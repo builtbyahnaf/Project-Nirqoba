@@ -128,8 +128,32 @@ void Parser::synchronize() {
 std::unique_ptr<Program> Parser::parse_program() {
   auto program = std::make_unique<Program>();
   while (!check(TokenKind::EndOfFile)) {
+    if (check(TokenKind::KwModule)) {
+      auto mod = parse_module();
+      if (mod) {
+        if (program->module_decl()) {
+          diagnostics_.error(diag::kDuplicateModule, mod->location(),
+                             "only one 'module' declaration is allowed per source file");
+        } else {
+          program->set_module(std::move(mod));
+        }
+      }
+      continue;
+    }
+    if (check(TokenKind::KwImport)) {
+      auto imp = parse_import();
+      if (imp) program->imports().push_back(std::move(imp));
+      continue;
+    }
+
+    Visibility vis = Visibility::Public;
+    if (check(TokenKind::KwPublic) || check(TokenKind::KwPrivate)) {
+      vis = match(TokenKind::KwPrivate) ? Visibility::Private : Visibility::Public;
+      if (vis == Visibility::Public) advance();
+    }
+
     if (check(TokenKind::KwStruct)) {
-      std::unique_ptr<StructDecl> s = parse_struct();
+      std::unique_ptr<StructDecl> s = parse_struct(vis);
       if (s) program->structs().push_back(std::move(s));
       continue;
     }
@@ -142,18 +166,12 @@ std::unique_ptr<Program> Parser::parse_program() {
     }
     if (is_type_keyword(peek().kind) || (check(TokenKind::Identifier) && peek(1).kind == TokenKind::KwFunction)) {
       const std::size_t before = position_;
-      std::unique_ptr<FunctionDecl> function = parse_function();
+      std::unique_ptr<FunctionDecl> function = parse_function(vis);
       if (function) {
         program->functions().push_back(std::move(function));
       } else if (position_ == before) {
         advance();
       }
-      continue;
-    }
-    if (check(TokenKind::KwModule) || check(TokenKind::KwImport)) {
-      report_phase_gap(peek(), token_kind_name(peek().kind), phase_for_keyword(peek().kind));
-      advance();
-      synchronize();
       continue;
     }
     error_at(peek(), diag::kUnexpectedToken,
@@ -162,13 +180,55 @@ std::unique_ptr<Program> Parser::parse_program() {
     synchronize();
   }
 
-  if (program->functions().empty() && !diagnostics_.has_errors()) {
-    error_at(peek(), diag::kMissingMain, "program contains no function declarations");
-  }
   return program;
 }
 
-std::unique_ptr<StructDecl> Parser::parse_struct() {
+std::unique_ptr<ModuleDecl> Parser::parse_module() {
+  const Token kw = advance();  // 'module'
+  if (!check(TokenKind::Identifier)) {
+    error_at(peek(), diag::kExpectedToken, "expected module name after 'module'");
+    synchronize();
+    return nullptr;
+  }
+  const Token name_tok = advance();
+  expect(TokenKind::Semicolon, "after module declaration");
+  return std::make_unique<ModuleDecl>(name_tok.text, kw.location);
+}
+
+std::unique_ptr<ImportDecl> Parser::parse_import() {
+  const Token kw = advance();  // 'import'
+  if (!check(TokenKind::Identifier)) {
+    error_at(peek(), diag::kExpectedToken, "expected module name after 'import'");
+    synchronize();
+    return nullptr;
+  }
+  const Token mod_tok = advance();
+  std::string item_name;
+  std::string alias;
+
+  if (match(TokenKind::Dot)) {
+    if (!check(TokenKind::Identifier)) {
+      error_at(peek(), diag::kExpectedToken, "expected member name after '.' in import");
+      synchronize();
+      return nullptr;
+    }
+    item_name = advance().text;
+  }
+
+  if (match(TokenKind::KwAs)) {
+    if (!check(TokenKind::Identifier)) {
+      error_at(peek(), diag::kExpectedToken, "expected alias name after 'as' in import");
+      synchronize();
+      return nullptr;
+    }
+    alias = advance().text;
+  }
+
+  expect(TokenKind::Semicolon, "after import statement");
+  return std::make_unique<ImportDecl>(mod_tok.text, std::move(item_name), std::move(alias), kw.location);
+}
+
+std::unique_ptr<StructDecl> Parser::parse_struct(Visibility visibility) {
   const Token struct_tok = advance();  // 'struct'
   if (!check(TokenKind::Identifier)) {
     error_at(peek(), diag::kExpectedToken, "expected struct name after 'struct'");
@@ -191,10 +251,10 @@ std::unique_ptr<StructDecl> Parser::parse_struct() {
     fields.push_back(Parameter{field_name.text, field_type, field_name.location});
   }
   expect(TokenKind::RBrace, "to close struct body");
-  return std::make_unique<StructDecl>(name_tok.text, std::move(fields), struct_tok.location);
+  return std::make_unique<StructDecl>(name_tok.text, std::move(fields), struct_tok.location, visibility);
 }
 
-std::unique_ptr<FunctionDecl> Parser::parse_function() {
+std::unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
   const Token& type_token = peek();
   const Type return_type = parse_type_annotation();
   expect(TokenKind::KwFunction, "after the return type");
@@ -238,7 +298,8 @@ std::unique_ptr<FunctionDecl> Parser::parse_function() {
   return std::make_unique<FunctionDecl>(return_type, name_token.text, std::move(parameters),
                                         std::move(body),
                                         type_token.location.is_valid() ? type_token.location
-                                                                       : name_token.location);
+                                                                       : name_token.location,
+                                        visibility);
 }
 
 Type Parser::parse_type_annotation() {

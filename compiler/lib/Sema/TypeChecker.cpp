@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <unordered_set>
 
+#include "nirqoba/Driver/ModuleResolver.h"
+
 namespace nirq {
 namespace {
 
@@ -43,6 +45,7 @@ static bool statement_can_fall_through(const Stmt& stmt) {
 bool TypeChecker::check(Program& program) {
   functions_.clear();
   structs_.clear();
+  current_module_ = program.module_name();
   const FunctionDecl* main_function = nullptr;
   int main_count = 0;
 
@@ -61,6 +64,8 @@ bool TypeChecker::check(Program& program) {
     info.name = decl->name();
     info.fields = decl->fields();
     info.location = decl->location();
+    info.module_name = current_module_;
+    info.visibility = decl->visibility();
     if (!structs_.emplace(decl->name(), std::move(info)).second) {
       diagnostics_.error(diag::kDuplicateName, decl->location(),
                          "struct '" + decl->name() + "' is already defined");
@@ -79,7 +84,9 @@ bool TypeChecker::check(Program& program) {
         function->name(),
         function->return_type(),
         std::move(param_types),
-        function->location()
+        function->location(),
+        current_module_,
+        function->visibility()
     };
 
     if (!functions_.emplace(function->name(), std::move(sig)).second) {
@@ -98,14 +105,23 @@ bool TypeChecker::check(Program& program) {
     SourceLocation location;
     if (!program.functions().empty()) location = program.functions().front()->location();
     diagnostics_.error(diag::kMissingMain, location,
-                       "program has no entry point: exactly one 'int function main()' is required");
+                       "program has no entry point: exactly one 'main' function is required");
   } else if (main_count > 1) {
     diagnostics_.error(diag::kDuplicateMain, main_function->location(),
                        "program defines 'main' more than once; exactly one entry point is allowed");
   } else if (main_function != nullptr) {
     if (!main_function->parameters().empty()) {
-      diagnostics_.error(diag::kMainParameters, main_function->location(),
-                         "'main' must not declare parameters in Phase 3");
+      bool valid_args = false;
+      if (main_function->parameters().size() == 1) {
+        const Type& ptype = main_function->parameters()[0].type;
+        if (ptype.is_dynamic_array() && ptype.element_type().is_string()) {
+          valid_args = true;
+        }
+      }
+      if (!valid_args) {
+        diagnostics_.error(diag::kMainParameters, main_function->location(),
+                           "'main' may only declare 'string[] args' or no parameters");
+      }
     }
     if (!main_function->return_type().is_integer() && !main_function->return_type().is_void()) {
       diagnostics_.error(diag::kInvalidMainReturn, main_function->location(),
@@ -117,6 +133,130 @@ bool TypeChecker::check(Program& program) {
   // Pass 2: Type-check each function body.
   for (const auto& function : program.functions()) {
     check_function(*function);
+  }
+
+  return !diagnostics_.has_errors();
+}
+
+bool TypeChecker::check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& modules) {
+  functions_.clear();
+  structs_.clear();
+  const FunctionDecl* main_function = nullptr;
+  int main_count = 0;
+
+  // Pass 0: Register all structs across all modules.
+  for (const auto& unit : modules) {
+    if (!unit || !unit->ast) continue;
+    const std::string& mod_name = unit->name;
+    for (const auto& decl : unit->ast->structs()) {
+      StructInfo info;
+      info.name = decl->name();
+      info.fields = decl->fields();
+      info.location = decl->location();
+      info.module_name = mod_name;
+      info.visibility = decl->visibility();
+
+      // Register qualified: mod.StructName
+      structs_[mod_name + "." + decl->name()] = info;
+
+      // Register bare name for root module or public structs
+      if (unit->is_root || decl->is_public()) {
+        structs_.emplace(decl->name(), info);
+      }
+    }
+  }
+
+  // Pass 1: Register all function signatures across all modules.
+  for (const auto& unit : modules) {
+    if (!unit || !unit->ast) continue;
+    const std::string& mod_name = unit->name;
+    for (const auto& function : unit->ast->functions()) {
+      std::vector<Type> param_types;
+      param_types.reserve(function->parameters().size());
+      for (const Parameter& param : function->parameters()) {
+        param_types.push_back(param.type);
+      }
+
+      FunctionSignature sig{
+          function->name(),
+          function->return_type(),
+          std::move(param_types),
+          function->location(),
+          mod_name,
+          function->visibility()
+      };
+
+      // Register qualified: mod.func_name
+      functions_[mod_name + "." + function->name()] = sig;
+
+      // Register bare name for root module
+      if (unit->is_root) {
+        functions_.emplace(function->name(), sig);
+      }
+
+      if (function->name() == "main" && unit->is_root) {
+        ++main_count;
+        main_function = function.get();
+      }
+    }
+  }
+
+  // Handle selective & aliased imports.
+  for (const auto& unit : modules) {
+    if (!unit || !unit->ast) continue;
+    for (const auto& imp : unit->ast->imports()) {
+      if (imp->is_selective()) {
+        std::string qualified = imp->module_name() + "." + imp->item_name();
+        auto it = functions_.find(qualified);
+        if (it != functions_.end()) {
+          functions_.emplace(imp->item_name(), it->second);
+        }
+      }
+      if (imp->is_aliased()) {
+        for (const auto& kv : functions_) {
+          if (kv.second.module_name == imp->module_name()) {
+            functions_[imp->alias() + "." + kv.second.name] = kv.second;
+          }
+        }
+      }
+    }
+  }
+
+  // Entry point validation.
+  if (main_count == 0) {
+    diagnostics_.error(diag::kMissingMain, SourceLocation{},
+                       "program has no entry point: exactly one 'main' function is required");
+  } else if (main_count > 1) {
+    diagnostics_.error(diag::kDuplicateMain, main_function->location(),
+                       "program defines 'main' more than once");
+  } else if (main_function != nullptr) {
+    if (!main_function->parameters().empty()) {
+      bool valid_args = false;
+      if (main_function->parameters().size() == 1) {
+        const Type& ptype = main_function->parameters()[0].type;
+        if (ptype.is_dynamic_array() && ptype.element_type().is_string()) {
+          valid_args = true;
+        }
+      }
+      if (!valid_args) {
+        diagnostics_.error(diag::kMainParameters, main_function->location(),
+                           "'main' may only declare 'string[] args' or no parameters");
+      }
+    }
+    if (!main_function->return_type().is_integer() && !main_function->return_type().is_void()) {
+      diagnostics_.error(diag::kInvalidMainReturn, main_function->location(),
+                         "'main' must return an integer or 'void', not '" +
+                             main_function->return_type().to_string() + "'");
+    }
+  }
+
+  // Pass 2: Type-check each function body in each module.
+  for (const auto& unit : modules) {
+    if (!unit || !unit->ast) continue;
+    current_module_ = unit->name;
+    for (const auto& function : unit->ast->functions()) {
+      check_function(*function);
+    }
   }
 
   return !diagnostics_.has_errors();
@@ -967,6 +1107,81 @@ Type TypeChecker::check_call(CallExpr& call) {
     return Type::f64_type();
   }
 
+  // File I/O builtins: file.read_text, file.write_text, file.append_text, file.exists
+  if (call.callee() == "file.read_text") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'file.read_text' expects 1 argument (path: string), but " +
+                             std::to_string(call.arguments().size()) + " were given");
+      return Type::string_type();
+    }
+    const Type path_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (path_type.is_valid() && !path_type.is_string()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'file.read_text' path must be a 'string', not '" + path_type.to_string() + "'");
+    }
+    return Type::string_type();
+  }
+
+  if (call.callee() == "file.write_text" || call.callee() == "file.append_text") {
+    if (call.arguments().size() != 2) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "' expects 2 arguments (path: string, content: string), but " +
+                             std::to_string(call.arguments().size()) + " were given");
+      return Type::int_type();
+    }
+    const Type path_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    const Type content_type = check_expression(const_cast<Expr&>(*call.arguments()[1]));
+    if (path_type.is_valid() && !path_type.is_string()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "path must be a 'string', not '" + path_type.to_string() + "'");
+    }
+    if (content_type.is_valid() && !content_type.is_string()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
+                         "content must be a 'string', not '" + content_type.to_string() + "'");
+    }
+    return Type::int_type();
+  }
+
+  if (call.callee() == "file.exists") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'file.exists' expects 1 argument (path: string), but " +
+                             std::to_string(call.arguments().size()) + " were given");
+      return Type::bool_type();
+    }
+    const Type path_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (path_type.is_valid() && !path_type.is_string()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'file.exists' path must be a 'string', not '" + path_type.to_string() + "'");
+    }
+    return Type::bool_type();
+  }
+
+  // Time & System builtins: time.now, system.exit
+  if (call.callee() == "time.now") {
+    if (!call.arguments().empty()) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'time.now' takes no arguments");
+    }
+    return Type::int_type();
+  }
+
+  if (call.callee() == "system.exit") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'system.exit' expects 1 argument (code: int), but " +
+                             std::to_string(call.arguments().size()) + " were given");
+      return Type::void_type();
+    }
+    const Type code_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (code_type.is_valid() && !code_type.is_integer()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'system.exit' exit code must be an integer, not '" + code_type.to_string() + "'");
+    }
+    return Type::void_type();
+  }
+
   // User-defined function call
   auto it = functions_.find(call.callee());
   if (it == functions_.end()) {
@@ -979,6 +1194,12 @@ Type TypeChecker::check_call(CallExpr& call) {
   }
 
   const FunctionSignature& sig = it->second;
+  if (!current_module_.empty() && !sig.module_name.empty() &&
+      current_module_ != sig.module_name && sig.visibility == Visibility::Private) {
+    diagnostics_.error(diag::kPrivateAccessViolation, call.location(),
+                       "cannot access private function '" + sig.name +
+                           "' from outside module '" + sig.module_name + "'");
+  }
   if (call.arguments().size() != sig.parameter_types.size()) {
     diagnostics_.error(diag::kPrintArity, call.location(),
                        "function '" + call.callee() + "' expects " +

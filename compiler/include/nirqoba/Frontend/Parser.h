@@ -33,8 +33,10 @@ class Parser {
   void synchronize();
 
   // Declarations.
-  std::unique_ptr<StructDecl> parse_struct();
-  std::unique_ptr<FunctionDecl> parse_function();
+  std::unique_ptr<ModuleDecl> parse_module();
+  std::unique_ptr<ImportDecl> parse_import();
+  std::unique_ptr<StructDecl> parse_struct(Visibility visibility = Visibility::Public);
+  std::unique_ptr<FunctionDecl> parse_function(Visibility visibility = Visibility::Public);
   Type parse_type_annotation();
 
   // Statements.
