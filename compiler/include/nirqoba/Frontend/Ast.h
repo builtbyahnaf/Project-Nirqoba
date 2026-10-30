@@ -1,9 +1,10 @@
-// Abstract Syntax Tree for Nirqoba Phase 1, 2 & 3.
+// Abstract Syntax Tree for Nirqoba Phase 1, 2, 3 & 4.
 #pragma once
 
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "nirqoba/Common/Type.h"
@@ -21,6 +22,11 @@ class Expr {
     CharLiteral,
     StringLiteral,
     BoolLiteral,
+    ArrayLiteral,
+    TupleLiteral,
+    Index,
+    MemberAccess,
+    StructInit,
     Name,
     Call,
     Unary,
@@ -97,6 +103,78 @@ class BoolLiteralExpr : public Expr {
 
  private:
   bool value_;
+};
+
+class ArrayLiteralExpr : public Expr {
+ public:
+  ArrayLiteralExpr(SourceLocation location, std::vector<ExprPtr> elements)
+      : Expr(Kind::ArrayLiteral, std::move(location)), elements_(std::move(elements)) {}
+  const std::vector<ExprPtr>& elements() const { return elements_; }
+
+ private:
+  std::vector<ExprPtr> elements_;
+};
+
+class TupleLiteralExpr : public Expr {
+ public:
+  TupleLiteralExpr(SourceLocation location, std::vector<ExprPtr> elements)
+      : Expr(Kind::TupleLiteral, std::move(location)), elements_(std::move(elements)) {}
+  const std::vector<ExprPtr>& elements() const { return elements_; }
+
+ private:
+  std::vector<ExprPtr> elements_;
+};
+
+class IndexExpr : public Expr {
+ public:
+  IndexExpr(SourceLocation location, ExprPtr base, ExprPtr index)
+      : Expr(Kind::Index, std::move(location)), base_(std::move(base)), index_(std::move(index)) {}
+  const Expr& base() const { return *base_; }
+  const Expr& index() const { return *index_; }
+
+ private:
+  ExprPtr base_;
+  ExprPtr index_;
+};
+
+class MemberAccessExpr : public Expr {
+ public:
+  MemberAccessExpr(SourceLocation location, ExprPtr base, std::string member, int tuple_index = -1)
+      : Expr(Kind::MemberAccess, std::move(location)), base_(std::move(base)),
+        member_(std::move(member)), tuple_index_(tuple_index) {}
+  const Expr& base() const { return *base_; }
+  const std::string& member() const { return member_; }
+  bool is_tuple_access() const { return tuple_index_ >= 0; }
+  int tuple_index() const { return tuple_index_; }
+
+ private:
+  ExprPtr base_;
+  std::string member_;
+  int tuple_index_;
+};
+
+class StructInitExpr : public Expr {
+ public:
+  StructInitExpr(SourceLocation location, std::string struct_name,
+                 std::vector<std::pair<std::string, ExprPtr>> field_inits)
+      : Expr(Kind::StructInit, std::move(location)), struct_name_(std::move(struct_name)),
+        field_inits_(std::move(field_inits)), is_positional_(false) {}
+
+  StructInitExpr(SourceLocation location, std::string struct_name,
+                 std::vector<ExprPtr> positional_inits)
+      : Expr(Kind::StructInit, std::move(location)), struct_name_(std::move(struct_name)),
+        positional_inits_(std::move(positional_inits)), is_positional_(true) {}
+
+  const std::string& struct_name() const { return struct_name_; }
+  bool is_positional() const { return is_positional_; }
+  const std::vector<std::pair<std::string, ExprPtr>>& field_inits() const { return field_inits_; }
+  const std::vector<ExprPtr>& positional_inits() const { return positional_inits_; }
+
+ private:
+  std::string struct_name_;
+  std::vector<std::pair<std::string, ExprPtr>> field_inits_;
+  std::vector<ExprPtr> positional_inits_;
+  bool is_positional_;
 };
 
 class NameExpr : public Expr {
@@ -196,6 +274,7 @@ class Stmt {
     VariableDeclaration,
     Assignment,
     CompoundAssignment,
+    Destructuring,
     If,
     While,
     For,
@@ -250,6 +329,22 @@ class VariableDeclarationStmt : public Stmt {
   bool has_annotation_;
   Type annotation_;
   ExprPtr initializer_;
+};
+
+class DestructuringStmt : public Stmt {
+ public:
+  DestructuringStmt(SourceLocation location, BindingKind binding, std::vector<std::string> names,
+                    ExprPtr value)
+      : Stmt(Kind::Destructuring, std::move(location)), binding_(binding),
+        names_(std::move(names)), value_(std::move(value)) {}
+  BindingKind binding() const { return binding_; }
+  const std::vector<std::string>& names() const { return names_; }
+  const Expr& value() const { return *value_; }
+
+ private:
+  BindingKind binding_;
+  std::vector<std::string> names_;
+  ExprPtr value_;
 };
 
 class AssignmentStmt : public Stmt {
@@ -371,6 +466,21 @@ struct Parameter {
   SourceLocation location;
 };
 
+class StructDecl {
+ public:
+  StructDecl(std::string name, std::vector<Parameter> fields, SourceLocation location)
+      : name_(std::move(name)), fields_(std::move(fields)), location_(std::move(location)) {}
+
+  const std::string& name() const { return name_; }
+  const std::vector<Parameter>& fields() const { return fields_; }
+  const SourceLocation& location() const { return location_; }
+
+ private:
+  std::string name_;
+  std::vector<Parameter> fields_;
+  SourceLocation location_;
+};
+
 class FunctionDecl {
  public:
   FunctionDecl(Type return_type, std::string name, std::vector<Parameter> parameters,
@@ -395,10 +505,14 @@ class FunctionDecl {
 
 class Program {
  public:
+  std::vector<std::unique_ptr<StructDecl>>& structs() { return structs_; }
+  const std::vector<std::unique_ptr<StructDecl>>& structs() const { return structs_; }
+
   std::vector<std::unique_ptr<FunctionDecl>>& functions() { return functions_; }
   const std::vector<std::unique_ptr<FunctionDecl>>& functions() const { return functions_; }
 
  private:
+  std::vector<std::unique_ptr<StructDecl>> structs_;
   std::vector<std::unique_ptr<FunctionDecl>> functions_;
 };
 

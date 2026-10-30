@@ -1,4 +1,4 @@
-// Recursive-descent parser for Phase 1, 2 & 3 grammar.
+// Recursive-descent parser for Nirqoba Phase 1, 2, 3 & 4 grammar.
 #pragma once
 
 #include <memory>
@@ -33,6 +33,7 @@ class Parser {
   void synchronize();
 
   // Declarations.
+  std::unique_ptr<StructDecl> parse_struct();
   std::unique_ptr<FunctionDecl> parse_function();
   Type parse_type_annotation();
 
@@ -40,6 +41,7 @@ class Parser {
   std::unique_ptr<BlockStmt> parse_block();
   StmtPtr parse_statement();
   StmtPtr parse_variable_declaration();
+  StmtPtr parse_destructuring();
   StmtPtr parse_assignment_or_expression();
   StmtPtr parse_if();
   StmtPtr parse_while();
@@ -62,7 +64,10 @@ class Parser {
   ExprPtr parse_cast();
   ExprPtr parse_exponentiation();
   ExprPtr parse_unary();
+  ExprPtr parse_postfix();
   ExprPtr parse_primary();
+  ExprPtr parse_array_literal();
+  ExprPtr parse_struct_init(std::string struct_name, SourceLocation location);
   std::vector<ExprPtr> parse_argument_list();
 
   std::vector<Token> tokens_;
