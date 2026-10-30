@@ -21,6 +21,7 @@ std::string_view op_name(OpKind kind) {
     case OpKind::Unary: return "unary";
     case OpKind::Binary: return "binary";
     case OpKind::Cast: return "cast";
+    case OpKind::Call: return "call";
     case OpKind::PrintString: return "print_string";
     case OpKind::Print: return "print";
     case OpKind::Label: return "label";

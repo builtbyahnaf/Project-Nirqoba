@@ -3,6 +3,7 @@
 #include "nirqoba/Lowering/TirToMlir.h"
 
 #include <unordered_map>
+#include <vector>
 
 #include "mlir/Dialect/Func/IR/FuncDialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -77,6 +78,10 @@ class FunctionTranslator {
     entry_block_ = func_op.addEntryBlock();
     builder_.setInsertionPointToStart(entry_block_);
     values_.resize(tir_fn.value_count());
+
+    for (std::size_t i = 0; i < tir_fn.parameters().size(); ++i) {
+      set(tir_fn.parameters()[i].value, entry_block_->getArgument(i));
+    }
   }
 
   bool translate() {
@@ -305,7 +310,6 @@ class FunctionTranslator {
             default: break;
           }
         } else {
-          // Integer / bool / char
           const bool is_signed = lhs_type.is_signed_integer();
           switch (op.binary_op) {
             case tir::BinaryOp::Add: result = builder_.create<mlir::LLVM::AddOp>(loc, lhs, rhs); break;
@@ -416,6 +420,25 @@ class FunctionTranslator {
         return true;
       }
 
+      case tir::OpKind::Call: {
+        std::vector<mlir::Value> args;
+        args.reserve(op.arguments.size());
+        for (const tir::Value arg : op.arguments) {
+          mlir::Value arg_val = get(arg);
+          if (arg_val) args.push_back(arg_val);
+        }
+        if (op.result.is_valid()) {
+          mlir::Type ret_ty = tir_type_to_mlir(op.result.type, ctx_, builder_);
+          auto call_op = builder_.create<mlir::func::CallOp>(
+              loc, op.callee, mlir::TypeRange{ret_ty}, args);
+          set(op.result, call_op.getResult(0));
+        } else {
+          builder_.create<mlir::func::CallOp>(
+              loc, op.callee, mlir::TypeRange{}, args);
+        }
+        return true;
+      }
+
       case tir::OpKind::PrintString: {
         builder_.create<nrq::PrintStringOp>(loc, builder_.getStringAttr(op.string_value));
         return true;
@@ -504,11 +527,23 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
       }
     }
 
+    std::vector<mlir::Type> param_types;
+    param_types.reserve(tir_fn->parameters().size());
+    for (const auto& param : tir_fn->parameters()) {
+      mlir::Type pty = tir_type_to_mlir(param.type, &context, builder);
+      if (!pty) {
+        diagnostics.error("NRQ4005", SourceLocation{},
+                          "internal: unsupported parameter type in TIR translation");
+        return nullptr;
+      }
+      param_types.push_back(pty);
+    }
+
     mlir::FunctionType fn_type;
     if (ret_type) {
-      fn_type = mlir::FunctionType::get(&context, {}, {ret_type});
+      fn_type = mlir::FunctionType::get(&context, param_types, {ret_type});
     } else {
-      fn_type = mlir::FunctionType::get(&context, {}, {});
+      fn_type = mlir::FunctionType::get(&context, param_types, {});
     }
 
     auto func_op = builder.create<mlir::func::FuncOp>(

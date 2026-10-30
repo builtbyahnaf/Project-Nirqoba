@@ -1,5 +1,5 @@
-// Nirqoba typed IR (TIR): the typed, target-independent form Phase 1 & 2 lowers
-// from the AST and then translates into the `nrq` MLIR dialect.
+// Nirqoba typed IR (TIR): the typed, target-independent form Phase 1, 2 & 3 lowers
+// from the AST and then translates into the `nrq` and standard MLIR dialects.
 #pragma once
 
 #include <cstddef>
@@ -31,6 +31,7 @@ enum class OpKind {
   Unary,           // result = <op> operand
   Binary,          // result = lhs <op> rhs
   Cast,            // result = cast(operand) with cast_kind
+  Call,            // result = callee(arguments...)
   PrintString,     // write string_value to stdout through the runtime
   Print,           // write operand to stdout through the runtime
   Label,           // basic block label: label_id
@@ -106,6 +107,8 @@ struct Op {
   double float_value = 0.0;
   std::string string_value;
   std::string slot_name;
+  std::string callee;
+  std::vector<Value> arguments;
 
   int label_id = -1;
   int true_label = -1;
@@ -114,6 +117,12 @@ struct Op {
 
 class Function {
  public:
+  struct Parameter {
+    std::string name;
+    Type type;
+    Value value;
+  };
+
   Function(std::string name, Type return_type) : name_(std::move(name)), return_type_(return_type) {}
 
   const std::string& name() const { return name_; }
@@ -121,6 +130,11 @@ class Function {
 
   std::vector<Op>& operations() { return operations_; }
   const std::vector<Op>& operations() const { return operations_; }
+
+  const std::vector<Parameter>& parameters() const { return parameters_; }
+  void add_parameter(std::string name, Type type, Value value) {
+    parameters_.push_back(Parameter{std::move(name), type, value});
+  }
 
   // Reserves the next value number. Types are recorded so the verifier can
   // check operand types without re-deriving them.
@@ -135,6 +149,7 @@ class Function {
  private:
   std::string name_;
   Type return_type_;
+  std::vector<Parameter> parameters_;
   std::vector<Op> operations_;
   std::vector<Type> types_;
   int next_label_id_ = 0;

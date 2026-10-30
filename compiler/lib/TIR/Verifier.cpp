@@ -30,7 +30,7 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
     if (last.kind != tir::OpKind::Return && last.kind != tir::OpKind::Branch) {
       diagnostics.error(kStructure, last.location,
                         "internal: function '" + function->name() +
-                            "' does not end in a return operation");
+                            "' does not end in a return or branch operation");
       ok = false;
     }
 
@@ -41,6 +41,14 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
           diagnostics.error(kStructure, op.location,
                             "internal: operation references undefined value %" +
                                 std::to_string(value.id));
+          ok = false;
+        }
+      }
+      for (const tir::Value arg : op.arguments) {
+        if (arg.is_valid() && !value_in_range(*function, arg)) {
+          diagnostics.error(kStructure, op.location,
+                            "internal: call operation references undefined argument value %" +
+                                std::to_string(arg.id));
           ok = false;
         }
       }
@@ -56,6 +64,7 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
         case tir::OpKind::Label:
         case tir::OpKind::Branch:
         case tir::OpKind::BranchCond:
+        case tir::OpKind::Call:
           break;
         case tir::OpKind::Load: {
           if (op.lhs.is_valid() && function->value_type(op.lhs.id) != op.result.type) {
