@@ -1,3 +1,14 @@
 project_context/AGENTS.md
 project_context/ROADMAP.md
 project_context/SYNTAX.md
+phase_plans
+phase_plans/*
+.freebuff
+.freebuff/*
+
+build/
+toolchain/
+out/
+*.obj
+*.exe
+__pycache__/
