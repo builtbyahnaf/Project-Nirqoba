@@ -25,6 +25,11 @@ int32_t nrq_print_f32(float val);
 int32_t nrq_print_bool(int32_t val);
 int32_t nrq_print_char(uint32_t code_point);
 
+// Console input (Phase 4): reads up to max_bytes-1 bytes from stdin into out_buf,
+// strips trailing '\r' and '\n', and writes the byte count to *out_bytes_read.
+// Returns 0 on success or a Win32 error code on failure.
+int32_t nrq_read_line(char* out_buf, size_t max_bytes, size_t* out_bytes_read);
+
 // Initialises the Nirqoba runtime.
 void nrq_runtime_init(void);
 

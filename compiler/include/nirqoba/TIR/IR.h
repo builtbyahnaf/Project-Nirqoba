@@ -22,22 +22,27 @@ struct Value {
 };
 
 enum class OpKind {
-  ConstantInt,     // result = integer_value
-  ConstantFloat,   // result = float_value
-  ConstantString,  // result = pointer to string_value
-  Alloca,          // result = slot for slot_name of result.type
-  Store,           // store operand into slot (lhs)
-  Load,            // result = load from slot (lhs)
-  Unary,           // result = <op> operand
-  Binary,          // result = lhs <op> rhs
-  Cast,            // result = cast(operand) with cast_kind
-  Call,            // result = callee(arguments...)
-  PrintString,     // write string_value to stdout through the runtime
-  Print,           // write operand to stdout through the runtime
-  Label,           // basic block label: label_id
-  Branch,          // unconditional branch to label_id
-  BranchCond,      // conditional branch: if operand then true_label else false_label
-  Return,          // function exit, optional operand
+  ConstantInt,       // result = integer_value
+  ConstantFloat,     // result = float_value
+  ConstantString,    // result = pointer to string_value
+  Alloca,            // result = slot for slot_name of result.type
+  Store,             // store operand into slot (lhs)
+  Load,              // result = load from slot (lhs)
+  Unary,             // result = <op> operand
+  Binary,            // result = lhs <op> rhs
+  Cast,              // result = cast(operand) with cast_kind
+  Call,              // result = callee(arguments...)
+  PrintString,       // write string_value to stdout through the runtime
+  Print,             // write operand to stdout through the runtime
+  Label,             // basic block label: label_id
+  Branch,            // unconditional branch to label_id
+  BranchCond,        // conditional branch: if operand then true_label else false_label
+  Return,            // function exit, optional operand
+  // Phase 4 aggregate operations:
+  ArrayAlloca,       // alloca for a fixed-size array: result = ptr to array[length] of elem_type
+  GetElementPtr,     // result = ptr to element: base_ptr + index (array) or field_index (struct/tuple)
+  AggregatePack,     // pack multiple operands into an aggregate (tuple/struct) slot
+  AggregateExtract,  // result = extract field_index from aggregate operand
 };
 
 enum class UnaryOp {
@@ -113,6 +118,8 @@ struct Op {
   int label_id = -1;
   int true_label = -1;
   int false_label = -1;
+  int field_index = -1;           // GetElementPtr / AggregateExtract: field/element index
+  std::vector<Value> aggregate_elements;  // AggregatePack: values to pack
 };
 
 class Function {

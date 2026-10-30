@@ -105,6 +105,25 @@ std::string print_tir(const tir::Module& module) {
           break;
         case tir::OpKind::Label:
           break;
+        case tir::OpKind::ArrayAlloca:
+          out << " " << op.slot_name << "[" << op.integer_value << "] : " << op.result.type.mangle();
+          break;
+        case tir::OpKind::GetElementPtr:
+          out << " " << value_name(op.lhs) << "[" << value_name(op.operand)
+              << "] field=" << op.field_index;
+          break;
+        case tir::OpKind::AggregatePack:
+          out << " (";
+          for (std::size_t i = 0; i < op.aggregate_elements.size(); ++i) {
+            if (i > 0) out << ", ";
+            out << value_name(op.aggregate_elements[i]);
+          }
+          out << ") : " << op.result.type.mangle();
+          break;
+        case tir::OpKind::AggregateExtract:
+          out << " " << value_name(op.operand) << "." << op.field_index
+              << " : " << op.result.type.mangle();
+          break;
       }
       out << "\n";
     }

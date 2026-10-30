@@ -42,6 +42,9 @@ inline constexpr const char* kUseBeforeInit = "NRQ3020";
 inline constexpr const char* kConstDivisionByZero = "NRQ3021";
 inline constexpr const char* kBreakOutsideLoop = "NRQ3022";
 inline constexpr const char* kContinueOutsideLoop = "NRQ3023";
+  inline constexpr const char* kUnknownField = "NRQ3025";
+  inline constexpr const char* kIndexOutOfBounds = "NRQ3026";
+  inline constexpr const char* kDestructuringMismatch = "NRQ3027";
 inline constexpr const char* kMissingSourceFile = "NRQ5001";
 inline constexpr const char* kInvalidCommandLine = "NRQ5002";
 inline constexpr const char* kToolchainUnavailable = "NRQ5003";
@@ -63,3 +66,4 @@ struct Diagnostic {
 };
 
 }  // namespace nirq
+

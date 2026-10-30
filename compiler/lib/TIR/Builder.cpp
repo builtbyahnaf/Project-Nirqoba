@@ -113,6 +113,61 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
     case Stmt::Kind::Block:
       lower_block(static_cast<const BlockStmt&>(statement), function);
       return;
+    case Stmt::Kind::Destructuring: {
+      const auto& dest = static_cast<const DestructuringStmt&>(statement);
+      const tir::Value agg_val = lower_expression(dest.value(), function);
+      const Type& agg_type = agg_val.type;
+      const std::vector<std::string>& names = dest.names();
+      const std::size_t count = names.size();
+
+      for (std::size_t i = 0; i < count; ++i) {
+        Type elem_type;
+        if (agg_type.is_tuple() && i < agg_type.tuple_elements().size()) {
+          elem_type = agg_type.tuple_elements()[i];
+        } else if (agg_type.is_array()) {
+          elem_type = agg_type.element_type();
+        } else {
+          continue;
+        }
+
+        // Extract element i from the aggregate.
+        tir::Value extracted = function.allocate_value(elem_type);
+        {
+          tir::Op ext_op;
+          ext_op.kind = tir::OpKind::AggregateExtract;
+          ext_op.location = dest.location();
+          ext_op.operand = agg_val;
+          ext_op.field_index = static_cast<int>(i);
+          ext_op.result = extracted;
+          function.add_operation(std::move(ext_op));
+        }
+
+        // Alloca for the bound name.
+        tir::Value slot = function.allocate_value(elem_type);
+        {
+          tir::Op alloca;
+          alloca.kind = tir::OpKind::Alloca;
+          alloca.location = dest.location();
+          alloca.result = slot;
+          alloca.slot_name = names[i];
+          function.add_operation(std::move(alloca));
+        }
+
+        // Store extracted value into slot.
+        {
+          tir::Op store;
+          store.kind = tir::OpKind::Store;
+          store.location = dest.location();
+          store.lhs = slot;
+          store.operand = extracted;
+          store.result = slot;
+          function.add_operation(std::move(store));
+        }
+
+        scopes_.back().emplace(names[i], slot);
+      }
+      return;
+    }
     case Stmt::Kind::VariableDeclaration: {
       const auto& declaration = static_cast<const VariableDeclarationStmt&>(statement);
       const tir::Value initial = lower_expression(declaration.initializer(), function);
@@ -635,6 +690,182 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       op.arguments = std::move(arg_vals);
       op.result = result;
       function.add_operation(std::move(op));
+      return result;
+    }
+    case Expr::Kind::ArrayLiteral: {
+      const auto& arr = static_cast<const ArrayLiteralExpr&>(expr);
+      const Type arr_type = expr.type().is_valid() ? expr.type()
+          : (arr.elements().empty() ? Type::error()
+             : Type::array_type(arr.elements()[0]->type(), arr.elements().size()));
+
+      // Alloca for the entire array on the stack.
+      tir::Value arr_slot = function.allocate_value(arr_type);
+      {
+        tir::Op alloca;
+        alloca.kind = tir::OpKind::ArrayAlloca;
+        alloca.location = arr.location();
+        alloca.result = arr_slot;
+        alloca.slot_name = "$array_lit";
+        alloca.integer_value = static_cast<long long>(arr.elements().size());
+        function.add_operation(std::move(alloca));
+      }
+
+      // For each element, compute a GEP and store.
+      for (std::size_t i = 0; i < arr.elements().size(); ++i) {
+        const tir::Value elem_val = lower_expression(*arr.elements()[i], function);
+
+        // Index constant for GEP.
+        tir::Value idx_val = function.allocate_value(Type::int_type());
+        {
+          tir::Op idx_op;
+          idx_op.kind = tir::OpKind::ConstantInt;
+          idx_op.location = arr.location();
+          idx_op.result = idx_val;
+          idx_op.integer_value = static_cast<long long>(i);
+          function.add_operation(std::move(idx_op));
+        }
+
+        // GEP to element pointer.
+        const Type elem_type = arr_type.is_array() ? arr_type.element_type() : Type::error();
+        tir::Value elem_ptr = function.allocate_value(elem_type);
+        {
+          tir::Op gep;
+          gep.kind = tir::OpKind::GetElementPtr;
+          gep.location = arr.location();
+          gep.lhs = arr_slot;
+          gep.operand = idx_val;
+          gep.field_index = static_cast<int>(i);
+          gep.result = elem_ptr;
+          function.add_operation(std::move(gep));
+        }
+
+        // Store element.
+        {
+          tir::Op store;
+          store.kind = tir::OpKind::Store;
+          store.location = arr.location();
+          store.lhs = elem_ptr;
+          store.operand = elem_val;
+          store.result = elem_ptr;
+          function.add_operation(std::move(store));
+        }
+      }
+
+      // Load the whole array value from the slot.
+      tir::Value loaded = function.allocate_value(arr_type);
+      {
+        tir::Op load;
+        load.kind = tir::OpKind::Load;
+        load.location = arr.location();
+        load.lhs = arr_slot;
+        load.result = loaded;
+        function.add_operation(std::move(load));
+      }
+      return loaded;
+    }
+    case Expr::Kind::TupleLiteral: {
+      const auto& tup = static_cast<const TupleLiteralExpr&>(expr);
+      const Type tup_type = expr.type().is_valid() ? expr.type() : Type::error();
+
+      // Lower each element and pack into AggregatePack.
+      std::vector<tir::Value> elem_vals;
+      elem_vals.reserve(tup.elements().size());
+      for (const ExprPtr& elem : tup.elements()) {
+        elem_vals.push_back(lower_expression(*elem, function));
+      }
+
+      tir::Value result = function.allocate_value(tup_type);
+      tir::Op pack;
+      pack.kind = tir::OpKind::AggregatePack;
+      pack.location = tup.location();
+      pack.aggregate_elements = std::move(elem_vals);
+      pack.result = result;
+      function.add_operation(std::move(pack));
+      return result;
+    }
+    case Expr::Kind::Index: {
+      const auto& idx_expr = static_cast<const IndexExpr&>(expr);
+      const tir::Value base_val = lower_expression(idx_expr.base(), function);
+      const tir::Value index_val = lower_expression(idx_expr.index(), function);
+
+      const Type result_type = expr.type().is_valid() ? expr.type() : Type::error();
+
+      // GEP to the element pointer.
+      tir::Value elem_ptr = function.allocate_value(result_type);
+      {
+        tir::Op gep;
+        gep.kind = tir::OpKind::GetElementPtr;
+        gep.location = idx_expr.location();
+        gep.lhs = base_val;
+        gep.operand = index_val;
+        gep.field_index = -1;  // dynamic index
+        gep.result = elem_ptr;
+        function.add_operation(std::move(gep));
+      }
+
+      // Load value from pointer.
+      tir::Value loaded = function.allocate_value(result_type);
+      {
+        tir::Op load;
+        load.kind = tir::OpKind::Load;
+        load.location = idx_expr.location();
+        load.lhs = elem_ptr;
+        load.result = loaded;
+        function.add_operation(std::move(load));
+      }
+      return loaded;
+    }
+    case Expr::Kind::MemberAccess: {
+      const auto& mem = static_cast<const MemberAccessExpr&>(expr);
+      const tir::Value base_val = lower_expression(mem.base(), function);
+      const Type result_type = expr.type().is_valid() ? expr.type() : Type::error();
+      const int field_idx = mem.is_tuple_access() ? mem.tuple_index() : -1;
+
+      // For struct member: we need to look up the field index.
+      int computed_field_idx = field_idx;
+      if (!mem.is_tuple_access() && base_val.type.is_struct()) {
+        // We can't look up the struct catalog from Builder, so we embed -1
+        // and let MLIR lowering resolve by field name. For now use field_index
+        // from the string_value (we'll use slot_name to carry the field name).
+      }
+
+      tir::Value result = function.allocate_value(result_type);
+      tir::Op extract;
+      extract.kind = tir::OpKind::AggregateExtract;
+      extract.location = mem.location();
+      extract.operand = base_val;
+      extract.field_index = computed_field_idx;
+      extract.string_value = mem.member();  // carry field name for struct lowering
+      extract.result = result;
+      function.add_operation(std::move(extract));
+      return result;
+    }
+    case Expr::Kind::StructInit: {
+      const auto& si = static_cast<const StructInitExpr&>(expr);
+      const Type struct_type = expr.type().is_valid() ? expr.type()
+                                : Type::struct_type(si.struct_name());
+
+      std::vector<tir::Value> field_vals;
+      if (si.is_positional()) {
+        field_vals.reserve(si.positional_inits().size());
+        for (const ExprPtr& e : si.positional_inits()) {
+          field_vals.push_back(lower_expression(*e, function));
+        }
+      } else {
+        field_vals.reserve(si.field_inits().size());
+        for (const auto& kv : si.field_inits()) {
+          field_vals.push_back(lower_expression(*kv.second, function));
+        }
+      }
+
+      tir::Value result = function.allocate_value(struct_type);
+      tir::Op pack;
+      pack.kind = tir::OpKind::AggregatePack;
+      pack.location = si.location();
+      pack.aggregate_elements = std::move(field_vals);
+      pack.slot_name = si.struct_name();
+      pack.result = result;
+      function.add_operation(std::move(pack));
       return result;
     }
   }

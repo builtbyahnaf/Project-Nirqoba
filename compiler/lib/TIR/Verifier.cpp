@@ -65,6 +65,10 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
         case tir::OpKind::Branch:
         case tir::OpKind::BranchCond:
         case tir::OpKind::Call:
+        case tir::OpKind::ArrayAlloca:
+        case tir::OpKind::GetElementPtr:
+        case tir::OpKind::AggregatePack:
+        case tir::OpKind::AggregateExtract:
           break;
         case tir::OpKind::Load: {
           if (op.lhs.is_valid() && function->value_type(op.lhs.id) != op.result.type) {

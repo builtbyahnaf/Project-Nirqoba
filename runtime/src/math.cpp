@@ -1,5 +1,5 @@
 // runtime/src/math.cpp
-// Math helper implementations for Nirqoba Phase 2.
+// Math helper implementations for Nirqoba Phase 2 & 4.
 #include "nirqoba/runtime/math.h"
 
 #include <cmath>
@@ -24,5 +24,13 @@ int64_t nrq_pow_i64(int64_t base, int64_t exp) {
 double nrq_pow_f64(double base, double exp) {
     return std::pow(base, exp);
 }
+
+// Phase 4 math primitives.
+double nrq_sqrt(double val)  { return std::sqrt(val); }
+double nrq_sin(double val)   { return std::sin(val); }
+double nrq_cos(double val)   { return std::cos(val); }
+double nrq_abs(double val)   { return std::fabs(val); }
+double nrq_floor(double val) { return std::floor(val); }
+double nrq_ceil(double val)  { return std::ceil(val); }
 
 }  // extern "C"

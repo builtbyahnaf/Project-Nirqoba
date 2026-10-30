@@ -160,4 +160,32 @@ void nrq_runtime_shutdown(void) {
     }
 }
 
+// Console input: reads one line from stdin using Win32 ReadFile.
+// Strips trailing '\r' and '\n'. Writes byte count to *out_bytes_read.
+// Returns 0 on success or Win32 error code on failure.
+int32_t nrq_read_line(char* out_buf, size_t max_bytes, size_t* out_bytes_read) {
+    if (!out_buf || max_bytes == 0) return ERROR_INVALID_PARAMETER;
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    if (h == INVALID_HANDLE_VALUE || h == nullptr) {
+        if (out_bytes_read) *out_bytes_read = 0;
+        out_buf[0] = '\0';
+        return static_cast<int32_t>(GetLastError());
+    }
+
+    // Read byte by byte until '\n', EOF, or buffer exhaustion.
+    size_t total = 0;
+    while (total < max_bytes - 1) {
+        char c;
+        DWORD bytes_read = 0;
+        BOOL ok = ReadFile(h, &c, 1, &bytes_read, nullptr);
+        if (!ok || bytes_read == 0) break;  // EOF or error
+        if (c == '\n') break;               // end of line
+        if (c == '\r') continue;            // strip carriage return
+        out_buf[total++] = c;
+    }
+    out_buf[total] = '\0';
+    if (out_bytes_read) *out_bytes_read = total;
+    return 0;
+}
+
 }  // extern "C"
