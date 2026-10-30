@@ -70,9 +70,13 @@ void TirBuilder::lower_function(const FunctionDecl& function, tir::Module& modul
   tir::Function* function_ir = module.add_function(std::move(body));
 
   scopes_.clear();
+  loop_stack_.clear();
   push_scope();
 
   for (const Parameter& parameter : function.parameters()) {
+    tir::Value param_val = function_ir->allocate_value(parameter.type);
+    function_ir->add_parameter(parameter.name, parameter.type, param_val);
+
     tir::Value slot = function_ir->allocate_value(parameter.type);
     tir::Op alloca;
     alloca.kind = tir::OpKind::Alloca;
@@ -80,6 +84,15 @@ void TirBuilder::lower_function(const FunctionDecl& function, tir::Module& modul
     alloca.result = slot;
     alloca.slot_name = parameter.name;
     function_ir->add_operation(std::move(alloca));
+
+    tir::Op store;
+    store.kind = tir::OpKind::Store;
+    store.location = parameter.location;
+    store.lhs = slot;
+    store.operand = param_val;
+    store.result = slot;
+    function_ir->add_operation(std::move(store));
+
     scopes_.back().emplace(parameter.name, slot);
   }
 
@@ -178,6 +191,189 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       store.lhs = slot;
       store.result = slot;
       function.add_operation(std::move(store));
+      return;
+    }
+    case Stmt::Kind::If: {
+      const auto& if_stmt = static_cast<const IfStmt&>(statement);
+      tir::Value cond = lower_expression(if_stmt.condition(), function);
+      int then_label = function.allocate_label();
+      int else_label = if_stmt.has_else() ? function.allocate_label() : -1;
+      int merge_label = function.allocate_label();
+
+      tir::Op br_cond;
+      br_cond.kind = tir::OpKind::BranchCond;
+      br_cond.location = if_stmt.location();
+      br_cond.operand = cond;
+      br_cond.true_label = then_label;
+      br_cond.false_label = if_stmt.has_else() ? else_label : merge_label;
+      function.add_operation(std::move(br_cond));
+
+      // Then block
+      tir::Op then_lbl;
+      then_lbl.kind = tir::OpKind::Label;
+      then_lbl.label_id = then_label;
+      function.add_operation(std::move(then_lbl));
+      lower_block(if_stmt.then_branch(), function);
+      tir::Op br_then;
+      br_then.kind = tir::OpKind::Branch;
+      br_then.label_id = merge_label;
+      function.add_operation(std::move(br_then));
+
+      // Else block
+      if (if_stmt.has_else()) {
+        tir::Op else_lbl;
+        else_lbl.kind = tir::OpKind::Label;
+        else_lbl.label_id = else_label;
+        function.add_operation(std::move(else_lbl));
+        lower_statement(*if_stmt.else_branch(), function);
+        tir::Op br_else;
+        br_else.kind = tir::OpKind::Branch;
+        br_else.label_id = merge_label;
+        function.add_operation(std::move(br_else));
+      }
+
+      // Merge block
+      tir::Op merge_lbl;
+      merge_lbl.kind = tir::OpKind::Label;
+      merge_lbl.label_id = merge_label;
+      function.add_operation(std::move(merge_lbl));
+      return;
+    }
+    case Stmt::Kind::While: {
+      const auto& while_stmt = static_cast<const WhileStmt&>(statement);
+      int header_label = function.allocate_label();
+      int body_label = function.allocate_label();
+      int exit_label = function.allocate_label();
+
+      loop_stack_.push_back(LoopContext{exit_label, header_label});
+
+      tir::Op br_head;
+      br_head.kind = tir::OpKind::Branch;
+      br_head.label_id = header_label;
+      function.add_operation(std::move(br_head));
+
+      // Header block
+      tir::Op head_lbl;
+      head_lbl.kind = tir::OpKind::Label;
+      head_lbl.label_id = header_label;
+      function.add_operation(std::move(head_lbl));
+      tir::Value cond = lower_expression(while_stmt.condition(), function);
+      tir::Op br_cond;
+      br_cond.kind = tir::OpKind::BranchCond;
+      br_cond.location = while_stmt.location();
+      br_cond.operand = cond;
+      br_cond.true_label = body_label;
+      br_cond.false_label = exit_label;
+      function.add_operation(std::move(br_cond));
+
+      // Body block
+      tir::Op body_lbl;
+      body_lbl.kind = tir::OpKind::Label;
+      body_lbl.label_id = body_label;
+      function.add_operation(std::move(body_lbl));
+      lower_block(while_stmt.body(), function);
+      tir::Op br_loop;
+      br_loop.kind = tir::OpKind::Branch;
+      br_loop.label_id = header_label;
+      function.add_operation(std::move(br_loop));
+
+      // Exit block
+      tir::Op exit_lbl;
+      exit_lbl.kind = tir::OpKind::Label;
+      exit_lbl.label_id = exit_label;
+      function.add_operation(std::move(exit_lbl));
+
+      loop_stack_.pop_back();
+      return;
+    }
+    case Stmt::Kind::For: {
+      const auto& for_stmt = static_cast<const ForStmt&>(statement);
+      push_scope();
+      if (for_stmt.has_initializer()) {
+        lower_statement(*for_stmt.initializer(), function);
+      }
+
+      int header_label = function.allocate_label();
+      int body_label = function.allocate_label();
+      int step_label = function.allocate_label();
+      int exit_label = function.allocate_label();
+
+      loop_stack_.push_back(LoopContext{exit_label, step_label});
+
+      tir::Op br_head;
+      br_head.kind = tir::OpKind::Branch;
+      br_head.label_id = header_label;
+      function.add_operation(std::move(br_head));
+
+      // Header block
+      tir::Op head_lbl;
+      head_lbl.kind = tir::OpKind::Label;
+      head_lbl.label_id = header_label;
+      function.add_operation(std::move(head_lbl));
+      if (for_stmt.has_condition()) {
+        tir::Value cond = lower_expression(*for_stmt.condition(), function);
+        tir::Op br_cond;
+        br_cond.kind = tir::OpKind::BranchCond;
+        br_cond.location = for_stmt.location();
+        br_cond.operand = cond;
+        br_cond.true_label = body_label;
+        br_cond.false_label = exit_label;
+        function.add_operation(std::move(br_cond));
+      } else {
+        tir::Op br_body;
+        br_body.kind = tir::OpKind::Branch;
+        br_body.label_id = body_label;
+        function.add_operation(std::move(br_body));
+      }
+
+      // Body block
+      tir::Op body_lbl;
+      body_lbl.kind = tir::OpKind::Label;
+      body_lbl.label_id = body_label;
+      function.add_operation(std::move(body_lbl));
+      lower_block(for_stmt.body(), function);
+      tir::Op br_step;
+      br_step.kind = tir::OpKind::Branch;
+      br_step.label_id = step_label;
+      function.add_operation(std::move(br_step));
+
+      // Step block
+      tir::Op step_lbl;
+      step_lbl.kind = tir::OpKind::Label;
+      step_lbl.label_id = step_label;
+      function.add_operation(std::move(step_lbl));
+      if (for_stmt.has_step()) {
+        lower_statement(*for_stmt.step(), function);
+      }
+      tir::Op br_next;
+      br_next.kind = tir::OpKind::Branch;
+      br_next.label_id = header_label;
+      function.add_operation(std::move(br_next));
+
+      // Exit block
+      tir::Op exit_lbl;
+      exit_lbl.kind = tir::OpKind::Label;
+      exit_lbl.label_id = exit_label;
+      function.add_operation(std::move(exit_lbl));
+
+      loop_stack_.pop_back();
+      pop_scope();
+      return;
+    }
+    case Stmt::Kind::Break: {
+      tir::Op br;
+      br.kind = tir::OpKind::Branch;
+      br.location = statement.location();
+      br.label_id = loop_stack_.back().break_label;
+      function.add_operation(std::move(br));
+      return;
+    }
+    case Stmt::Kind::Continue: {
+      tir::Op br;
+      br.kind = tir::OpKind::Branch;
+      br.location = statement.location();
+      br.label_id = loop_stack_.back().continue_label;
+      function.add_operation(std::move(br));
       return;
     }
     case Stmt::Kind::Return: {
@@ -315,7 +511,6 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
     case Expr::Kind::Binary: {
       const auto& binary = static_cast<const BinaryExpr&>(expr);
 
-      // Short-circuit evaluation for && and ||
       if (binary.op() == BinaryOp::LogicalAnd || binary.op() == BinaryOp::LogicalOr) {
         tir::Value slot = function.allocate_value(Type::bool_type());
         tir::Op alloca;
@@ -350,7 +545,6 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         }
         function.add_operation(std::move(br_cond));
 
-        // Evaluate RHS block
         tir::Op rhs_lbl;
         rhs_lbl.kind = tir::OpKind::Label;
         rhs_lbl.label_id = rhs_label;
@@ -370,7 +564,6 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         br_merge.label_id = merge_label;
         function.add_operation(std::move(br_merge));
 
-        // Merge block
         tir::Op merge_lbl;
         merge_lbl.kind = tir::OpKind::Label;
         merge_lbl.label_id = merge_label;
@@ -404,30 +597,45 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
     }
     case Expr::Kind::Call: {
       const auto& call = static_cast<const CallExpr&>(expr);
-      if (call.callee() != "print") {
-        diagnostics_.error(kUnsupportedExpression, call.location(),
-                           "internal: TIR lowering received an unlowered call to '" +
-                               call.callee() + "'");
-        return tir::Value{};
-      }
-      if (call.arguments().size() != 1) return tir::Value{};
-      const Expr& argument = *call.arguments().front();
-      if (argument.kind() == Expr::Kind::StringLiteral) {
+      if (call.callee() == "print") {
+        if (call.arguments().size() != 1) return tir::Value{};
+        const Expr& argument = *call.arguments().front();
+        if (argument.kind() == Expr::Kind::StringLiteral) {
+          tir::Op op;
+          op.kind = tir::OpKind::PrintString;
+          op.location = call.location();
+          op.string_value = static_cast<const StringLiteralExpr&>(argument).value();
+          function.add_operation(std::move(op));
+          return tir::Value{};
+        }
+
+        const tir::Value arg_val = lower_expression(argument, function);
         tir::Op op;
-        op.kind = tir::OpKind::PrintString;
+        op.kind = tir::OpKind::Print;
         op.location = call.location();
-        op.string_value = static_cast<const StringLiteralExpr&>(argument).value();
+        op.operand = arg_val;
         function.add_operation(std::move(op));
         return tir::Value{};
       }
 
-      const tir::Value arg_val = lower_expression(argument, function);
+      std::vector<tir::Value> arg_vals;
+      for (const auto& argument : call.arguments()) {
+        arg_vals.push_back(lower_expression(*argument, function));
+      }
+
+      tir::Value result;
+      if (call.type().is_valid() && !call.type().is_void()) {
+        result = function.allocate_value(call.type());
+      }
+
       tir::Op op;
-      op.kind = tir::OpKind::Print;
+      op.kind = tir::OpKind::Call;
       op.location = call.location();
-      op.operand = arg_val;
+      op.callee = call.callee();
+      op.arguments = std::move(arg_vals);
+      op.result = result;
       function.add_operation(std::move(op));
-      return tir::Value{};
+      return result;
     }
   }
   return tir::Value{};

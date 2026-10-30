@@ -1,8 +1,4 @@
 // Lowers a type-checked AST into TIR.
-//
-// Preconditions: the TypeChecker has run and produced no errors, so every
-// expression carries a valid type. Lowering therefore never re-reports type
-// errors; it may only report internal inconsistencies (NRQ4001).
 #pragma once
 
 #include <memory>
@@ -23,6 +19,11 @@ class TirBuilder {
   std::unique_ptr<tir::Module> lower(const Program& program);
 
  private:
+  struct LoopContext {
+    int break_label = -1;
+    int continue_label = -1;
+  };
+
   void lower_function(const FunctionDecl& function, tir::Module& module);
   void lower_block(const BlockStmt& block, tir::Function& function);
   void lower_statement(const Stmt& statement, tir::Function& function);
@@ -33,8 +34,8 @@ class TirBuilder {
   tir::Value lookup_slot(const std::string& name) const;
 
   DiagnosticEngine& diagnostics_;
-  // Stack of name -> slot handle maps, mirroring the checker's scopes.
   std::vector<std::unordered_map<std::string, tir::Value>> scopes_;
+  std::vector<LoopContext> loop_stack_;
 };
 
 }  // namespace nirq

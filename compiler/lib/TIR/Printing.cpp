@@ -30,8 +30,14 @@ std::string print_tir(const tir::Module& module) {
   std::ostringstream out;
   out << "tir.module\n";
   for (const auto& function : module.functions()) {
-    out << "  func @" << function->name() << "() -> " << function->return_type().mangle()
-        << " {\n";
+    out << "  func @" << function->name() << "(";
+    for (std::size_t i = 0; i < function->parameters().size(); ++i) {
+      if (i > 0) out << ", ";
+      out << "%" << function->parameters()[i].value.id << " : "
+          << function->parameters()[i].type.mangle();
+    }
+    out << ") -> " << function->return_type().mangle() << " {\n";
+
     for (const tir::Op& op : function->operations()) {
       out << "    ";
       if (op.kind == tir::OpKind::Label) {
@@ -72,6 +78,14 @@ std::string print_tir(const tir::Module& module) {
         case tir::OpKind::Cast:
           out << "." << tir::cast_kind_name(op.cast_kind) << " " << value_name(op.operand)
               << " : " << op.result.type.mangle();
+          break;
+        case tir::OpKind::Call:
+          out << " @" << op.callee << "(";
+          for (std::size_t i = 0; i < op.arguments.size(); ++i) {
+            if (i > 0) out << ", ";
+            out << value_name(op.arguments[i]);
+          }
+          out << ")";
           break;
         case tir::OpKind::PrintString:
           out << " \"" << escape(op.string_value) << "\"";
