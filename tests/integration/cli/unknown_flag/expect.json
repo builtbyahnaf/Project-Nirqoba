@@ -1,0 +1,6 @@
+{
+  "mode": "raw",
+  "args": ["build", "some.nrqba", "--unsupported-option"],
+  "expect_exit": 2,
+  "expect_stderr_contains": ["[NRQ5002]"]
+}

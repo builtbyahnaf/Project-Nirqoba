@@ -1,0 +1,4 @@
+int function main() {
+    print("MLIR lowering test");
+    return 0;
+}

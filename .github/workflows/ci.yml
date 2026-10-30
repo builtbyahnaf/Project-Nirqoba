@@ -1,0 +1,53 @@
+name: Nirqoba CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Cache LLVM/MLIR SDK
+      id: cache-llvm
+      uses: actions/cache@v4
+      with:
+        path: toolchain/llvm-23.1.4
+        key: llvm-23.1.4-${{ hashFiles('toolchain/versions.lock.json') }}
+
+    - name: Install Ninja
+      run: |
+        py -m pip install ninja
+
+    - name: Bootstrap toolchain
+      shell: powershell
+      run: |
+        .\scripts\bootstrap.ps1
+
+    - name: Build Nirqoba (RelWithDebInfo)
+      shell: powershell
+      run: |
+        .\scripts\build.ps1 -Configuration RelWithDebInfo
+
+    - name: Run Test Suite
+      shell: powershell
+      run: |
+        .\scripts\test.ps1 -Configuration RelWithDebInfo
+
+    - name: Upload Test Logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-logs
+        path: build/logs/

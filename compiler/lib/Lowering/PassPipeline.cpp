@@ -6,6 +6,8 @@
 #include "mlir/Dialect/Func/IR/FuncDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinDialect.h"
+#include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 
 #include "nirqoba/Lowering/NrqDialect.h"
 
@@ -23,6 +25,8 @@ void register_all_dialects(mlir::DialectRegistry& registry) {
     mlir::LLVM::LLVMDialect,
     nirq::nrq::NrqDialect
   >();
+  mlir::registerBuiltinDialectTranslation(registry);
+  mlir::registerLLVMDialectTranslation(registry);
 }
 
 void register_dialects(mlir::DialectRegistry& registry) {
