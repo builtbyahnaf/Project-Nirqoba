@@ -1,31 +1,4 @@
 // NrqToLLVMPass.cpp — lowers the nrq dialect to the LLVM dialect.
-//
-// This pass is the Phase 1 "compile" step in the MLIR pipeline. Its job is to
-// turn every nrq.print_string op into:
-//
-//   1. An llvm.mlir.global constant holding the string bytes (NUL-terminated,
-//      though the runtime also receives the byte length).
-//   2. A call to the runtime symbol `nrq_print_string(ptr, i64)`.
-//
-// Algorithm:
-//   The pass walks all func.func bodies in the module. When it finds a
-//   nrq.print_string op it:
-//     a. Materialises a uniqued global constant for the literal text.
-//        Uniqueness is by content: two identical string literals produce one
-//        global, reducing the symbol table size.
-//     b. Emits an llvm.getelementptr to get a ptr into the global.
-//     c. Emits the byte-length as an i64 constant.
-//     d. Emits llvm.call @nrq_print_string(%ptr, %len).
-//     e. Erases the original op.
-//
-// The nrq_print_string symbol is declared as an llvm.func with external
-// linkage once per module; MLIR deduplicates additional declarations.
-//
-// Why not use MLIR's ConversionPattern machinery?
-//   ConversionPattern requires a TypeConverter and a full dialect conversion
-//   framework. Phase 1's nrq dialect has one op and no custom types, so a
-//   simple op walk is both correct and much easier to read. Phase 2 or 3 can
-//   upgrade to the pattern framework when the dialect grows.
 
 #include <memory>
 #include <string>
@@ -43,77 +16,49 @@
 namespace nirq {
 namespace {
 
-// ----------------------------------------------------------------------------
-// Helpers
-// ----------------------------------------------------------------------------
-
-// Ensures `@nrq_print_string` is declared in the module as:
-//   llvm.func @nrq_print_string(!llvm.ptr, i64) -> i32
-// Returns the symbol name so callers can emit a call.
-static mlir::LLVM::LLVMFuncOp
-ensure_runtime_decl(mlir::ModuleOp module, mlir::OpBuilder& builder) {
-  const char* kSymbol = "nrq_print_string";
-
-  // If already declared, return it.
-  if (auto fn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(kSymbol)) {
+static mlir::LLVM::LLVMFuncOp ensure_runtime_decl(
+    mlir::ModuleOp module, mlir::OpBuilder& builder,
+    llvm::StringRef symbol, mlir::Type retTy, llvm::ArrayRef<mlir::Type> argTys) {
+  if (auto fn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(symbol)) {
     return fn;
   }
-
-  mlir::MLIRContext* ctx = module.getContext();
   mlir::OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToStart(module.getBody());
-
-  auto ptrTy = mlir::LLVM::LLVMPointerType::get(ctx);
-  auto i64Ty = builder.getI64Type();
-  auto i32Ty = builder.getI32Type();
-  auto fnTy  = mlir::LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, i64Ty});
-
+  auto fnTy = mlir::LLVM::LLVMFunctionType::get(retTy, argTys);
   return builder.create<mlir::LLVM::LLVMFuncOp>(
-    module.getLoc(), kSymbol, fnTy,
-    mlir::LLVM::Linkage::External);
+      module.getLoc(), symbol, fnTy, mlir::LLVM::Linkage::External);
 }
 
-// Creates (or returns) a module-level llvm.mlir.global constant for `text`.
-// Globals are uniqued by content using a module-level map passed in by the
-// caller; two identical literals share one global.
-static mlir::LLVM::GlobalOp
-get_or_create_string_global(mlir::ModuleOp module,
-                             mlir::OpBuilder& builder,
-                             const std::string& text,
-                             std::unordered_map<std::string, mlir::LLVM::GlobalOp>& cache) {
+static mlir::LLVM::GlobalOp get_or_create_string_global(
+    mlir::ModuleOp module, mlir::OpBuilder& builder,
+    const std::string& text,
+    std::unordered_map<std::string, mlir::LLVM::GlobalOp>& cache) {
   auto it = cache.find(text);
   if (it != cache.end()) return it->second;
 
-  mlir::MLIRContext* ctx = module.getContext();
   mlir::OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToStart(module.getBody());
 
-  // The global stores the UTF-8 bytes including a NUL terminator.
   const std::string stored = text + '\0';
   const std::size_t num_bytes = stored.size();
 
   auto arrayTy = mlir::LLVM::LLVMArrayType::get(builder.getI8Type(),
-                                                  static_cast<unsigned>(num_bytes));
+                                                static_cast<unsigned>(num_bytes));
 
-  // Unique the name by a counter to avoid collisions.
   static int counter = 0;
   const std::string sym = "__nrq_str_" + std::to_string(counter++);
 
   auto global = builder.create<mlir::LLVM::GlobalOp>(
-    module.getLoc(),
-    arrayTy,
-    /*isConstant=*/true,
-    mlir::LLVM::Linkage::Private,
-    sym,
-    builder.getStringAttr(stored));
+      module.getLoc(),
+      arrayTy,
+      /*isConstant=*/true,
+      mlir::LLVM::Linkage::Private,
+      sym,
+      builder.getStringAttr(stored));
 
   cache.emplace(text, global);
   return global;
 }
-
-// ----------------------------------------------------------------------------
-// Pass implementation
-// ----------------------------------------------------------------------------
 
 class NrqToLLVMPass : public mlir::PassWrapper<NrqToLLVMPass, mlir::OperationPass<mlir::ModuleOp>> {
  public:
@@ -130,74 +75,117 @@ class NrqToLLVMPass : public mlir::PassWrapper<NrqToLLVMPass, mlir::OperationPas
     mlir::OpBuilder builder(ctx);
 
     std::unordered_map<std::string, mlir::LLVM::GlobalOp> string_cache;
-    bool failed = false;
+    auto ptrTy = mlir::LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = builder.getI64Type();
+    auto i32Ty = builder.getI32Type();
+    auto f64Ty = builder.getF64Type();
 
-    // Ensure the runtime declaration exists before walking so any newly
-    // created call sites see a defined callee.
-    mlir::LLVM::LLVMFuncOp runtime_fn = ensure_runtime_decl(module, builder);
+    // 1. Lower nrq.print_string
+    llvm::SmallVector<nrq::PrintStringOp, 8> str_ops;
+    module.walk([&](nrq::PrintStringOp op) { str_ops.push_back(op); });
+    if (!str_ops.empty()) {
+      auto fn = ensure_runtime_decl(module, builder, "nrq_print_string", i32Ty, {ptrTy, i64Ty});
+      for (nrq::PrintStringOp op : str_ops) {
+        const std::string text = op.getValue().str();
+        builder.setInsertionPoint(op);
+        mlir::Location loc = op.getLoc();
 
-    // Collect all nrq.print_string ops first to avoid mutation during walk.
-    llvm::SmallVector<nrq::PrintStringOp, 8> print_ops;
-    module.walk([&](nrq::PrintStringOp op) {
-      print_ops.push_back(op);
-    });
+        mlir::LLVM::GlobalOp global = get_or_create_string_global(module, builder, text, string_cache);
+        mlir::Value addr = builder.create<mlir::LLVM::AddressOfOp>(loc, ptrTy, global.getSymName());
+        mlir::Value zero = builder.create<mlir::LLVM::ConstantOp>(loc, i64Ty, builder.getI64IntegerAttr(0));
+        mlir::Value gep = builder.create<mlir::LLVM::GEPOp>(
+            loc, ptrTy, global.getType(), addr, mlir::ValueRange{zero, zero}, /*inbounds=*/true);
+        mlir::Value len_val = builder.create<mlir::LLVM::ConstantOp>(
+            loc, i64Ty, builder.getI64IntegerAttr(static_cast<int64_t>(text.size())));
 
-    for (nrq::PrintStringOp op : print_ops) {
-      const std::string text = op.getValue().str();
-      builder.setInsertionPoint(op);
-
-      mlir::Location loc = op.getLoc();
-
-      // --- 1. Materialise or reuse the string global.
-      mlir::LLVM::GlobalOp global = get_or_create_string_global(
-          module, builder, text, string_cache);
-
-      // --- 2. GEP to get a pointer to the first byte.
-      auto ptrTy = mlir::LLVM::LLVMPointerType::get(ctx);
-      auto i64Ty = builder.getI64Type();
-      auto i32Ty = builder.getI32Type();
-
-      // addressof gives us a ptr to the global array.
-      mlir::Value addr = builder.create<mlir::LLVM::AddressOfOp>(
-          loc, ptrTy, global.getSymName());
-
-      // GEP [N x i8]* %addr, 0, 0 -> ptr to first byte.
-      mlir::Value zero = builder.create<mlir::LLVM::ConstantOp>(
-          loc, i64Ty, builder.getI64IntegerAttr(0));
-
-      mlir::Value gep = builder.create<mlir::LLVM::GEPOp>(
-          loc,
-          ptrTy,
-          global.getType(),
-          addr,
-          mlir::ValueRange{zero, zero},
-          /*inbounds=*/true);
-
-      // --- 3. Length as i64 (not counting the NUL terminator).
-      mlir::Value len_val = builder.create<mlir::LLVM::ConstantOp>(
-          loc, i64Ty,
-          builder.getI64IntegerAttr(static_cast<int64_t>(text.size())));
-
-      // --- 4. Call nrq_print_string(ptr, len).
-      builder.create<mlir::LLVM::CallOp>(
-          loc,
-          mlir::TypeRange{i32Ty},
-          mlir::FlatSymbolRefAttr::get(ctx, runtime_fn.getSymName()),
-          mlir::ValueRange{gep, len_val});
-
-      // --- 5. Erase the original nrq.print_string op.
-      op.erase();
+        builder.create<mlir::LLVM::CallOp>(
+            loc, mlir::TypeRange{i32Ty},
+            mlir::FlatSymbolRefAttr::get(ctx, fn.getSymName()),
+            mlir::ValueRange{gep, len_val});
+        op.erase();
+      }
     }
 
-    if (failed) {
-      signalPassFailure();
+    // 2. Lower nrq.print_int
+    llvm::SmallVector<nrq::PrintIntOp, 8> int_ops;
+    module.walk([&](nrq::PrintIntOp op) { int_ops.push_back(op); });
+    if (!int_ops.empty()) {
+      auto fn = ensure_runtime_decl(module, builder, "nrq_print_int", i32Ty, {i64Ty});
+      for (nrq::PrintIntOp op : int_ops) {
+        builder.setInsertionPoint(op);
+        builder.create<mlir::LLVM::CallOp>(
+            op.getLoc(), mlir::TypeRange{i32Ty},
+            mlir::FlatSymbolRefAttr::get(ctx, fn.getSymName()),
+            mlir::ValueRange{op.getValue()});
+        op.erase();
+      }
+    }
+
+    // 3. Lower nrq.print_uint
+    llvm::SmallVector<nrq::PrintUintOp, 8> uint_ops;
+    module.walk([&](nrq::PrintUintOp op) { uint_ops.push_back(op); });
+    if (!uint_ops.empty()) {
+      auto fn = ensure_runtime_decl(module, builder, "nrq_print_uint", i32Ty, {i64Ty});
+      for (nrq::PrintUintOp op : uint_ops) {
+        builder.setInsertionPoint(op);
+        builder.create<mlir::LLVM::CallOp>(
+            op.getLoc(), mlir::TypeRange{i32Ty},
+            mlir::FlatSymbolRefAttr::get(ctx, fn.getSymName()),
+            mlir::ValueRange{op.getValue()});
+        op.erase();
+      }
+    }
+
+    // 4. Lower nrq.print_f64
+    llvm::SmallVector<nrq::PrintF64Op, 8> f64_ops;
+    module.walk([&](nrq::PrintF64Op op) { f64_ops.push_back(op); });
+    if (!f64_ops.empty()) {
+      auto fn = ensure_runtime_decl(module, builder, "nrq_print_f64", i32Ty, {f64Ty});
+      for (nrq::PrintF64Op op : f64_ops) {
+        builder.setInsertionPoint(op);
+        builder.create<mlir::LLVM::CallOp>(
+            op.getLoc(), mlir::TypeRange{i32Ty},
+            mlir::FlatSymbolRefAttr::get(ctx, fn.getSymName()),
+            mlir::ValueRange{op.getValue()});
+        op.erase();
+      }
+    }
+
+    // 5. Lower nrq.print_bool
+    llvm::SmallVector<nrq::PrintBoolOp, 8> bool_ops;
+    module.walk([&](nrq::PrintBoolOp op) { bool_ops.push_back(op); });
+    if (!bool_ops.empty()) {
+      auto fn = ensure_runtime_decl(module, builder, "nrq_print_bool", i32Ty, {i32Ty});
+      for (nrq::PrintBoolOp op : bool_ops) {
+        builder.setInsertionPoint(op);
+        mlir::Value i32_val = builder.create<mlir::LLVM::ZExtOp>(op.getLoc(), i32Ty, op.getValue());
+        builder.create<mlir::LLVM::CallOp>(
+            op.getLoc(), mlir::TypeRange{i32Ty},
+            mlir::FlatSymbolRefAttr::get(ctx, fn.getSymName()),
+            mlir::ValueRange{i32_val});
+        op.erase();
+      }
+    }
+
+    // 6. Lower nrq.print_char
+    llvm::SmallVector<nrq::PrintCharOp, 8> char_ops;
+    module.walk([&](nrq::PrintCharOp op) { char_ops.push_back(op); });
+    if (!char_ops.empty()) {
+      auto fn = ensure_runtime_decl(module, builder, "nrq_print_char", i32Ty, {i32Ty});
+      for (nrq::PrintCharOp op : char_ops) {
+        builder.setInsertionPoint(op);
+        builder.create<mlir::LLVM::CallOp>(
+            op.getLoc(), mlir::TypeRange{i32Ty},
+            mlir::FlatSymbolRefAttr::get(ctx, fn.getSymName()),
+            mlir::ValueRange{op.getValue()});
+        op.erase();
+      }
     }
   }
 };
 
 }  // namespace
 
-// Factory function declared in PassPipeline.cpp.
 std::unique_ptr<mlir::Pass> createNrqToLLVMPass() {
   return std::make_unique<NrqToLLVMPass>();
 }

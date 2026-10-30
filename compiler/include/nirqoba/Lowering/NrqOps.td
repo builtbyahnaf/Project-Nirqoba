@@ -15,9 +15,7 @@ def Nrq_Dialect : Dialect {
   let summary = "Operations specific to the Nirqoba language";
   let description = [{
     The `nrq` dialect represents language-level operations that are lowered to
-    calls into the Nirqoba runtime. Phase 1 defines a single operation,
-    `nrq.print_string`, which carries the literal text as an attribute: the
-    string table is materialised only when the operation is lowered to LLVM.
+    calls into the Nirqoba runtime.
   }];
   let useDefaultAttributePrinterParser = 1;
 }
@@ -27,12 +25,39 @@ class Nrq_Op<string mnemonic> : Op<Nrq_Dialect, mnemonic>;
 def Nrq_PrintStringOp : Nrq_Op<"print_string"> {
   let summary = "Write a string literal followed by a newline to standard output";
   let description = [{
-    Lowers to a call to `nrq_print_string` in the Nirqoba runtime, which writes
-    the bytes and a trailing newline to the standard output handle. The runtime
-    call is the ABI boundary established in Phase 1 and the place where Phase 6
-    will attach flush/ownership handling.
+    Lowers to a call to `nrq_print_string` in the Nirqoba runtime.
   }];
   let arguments = (ins StrAttr:$value);
+  let assemblyFormat = "$value attr-dict";
+}
+
+def Nrq_PrintIntOp : Nrq_Op<"print_int"> {
+  let summary = "Print an i64 integer followed by a newline";
+  let arguments = (ins I64:$value);
+  let assemblyFormat = "$value attr-dict";
+}
+
+def Nrq_PrintUintOp : Nrq_Op<"print_uint"> {
+  let summary = "Print an u64 unsigned integer followed by a newline";
+  let arguments = (ins I64:$value);
+  let assemblyFormat = "$value attr-dict";
+}
+
+def Nrq_PrintF64Op : Nrq_Op<"print_f64"> {
+  let summary = "Print an f64 float followed by a newline";
+  let arguments = (ins F64:$value);
+  let assemblyFormat = "$value attr-dict";
+}
+
+def Nrq_PrintBoolOp : Nrq_Op<"print_bool"> {
+  let summary = "Print a bool followed by a newline";
+  let arguments = (ins I1:$value);
+  let assemblyFormat = "$value attr-dict";
+}
+
+def Nrq_PrintCharOp : Nrq_Op<"print_char"> {
+  let summary = "Print a char (unicode code point) followed by a newline";
+  let arguments = (ins I32:$value);
   let assemblyFormat = "$value attr-dict";
 }
 

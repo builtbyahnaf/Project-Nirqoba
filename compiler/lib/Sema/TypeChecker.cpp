@@ -5,7 +5,7 @@
 namespace nirq {
 namespace {
 
-// Builtin `print` is the only callable in Phase 1; it is spelled like a
+// Builtin `print` is the only callable in Phase 1 & 2; it is spelled like a
 // function so Phase 3 can replace this special case with real overloads
 // without changing the surface syntax.
 constexpr const char* kPrintBuiltin = "print";
@@ -39,17 +39,17 @@ bool TypeChecker::check(Program& program) {
   } else if (main_function != nullptr) {
     if (!main_function->parameters().empty()) {
       diagnostics_.error(diag::kMainParameters, main_function->location(),
-                         "'main' must not declare parameters in Phase 1");
+                         "'main' must not declare parameters in Phase 2");
     }
-    if (!main_function->return_type().is_int() && !main_function->return_type().is_void()) {
+    if (!main_function->return_type().is_integer() && !main_function->return_type().is_void()) {
       diagnostics_.error(diag::kInvalidMainReturn, main_function->location(),
-                         "'main' must return 'int' or 'void', not '" +
+                         "'main' must return an integer or 'void', not '" +
                              main_function->return_type().to_string() + "'");
     }
   }
 
   for (const auto& function : program.functions()) {
-    if (function->return_type().is_int() || function->return_type().is_void()) {
+    if (function->return_type().is_integer() || function->return_type().is_void()) {
       check_function(*function);
     }
   }
@@ -70,10 +70,11 @@ void TypeChecker::check_function(FunctionDecl& function) {
 
   check_block(const_cast<BlockStmt&>(function.body()));
 
-  if (current_return_type_.is_int() && block_can_fall_through(function.body())) {
+  if (!current_return_type_.is_void() && block_can_fall_through(function.body())) {
     diagnostics_.error(diag::kMissingReturn, function.location(),
-                       "function '" + function.name() +
-                           "' returns 'int' but control can reach the end of its body");
+                       "function '" + function.name() + "' returns '" +
+                           current_return_type_.to_string() +
+                           "' but control can reach the end of its body");
   }
 
   symbols_.pop_scope();
@@ -98,6 +99,9 @@ void TypeChecker::check_statement(Stmt& statement) {
       return;
     case Stmt::Kind::Assignment:
       check_assignment(static_cast<AssignmentStmt&>(statement));
+      return;
+    case Stmt::Kind::CompoundAssignment:
+      check_compound_assignment(static_cast<CompoundAssignmentStmt&>(statement));
       return;
     case Stmt::Kind::Return:
       check_return(static_cast<ReturnStmt&>(statement));
@@ -154,13 +158,69 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
   }
 }
 
+void TypeChecker::check_compound_assignment(CompoundAssignmentStmt& assignment) {
+  const Type value_type = check_expression(const_cast<Expr&>(assignment.value()));
+  const Symbol* symbol = symbols_.lookup(assignment.name());
+  if (symbol == nullptr) {
+    diagnostics_.error(diag::kUndefinedName, assignment.name_location(),
+                       "compound assignment to undeclared variable '" + assignment.name() + "'");
+    return;
+  }
+  if (!symbol->is_mutable()) {
+    diagnostics_.error(diag::kImmutableAssignment, assignment.name_location(),
+                       "'" + assignment.name() + "' was declared as " +
+                           std::string(binding_kind_spelling(symbol->binding)) +
+                           " and cannot be mutated; declare it with 'var' to mutate it");
+    return;
+  }
+  if (!symbol->type.is_valid() || !value_type.is_valid()) return;
+
+  if (symbol->type != value_type) {
+    diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                       "cannot apply compound operator to target of type '" +
+                           symbol->type.to_string() + "' and operand of type '" +
+                           value_type.to_string() + "'");
+    return;
+  }
+
+  // Operator applicability check
+  switch (assignment.op()) {
+    case BinaryOp::Remainder:
+    case BinaryOp::BitwiseAnd:
+    case BinaryOp::BitwiseOr:
+    case BinaryOp::BitwiseXor:
+    case BinaryOp::ShiftLeft:
+    case BinaryOp::ShiftRight:
+      if (!symbol->type.is_integer()) {
+        diagnostics_.error(diag::kTypeMismatch, assignment.location(),
+                           "operator '" + std::string(binary_op_spelling(assignment.op())) +
+                               "=' requires integer operands, found '" + symbol->type.to_string() + "'");
+      }
+      break;
+    case BinaryOp::Add:
+    case BinaryOp::Subtract:
+    case BinaryOp::Multiply:
+    case BinaryOp::Divide:
+    case BinaryOp::Exponentiate:
+      if (!symbol->type.is_numeric()) {
+        diagnostics_.error(diag::kTypeMismatch, assignment.location(),
+                           "operator '" + std::string(binary_op_spelling(assignment.op())) +
+                               "=' requires numeric operands, found '" + symbol->type.to_string() + "'");
+      }
+      break;
+    default:
+      break;
+  }
+}
+
 void TypeChecker::check_return(ReturnStmt& statement) {
   if (!current_return_type_.is_valid()) return;  // function already failed to resolve
 
   if (!statement.has_value()) {
-    if (current_return_type_.is_int()) {
+    if (!current_return_type_.is_void()) {
       diagnostics_.error(diag::kReturnValueRequired, statement.location(),
-                         "'return' without a value in a function returning 'int'");
+                         "'return' without a value in a function returning '" +
+                             current_return_type_.to_string() + "'");
     }
     return;
   }
@@ -249,31 +309,144 @@ Type TypeChecker::check_expression(Expr& expr) {
     case Expr::Kind::Unary: {
       auto& unary = static_cast<UnaryExpr&>(expr);
       const Type operand_type = check_expression(const_cast<Expr&>(unary.operand()));
-      if (operand_type.is_valid() && !operand_type.is_int()) {
-        diagnostics_.error(diag::kTypeMismatch, unary.location(),
-                           "operator '" + std::string(unary_op_spelling(unary.op())) +
-                               "' requires an 'int' operand, not '" +
-                               operand_type.to_string() + "'");
+      if (!operand_type.is_valid()) break;
+
+      switch (unary.op()) {
+        case UnaryOp::Negate:
+        case UnaryOp::Plus:
+          if (!operand_type.is_numeric()) {
+            diagnostics_.error(diag::kTypeMismatch, unary.location(),
+                               "operator '" + std::string(unary_op_spelling(unary.op())) +
+                                   "' requires a numeric operand, not '" +
+                                   operand_type.to_string() + "'");
+            type = Type::error();
+          } else {
+            type = operand_type;
+          }
+          break;
+        case UnaryOp::LogicalNot:
+          if (!operand_type.is_bool()) {
+            diagnostics_.error(diag::kTypeMismatch, unary.location(),
+                               "operator '!' requires a 'bool' operand, not '" +
+                                   operand_type.to_string() + "'");
+            type = Type::error();
+          } else {
+            type = Type::bool_type();
+          }
+          break;
+        case UnaryOp::BitwiseNot:
+          if (!operand_type.is_integer()) {
+            diagnostics_.error(diag::kTypeMismatch, unary.location(),
+                               "operator '~' requires an integer operand, not '" +
+                                   operand_type.to_string() + "'");
+            type = Type::error();
+          } else {
+            type = operand_type;
+          }
+          break;
       }
-      type = operand_type.is_int() ? Type::int_type() : Type::error();
       break;
     }
     case Expr::Kind::Binary: {
       auto& binary = static_cast<BinaryExpr&>(expr);
       const Type lhs_type = check_expression(const_cast<Expr&>(binary.lhs()));
       const Type rhs_type = check_expression(const_cast<Expr&>(binary.rhs()));
+      if (!lhs_type.is_valid() || !rhs_type.is_valid()) break;
+
       const std::string spelling(binary_op_spelling(binary.op()));
-      if (lhs_type.is_valid() && !lhs_type.is_int()) {
-        diagnostics_.error(diag::kTypeMismatch, binary.lhs().location(),
-                           "left operand of '" + spelling + "' must be 'int', not '" +
-                               lhs_type.to_string() + "'");
+
+      // Check constant division by zero
+      if (binary.op() == BinaryOp::Divide || binary.op() == BinaryOp::Remainder) {
+        if (binary.rhs().kind() == Expr::Kind::IntegerLiteral) {
+          const auto& lit = static_cast<const IntegerLiteralExpr&>(binary.rhs());
+          if (lit.value() == 0) {
+            diagnostics_.error(diag::kConstDivisionByZero, binary.rhs().location(),
+                               "division by constant zero");
+          }
+        }
       }
-      if (rhs_type.is_valid() && !rhs_type.is_int()) {
-        diagnostics_.error(diag::kTypeMismatch, binary.rhs().location(),
-                           "right operand of '" + spelling + "' must be 'int', not '" +
-                               rhs_type.to_string() + "'");
+
+      switch (binary.op()) {
+        case BinaryOp::Add:
+        case BinaryOp::Subtract:
+        case BinaryOp::Multiply:
+        case BinaryOp::Divide:
+        case BinaryOp::Exponentiate:
+          if (!lhs_type.is_numeric() || !rhs_type.is_numeric()) {
+            diagnostics_.error(diag::kTypeMismatch, binary.location(),
+                               "operator '" + spelling + "' requires numeric operands, found '" +
+                                   lhs_type.to_string() + "' and '" + rhs_type.to_string() + "'");
+            type = Type::error();
+          } else if (lhs_type != rhs_type) {
+            diagnostics_.error(diag::kTypeMismatch, binary.location(),
+                               "mismatched operand types for '" + spelling + "': '" +
+                                   lhs_type.to_string() + "' and '" + rhs_type.to_string() + "'");
+            type = Type::error();
+          } else {
+            type = lhs_type;
+          }
+          break;
+        case BinaryOp::Remainder:
+        case BinaryOp::BitwiseAnd:
+        case BinaryOp::BitwiseOr:
+        case BinaryOp::BitwiseXor:
+        case BinaryOp::ShiftLeft:
+        case BinaryOp::ShiftRight:
+          if (!lhs_type.is_integer() || !rhs_type.is_integer()) {
+            diagnostics_.error(diag::kTypeMismatch, binary.location(),
+                               "operator '" + spelling + "' requires integer operands, found '" +
+                                   lhs_type.to_string() + "' and '" + rhs_type.to_string() + "'");
+            type = Type::error();
+          } else if (lhs_type != rhs_type) {
+            diagnostics_.error(diag::kTypeMismatch, binary.location(),
+                               "mismatched operand types for '" + spelling + "': '" +
+                                   lhs_type.to_string() + "' and '" + rhs_type.to_string() + "'");
+            type = Type::error();
+          } else {
+            type = lhs_type;
+          }
+          break;
+        case BinaryOp::Equal:
+        case BinaryOp::NotEqual:
+          if (lhs_type != rhs_type) {
+            diagnostics_.error(diag::kTypeMismatch, binary.location(),
+                               "cannot compare values of different types for equality: '" +
+                                   lhs_type.to_string() + "' and '" + rhs_type.to_string() + "'");
+            type = Type::error();
+          } else {
+            type = Type::bool_type();
+          }
+          break;
+        case BinaryOp::Less:
+        case BinaryOp::LessEqual:
+        case BinaryOp::Greater:
+        case BinaryOp::GreaterEqual:
+          if (!lhs_type.is_numeric() || !rhs_type.is_numeric()) {
+            diagnostics_.error(diag::kTypeMismatch, binary.location(),
+                               "comparison operator '" + spelling + "' requires numeric operands, found '" +
+                                   lhs_type.to_string() + "' and '" + rhs_type.to_string() + "'");
+            type = Type::error();
+          } else if (lhs_type != rhs_type) {
+            diagnostics_.error(diag::kTypeMismatch, binary.location(),
+                               "mismatched operand types for comparison '" + spelling + "': '" +
+                                   lhs_type.to_string() + "' and '" + rhs_type.to_string() + "'");
+            type = Type::error();
+          } else {
+            type = Type::bool_type();
+          }
+          break;
+        case BinaryOp::LogicalAnd:
+        case BinaryOp::LogicalOr:
+          if (!lhs_type.is_bool() || !rhs_type.is_bool()) {
+            diagnostics_.error(diag::kTypeMismatch, binary.location(),
+                               "logical operator '" + spelling + "' requires 'bool' operands, found '" +
+                                   lhs_type.to_string() + "' and '" + rhs_type.to_string() + "'");
+            type = Type::error();
+          } else {
+            type = Type::bool_type();
+          }
+          break;
       }
-      type = (lhs_type.is_int() && rhs_type.is_int()) ? Type::int_type() : Type::error();
       break;
     }
   }
@@ -285,7 +458,7 @@ Type TypeChecker::check_call(CallExpr& call) {
   if (call.callee() == kPrintBuiltin) {
     if (call.arguments().size() != 1) {
       diagnostics_.error(diag::kPrintArity, call.location(),
-                         "'print' takes exactly one 'string' argument, but " +
+                         "'print' takes exactly one argument, but " +
                              std::to_string(call.arguments().size()) + " were given");
       for (const ExprPtr& argument : call.arguments()) {
         check_expression(const_cast<Expr&>(*argument));
@@ -294,23 +467,23 @@ Type TypeChecker::check_call(CallExpr& call) {
     }
     const Type argument_type =
         check_expression(const_cast<Expr&>(*call.arguments().front()));
-    if (argument_type.is_valid() && !argument_type.is_string()) {
-      diagnostics_.error(diag::kPrintRequiresString, call.arguments().front()->location(),
-                         "'print' requires a 'string' argument, not '" +
-                             argument_type.to_string() +
-                             "'; formatting other types is specified for Phase 2");
+    if (argument_type.is_valid()) {
+      if (!argument_type.is_numeric() && !argument_type.is_bool() &&
+          !argument_type.is_char() && !argument_type.is_string()) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments().front()->location(),
+                           "'print' requires a scalar or string argument, not '" +
+                               argument_type.to_string() + "'");
+      }
     }
     return Type::void_type();
   }
 
-  // Any other callee: report the phase gap, but still walk the arguments so
-  // name errors inside them are reported too.
   for (const ExprPtr& argument : call.arguments()) {
     check_expression(const_cast<Expr&>(*argument));
   }
   diagnostics_.error(diag::kNotCallable, call.location(),
                      "call to '" + call.callee() +
-                         "' is not supported in Phase 1; user-defined function calls are "
+                         "' is not supported in Phase 2; user-defined function calls are "
                          "specified for Phase 3");
   return Type::error();
 }
@@ -334,8 +507,6 @@ bool TypeChecker::block_can_fall_through(const BlockStmt& block) const {
     case Stmt::Kind::Block:
       return block_can_fall_through(static_cast<const BlockStmt&>(last));
     default:
-      // Phase 1 has no branching, so any other final statement can reach the
-      // closing brace. Phase 3 replaces this with a terminator analysis.
       return true;
   }
 }

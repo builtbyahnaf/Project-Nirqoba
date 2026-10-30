@@ -1,33 +1,8 @@
 // runtime/src/io_windows.cpp
-// Windows x64 implementation of nrq_print_string, nrq_runtime_init and
-// nrq_runtime_shutdown.
-//
-// Implementation notes:
-//
-//   1. WriteFile is used instead of printf/puts because this boundary must be
-//      replaceable when the GC is introduced in Phase 6.5. CRT stdio buffers
-//      and internal state would make that replacement harder. WriteFile goes
-//      directly to the Win32 handle, which the GC can own and flush on
-//      collection cycles.
-//
-//   2. A partial-write loop handles the case where WriteFile writes fewer
-//      bytes than requested (unusual on Windows console handles but possible
-//      on redirected handles under low-memory conditions).
-//
-//   3. The newline is a single '\n'. Windows console mode translates '\n' to
-//      "\r\n" when ENABLE_PROCESSED_OUTPUT is set (the default), so the
-//      output looks correct in both console and file redirection contexts.
-//
-//   4. nrq_runtime_init and nrq_runtime_shutdown are currently no-ops. Their
-//      ABI exists so Phase 6.5 can wire in GC initialisation without changing
-//      the generated entry-point stub.
-//
-// Non-Windows compilation fails here with an explicit #error. There is no
-// silent stub; Linux support is scheduled for its own platform milestone.
+// Windows x64 implementation of nrq_print_*, nrq_runtime_init and nrq_runtime_shutdown.
 
 #ifndef _WIN32
-#  error "io_windows.cpp is the Windows-only runtime I/O implementation. \
-Linux support will be added in the dedicated platform milestone."
+#  error "io_windows.cpp is the Windows-only runtime I/O implementation."
 #endif
 
 #include "nirqoba/runtime/io.h"
@@ -35,11 +10,8 @@ Linux support will be added in the dedicated platform milestone."
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <cstdio>
 
-// Returns the cached standard output handle. Obtained once at first call.
-// We do not cache it at startup because the handle can be redirected by
-// the parent process before it calls WriteFile; caching it lazily is safe
-// on single-threaded Phase 1 programs.
 static HANDLE get_stdout_handle() {
     static HANDLE h = INVALID_HANDLE_VALUE;
     if (h == INVALID_HANDLE_VALUE) {
@@ -48,8 +20,6 @@ static HANDLE get_stdout_handle() {
     return h;
 }
 
-// Writes `size` bytes from `data` to `handle`, looping on short writes.
-// Returns 0 on success, the Windows error code on failure.
 static int32_t write_all(HANDLE handle, const char* data, DWORD size) {
     DWORD written = 0;
     while (written < size) {
@@ -66,37 +36,128 @@ extern "C" {
 
 int32_t nrq_print_string(const char* utf8, size_t byte_len) {
     HANDLE h = get_stdout_handle();
-    if (h == INVALID_HANDLE_VALUE || h == nullptr) {
-        // No output handle — the process was launched without one. Silently
-        // succeed so programs piped to /dev/null (NUL on Windows) do not crash.
-        return 0;
-    }
+    if (h == INVALID_HANDLE_VALUE || h == nullptr) return 0;
 
-    // Write the payload bytes (may be zero for an empty string).
     if (byte_len > 0) {
         const int32_t err = write_all(h, utf8, static_cast<DWORD>(byte_len));
         if (err != 0) return err;
     }
 
-    // Write the trailing newline.
     const char newline = '\n';
     return write_all(h, &newline, 1);
 }
 
+int32_t nrq_print_int(int64_t val) {
+    HANDLE h = get_stdout_handle();
+    if (h == INVALID_HANDLE_VALUE || h == nullptr) return 0;
+
+    char buf[32];
+    int len = 0;
+    uint64_t uval;
+    if (val < 0) {
+        buf[len++] = '-';
+        uval = static_cast<uint64_t>(-(val + 1)) + 1;
+    } else {
+        uval = static_cast<uint64_t>(val);
+    }
+
+    char digits[24];
+    int dcount = 0;
+    do {
+        digits[dcount++] = static_cast<char>('0' + (uval % 10));
+        uval /= 10;
+    } while (uval > 0);
+
+    while (dcount > 0) {
+        buf[len++] = digits[--dcount];
+    }
+    buf[len++] = '\n';
+
+    return write_all(h, buf, static_cast<DWORD>(len));
+}
+
+int32_t nrq_print_uint(uint64_t val) {
+    HANDLE h = get_stdout_handle();
+    if (h == INVALID_HANDLE_VALUE || h == nullptr) return 0;
+
+    char buf[32];
+    int len = 0;
+
+    char digits[24];
+    int dcount = 0;
+    do {
+        digits[dcount++] = static_cast<char>('0' + (val % 10));
+        val /= 10;
+    } while (val > 0);
+
+    while (dcount > 0) {
+        buf[len++] = digits[--dcount];
+    }
+    buf[len++] = '\n';
+
+    return write_all(h, buf, static_cast<DWORD>(len));
+}
+
+int32_t nrq_print_f64(double val) {
+    HANDLE h = get_stdout_handle();
+    if (h == INVALID_HANDLE_VALUE || h == nullptr) return 0;
+
+    char buf[64];
+    int n = snprintf(buf, sizeof(buf) - 2, "%.15g", val);
+    if (n < 0) n = 0;
+    buf[n++] = '\n';
+    return write_all(h, buf, static_cast<DWORD>(n));
+}
+
+int32_t nrq_print_f32(float val) {
+    return nrq_print_f64(static_cast<double>(val));
+}
+
+int32_t nrq_print_bool(int32_t val) {
+    HANDLE h = get_stdout_handle();
+    if (h == INVALID_HANDLE_VALUE || h == nullptr) return 0;
+
+    if (val != 0) {
+        return write_all(h, "true\n", 5);
+    } else {
+        return write_all(h, "false\n", 6);
+    }
+}
+
+int32_t nrq_print_char(uint32_t cp) {
+    HANDLE h = get_stdout_handle();
+    if (h == INVALID_HANDLE_VALUE || h == nullptr) return 0;
+
+    char buf[8];
+    int len = 0;
+    if (cp <= 0x7F) {
+        buf[len++] = static_cast<char>(cp);
+    } else if (cp <= 0x7FF) {
+        buf[len++] = static_cast<char>(0xC0 | ((cp >> 6) & 0x1F));
+        buf[len++] = static_cast<char>(0x80 | (cp & 0x3F));
+    } else if (cp <= 0xFFFF) {
+        buf[len++] = static_cast<char>(0xE0 | ((cp >> 12) & 0x0F));
+        buf[len++] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        buf[len++] = static_cast<char>(0x80 | (cp & 0x3F));
+    } else if (cp <= 0x10FFFF) {
+        buf[len++] = static_cast<char>(0xF0 | ((cp >> 18) & 0x07));
+        buf[len++] = static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+        buf[len++] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        buf[len++] = static_cast<char>(0x80 | (cp & 0x3F));
+    }
+    buf[len++] = '\n';
+
+    return write_all(h, buf, static_cast<DWORD>(len));
+}
+
 void nrq_runtime_init(void) {
-    // Phase 1: no initialisation needed.
-    // Phase 6.5 will initialise the GC heap and root registry here.
 }
 
 void nrq_runtime_shutdown(void) {
-    // Phase 1: flush stdout by calling FlushFileBuffers. This ensures the
-    // last nrq_print_string output is visible before the process exits, even
-    // when stdout is redirected to a pipe or file.
     HANDLE h = get_stdout_handle();
     if (h != INVALID_HANDLE_VALUE && h != nullptr) {
         FlushFileBuffers(h);
     }
-    // Phase 6.5 will drain the GC and release managed memory here.
 }
 
 }  // extern "C"

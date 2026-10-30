@@ -2,7 +2,7 @@
 #
 # Provides the C ABI symbols that the compiler emits calls to:
 #   nrq_print_string, nrq_runtime_init, nrq_runtime_shutdown,
-#   nrq_runtime_fatal, nrq_runtime_version.
+#   nrq_runtime_fatal, nrq_runtime_version, nrq_print_*, nrq_pow_*.
 #
 # This library intentionally avoids the C runtime stdio layer (printf, puts)
 # so the boundary remains replaceable when the GC is introduced in Phase 6.5.
@@ -17,6 +17,7 @@ add_library(nrqoba_runtime STATIC
   src/io_windows.cpp
   src/fatal_windows.cpp
   src/runtime_version.cpp
+  src/math.cpp
 )
 
 set_property(TARGET nrqoba_runtime PROPERTY CXX_STANDARD 20)
