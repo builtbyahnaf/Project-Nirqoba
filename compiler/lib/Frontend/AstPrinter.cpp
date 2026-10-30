@@ -9,6 +9,9 @@ class Printer {
  public:
   std::string print(const Program& program) {
     out_ << "program\n";
+    for (const auto& str : program.structs()) {
+      print_struct(*str);
+    }
     for (const auto& function : program.functions()) {
       print_function(*function);
     }
@@ -18,6 +21,17 @@ class Printer {
  private:
   void indent() {
     for (int level = 0; level < depth_; ++level) out_ << "  ";
+  }
+
+  void print_struct(const StructDecl& str) {
+    indent();
+    out_ << "struct @" << str.name() << " (" << str.location().line << ":" << str.location().column << ")\n";
+    ++depth_;
+    for (const auto& field : str.fields()) {
+      indent();
+      out_ << "field " << field.name << " : " << field.type.to_string() << "\n";
+    }
+    --depth_;
   }
 
   void print_function(const FunctionDecl& function) {
@@ -61,6 +75,17 @@ class Printer {
           out_ << " : " << declaration.annotation().to_string();
         }
         out_ << " = " << expression(declaration.initializer()) << "\n";
+        return;
+      }
+      case Stmt::Kind::Destructuring: {
+        const auto& destructure = static_cast<const DestructuringStmt&>(statement);
+        indent();
+        out_ << binding_kind_spelling(destructure.binding()) << " (";
+        for (std::size_t i = 0; i < destructure.names().size(); ++i) {
+          if (i > 0) out_ << ", ";
+          out_ << destructure.names()[i];
+        }
+        out_ << ") = " << expression(destructure.value()) << "\n";
         return;
       }
       case Stmt::Kind::Assignment: {
@@ -152,6 +177,51 @@ class Printer {
       }
       case Expr::Kind::BoolLiteral:
         return static_cast<const BoolLiteralExpr&>(expr).value() ? "true" : "false";
+      case Expr::Kind::ArrayLiteral: {
+        const auto& arr = static_cast<const ArrayLiteralExpr&>(expr);
+        std::string text = "[";
+        for (std::size_t i = 0; i < arr.elements().size(); ++i) {
+          if (i > 0) text += ", ";
+          text += expression(*arr.elements()[i]);
+        }
+        return text + "]";
+      }
+      case Expr::Kind::TupleLiteral: {
+        const auto& tup = static_cast<const TupleLiteralExpr&>(expr);
+        std::string text = "(";
+        for (std::size_t i = 0; i < tup.elements().size(); ++i) {
+          if (i > 0) text += ", ";
+          text += expression(*tup.elements()[i]);
+        }
+        return text + ")";
+      }
+      case Expr::Kind::Index: {
+        const auto& idx = static_cast<const IndexExpr&>(expr);
+        return expression(idx.base()) + "[" + expression(idx.index()) + "]";
+      }
+      case Expr::Kind::MemberAccess: {
+        const auto& mem = static_cast<const MemberAccessExpr&>(expr);
+        if (mem.is_tuple_access()) {
+          return expression(mem.base()) + "." + std::to_string(mem.tuple_index());
+        }
+        return expression(mem.base()) + "." + mem.member();
+      }
+      case Expr::Kind::StructInit: {
+        const auto& init = static_cast<const StructInitExpr&>(expr);
+        std::string text = init.struct_name() + " {";
+        if (init.is_positional()) {
+          for (std::size_t i = 0; i < init.positional_inits().size(); ++i) {
+            if (i > 0) text += ", ";
+            text += expression(*init.positional_inits()[i]);
+          }
+        } else {
+          for (std::size_t i = 0; i < init.field_inits().size(); ++i) {
+            if (i > 0) text += ", ";
+            text += init.field_inits()[i].first + ": " + expression(*init.field_inits()[i].second);
+          }
+        }
+        return text + "}";
+      }
       case Expr::Kind::Name:
         return static_cast<const NameExpr&>(expr).name();
       case Expr::Kind::Call: {

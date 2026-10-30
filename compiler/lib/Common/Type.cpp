@@ -2,6 +2,62 @@
 
 namespace nirq {
 
+namespace {
+static const std::vector<Type> kEmptyTypes;
+static const std::string kEmptyString;
+static const std::vector<std::pair<std::string, Type>> kEmptyFields;
+}  // namespace
+
+Type Type::array_type(Type element_type, std::size_t length) {
+  Type t(TypeKind::Array);
+  t.data_ = std::make_shared<TypeData>();
+  t.data_->element_type = element_type;
+  t.data_->length = length;
+  return t;
+}
+
+Type Type::dynamic_array_type(Type element_type) {
+  Type t(TypeKind::DynamicArray);
+  t.data_ = std::make_shared<TypeData>();
+  t.data_->element_type = element_type;
+  return t;
+}
+
+Type Type::tuple_type(std::vector<Type> elements) {
+  Type t(TypeKind::Tuple);
+  t.data_ = std::make_shared<TypeData>();
+  t.data_->tuple_elements = std::move(elements);
+  return t;
+}
+
+Type Type::struct_type(std::string name, std::vector<std::pair<std::string, Type>> fields) {
+  Type t(TypeKind::Struct);
+  t.data_ = std::make_shared<TypeData>();
+  t.data_->struct_name = std::move(name);
+  t.data_->struct_fields = std::move(fields);
+  return t;
+}
+
+Type Type::element_type() const {
+  return data_ ? data_->element_type : Type::error();
+}
+
+std::size_t Type::array_length() const {
+  return data_ ? data_->length : 0;
+}
+
+const std::vector<Type>& Type::tuple_elements() const {
+  return data_ ? data_->tuple_elements : kEmptyTypes;
+}
+
+const std::string& Type::struct_name() const {
+  return data_ ? data_->struct_name : kEmptyString;
+}
+
+const std::vector<std::pair<std::string, Type>>& Type::struct_fields() const {
+  return data_ ? data_->struct_fields : kEmptyFields;
+}
+
 std::string Type::to_string() const {
   switch (kind_) {
     case TypeKind::Void: return "void";
@@ -19,6 +75,22 @@ std::string Type::to_string() const {
     case TypeKind::F64: return "f64";
     case TypeKind::Char: return "char";
     case TypeKind::String: return "string";
+    case TypeKind::Array:
+      return element_type().to_string() + "[" + std::to_string(array_length()) + "]";
+    case TypeKind::DynamicArray:
+      return element_type().to_string() + "[]";
+    case TypeKind::Tuple: {
+      std::string s = "(";
+      const auto& elems = tuple_elements();
+      for (std::size_t i = 0; i < elems.size(); ++i) {
+        if (i > 0) s += ", ";
+        s += elems[i].to_string();
+      }
+      s += ")";
+      return s;
+    }
+    case TypeKind::Struct:
+      return struct_name();
     case TypeKind::Error: return "<error>";
   }
   return "<error>";
@@ -41,9 +113,53 @@ std::string Type::mangle() const {
     case TypeKind::F32: return "f32";
     case TypeKind::F64: return "f64";
     case TypeKind::String: return "ptr";
+    case TypeKind::Array:
+      return "A" + std::to_string(array_length()) + "_" + element_type().mangle();
+    case TypeKind::DynamicArray:
+      return "DA_" + element_type().mangle();
+    case TypeKind::Tuple: {
+      std::string s = "T" + std::to_string(tuple_elements().size());
+      for (const auto& elem : tuple_elements()) {
+        s += "_" + elem.mangle();
+      }
+      return s;
+    }
+    case TypeKind::Struct:
+      return "S" + std::to_string(struct_name().size()) + struct_name();
     case TypeKind::Error: return "error";
   }
   return "error";
+}
+
+bool operator==(const Type& lhs, const Type& rhs) {
+  if (lhs.kind_ != rhs.kind_) {
+    if ((lhs.kind_ == TypeKind::Int && rhs.kind_ == TypeKind::I64) ||
+        (lhs.kind_ == TypeKind::I64 && rhs.kind_ == TypeKind::Int)) {
+      return true;
+    }
+    return false;
+  }
+
+  switch (lhs.kind_) {
+    case TypeKind::Array:
+      return lhs.array_length() == rhs.array_length() &&
+             lhs.element_type() == rhs.element_type();
+    case TypeKind::DynamicArray:
+      return lhs.element_type() == rhs.element_type();
+    case TypeKind::Tuple: {
+      const auto& l = lhs.tuple_elements();
+      const auto& r = rhs.tuple_elements();
+      if (l.size() != r.size()) return false;
+      for (std::size_t i = 0; i < l.size(); ++i) {
+        if (l[i] != r[i]) return false;
+      }
+      return true;
+    }
+    case TypeKind::Struct:
+      return lhs.struct_name() == rhs.struct_name();
+    default:
+      return true;
+  }
 }
 
 Type parse_type_name(std::string_view spelling) {

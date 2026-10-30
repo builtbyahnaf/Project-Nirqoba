@@ -37,8 +37,6 @@ std::string_view phase_for_keyword(TokenKind kind) {
   switch (kind) {
     case TokenKind::KwFn:
       return "Phase 3 (use 'function', not 'fn')";
-    case TokenKind::KwStruct:
-      return "Phase 4";
     case TokenKind::KwModule:
     case TokenKind::KwImport:
     case TokenKind::KwPublic:
@@ -96,7 +94,7 @@ void Parser::report_phase_gap(const Token& token, std::string_view feature,
                              std::string_view phase) {
   diagnostics_.error(diag::kNotImplementedInPhase1, token.location,
                      "'" + std::string(feature) + "' is specified for " + std::string(phase) +
-                         " and is not available in Phase 3");
+                         " and is not available in Phase 4");
 }
 
 void Parser::synchronize() {
@@ -109,6 +107,7 @@ void Parser::synchronize() {
       case TokenKind::RBrace:
         return;
       case TokenKind::KwFunction:
+      case TokenKind::KwStruct:
       case TokenKind::KwLet:
       case TokenKind::KwVar:
       case TokenKind::KwConst:
@@ -129,6 +128,11 @@ void Parser::synchronize() {
 std::unique_ptr<Program> Parser::parse_program() {
   auto program = std::make_unique<Program>();
   while (!check(TokenKind::EndOfFile)) {
+    if (check(TokenKind::KwStruct)) {
+      std::unique_ptr<StructDecl> s = parse_struct();
+      if (s) program->structs().push_back(std::move(s));
+      continue;
+    }
     if (check(TokenKind::KwFunction)) {
       error_at(peek(), kUnknownType,
                "function declaration requires an explicit return type before 'function'");
@@ -136,7 +140,7 @@ std::unique_ptr<Program> Parser::parse_program() {
       synchronize();
       continue;
     }
-    if (is_type_keyword(peek().kind)) {
+    if (is_type_keyword(peek().kind) || (check(TokenKind::Identifier) && peek(1).kind == TokenKind::KwFunction)) {
       const std::size_t before = position_;
       std::unique_ptr<FunctionDecl> function = parse_function();
       if (function) {
@@ -146,14 +150,14 @@ std::unique_ptr<Program> Parser::parse_program() {
       }
       continue;
     }
-    if (check(TokenKind::KwModule) || check(TokenKind::KwImport) || check(TokenKind::KwStruct)) {
+    if (check(TokenKind::KwModule) || check(TokenKind::KwImport)) {
       report_phase_gap(peek(), token_kind_name(peek().kind), phase_for_keyword(peek().kind));
       advance();
       synchronize();
       continue;
     }
     error_at(peek(), diag::kUnexpectedToken,
-             "expected a function declaration, found " + describe_token(peek()));
+             "expected a declaration, found " + describe_token(peek()));
     advance();
     synchronize();
   }
@@ -162,6 +166,32 @@ std::unique_ptr<Program> Parser::parse_program() {
     error_at(peek(), diag::kMissingMain, "program contains no function declarations");
   }
   return program;
+}
+
+std::unique_ptr<StructDecl> Parser::parse_struct() {
+  const Token struct_tok = advance();  // 'struct'
+  if (!check(TokenKind::Identifier)) {
+    error_at(peek(), diag::kExpectedToken, "expected struct name after 'struct'");
+    synchronize();
+    return nullptr;
+  }
+  const Token name_tok = advance();
+  expect(TokenKind::LBrace, "to open struct body");
+
+  std::vector<Parameter> fields;
+  while (!check(TokenKind::RBrace) && !check(TokenKind::EndOfFile)) {
+    Type field_type = parse_type_annotation();
+    if (!check(TokenKind::Identifier)) {
+      error_at(peek(), diag::kExpectedToken, "expected field name in struct");
+      synchronize();
+      break;
+    }
+    Token field_name = advance();
+    expect(TokenKind::Semicolon, "after struct field declaration");
+    fields.push_back(Parameter{field_name.text, field_type, field_name.location});
+  }
+  expect(TokenKind::RBrace, "to close struct body");
+  return std::make_unique<StructDecl>(name_tok.text, std::move(fields), struct_tok.location);
 }
 
 std::unique_ptr<FunctionDecl> Parser::parse_function() {
@@ -181,12 +211,6 @@ std::unique_ptr<FunctionDecl> Parser::parse_function() {
     if (!check(TokenKind::RParen)) {
       do {
         if (check(TokenKind::RParen)) break;
-        if (!is_type_keyword(peek().kind)) {
-          error_at(peek(), kUnknownType,
-                   "expected a parameter type, found " + describe_token(peek()));
-          synchronize();
-          return nullptr;
-        }
         const Token& parameter_type_token = peek();
         const Type parameter_type = parse_type_annotation();
         if (!check(TokenKind::Identifier)) {
@@ -218,28 +242,41 @@ std::unique_ptr<FunctionDecl> Parser::parse_function() {
 }
 
 Type Parser::parse_type_annotation() {
-  const Token& token = peek();
-  if (!is_type_keyword(token.kind)) {
-    error_at(token, kUnknownType, "expected a type, found " + describe_token(token));
+  Type base_type = Type::error();
+  if (is_type_keyword(peek().kind)) {
+    const Token token = advance();
+    base_type = parse_type_name(token.text);
+  } else if (check(TokenKind::Identifier)) {
+    const Token token = advance();
+    base_type = Type::struct_type(token.text);
+  } else if (match(TokenKind::LParen)) {
+    std::vector<Type> tuple_elements;
+    if (!check(TokenKind::RParen)) {
+      do {
+        tuple_elements.push_back(parse_type_annotation());
+      } while (match(TokenKind::Comma));
+    }
+    expect(TokenKind::RParen, "to close tuple type");
+    base_type = Type::tuple_type(std::move(tuple_elements));
+  } else {
+    error_at(peek(), kUnknownType, "expected a type, found " + describe_token(peek()));
+    advance();
     return Type::error();
   }
-  advance();
-  if (check(TokenKind::LBracket)) {
-    report_phase_gap(peek(), "array type", "Phase 4");
-    int depth = 0;
-    while (!check(TokenKind::EndOfFile)) {
-      if (check(TokenKind::LBracket)) ++depth;
-      if (check(TokenKind::RBracket)) {
-        --depth;
-        if (depth == 0) {
-          advance();
-          break;
-        }
-      }
-      advance();
+
+  // Parse any array suffixes: `[N]` or `[]`
+  while (match(TokenKind::LBracket)) {
+    if (check(TokenKind::IntegerLiteral)) {
+      const Token len_tok = advance();
+      expect(TokenKind::RBracket, "to close array type");
+      base_type = Type::array_type(base_type, static_cast<std::size_t>(len_tok.integer_value));
+    } else {
+      expect(TokenKind::RBracket, "to close dynamic array type");
+      base_type = Type::dynamic_array_type(base_type);
     }
   }
-  return parse_type_name(token.text);
+
+  return base_type;
 }
 
 std::unique_ptr<BlockStmt> Parser::parse_block() {
@@ -262,6 +299,10 @@ StmtPtr Parser::parse_statement() {
   const Token& token = peek();
 
   if (check(TokenKind::LBrace)) return parse_block();
+  if ((check(TokenKind::KwLet) || check(TokenKind::KwVar)) &&
+      (peek(1).kind == TokenKind::LParen || peek(1).kind == TokenKind::LBracket)) {
+    return parse_destructuring();
+  }
   if (check(TokenKind::KwLet) || check(TokenKind::KwVar) || check(TokenKind::KwConst)) {
     return parse_variable_declaration();
   }
@@ -298,6 +339,33 @@ StmtPtr Parser::parse_statement() {
     return nullptr;
   }
   return parse_assignment_or_expression();
+}
+
+StmtPtr Parser::parse_destructuring() {
+  const Token kw = advance();
+  const BindingKind binding = kw.kind == TokenKind::KwLet ? BindingKind::Let : BindingKind::Var;
+  const bool is_paren = match(TokenKind::LParen);
+  if (!is_paren) expect(TokenKind::LBracket, "for destructuring");
+
+  std::vector<std::string> names;
+  do {
+    if (is_paren && check(TokenKind::RParen)) break;
+    if (!is_paren && check(TokenKind::RBracket)) break;
+    if (!check(TokenKind::Identifier)) {
+      error_at(peek(), diag::kExpectedToken, "expected variable name in destructuring pattern");
+      synchronize();
+      return nullptr;
+    }
+    names.push_back(advance().text);
+  } while (match(TokenKind::Comma));
+
+  if (is_paren) expect(TokenKind::RParen, "to close destructuring pattern");
+  else expect(TokenKind::RBracket, "to close destructuring pattern");
+
+  expect(TokenKind::Equal, "before destructuring initializer");
+  ExprPtr value = parse_expression();
+  expect(TokenKind::Semicolon, "after destructuring statement");
+  return std::make_unique<DestructuringStmt>(kw.location, binding, std::move(names), std::move(value));
 }
 
 StmtPtr Parser::parse_variable_declaration() {
@@ -665,7 +733,7 @@ ExprPtr Parser::parse_unary() {
 }
 
 ExprPtr Parser::parse_exponentiation() {
-  ExprPtr lhs = parse_primary();
+  ExprPtr lhs = parse_postfix();
   if (check(TokenKind::StarStar)) {
     const Token op_tok = advance();
     ExprPtr rhs = parse_unary();
@@ -673,6 +741,82 @@ ExprPtr Parser::parse_exponentiation() {
                                        std::move(rhs));
   }
   return lhs;
+}
+
+ExprPtr Parser::parse_postfix() {
+  ExprPtr expr = parse_primary();
+  while (true) {
+    if (match(TokenKind::LBracket)) {
+      ExprPtr index = parse_expression();
+      expect(TokenKind::RBracket, "to close array index");
+      expr = std::make_unique<IndexExpr>(expr->location(), std::move(expr), std::move(index));
+    } else if (match(TokenKind::Dot)) {
+      const Token mem_tok = peek();
+      if (check(TokenKind::IntegerLiteral)) {
+        advance();
+        expr = std::make_unique<MemberAccessExpr>(
+            expr->location(), std::move(expr), "", static_cast<int>(mem_tok.integer_value));
+      } else if (check(TokenKind::Identifier)) {
+        advance();
+        expr = std::make_unique<MemberAccessExpr>(
+            expr->location(), std::move(expr), mem_tok.text, -1);
+      } else {
+        error_at(mem_tok, diag::kExpectedToken, "expected member name or tuple index after '.'");
+        break;
+      }
+    } else {
+      break;
+    }
+  }
+  return expr;
+}
+
+ExprPtr Parser::parse_array_literal() {
+  const Token open = advance();  // '['
+  std::vector<ExprPtr> elements;
+  if (!check(TokenKind::RBracket)) {
+    do {
+      if (check(TokenKind::RBracket)) break;
+      elements.push_back(parse_expression());
+    } while (match(TokenKind::Comma));
+  }
+  expect(TokenKind::RBracket, "to close array literal");
+  return std::make_unique<ArrayLiteralExpr>(open.location, std::move(elements));
+}
+
+ExprPtr Parser::parse_struct_init(std::string struct_name, SourceLocation location) {
+  expect(TokenKind::LBrace, "to open struct initializer");
+  if (match(TokenKind::RBrace)) {
+    return std::make_unique<StructInitExpr>(location, std::move(struct_name),
+                                           std::vector<ExprPtr>{});
+  }
+
+  if (check(TokenKind::Identifier) && peek(1).kind == TokenKind::Colon) {
+    std::vector<std::pair<std::string, ExprPtr>> field_inits;
+    do {
+      if (check(TokenKind::RBrace)) break;
+      if (!check(TokenKind::Identifier)) {
+        error_at(peek(), diag::kExpectedToken, "expected field name in struct initializer");
+        break;
+      }
+      Token field_tok = advance();
+      expect(TokenKind::Colon, "after field name");
+      ExprPtr init_expr = parse_expression();
+      field_inits.push_back({field_tok.text, std::move(init_expr)});
+    } while (match(TokenKind::Comma));
+    expect(TokenKind::RBrace, "to close struct initializer");
+    return std::make_unique<StructInitExpr>(location, std::move(struct_name),
+                                           std::move(field_inits));
+  } else {
+    std::vector<ExprPtr> positional_inits;
+    do {
+      if (check(TokenKind::RBrace)) break;
+      positional_inits.push_back(parse_expression());
+    } while (match(TokenKind::Comma));
+    expect(TokenKind::RBrace, "to close struct initializer");
+    return std::make_unique<StructInitExpr>(location, std::move(struct_name),
+                                           std::move(positional_inits));
+  }
 }
 
 ExprPtr Parser::parse_primary() {
@@ -697,6 +841,8 @@ ExprPtr Parser::parse_primary() {
     case TokenKind::KwFalse:
       advance();
       return std::make_unique<BoolLiteralExpr>(token.location, false);
+    case TokenKind::LBracket:
+      return parse_array_literal();
     case TokenKind::KwPrint: {
       advance();
       expect(TokenKind::LParen, "after 'print'");
@@ -706,6 +852,9 @@ ExprPtr Parser::parse_primary() {
     }
     case TokenKind::Identifier: {
       advance();
+      if (check(TokenKind::LBrace)) {
+        return parse_struct_init(token.text, token.location);
+      }
       if (match(TokenKind::LParen)) {
         std::vector<ExprPtr> arguments = parse_argument_list();
         expect(TokenKind::RParen, "to close the call");
@@ -715,9 +864,25 @@ ExprPtr Parser::parse_primary() {
     }
     case TokenKind::LParen: {
       advance();
-      ExprPtr inner = parse_expression();
+      if (check(TokenKind::RParen)) {
+        advance();
+        return std::make_unique<TupleLiteralExpr>(token.location, std::vector<ExprPtr>{});
+      }
+      ExprPtr first = parse_expression();
+      if (match(TokenKind::Comma)) {
+        std::vector<ExprPtr> tuple_elements;
+        tuple_elements.push_back(std::move(first));
+        if (!check(TokenKind::RParen)) {
+          do {
+            if (check(TokenKind::RParen)) break;
+            tuple_elements.push_back(parse_expression());
+          } while (match(TokenKind::Comma));
+        }
+        expect(TokenKind::RParen, "to close tuple expression");
+        return std::make_unique<TupleLiteralExpr>(token.location, std::move(tuple_elements));
+      }
       expect(TokenKind::RParen, "to close the parenthesized expression");
-      return inner;
+      return first;
     }
     case TokenKind::EndOfFile:
       error_at(token, diag::kUnexpectedToken, "unexpected end of file in an expression");
