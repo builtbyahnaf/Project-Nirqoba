@@ -182,9 +182,50 @@ void TypeChecker::check_return(ReturnStmt& statement) {
 Type TypeChecker::check_expression(Expr& expr) {
   Type type = Type::error();
   switch (expr.kind()) {
-    case Expr::Kind::IntegerLiteral:
-      type = Type::int_type();
+    case Expr::Kind::IntegerLiteral: {
+      const auto& lit = static_cast<const IntegerLiteralExpr&>(expr);
+      if (lit.suffix() == "i8") type = Type::i8_type();
+      else if (lit.suffix() == "i16") type = Type::i16_type();
+      else if (lit.suffix() == "i32") type = Type::i32_type();
+      else if (lit.suffix() == "i64") type = Type::i64_type();
+      else if (lit.suffix() == "u8") type = Type::u8_type();
+      else if (lit.suffix() == "u16") type = Type::u16_type();
+      else if (lit.suffix() == "u32") type = Type::u32_type();
+      else if (lit.suffix() == "u64") type = Type::u64_type();
+      else type = Type::int_type();
       break;
+    }
+    case Expr::Kind::FloatLiteral: {
+      const auto& lit = static_cast<const FloatLiteralExpr&>(expr);
+      if (lit.suffix() == "f32") type = Type::f32_type();
+      else type = Type::f64_type();
+      break;
+    }
+    case Expr::Kind::CharLiteral:
+      type = Type::char_type();
+      break;
+    case Expr::Kind::Cast: {
+      auto& cast = static_cast<CastExpr&>(expr);
+      const Type op_type = check_expression(const_cast<Expr&>(cast.operand()));
+      if (op_type.is_valid() && cast.target_type().is_valid()) {
+        bool valid_cast = false;
+        if (op_type.is_numeric() && cast.target_type().is_numeric()) valid_cast = true;
+        else if (op_type.is_bool() && cast.target_type().is_integer()) valid_cast = true;
+        else if (op_type.is_integer() && cast.target_type().is_bool()) valid_cast = true;
+        else if (op_type.is_char() && cast.target_type().is_integer()) valid_cast = true;
+        else if (op_type.is_integer() && cast.target_type().is_char()) valid_cast = true;
+
+        if (!valid_cast) {
+          diagnostics_.error(diag::kTypeMismatch, cast.location(),
+                             "cannot cast value of type '" + op_type.to_string() +
+                             "' to '" + cast.target_type().to_string() + "'");
+          type = Type::error();
+        } else {
+          type = cast.target_type();
+        }
+      }
+      break;
+    }
     case Expr::Kind::StringLiteral:
       type = Type::string_type();
       break;

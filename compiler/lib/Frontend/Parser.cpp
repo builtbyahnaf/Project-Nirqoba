@@ -11,6 +11,18 @@ constexpr const char* kUnknownType = "NRQ2003";
 bool is_type_keyword(TokenKind kind) {
   switch (kind) {
     case TokenKind::KwInt:
+    case TokenKind::KwI8:
+    case TokenKind::KwI16:
+    case TokenKind::KwI32:
+    case TokenKind::KwI64:
+    case TokenKind::KwU8:
+    case TokenKind::KwU16:
+    case TokenKind::KwU32:
+    case TokenKind::KwU64:
+    case TokenKind::KwByte:
+    case TokenKind::KwChar:
+    case TokenKind::KwF32:
+    case TokenKind::KwF64:
     case TokenKind::KwString:
     case TokenKind::KwBool:
     case TokenKind::KwVoid:
@@ -461,7 +473,13 @@ ExprPtr Parser::parse_primary() {
   switch (token.kind) {
     case TokenKind::IntegerLiteral:
       advance();
-      return std::make_unique<IntegerLiteralExpr>(token.location, token.integer_value);
+      return std::make_unique<IntegerLiteralExpr>(token.location, token.integer_value, token.suffix);
+    case TokenKind::FloatLiteral:
+      advance();
+      return std::make_unique<FloatLiteralExpr>(token.location, token.float_value, token.suffix);
+    case TokenKind::CharLiteral:
+      advance();
+      return std::make_unique<CharLiteralExpr>(token.location, token.char_value);
     case TokenKind::StringLiteral:
       advance();
       return std::make_unique<StringLiteralExpr>(token.location, token.string_value);
@@ -514,6 +532,9 @@ ExprPtr Parser::parse_primary() {
 std::string_view unary_op_spelling(UnaryOp op) {
   switch (op) {
     case UnaryOp::Negate: return "-";
+    case UnaryOp::Plus: return "+";
+    case UnaryOp::LogicalNot: return "!";
+    case UnaryOp::BitwiseNot: return "~";
   }
   return "?";
 }
@@ -525,6 +546,20 @@ std::string_view binary_op_spelling(BinaryOp op) {
     case BinaryOp::Multiply: return "*";
     case BinaryOp::Divide: return "/";
     case BinaryOp::Remainder: return "%";
+    case BinaryOp::Exponentiate: return "**";
+    case BinaryOp::BitwiseAnd: return "&";
+    case BinaryOp::BitwiseOr: return "|";
+    case BinaryOp::BitwiseXor: return "^";
+    case BinaryOp::ShiftLeft: return "<<";
+    case BinaryOp::ShiftRight: return ">>";
+    case BinaryOp::Equal: return "==";
+    case BinaryOp::NotEqual: return "!=";
+    case BinaryOp::Less: return "<";
+    case BinaryOp::LessEqual: return "<=";
+    case BinaryOp::Greater: return ">";
+    case BinaryOp::GreaterEqual: return ">=";
+    case BinaryOp::LogicalAnd: return "&&";
+    case BinaryOp::LogicalOr: return "||";
   }
   return "?";
 }

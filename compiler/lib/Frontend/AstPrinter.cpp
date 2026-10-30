@@ -69,6 +69,13 @@ class Printer {
         out_ << "assign " << assignment.name() << " = " << expression(assignment.value()) << "\n";
         return;
       }
+      case Stmt::Kind::CompoundAssignment: {
+        const auto& compound = static_cast<const CompoundAssignmentStmt&>(statement);
+        indent();
+        out_ << "assign " << compound.name() << " " << binary_op_spelling(compound.op()) << "= "
+             << expression(compound.value()) << "\n";
+        return;
+      }
       case Stmt::Kind::Return: {
         const auto& return_statement = static_cast<const ReturnStmt&>(statement);
         indent();
@@ -90,6 +97,10 @@ class Printer {
     switch (expr.kind()) {
       case Expr::Kind::IntegerLiteral:
         return std::to_string(static_cast<const IntegerLiteralExpr&>(expr).value());
+      case Expr::Kind::FloatLiteral:
+        return std::to_string(static_cast<const FloatLiteralExpr&>(expr).value());
+      case Expr::Kind::CharLiteral:
+        return "'" + std::to_string(static_cast<const CharLiteralExpr&>(expr).value()) + "'";
       case Expr::Kind::StringLiteral: {
         const std::string& value = static_cast<const StringLiteralExpr&>(expr).value();
         std::string escaped;
@@ -127,6 +138,10 @@ class Printer {
         // Fully parenthesized so precedence bugs cannot hide in the dump.
         return "(" + expression(binary.lhs()) + " " + std::string(binary_op_spelling(binary.op())) +
                " " + expression(binary.rhs()) + ")";
+      }
+      case Expr::Kind::Cast: {
+        const auto& cast = static_cast<const CastExpr&>(expr);
+        return "(" + expression(cast.operand()) + " as " + cast.target_type().to_string() + ")";
       }
     }
     return "<unknown>";
