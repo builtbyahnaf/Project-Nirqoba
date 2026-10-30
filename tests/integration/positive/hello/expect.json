@@ -1,0 +1,6 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 0,
+  "expect_stdout": "Hello, Nirqoba!\n",
+  "check_coff_header": true
+}

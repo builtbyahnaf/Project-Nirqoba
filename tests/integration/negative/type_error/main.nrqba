@@ -1,0 +1,4 @@
+int function main() {
+    let x: int = "string";
+    return 0;
+}

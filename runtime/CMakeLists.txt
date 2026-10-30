@@ -28,3 +28,7 @@ target_include_directories(nrqoba_runtime
 )
 
 nirqoba_set_target_warnings(nrqoba_runtime)
+
+set_target_properties(nrqoba_runtime PROPERTIES
+  ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+)

@@ -75,6 +75,7 @@ add_library(nirqoba_compiler_lib STATIC
 
   # Diagnostics
   lib/Diagnostics/DiagnosticEngine.cpp
+  lib/Diagnostics/DiagnosticRenderer.cpp
 
   # Frontend
   lib/Frontend/SourceFile.cpp
@@ -97,6 +98,7 @@ add_library(nirqoba_compiler_lib STATIC
   lib/Lowering/NrqDialect.cpp
   lib/Lowering/NrqToLLVMPass.cpp
   lib/Lowering/PassPipeline.cpp
+  lib/Lowering/TirToMlir.cpp
 
   # Backend
   lib/Backend/ObjectEmitter.cpp

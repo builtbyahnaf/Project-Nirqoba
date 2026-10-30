@@ -1,0 +1,6 @@
+{
+  "mode": "raw",
+  "args": ["build", "non_existent_file.nrqba"],
+  "expect_exit": 3,
+  "expect_stderr_contains": ["[NRQ5001]"]
+}

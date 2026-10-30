@@ -1,5 +1,10 @@
 #include "nirqoba/Driver/LinkerEnvironment.h"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 #include <fstream>
 #include <sstream>
 
@@ -57,8 +62,6 @@ static std::string read_file(const std::string& path) {
 static std::string find_repo_root() {
   // On Windows we use GetModuleFileNameW for the executable path.
 #ifdef _WIN32
-  #define WIN32_LEAN_AND_MEAN
-  #include <windows.h>
   wchar_t buf[4096] = {};
   if (GetModuleFileNameW(nullptr, buf, 4096) == 0) return {};
   // Convert to narrow string (ASCII/UTF-8 paths on our build machine).
