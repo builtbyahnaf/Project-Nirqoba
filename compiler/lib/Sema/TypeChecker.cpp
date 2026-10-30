@@ -285,50 +285,66 @@ void TypeChecker::check_destructuring(DestructuringStmt& statement) {
   }
 }
 
+static const Symbol* find_root_symbol(const Expr& expr, const SymbolTable& symbols) {
+  if (expr.kind() == Expr::Kind::Name) {
+    return symbols.lookup(static_cast<const NameExpr&>(expr).name());
+  }
+  if (expr.kind() == Expr::Kind::Index) {
+    return find_root_symbol(static_cast<const IndexExpr&>(expr).base(), symbols);
+  }
+  if (expr.kind() == Expr::Kind::MemberAccess) {
+    return find_root_symbol(static_cast<const MemberAccessExpr&>(expr).base(), symbols);
+  }
+  return nullptr;
+}
+
 void TypeChecker::check_assignment(AssignmentStmt& assignment) {
   const Type value_type = check_expression(const_cast<Expr&>(assignment.value()));
-  const Symbol* symbol = symbols_.lookup(assignment.name());
-  if (symbol == nullptr) {
+  const Type target_type = check_expression(const_cast<Expr&>(assignment.target()));
+
+  const Symbol* symbol = find_root_symbol(assignment.target(), symbols_);
+  if (symbol == nullptr && assignment.is_simple_name()) {
     diagnostics_.error(diag::kUndefinedName, assignment.name_location(),
                        "assignment to undeclared variable '" + assignment.name() + "'");
     return;
   }
-  if (!symbol->is_mutable()) {
-    diagnostics_.error(diag::kImmutableAssignment, assignment.name_location(),
-                       "'" + assignment.name() + "' was declared as " +
+  if (symbol != nullptr && !symbol->is_mutable()) {
+    diagnostics_.error(diag::kImmutableAssignment, assignment.target().location(),
+                       "'" + symbol->name + "' was declared as " +
                            std::string(binding_kind_spelling(symbol->binding)) +
-                           " and cannot be reassigned; declare it with 'var' to mutate it");
+                           " and cannot be mutated; declare it with 'var' to mutate it");
     return;
   }
-  if (symbol->type.is_valid() && value_type.is_valid() && symbol->type != value_type) {
+  if (target_type.is_valid() && value_type.is_valid() && target_type != value_type) {
     diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
                        "cannot assign a value of type '" + value_type.to_string() +
-                           "' to '" + assignment.name() + "' of type '" +
-                           symbol->type.to_string() + "'");
+                           "' to target of type '" + target_type.to_string() + "'");
   }
 }
 
 void TypeChecker::check_compound_assignment(CompoundAssignmentStmt& assignment) {
   const Type value_type = check_expression(const_cast<Expr&>(assignment.value()));
-  const Symbol* symbol = symbols_.lookup(assignment.name());
-  if (symbol == nullptr) {
+  const Type target_type = check_expression(const_cast<Expr&>(assignment.target()));
+
+  const Symbol* symbol = find_root_symbol(assignment.target(), symbols_);
+  if (symbol == nullptr && assignment.is_simple_name()) {
     diagnostics_.error(diag::kUndefinedName, assignment.name_location(),
                        "compound assignment to undeclared variable '" + assignment.name() + "'");
     return;
   }
-  if (!symbol->is_mutable()) {
-    diagnostics_.error(diag::kImmutableAssignment, assignment.name_location(),
-                       "'" + assignment.name() + "' was declared as " +
+  if (symbol != nullptr && !symbol->is_mutable()) {
+    diagnostics_.error(diag::kImmutableAssignment, assignment.target().location(),
+                       "'" + symbol->name + "' was declared as " +
                            std::string(binding_kind_spelling(symbol->binding)) +
                            " and cannot be mutated; declare it with 'var' to mutate it");
     return;
   }
-  if (!symbol->type.is_valid() || !value_type.is_valid()) return;
+  if (!target_type.is_valid() || !value_type.is_valid()) return;
 
-  if (symbol->type != value_type) {
+  if (target_type != value_type) {
     diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
                        "cannot apply compound operator to target of type '" +
-                           symbol->type.to_string() + "' and operand of type '" +
+                           target_type.to_string() + "' and operand of type '" +
                            value_type.to_string() + "'");
     return;
   }
@@ -896,6 +912,59 @@ Type TypeChecker::check_call(CallExpr& call) {
       }
     }
     return Type::void_type();
+  }
+
+  // Builtin 'input'
+  if (call.callee() == "input") {
+    if (call.arguments().size() > 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'input' takes at most one argument, but " +
+                             std::to_string(call.arguments().size()) + " were given");
+    }
+    if (call.arguments().size() == 1) {
+      const Type prompt_type = check_expression(const_cast<Expr&>(*call.arguments().front()));
+      if (prompt_type.is_valid() && !prompt_type.is_string()) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments().front()->location(),
+                           "'input' prompt must be a 'string', not '" + prompt_type.to_string() + "'");
+      }
+    }
+    return Type::string_type();
+  }
+
+  // Builtin 'length'
+  if (call.callee() == "length") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'length' takes exactly one argument, but " +
+                             std::to_string(call.arguments().size()) + " were given");
+      return Type::int_type();
+    }
+    const Type arg_type = check_expression(const_cast<Expr&>(*call.arguments().front()));
+    if (arg_type.is_valid() && !arg_type.is_string() && !arg_type.is_array() && !arg_type.is_dynamic_array()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments().front()->location(),
+                         "'length' requires a string or array argument, not '" + arg_type.to_string() + "'");
+    }
+    return Type::int_type();
+  }
+
+  // Math builtins: sqrt, sin, cos, abs, floor, ceil (and math.<name>)
+  std::string fn_name = call.callee();
+  if (fn_name.rfind("math.", 0) == 0) fn_name = fn_name.substr(5);
+  if (fn_name == "sqrt" || fn_name == "sin" || fn_name == "cos" ||
+      fn_name == "abs" || fn_name == "floor" || fn_name == "ceil") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "math function '" + call.callee() + "' takes exactly one argument, but " +
+                             std::to_string(call.arguments().size()) + " were given");
+      return Type::f64_type();
+    }
+    const Type arg_type = check_expression(const_cast<Expr&>(*call.arguments().front()));
+    if (arg_type.is_valid() && !arg_type.is_numeric()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments().front()->location(),
+                         "math function '" + call.callee() + "' requires a numeric argument, not '" +
+                             arg_type.to_string() + "'");
+    }
+    return Type::f64_type();
   }
 
   // User-defined function call

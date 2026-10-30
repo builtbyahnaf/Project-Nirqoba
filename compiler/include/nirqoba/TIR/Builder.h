@@ -28,6 +28,7 @@ class TirBuilder {
   void lower_block(const BlockStmt& block, tir::Function& function);
   void lower_statement(const Stmt& statement, tir::Function& function);
   tir::Value lower_expression(const Expr& expr, tir::Function& function);
+  tir::Value resolve_lvalue_ptr(const Expr& target, tir::Function& function);
 
   void push_scope() { scopes_.emplace_back(); }
   void pop_scope() { scopes_.pop_back(); }

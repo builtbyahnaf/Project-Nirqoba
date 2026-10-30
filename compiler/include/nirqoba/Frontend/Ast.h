@@ -349,34 +349,62 @@ class DestructuringStmt : public Stmt {
 
 class AssignmentStmt : public Stmt {
  public:
+  AssignmentStmt(SourceLocation location, ExprPtr target, ExprPtr value)
+      : Stmt(Kind::Assignment, std::move(location)), target_(std::move(target)),
+        value_(std::move(value)) {}
+
   AssignmentStmt(SourceLocation location, std::string name, ExprPtr value, SourceLocation name_location)
-      : Stmt(Kind::Assignment, std::move(location)), name_(std::move(name)),
-        value_(std::move(value)), name_location_(std::move(name_location)) {}
-  const std::string& name() const { return name_; }
+      : Stmt(Kind::Assignment, std::move(location)),
+        target_(std::make_unique<NameExpr>(name_location, std::move(name))),
+        value_(std::move(value)) {}
+
+  const Expr& target() const { return *target_; }
+  Expr& target() { return *target_; }
   const Expr& value() const { return *value_; }
-  const SourceLocation& name_location() const { return name_location_; }
+  Expr& value() { return *value_; }
+
+  bool is_simple_name() const { return target_ != nullptr && target_->kind() == Expr::Kind::Name; }
+  const std::string& name() const {
+    return static_cast<const NameExpr&>(*target_).name();
+  }
+  const SourceLocation& name_location() const {
+    return target_->location();
+  }
 
  private:
-  std::string name_;
+  ExprPtr target_;
   ExprPtr value_;
-  SourceLocation name_location_;
 };
 
 class CompoundAssignmentStmt : public Stmt {
  public:
+  CompoundAssignmentStmt(SourceLocation location, BinaryOp op, ExprPtr target, ExprPtr value)
+      : Stmt(Kind::CompoundAssignment, std::move(location)), op_(op),
+        target_(std::move(target)), value_(std::move(value)) {}
+
   CompoundAssignmentStmt(SourceLocation location, BinaryOp op, std::string name, ExprPtr value, SourceLocation name_location)
-      : Stmt(Kind::CompoundAssignment, std::move(location)), op_(op), name_(std::move(name)),
-        value_(std::move(value)), name_location_(std::move(name_location)) {}
+      : Stmt(Kind::CompoundAssignment, std::move(location)), op_(op),
+        target_(std::make_unique<NameExpr>(name_location, std::move(name))),
+        value_(std::move(value)) {}
+
   BinaryOp op() const { return op_; }
-  const std::string& name() const { return name_; }
+  const Expr& target() const { return *target_; }
+  Expr& target() { return *target_; }
   const Expr& value() const { return *value_; }
-  const SourceLocation& name_location() const { return name_location_; }
+  Expr& value() { return *value_; }
+
+  bool is_simple_name() const { return target_ != nullptr && target_->kind() == Expr::Kind::Name; }
+  const std::string& name() const {
+    return static_cast<const NameExpr&>(*target_).name();
+  }
+  const SourceLocation& name_location() const {
+    return target_->location();
+  }
 
  private:
   BinaryOp op_;
-  std::string name_;
+  ExprPtr target_;
   ExprPtr value_;
-  SourceLocation name_location_;
 };
 
 class IfStmt : public Stmt {

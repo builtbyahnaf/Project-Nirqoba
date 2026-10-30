@@ -195,11 +195,10 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
     case Stmt::Kind::Assignment: {
       const auto& assignment = static_cast<const AssignmentStmt&>(statement);
       const tir::Value value = lower_expression(assignment.value(), function);
-      const tir::Value slot = lookup_slot(assignment.name());
+      const tir::Value slot = resolve_lvalue_ptr(assignment.target(), function);
       if (!slot.is_valid()) {
-        diagnostics_.error(kUnresolvedSymbol, assignment.name_location(),
-                           "internal: assignment target '" + assignment.name() +
-                               "' has no TIR slot");
+        diagnostics_.error(kUnresolvedSymbol, assignment.target().location(),
+                           "internal: assignment target has no TIR slot");
         return;
       }
       tir::Op store;
@@ -213,17 +212,16 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
     }
     case Stmt::Kind::CompoundAssignment: {
       const auto& assignment = static_cast<const CompoundAssignmentStmt&>(statement);
-      const tir::Value slot = lookup_slot(assignment.name());
+      const tir::Value slot = resolve_lvalue_ptr(assignment.target(), function);
       if (!slot.is_valid()) {
-        diagnostics_.error(kUnresolvedSymbol, assignment.name_location(),
-                           "internal: compound assignment target '" + assignment.name() +
-                               "' has no TIR slot");
+        diagnostics_.error(kUnresolvedSymbol, assignment.target().location(),
+                           "internal: compound assignment target has no TIR slot");
         return;
       }
       tir::Value current_val = function.allocate_value(slot.type);
       tir::Op load;
       load.kind = tir::OpKind::Load;
-      load.location = assignment.name_location();
+      load.location = assignment.target().location();
       load.lhs = slot;
       load.result = current_val;
       function.add_operation(std::move(load));
@@ -876,6 +874,46 @@ tir::Value TirBuilder::lookup_slot(const std::string& name) const {
   for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
     const auto found = scope->find(name);
     if (found != scope->end()) return found->second;
+  }
+  return tir::Value{};
+}
+
+tir::Value TirBuilder::resolve_lvalue_ptr(const Expr& target, tir::Function& function) {
+  if (target.kind() == Expr::Kind::Name) {
+    const auto& name_expr = static_cast<const NameExpr&>(target);
+    return lookup_slot(name_expr.name());
+  }
+  if (target.kind() == Expr::Kind::Index) {
+    const auto& idx_expr = static_cast<const IndexExpr&>(target);
+    tir::Value base_ptr = resolve_lvalue_ptr(idx_expr.base(), function);
+    if (!base_ptr.is_valid()) return tir::Value{};
+    tir::Value idx_val = lower_expression(idx_expr.index(), function);
+    Type elem_type = idx_expr.type().is_valid() ? idx_expr.type() : base_ptr.type.element_type();
+    tir::Value elem_ptr = function.allocate_value(elem_type);
+    tir::Op gep;
+    gep.kind = tir::OpKind::GetElementPtr;
+    gep.location = idx_expr.location();
+    gep.lhs = base_ptr;
+    gep.operand = idx_val;
+    gep.result = elem_ptr;
+    function.add_operation(std::move(gep));
+    return elem_ptr;
+  }
+  if (target.kind() == Expr::Kind::MemberAccess) {
+    const auto& mem_expr = static_cast<const MemberAccessExpr&>(target);
+    tir::Value base_ptr = resolve_lvalue_ptr(mem_expr.base(), function);
+    if (!base_ptr.is_valid()) return tir::Value{};
+    Type field_type = mem_expr.type().is_valid() ? mem_expr.type() : Type::error();
+    tir::Value field_ptr = function.allocate_value(field_type);
+    tir::Op gep;
+    gep.kind = tir::OpKind::GetElementPtr;
+    gep.location = mem_expr.location();
+    gep.lhs = base_ptr;
+    gep.field_index = mem_expr.is_tuple_access() ? mem_expr.tuple_index() : -1;
+    gep.string_value = mem_expr.member();
+    gep.result = field_ptr;
+    function.add_operation(std::move(gep));
+    return field_ptr;
   }
   return tir::Value{};
 }

@@ -13,7 +13,7 @@
 
 // Phase identifier, matching ROADMAP phase numbering. Incremented when a
 // new phase is begun; keeps the `nirqoba version` output meaningful.
-#define NIRQOBA_PHASE "3"
+#define NIRQOBA_PHASE "4"
 
 // Pinned LLVM/MLIR version used to build this compiler binary.
 #define NIRQOBA_LLVM_VERSION "@LLVM_PACKAGE_VERSION@"
