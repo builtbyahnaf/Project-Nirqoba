@@ -76,6 +76,40 @@ class Printer {
              << expression(compound.value()) << "\n";
         return;
       }
+      case Stmt::Kind::If: {
+        const auto& if_stmt = static_cast<const IfStmt&>(statement);
+        indent();
+        out_ << "if " << expression(if_stmt.condition()) << "\n";
+        print_block(if_stmt.then_branch());
+        if (if_stmt.has_else()) {
+          indent();
+          out_ << "else\n";
+          print_statement(*if_stmt.else_branch());
+        }
+        return;
+      }
+      case Stmt::Kind::While: {
+        const auto& while_stmt = static_cast<const WhileStmt&>(statement);
+        indent();
+        out_ << "while " << expression(while_stmt.condition()) << "\n";
+        print_block(while_stmt.body());
+        return;
+      }
+      case Stmt::Kind::For: {
+        const auto& for_stmt = static_cast<const ForStmt&>(statement);
+        indent();
+        out_ << "for\n";
+        print_block(for_stmt.body());
+        return;
+      }
+      case Stmt::Kind::Break:
+        indent();
+        out_ << "break\n";
+        return;
+      case Stmt::Kind::Continue:
+        indent();
+        out_ << "continue\n";
+        return;
       case Stmt::Kind::Return: {
         const auto& return_statement = static_cast<const ReturnStmt&>(statement);
         indent();
@@ -106,11 +140,11 @@ class Printer {
         std::string escaped;
         for (const char c : value) {
           switch (c) {
-            case '\n': escaped += "\n"; break;
-            case '\t': escaped += "\t"; break;
-            case '\r': escaped += "\r"; break;
+            case '\n': escaped += "\\n"; break;
+            case '\t': escaped += "\\t"; break;
+            case '\r': escaped += "\\r"; break;
             case '"': escaped += "\\\""; break;
-            case '\': escaped += "\\\\"; break;
+            case '\\': escaped += "\\\\"; break;
             default: escaped.push_back(c); break;
           }
         }
@@ -135,7 +169,6 @@ class Printer {
       }
       case Expr::Kind::Binary: {
         const auto& binary = static_cast<const BinaryExpr&>(expr);
-        // Fully parenthesized so precedence bugs cannot hide in the dump.
         return "(" + expression(binary.lhs()) + " " + std::string(binary_op_spelling(binary.op())) +
                " " + expression(binary.rhs()) + ")";
       }
@@ -153,7 +186,7 @@ class Printer {
 
 }  // namespace
 
-std::string print_program(const Program& program) {
+std::string print_ast(const Program& program) {
   Printer printer;
   return printer.print(program);
 }

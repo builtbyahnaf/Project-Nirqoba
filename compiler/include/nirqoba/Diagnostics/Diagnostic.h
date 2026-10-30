@@ -1,8 +1,4 @@
 // Diagnostic value type shared by every compiler stage.
-//
-// Stages never print: they record a Diagnostic in the DiagnosticEngine, which
-// renders the whole set once. Keeping diagnostics as data means the same code
-// path serves the CLI, the unit tests and any future tooling.
 #pragma once
 
 #include <string>
@@ -14,11 +10,8 @@ namespace nirq {
 
 enum class Severity { Note, Warning, Error, Fatal };
 
-// Severity word used in rendered output: "error", "warning", "note", "fatal".
 std::string_view severity_name(Severity severity);
 
-// Diagnostic code blocks. Every code is stable and documented in
-// docs/compiler/cli.md so scripts and tests can match on it.
 namespace diag {
 inline constexpr const char* kUnexpectedCharacter = "NRQ1008";
 inline constexpr const char* kUnterminatedString = "NRQ1007";
@@ -47,6 +40,8 @@ inline constexpr const char* kPrintArity = "NRQ3018";
 inline constexpr const char* kConstantInitializer = "NRQ3019";
 inline constexpr const char* kUseBeforeInit = "NRQ3020";
 inline constexpr const char* kConstDivisionByZero = "NRQ3021";
+inline constexpr const char* kBreakOutsideLoop = "NRQ3022";
+inline constexpr const char* kContinueOutsideLoop = "NRQ3023";
 inline constexpr const char* kMissingSourceFile = "NRQ5001";
 inline constexpr const char* kInvalidCommandLine = "NRQ5002";
 inline constexpr const char* kToolchainUnavailable = "NRQ5003";
