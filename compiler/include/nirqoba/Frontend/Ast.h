@@ -1,9 +1,9 @@
-// Abstract syntax tree for Nirqoba (Phase 2).
+// Abstract Syntax Tree for Nirqoba Phase 1, 2 & 3.
 #pragma once
 
 #include <memory>
 #include <string>
-#include <utility>
+#include <string_view>
 #include <vector>
 
 #include "nirqoba/Common/Type.h"
@@ -11,7 +11,7 @@
 
 namespace nirq {
 
-// ---------------------------------------------------------------- expressions
+// ----------------------------------------------------------------- expressions
 
 class Expr {
  public:
@@ -191,7 +191,19 @@ class CastExpr : public Expr {
 
 class Stmt {
  public:
-  enum class Kind { Block, VariableDeclaration, Assignment, CompoundAssignment, Return, Expression };
+  enum class Kind {
+    Block,
+    VariableDeclaration,
+    Assignment,
+    CompoundAssignment,
+    If,
+    While,
+    For,
+    Break,
+    Continue,
+    Return,
+    Expression
+  };
 
   Stmt(Kind kind, SourceLocation location) : kind_(kind), location_(std::move(location)) {}
   virtual ~Stmt() = default;
@@ -272,6 +284,64 @@ class CompoundAssignmentStmt : public Stmt {
   SourceLocation name_location_;
 };
 
+class IfStmt : public Stmt {
+ public:
+  IfStmt(SourceLocation location, ExprPtr condition, std::unique_ptr<BlockStmt> then_branch, StmtPtr else_branch)
+      : Stmt(Kind::If, std::move(location)), condition_(std::move(condition)),
+        then_branch_(std::move(then_branch)), else_branch_(std::move(else_branch)) {}
+  const Expr& condition() const { return *condition_; }
+  const BlockStmt& then_branch() const { return *then_branch_; }
+  bool has_else() const { return else_branch_ != nullptr; }
+  const Stmt* else_branch() const { return else_branch_.get(); }
+
+ private:
+  ExprPtr condition_;
+  std::unique_ptr<BlockStmt> then_branch_;
+  StmtPtr else_branch_;
+};
+
+class WhileStmt : public Stmt {
+ public:
+  WhileStmt(SourceLocation location, ExprPtr condition, std::unique_ptr<BlockStmt> body)
+      : Stmt(Kind::While, std::move(location)), condition_(std::move(condition)), body_(std::move(body)) {}
+  const Expr& condition() const { return *condition_; }
+  const BlockStmt& body() const { return *body_; }
+
+ private:
+  ExprPtr condition_;
+  std::unique_ptr<BlockStmt> body_;
+};
+
+class ForStmt : public Stmt {
+ public:
+  ForStmt(SourceLocation location, StmtPtr initializer, ExprPtr condition, StmtPtr step, std::unique_ptr<BlockStmt> body)
+      : Stmt(Kind::For, std::move(location)), initializer_(std::move(initializer)),
+        condition_(std::move(condition)), step_(std::move(step)), body_(std::move(body)) {}
+  bool has_initializer() const { return initializer_ != nullptr; }
+  const Stmt* initializer() const { return initializer_.get(); }
+  bool has_condition() const { return condition_ != nullptr; }
+  const Expr* condition() const { return condition_.get(); }
+  bool has_step() const { return step_ != nullptr; }
+  const Stmt* step() const { return step_.get(); }
+  const BlockStmt& body() const { return *body_; }
+
+ private:
+  StmtPtr initializer_;
+  ExprPtr condition_;
+  StmtPtr step_;
+  std::unique_ptr<BlockStmt> body_;
+};
+
+class BreakStmt : public Stmt {
+ public:
+  explicit BreakStmt(SourceLocation location) : Stmt(Kind::Break, std::move(location)) {}
+};
+
+class ContinueStmt : public Stmt {
+ public:
+  explicit ContinueStmt(SourceLocation location) : Stmt(Kind::Continue, std::move(location)) {}
+};
+
 class ReturnStmt : public Stmt {
  public:
   ReturnStmt(SourceLocation location, ExprPtr value)
@@ -305,8 +375,10 @@ class FunctionDecl {
  public:
   FunctionDecl(Type return_type, std::string name, std::vector<Parameter> parameters,
                std::unique_ptr<BlockStmt> body, SourceLocation location)
-      : return_type_(return_type), name_(std::move(name)), parameters_(std::move(parameters)),
-        body_(std::move(body)), location_(std::move(location)) {}
+      : return_type_(return_type), name_(std::move(name)),
+        parameters_(std::move(parameters)), body_(std::move(body)),
+        location_(std::move(location)) {}
+
   Type return_type() const { return return_type_; }
   const std::string& name() const { return name_; }
   const std::vector<Parameter>& parameters() const { return parameters_; }

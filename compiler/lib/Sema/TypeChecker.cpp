@@ -1,33 +1,77 @@
 #include "nirqoba/Sema/TypeChecker.h"
 
+#include <algorithm>
 #include <unordered_set>
 
 namespace nirq {
 namespace {
 
-// Builtin `print` is the only callable in Phase 1 & 2; it is spelled like a
-// function so Phase 3 can replace this special case with real overloads
-// without changing the surface syntax.
 constexpr const char* kPrintBuiltin = "print";
+
+static bool statement_can_fall_through(const Stmt& stmt);
+
+static bool block_falls_through(const BlockStmt& block) {
+  if (block.statements().empty()) return true;
+  for (const StmtPtr& statement : block.statements()) {
+    if (!statement_can_fall_through(*statement)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool statement_can_fall_through(const Stmt& stmt) {
+  switch (stmt.kind()) {
+    case Stmt::Kind::Return:
+      return false;
+    case Stmt::Kind::Block:
+      return block_falls_through(static_cast<const BlockStmt&>(stmt));
+    case Stmt::Kind::If: {
+      const auto& if_stmt = static_cast<const IfStmt&>(stmt);
+      if (!if_stmt.has_else()) return true;
+      const bool then_falls = block_falls_through(if_stmt.then_branch());
+      const bool else_falls = statement_can_fall_through(*if_stmt.else_branch());
+      return then_falls || else_falls;
+    }
+    default:
+      return true;
+  }
+}
 
 }  // namespace
 
 bool TypeChecker::check(Program& program) {
-  std::unordered_set<std::string> function_names;
+  functions_.clear();
   const FunctionDecl* main_function = nullptr;
   int main_count = 0;
 
+  // Pass 1: Collect function signatures for forward references & mutual recursion.
   for (const auto& function : program.functions()) {
-    if (!function_names.insert(function->name()).second) {
+    std::vector<Type> param_types;
+    param_types.reserve(function->parameters().size());
+    for (const Parameter& param : function->parameters()) {
+      param_types.push_back(param.type);
+    }
+
+    FunctionSignature sig{
+        function->name(),
+        function->return_type(),
+        std::move(param_types),
+        function->location()
+    };
+
+    if (!functions_.emplace(function->name(), std::move(sig)).second) {
       diagnostics_.error(diag::kDuplicateFunction, function->location(),
                          "function '" + function->name() + "' is already defined");
     }
+
     if (function->name() == "main") {
       ++main_count;
       main_function = function.get();
     }
   }
 
+  // Entry point validation.
   if (main_count == 0) {
     SourceLocation location;
     if (!program.functions().empty()) location = program.functions().front()->location();
@@ -39,7 +83,7 @@ bool TypeChecker::check(Program& program) {
   } else if (main_function != nullptr) {
     if (!main_function->parameters().empty()) {
       diagnostics_.error(diag::kMainParameters, main_function->location(),
-                         "'main' must not declare parameters in Phase 2");
+                         "'main' must not declare parameters in Phase 3");
     }
     if (!main_function->return_type().is_integer() && !main_function->return_type().is_void()) {
       diagnostics_.error(diag::kInvalidMainReturn, main_function->location(),
@@ -48,17 +92,18 @@ bool TypeChecker::check(Program& program) {
     }
   }
 
+  // Pass 2: Type-check each function body.
   for (const auto& function : program.functions()) {
-    if (function->return_type().is_integer() || function->return_type().is_void()) {
-      check_function(*function);
-    }
+    check_function(*function);
   }
+
   return !diagnostics_.has_errors();
 }
 
 void TypeChecker::check_function(FunctionDecl& function) {
   symbols_.push_scope();
   current_return_type_ = function.return_type();
+  loop_depth_ = 0;
 
   for (const Parameter& parameter : function.parameters()) {
     if (!symbols_.declare(Symbol{parameter.name, parameter.type, BindingKind::Let,
@@ -74,7 +119,7 @@ void TypeChecker::check_function(FunctionDecl& function) {
     diagnostics_.error(diag::kMissingReturn, function.location(),
                        "function '" + function.name() + "' returns '" +
                            current_return_type_.to_string() +
-                           "' but control can reach the end of its body");
+                           "' but control can reach the end of its body without returning a value");
   }
 
   symbols_.pop_scope();
@@ -102,6 +147,21 @@ void TypeChecker::check_statement(Stmt& statement) {
       return;
     case Stmt::Kind::CompoundAssignment:
       check_compound_assignment(static_cast<CompoundAssignmentStmt&>(statement));
+      return;
+    case Stmt::Kind::If:
+      check_if(static_cast<IfStmt&>(statement));
+      return;
+    case Stmt::Kind::While:
+      check_while(static_cast<WhileStmt&>(statement));
+      return;
+    case Stmt::Kind::For:
+      check_for(static_cast<ForStmt&>(statement));
+      return;
+    case Stmt::Kind::Break:
+      check_break(static_cast<BreakStmt&>(statement));
+      return;
+    case Stmt::Kind::Continue:
+      check_continue(static_cast<ContinueStmt&>(statement));
       return;
     case Stmt::Kind::Return:
       check_return(static_cast<ReturnStmt&>(statement));
@@ -183,7 +243,6 @@ void TypeChecker::check_compound_assignment(CompoundAssignmentStmt& assignment) 
     return;
   }
 
-  // Operator applicability check
   switch (assignment.op()) {
     case BinaryOp::Remainder:
     case BinaryOp::BitwiseAnd:
@@ -213,8 +272,66 @@ void TypeChecker::check_compound_assignment(CompoundAssignmentStmt& assignment) 
   }
 }
 
+void TypeChecker::check_if(IfStmt& statement) {
+  const Type cond_type = check_expression(const_cast<Expr&>(statement.condition()));
+  if (cond_type.is_valid() && !cond_type.is_bool()) {
+    diagnostics_.error(diag::kTypeMismatch, statement.condition().location(),
+                       "'if' condition must be 'bool', not '" + cond_type.to_string() + "'");
+  }
+  check_block(const_cast<BlockStmt&>(statement.then_branch()));
+  if (statement.has_else()) {
+    check_statement(const_cast<Stmt&>(*statement.else_branch()));
+  }
+}
+
+void TypeChecker::check_while(WhileStmt& statement) {
+  const Type cond_type = check_expression(const_cast<Expr&>(statement.condition()));
+  if (cond_type.is_valid() && !cond_type.is_bool()) {
+    diagnostics_.error(diag::kTypeMismatch, statement.condition().location(),
+                       "'while' condition must be 'bool', not '" + cond_type.to_string() + "'");
+  }
+  ++loop_depth_;
+  check_block(const_cast<BlockStmt&>(statement.body()));
+  --loop_depth_;
+}
+
+void TypeChecker::check_for(ForStmt& statement) {
+  symbols_.push_scope();
+  if (statement.has_initializer()) {
+    check_statement(const_cast<Stmt&>(*statement.initializer()));
+  }
+  if (statement.has_condition()) {
+    const Type cond_type = check_expression(const_cast<Expr&>(*statement.condition()));
+    if (cond_type.is_valid() && !cond_type.is_bool()) {
+      diagnostics_.error(diag::kTypeMismatch, statement.condition()->location(),
+                         "'for' condition must be 'bool', not '" + cond_type.to_string() + "'");
+    }
+  }
+  if (statement.has_step()) {
+    check_statement(const_cast<Stmt&>(*statement.step()));
+  }
+  ++loop_depth_;
+  check_block(const_cast<BlockStmt&>(statement.body()));
+  --loop_depth_;
+  symbols_.pop_scope();
+}
+
+void TypeChecker::check_break(BreakStmt& statement) {
+  if (loop_depth_ <= 0) {
+    diagnostics_.error(diag::kBreakOutsideLoop, statement.location(),
+                       "'break' is only allowed inside an enclosing loop");
+  }
+}
+
+void TypeChecker::check_continue(ContinueStmt& statement) {
+  if (loop_depth_ <= 0) {
+    diagnostics_.error(diag::kContinueOutsideLoop, statement.location(),
+                       "'continue' is only allowed inside an enclosing loop");
+  }
+}
+
 void TypeChecker::check_return(ReturnStmt& statement) {
-  if (!current_return_type_.is_valid()) return;  // function already failed to resolve
+  if (!current_return_type_.is_valid()) return;
 
   if (!statement.has_value()) {
     if (!current_return_type_.is_void()) {
@@ -355,7 +472,6 @@ Type TypeChecker::check_expression(Expr& expr) {
 
       const std::string spelling(binary_op_spelling(binary.op()));
 
-      // Check constant division by zero
       if (binary.op() == BinaryOp::Divide || binary.op() == BinaryOp::Remainder) {
         if (binary.rhs().kind() == Expr::Kind::IntegerLiteral) {
           const auto& lit = static_cast<const IntegerLiteralExpr&>(binary.rhs());
@@ -455,6 +571,7 @@ Type TypeChecker::check_expression(Expr& expr) {
 }
 
 Type TypeChecker::check_call(CallExpr& call) {
+  // Builtin 'print'
   if (call.callee() == kPrintBuiltin) {
     if (call.arguments().size() != 1) {
       diagnostics_.error(diag::kPrintArity, call.location(),
@@ -478,14 +595,43 @@ Type TypeChecker::check_call(CallExpr& call) {
     return Type::void_type();
   }
 
-  for (const ExprPtr& argument : call.arguments()) {
-    check_expression(const_cast<Expr&>(*argument));
+  // User-defined function call
+  auto it = functions_.find(call.callee());
+  if (it == functions_.end()) {
+    diagnostics_.error(diag::kUndefinedName, call.location(),
+                       "call to undeclared function '" + call.callee() + "'");
+    for (const ExprPtr& argument : call.arguments()) {
+      check_expression(const_cast<Expr&>(*argument));
+    }
+    return Type::error();
   }
-  diagnostics_.error(diag::kNotCallable, call.location(),
-                     "call to '" + call.callee() +
-                         "' is not supported in Phase 2; user-defined function calls are "
-                         "specified for Phase 3");
-  return Type::error();
+
+  const FunctionSignature& sig = it->second;
+  if (call.arguments().size() != sig.parameter_types.size()) {
+    diagnostics_.error(diag::kPrintArity, call.location(),
+                       "function '" + call.callee() + "' expects " +
+                           std::to_string(sig.parameter_types.size()) +
+                           " argument" + (sig.parameter_types.size() == 1 ? "" : "s") +
+                           ", but " + std::to_string(call.arguments().size()) +
+                           " were given");
+  }
+
+  const std::size_t count = std::min(call.arguments().size(), sig.parameter_types.size());
+  for (std::size_t i = 0; i < count; ++i) {
+    const Type arg_type = check_expression(const_cast<Expr&>(*call.arguments()[i]));
+    if (arg_type.is_valid() && arg_type != sig.parameter_types[i]) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                         "argument " + std::to_string(i + 1) + " of '" + call.callee() +
+                             "' must be of type '" + sig.parameter_types[i].to_string() +
+                             "', not '" + arg_type.to_string() + "'");
+    }
+  }
+
+  for (std::size_t i = count; i < call.arguments().size(); ++i) {
+    check_expression(const_cast<Expr&>(*call.arguments()[i]));
+  }
+
+  return sig.return_type;
 }
 
 void TypeChecker::require_type(const Expr& expr, Type expected, const char* context) {
@@ -499,16 +645,7 @@ void TypeChecker::require_type(const Expr& expr, Type expected, const char* cont
 }
 
 bool TypeChecker::block_can_fall_through(const BlockStmt& block) const {
-  if (block.statements().empty()) return true;
-  const Stmt& last = *block.statements().back();
-  switch (last.kind()) {
-    case Stmt::Kind::Return:
-      return false;
-    case Stmt::Kind::Block:
-      return block_can_fall_through(static_cast<const BlockStmt&>(last));
-    default:
-      return true;
-  }
+  return block_falls_through(block);
 }
 
 }  // namespace nirq

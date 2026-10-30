@@ -5,7 +5,6 @@
 namespace nirq {
 namespace {
 
-// Diagnostic codes owned by the parser but not shared with other stages.
 constexpr const char* kUnknownType = "NRQ2003";
 
 bool is_type_keyword(TokenKind kind) {
@@ -36,14 +35,8 @@ bool is_type_keyword(TokenKind kind) {
 
 std::string_view phase_for_keyword(TokenKind kind) {
   switch (kind) {
-    case TokenKind::KwIf:
-    case TokenKind::KwElse:
-    case TokenKind::KwWhile:
-    case TokenKind::KwFor:
-    case TokenKind::KwBreak:
-    case TokenKind::KwContinue:
     case TokenKind::KwFn:
-      return "Phase 3";
+      return "Phase 3 (use 'function', not 'fn')";
     case TokenKind::KwStruct:
       return "Phase 4";
     case TokenKind::KwModule:
@@ -65,8 +58,6 @@ Parser::Parser(std::vector<Token> tokens, DiagnosticEngine& diagnostics)
 
 const Token& Parser::peek(std::size_t lookahead) const {
   const std::size_t index = position_ + lookahead;
-  // The lexer always terminates the stream with EndOfFile, so clamping here is
-  // a safety net rather than a reachable path.
   if (index >= tokens_.size()) return tokens_.back();
   return tokens_[index];
 }
@@ -94,8 +85,6 @@ const Token& Parser::expect(TokenKind kind, std::string_view context) {
   error_at(peek(), diag::kExpectedToken,
            "expected '" + std::string(token_kind_name(kind)) + "' " + std::string(context) +
                ", found " + describe_token(peek()));
-  // Return the unexpected token so callers can keep building a tree; the
-  // recorded diagnostic already guarantees compilation fails.
   return peek();
 }
 
@@ -107,12 +96,10 @@ void Parser::report_phase_gap(const Token& token, std::string_view feature,
                              std::string_view phase) {
   diagnostics_.error(diag::kNotImplementedInPhase1, token.location,
                      "'" + std::string(feature) + "' is specified for " + std::string(phase) +
-                         " and is not available in Phase 2");
+                         " and is not available in Phase 3");
 }
 
 void Parser::synchronize() {
-  // Consume until a statement boundary. A closing brace is left for the
-  // enclosing block parser; consuming it here would unbalance the nesting.
   while (!check(TokenKind::EndOfFile)) {
     if (previous().kind == TokenKind::Semicolon) return;
     switch (peek().kind) {
@@ -125,6 +112,11 @@ void Parser::synchronize() {
       case TokenKind::KwLet:
       case TokenKind::KwVar:
       case TokenKind::KwConst:
+      case TokenKind::KwIf:
+      case TokenKind::KwWhile:
+      case TokenKind::KwFor:
+      case TokenKind::KwBreak:
+      case TokenKind::KwContinue:
       case TokenKind::KwReturn:
         return;
       default:
@@ -188,7 +180,7 @@ std::unique_ptr<FunctionDecl> Parser::parse_function() {
   if (expect(TokenKind::LParen, "after the function name").kind == TokenKind::LParen) {
     if (!check(TokenKind::RParen)) {
       do {
-        if (check(TokenKind::RParen)) break;  // trailing comma
+        if (check(TokenKind::RParen)) break;
         if (!is_type_keyword(peek().kind)) {
           error_at(peek(), kUnknownType,
                    "expected a parameter type, found " + describe_token(peek()));
@@ -251,7 +243,7 @@ Type Parser::parse_type_annotation() {
 }
 
 std::unique_ptr<BlockStmt> Parser::parse_block() {
-  const Token open = advance();  // '{' (checked by the caller)
+  const Token open = advance();
   auto block = std::make_unique<BlockStmt>(open.location);
   while (!check(TokenKind::RBrace) && !check(TokenKind::EndOfFile)) {
     const std::size_t before = position_;
@@ -272,6 +264,21 @@ StmtPtr Parser::parse_statement() {
   if (check(TokenKind::LBrace)) return parse_block();
   if (check(TokenKind::KwLet) || check(TokenKind::KwVar) || check(TokenKind::KwConst)) {
     return parse_variable_declaration();
+  }
+  if (check(TokenKind::KwIf)) {
+    return parse_if();
+  }
+  if (check(TokenKind::KwWhile)) {
+    return parse_while();
+  }
+  if (check(TokenKind::KwFor)) {
+    return parse_for();
+  }
+  if (check(TokenKind::KwBreak)) {
+    return parse_break();
+  }
+  if (check(TokenKind::KwContinue)) {
+    return parse_continue();
   }
   if (check(TokenKind::KwReturn)) {
     const Token keyword = advance();
@@ -368,11 +375,137 @@ StmtPtr Parser::parse_assignment_or_expression() {
   return std::make_unique<ExprStmt>(start.location, std::move(expr));
 }
 
+StmtPtr Parser::parse_if() {
+  const Token if_tok = advance();
+  expect(TokenKind::LParen, "after 'if'");
+  ExprPtr condition = parse_expression();
+  expect(TokenKind::RParen, "after the 'if' condition");
+  if (!check(TokenKind::LBrace)) {
+    error_at(peek(), diag::kExpectedToken, "expected '{' to start the 'if' body");
+    synchronize();
+    return nullptr;
+  }
+  auto then_branch = parse_block();
+  StmtPtr else_branch = nullptr;
+  if (match(TokenKind::KwElse)) {
+    if (check(TokenKind::KwIf)) {
+      else_branch = parse_if();
+    } else if (check(TokenKind::LBrace)) {
+      else_branch = parse_block();
+    } else {
+      error_at(peek(), diag::kExpectedToken, "expected '{' or 'if' after 'else'");
+      synchronize();
+    }
+  }
+  return std::make_unique<IfStmt>(if_tok.location, std::move(condition),
+                                  std::move(then_branch), std::move(else_branch));
+}
+
+StmtPtr Parser::parse_while() {
+  const Token while_tok = advance();
+  expect(TokenKind::LParen, "after 'while'");
+  ExprPtr condition = parse_expression();
+  expect(TokenKind::RParen, "after the 'while' condition");
+  if (!check(TokenKind::LBrace)) {
+    error_at(peek(), diag::kExpectedToken, "expected '{' to start the 'while' body");
+    synchronize();
+    return nullptr;
+  }
+  auto body = parse_block();
+  return std::make_unique<WhileStmt>(while_tok.location, std::move(condition), std::move(body));
+}
+
+StmtPtr Parser::parse_for() {
+  const Token for_tok = advance();
+  expect(TokenKind::LParen, "after 'for'");
+
+  StmtPtr initializer = nullptr;
+  if (check(TokenKind::KwLet) || check(TokenKind::KwVar) || check(TokenKind::KwConst)) {
+    initializer = parse_variable_declaration();
+  } else if (match(TokenKind::Semicolon)) {
+    initializer = nullptr;
+  } else {
+    initializer = parse_assignment_or_expression();
+  }
+
+  ExprPtr condition = nullptr;
+  if (!check(TokenKind::Semicolon)) {
+    condition = parse_expression();
+  }
+  expect(TokenKind::Semicolon, "after the 'for' condition");
+
+  StmtPtr step = nullptr;
+  if (!check(TokenKind::RParen)) {
+    if (check(TokenKind::Identifier)) {
+      if (peek(1).kind == TokenKind::Equal) {
+        const Token name = advance();
+        advance();  // '='
+        ExprPtr value = parse_expression();
+        step = std::make_unique<AssignmentStmt>(name.location, name.text, std::move(value),
+                                                name.location);
+      } else {
+        BinaryOp comp_op;
+        bool is_compound = false;
+        switch (peek(1).kind) {
+          case TokenKind::PlusEqual: comp_op = BinaryOp::Add; is_compound = true; break;
+          case TokenKind::MinusEqual: comp_op = BinaryOp::Subtract; is_compound = true; break;
+          case TokenKind::StarEqual: comp_op = BinaryOp::Multiply; is_compound = true; break;
+          case TokenKind::SlashEqual: comp_op = BinaryOp::Divide; is_compound = true; break;
+          case TokenKind::PercentEqual: comp_op = BinaryOp::Remainder; is_compound = true; break;
+          case TokenKind::AmpEqual: comp_op = BinaryOp::BitwiseAnd; is_compound = true; break;
+          case TokenKind::PipeEqual: comp_op = BinaryOp::BitwiseOr; is_compound = true; break;
+          case TokenKind::CaretEqual: comp_op = BinaryOp::BitwiseXor; is_compound = true; break;
+          case TokenKind::LessLessEqual: comp_op = BinaryOp::ShiftLeft; is_compound = true; break;
+          case TokenKind::GreaterGreaterEqual: comp_op = BinaryOp::ShiftRight; is_compound = true; break;
+          default: break;
+        }
+        if (is_compound) {
+          const Token name = advance();
+          advance();  // compound op
+          ExprPtr value = parse_expression();
+          step = std::make_unique<CompoundAssignmentStmt>(name.location, comp_op, name.text,
+                                                          std::move(value), name.location);
+        } else {
+          const Token start = peek();
+          ExprPtr expr = parse_expression();
+          step = std::make_unique<ExprStmt>(start.location, std::move(expr));
+        }
+      }
+    } else {
+      const Token start = peek();
+      ExprPtr expr = parse_expression();
+      step = std::make_unique<ExprStmt>(start.location, std::move(expr));
+    }
+  }
+  expect(TokenKind::RParen, "after the 'for' loop clauses");
+
+  if (!check(TokenKind::LBrace)) {
+    error_at(peek(), diag::kExpectedToken, "expected '{' to start the 'for' body");
+    synchronize();
+    return nullptr;
+  }
+  auto body = parse_block();
+  return std::make_unique<ForStmt>(for_tok.location, std::move(initializer),
+                                  std::move(condition), std::move(step), std::move(body));
+}
+
+StmtPtr Parser::parse_break() {
+  const Token tok = advance();
+  expect(TokenKind::Semicolon, "after 'break'");
+  return std::make_unique<BreakStmt>(tok.location);
+}
+
+StmtPtr Parser::parse_continue() {
+  const Token tok = advance();
+  expect(TokenKind::Semicolon, "after 'continue'");
+  return std::make_unique<ContinueStmt>(tok.location);
+}
+
 std::vector<ExprPtr> Parser::parse_argument_list() {
   std::vector<ExprPtr> arguments;
   if (check(TokenKind::RParen)) return arguments;
   do {
-    if (check(TokenKind::RParen)) break;  // trailing comma
+    if (check(TokenKind::RParen)) break;
     arguments.push_back(parse_expression());
   } while (match(TokenKind::Comma));
   return arguments;
