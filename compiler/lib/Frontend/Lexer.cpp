@@ -1,7 +1,10 @@
 #include "nirqoba/Frontend/Lexer.h"
 
 #include <cctype>
+#include <charconv>
+#include <cmath>
 #include <limits>
+#include <string>
 
 namespace nirq {
 namespace {
@@ -16,6 +19,12 @@ bool is_identifier_continue(char c) {
 
 bool is_digit(char c) { return c >= '0' && c <= '9'; }
 
+bool is_hex_digit(char c) {
+  return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+bool is_binary_digit(char c) { return c == '0' || c == '1'; }
+
 }  // namespace
 
 std::vector<Token> Lexer::tokenize() {
@@ -28,8 +37,6 @@ std::vector<Token> Lexer::tokenize() {
     if (at_end) break;
   }
   if (tokens.size() == 1) {
-    // A file containing only comments or whitespace has no tokens; report it
-    // here so the driver never reaches the parser with an empty program.
     diagnostics_.error(diag::kEmptySource, source_.location(0, 0),
                        "source file contains no tokens");
   }
@@ -44,7 +51,6 @@ void Lexer::skip_trivia() {
       continue;
     }
     if (c == '/' && peek(1) == '/') {
-      // Line comments run to the newline (or end of file) and are not tokens.
       while (!at_end() && peek() != '\n') ++offset_;
       continue;
     }
@@ -113,6 +119,12 @@ Token Lexer::scan_token() {
     scan_string(token, start);
     return token;
   }
+  if (c == '\'') {
+    Token token = make_token(TokenKind::CharLiteral, start);
+    --offset_;
+    scan_char(token, start);
+    return token;
+  }
 
   switch (c) {
     case '(': return make_token(TokenKind::LParen, start);
@@ -139,7 +151,9 @@ Token Lexer::scan_token() {
     case '/':
       if (match('=')) return make_token(TokenKind::SlashEqual, start);
       return make_token(TokenKind::Slash, start);
-    case '%': return make_token(TokenKind::Percent, start);
+    case '%':
+      if (match('=')) return make_token(TokenKind::PercentEqual, start);
+      return make_token(TokenKind::Percent, start);
     case '=':
       if (match('=')) return make_token(TokenKind::EqualEqual, start);
       return make_token(TokenKind::Equal, start);
@@ -147,28 +161,35 @@ Token Lexer::scan_token() {
       if (match('=')) return make_token(TokenKind::BangEqual, start);
       return make_token(TokenKind::Bang, start);
     case '<':
-      if (match('<')) return make_token(TokenKind::LessLess, start);
+      if (match('<')) {
+        if (match('=')) return make_token(TokenKind::LessLessEqual, start);
+        return make_token(TokenKind::LessLess, start);
+      }
       if (match('=')) return make_token(TokenKind::LessEqual, start);
       return make_token(TokenKind::Less, start);
     case '>':
-      if (match('>')) return make_token(TokenKind::GreaterGreater, start);
+      if (match('>')) {
+        if (match('=')) return make_token(TokenKind::GreaterGreaterEqual, start);
+        return make_token(TokenKind::GreaterGreater, start);
+      }
       if (match('=')) return make_token(TokenKind::GreaterEqual, start);
       return make_token(TokenKind::Greater, start);
     case '&':
       if (match('&')) return make_token(TokenKind::AmpAmp, start);
+      if (match('=')) return make_token(TokenKind::AmpEqual, start);
       return make_token(TokenKind::Amp, start);
     case '|':
       if (match('|')) return make_token(TokenKind::PipePipe, start);
       if (match('=')) return make_token(TokenKind::PipeEqual, start);
       return make_token(TokenKind::Pipe, start);
-    case '^': return make_token(TokenKind::Caret, start);
+    case '^':
+      if (match('=')) return make_token(TokenKind::CaretEqual, start);
+      return make_token(TokenKind::Caret, start);
     case '~': return make_token(TokenKind::Tilde, start);
     default:
       break;
   }
 
-  // Unknown byte: report it, emit Invalid and keep scanning so one stray
-  // character does not hide the rest of the file's diagnostics.
   Token token;
   token.kind = TokenKind::Invalid;
   token.text = std::string(1, c);
@@ -179,29 +200,151 @@ Token Lexer::scan_token() {
 }
 
 void Lexer::scan_number(Token& token, std::size_t start_offset) {
-  // decimal_only: Nirqoba Phase 1 accepts decimal integers. Hex/binary
-  // literals are part of Phase 2 and are rejected here rather than misread.
-  while (!at_end() && is_digit(peek())) ++offset_;
-  if (!at_end() && (peek() == 'x' || peek() == 'X' || peek() == 'b' || peek() == 'B')) {
-    diagnostics_.error(diag::kNotImplementedInPhase1, source_.location(start_offset, offset_ - start_offset),
-                       "non-decimal integer literals are specified for Phase 2");
-  }
-  const std::string_view digits = source_text_.substr(start_offset, offset_ - start_offset);
-  token.kind = TokenKind::IntegerLiteral;
-  token.text = std::string(digits);
-  token.location = source_.location(start_offset, digits.size());
+  bool is_hex = false;
+  bool is_binary = false;
+  bool is_float = false;
 
-  long long value = 0;
-  for (const char digit : digits) {
-    if (value > (std::numeric_limits<long long>::max() - (digit - '0')) / 10) {
-      diagnostics_.error("NRQ1009", token.location,
-                         "integer literal '" + std::string(digits) + "' is too large for int (64-bit)");
-      token.integer_value = 0;
-      return;
+  // Check prefix 0x / 0b
+  if (peek() == '0' && (peek(1) == 'x' || peek(1) == 'X')) {
+    is_hex = true;
+    offset_ += 2;
+    while (!at_end() && (is_hex_digit(peek()) || peek() == '_')) ++offset_;
+  } else if (peek() == '0' && (peek(1) == 'b' || peek(1) == 'B')) {
+    is_binary = true;
+    offset_ += 2;
+    while (!at_end() && (is_binary_digit(peek()) || peek() == '_')) ++offset_;
+  } else {
+    // Decimal or floating point
+    while (!at_end() && (is_digit(peek()) || peek() == '_')) ++offset_;
+
+    if (!at_end() && peek() == '.' && is_digit(peek(1))) {
+      is_float = true;
+      ++offset_;  // consume '.'
+      while (!at_end() && (is_digit(peek()) || peek() == '_')) ++offset_;
     }
-    value = value * 10 + (digit - '0');
+
+    if (!at_end() && (peek() == 'e' || peek() == 'E')) {
+      is_float = true;
+      ++offset_;  // consume 'e'
+      if (!at_end() && (peek() == '+' || peek() == '-')) ++offset_;
+      while (!at_end() && (is_digit(peek()) || peek() == '_')) ++offset_;
+    }
   }
-  token.integer_value = value;
+
+  // Type suffixes: i8, i16, i32, i64, u8, u16, u32, u64, f32, f64
+  std::size_t suffix_start = offset_;
+  if (!at_end() && (peek() == 'i' || peek() == 'u' || peek() == 'f')) {
+    const std::size_t rem = source_text_.size() - offset_;
+    if (rem >= 3 && (source_text_.substr(offset_, 3) == "i64" ||
+                     source_text_.substr(offset_, 3) == "i32" ||
+                     source_text_.substr(offset_, 3) == "i16" ||
+                     source_text_.substr(offset_, 3) == "u64" ||
+                     source_text_.substr(offset_, 3) == "u32" ||
+                     source_text_.substr(offset_, 3) == "u16" ||
+                     source_text_.substr(offset_, 3) == "f64" ||
+                     source_text_.substr(offset_, 3) == "f32")) {
+      offset_ += 3;
+    } else if (rem >= 2 && (source_text_.substr(offset_, 2) == "i8" ||
+                            source_text_.substr(offset_, 2) == "u8")) {
+      offset_ += 2;
+    }
+  }
+
+  const std::string_view full_text = source_text_.substr(start_offset, offset_ - start_offset);
+  std::string_view num_part = full_text.substr(0, suffix_start - start_offset);
+  std::string suffix(full_text.substr(suffix_start - start_offset));
+
+  if (suffix == "f32" || suffix == "f64") {
+    is_float = true;
+  }
+
+  token.text = std::string(full_text);
+  token.suffix = std::move(suffix);
+  token.location = source_.location(start_offset, full_text.size());
+
+  // Clean underscores for parsing
+  std::string clean_digits;
+  for (char ch : num_part) {
+    if (ch != '_') clean_digits.push_back(ch);
+  }
+
+  if (is_float) {
+    token.kind = TokenKind::FloatLiteral;
+    try {
+      token.float_value = std::stod(clean_digits);
+    } catch (...) {
+      diagnostics_.error("NRQ1010", token.location, "invalid floating-point literal '" + token.text + "'");
+      token.float_value = 0.0;
+    }
+    return;
+  }
+
+  token.kind = TokenKind::IntegerLiteral;
+  int base = 10;
+  std::string_view parse_digits = clean_digits;
+  if (is_hex) {
+    base = 16;
+    parse_digits = parse_digits.substr(2);
+  } else if (is_binary) {
+    base = 2;
+    parse_digits = parse_digits.substr(2);
+  }
+
+  unsigned long long raw_val = 0;
+  auto [ptr, ec] = std::from_chars(parse_digits.data(), parse_digits.data() + parse_digits.size(), raw_val, base);
+  if (ec != std::errc()) {
+    diagnostics_.error("NRQ1009", token.location,
+                       "integer literal '" + token.text + "' is too large for 64-bit integer");
+    token.integer_value = 0;
+    return;
+  }
+  token.integer_value = static_cast<long long>(raw_val);
+}
+
+void Lexer::scan_char(Token& token, std::size_t start_offset) {
+  ++offset_;  // consume opening single quote
+  if (at_end() || peek() == '\n') {
+    diagnostics_.error("NRQ1011", source_.location(start_offset, offset_ - start_offset),
+                       "unterminated character literal");
+    token.kind = TokenKind::CharLiteral;
+    return;
+  }
+
+  uint32_t val = 0;
+  if (peek() == '\\') {
+    ++offset_;
+    if (at_end()) return;
+    char escaped = peek();
+    ++offset_;
+    switch (escaped) {
+      case 'n': val = '\n'; break;
+      case 't': val = '\t'; break;
+      case 'r': val = '\r'; break;
+      case '\\': val = '\\'; break;
+      case '\'': val = '\''; break;
+      case '0': val = '\0'; break;
+      default:
+        diagnostics_.error(diag::kUnknownEscape, source_.location(start_offset, 2),
+                           std::string("unknown escape sequence in character literal '\\") + escaped + "'");
+        val = static_cast<uint32_t>(escaped);
+        break;
+    }
+  } else {
+    val = static_cast<unsigned char>(peek());
+    ++offset_;
+  }
+
+  if (at_end() || peek() != '\'') {
+    diagnostics_.error("NRQ1011", source_.location(start_offset, offset_ - start_offset),
+                       "character literal must be terminated with a single quote");
+  } else {
+    ++offset_;  // consume closing single quote
+  }
+
+  token.kind = TokenKind::CharLiteral;
+  token.text = std::string(source_text_.substr(start_offset, offset_ - start_offset));
+  token.char_value = val;
+  token.location = source_.location(start_offset, offset_ - start_offset);
 }
 
 void Lexer::scan_identifier(Token& token, std::size_t start_offset) {
@@ -213,7 +356,6 @@ void Lexer::scan_identifier(Token& token, std::size_t start_offset) {
 }
 
 void Lexer::scan_string(Token& token, std::size_t start_offset) {
-  // The opening quote is consumed here; `start_offset` still points at it.
   ++offset_;
   std::string value;
   bool terminated = false;
@@ -225,11 +367,9 @@ void Lexer::scan_string(Token& token, std::size_t start_offset) {
       break;
     }
     if (c == '\n') {
-      // Phase 1 has no multi-line string literals; stopping at the newline
-      // keeps the diagnostic anchored on the line the user actually wrote.
       break;
     }
-    if (c != '\') {
+    if (c != '\\') {
       value.push_back(c);
       ++offset_;
       continue;
@@ -244,13 +384,13 @@ void Lexer::scan_string(Token& token, std::size_t start_offset) {
       case 'n': value.push_back('\n'); break;
       case 't': value.push_back('\t'); break;
       case 'r': value.push_back('\r'); break;
-      case '\': value.push_back('\'); break;
+      case '\\': value.push_back('\\'); break;
       case '"': value.push_back('"'); break;
       case '0': value.push_back('\0'); break;
       default:
         diagnostics_.error(diag::kUnknownEscape, source_.location(escape_offset, 2),
                            std::string("unknown escape sequence '\\") + escaped +
-                               "'; supported escapes are \n, \t, \r, \\, \\\" and \0");
+                               "'; supported escapes are \\n, \\t, \\r, \\\\, \\\" and \\0");
         value.push_back(escaped);
         break;
     }

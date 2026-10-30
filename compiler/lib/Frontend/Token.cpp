@@ -7,6 +7,8 @@ std::string_view token_kind_name(TokenKind kind) {
     case TokenKind::EndOfFile: return "end of file";
     case TokenKind::Invalid: return "invalid token";
     case TokenKind::IntegerLiteral: return "integer literal";
+    case TokenKind::FloatLiteral: return "float literal";
+    case TokenKind::CharLiteral: return "character literal";
     case TokenKind::StringLiteral: return "string literal";
     case TokenKind::Identifier: return "identifier";
     case TokenKind::KwFunction: return "function";
@@ -16,6 +18,19 @@ std::string_view token_kind_name(TokenKind kind) {
     case TokenKind::KwReturn: return "return";
     case TokenKind::KwPrint: return "print";
     case TokenKind::KwInt: return "int";
+    case TokenKind::KwI8: return "i8";
+    case TokenKind::KwI16: return "i16";
+    case TokenKind::KwI32: return "i32";
+    case TokenKind::KwI64: return "i64";
+    case TokenKind::KwU8: return "u8";
+    case TokenKind::KwU16: return "u16";
+    case TokenKind::KwU32: return "u32";
+    case TokenKind::KwU64: return "u64";
+    case TokenKind::KwByte: return "byte";
+    case TokenKind::KwChar: return "char";
+    case TokenKind::KwF32: return "f32";
+    case TokenKind::KwF64: return "f64";
+    case TokenKind::KwAs: return "as";
     case TokenKind::KwString: return "string";
     case TokenKind::KwBool: return "bool";
     case TokenKind::KwVoid: return "void";
@@ -58,7 +73,12 @@ std::string_view token_kind_name(TokenKind kind) {
     case TokenKind::MinusEqual: return "-=";
     case TokenKind::StarEqual: return "*=";
     case TokenKind::SlashEqual: return "/=";
+    case TokenKind::PercentEqual: return "%=";
     case TokenKind::PipeEqual: return "|=";
+    case TokenKind::AmpEqual: return "&=";
+    case TokenKind::CaretEqual: return "^=";
+    case TokenKind::LessLessEqual: return "<<=";
+    case TokenKind::GreaterGreaterEqual: return ">>=";
     case TokenKind::EqualEqual: return "==";
     case TokenKind::BangEqual: return "!=";
     case TokenKind::Less: return "<";
@@ -79,8 +99,6 @@ std::string_view token_kind_name(TokenKind kind) {
 }
 
 TokenKind keyword_kind(std::string_view text) {
-  // Linear lookup over a small table is faster than hashing for these lengths
-  // and keeps the keyword set visible in one place.
   struct Entry { std::string_view spelling; TokenKind kind; };
   static constexpr Entry kKeywords[] = {
       {"function", TokenKind::KwFunction}, {"let", TokenKind::KwLet},
@@ -89,6 +107,13 @@ TokenKind keyword_kind(std::string_view text) {
       {"int", TokenKind::KwInt},           {"string", TokenKind::KwString},
       {"bool", TokenKind::KwBool},         {"void", TokenKind::KwVoid},
       {"true", TokenKind::KwTrue},         {"false", TokenKind::KwFalse},
+      {"i8", TokenKind::KwI8},             {"i16", TokenKind::KwI16},
+      {"i32", TokenKind::KwI32},           {"i64", TokenKind::KwI64},
+      {"u8", TokenKind::KwU8},             {"u16", TokenKind::KwU16},
+      {"u32", TokenKind::KwU32},           {"u64", TokenKind::KwU64},
+      {"byte", TokenKind::KwByte},         {"char", TokenKind::KwChar},
+      {"f32", TokenKind::KwF32},           {"f64", TokenKind::KwF64},
+      {"as", TokenKind::KwAs},
       {"if", TokenKind::KwIf},             {"else", TokenKind::KwElse},
       {"while", TokenKind::KwWhile},       {"for", TokenKind::KwFor},
       {"break", TokenKind::KwBreak},       {"continue", TokenKind::KwContinue},
@@ -129,6 +154,8 @@ bool is_reserved_future_keyword(TokenKind kind) {
 
 std::string describe_token(const Token& token) {
   if (token.kind == TokenKind::IntegerLiteral) return "integer literal '" + token.text + "'";
+  if (token.kind == TokenKind::FloatLiteral) return "float literal '" + token.text + "'";
+  if (token.kind == TokenKind::CharLiteral) return "character literal '" + token.text + "'";
   if (token.kind == TokenKind::StringLiteral) return "string literal";
   if (token.kind == TokenKind::Identifier) return "identifier '" + token.text + "'";
   return "'" + std::string(token_kind_name(token.kind)) + "'";

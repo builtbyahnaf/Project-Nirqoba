@@ -28,6 +28,7 @@ class Lexer {
   Token make_token(TokenKind kind, std::size_t start_offset);
   void scan_number(Token& token, std::size_t start_offset);
   void scan_string(Token& token, std::size_t start_offset);
+  void scan_char(Token& token, std::size_t start_offset);
   void scan_identifier(Token& token, std::size_t start_offset);
   void skip_trivia();
 

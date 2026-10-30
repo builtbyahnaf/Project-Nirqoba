@@ -122,7 +122,19 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
   switch (expr.kind()) {
     case Expr::Kind::IntegerLiteral: {
       const auto& literal = static_cast<const IntegerLiteralExpr&>(expr);
-      tir::Value result = function.allocate_value(Type::int_type());
+      Type lit_type = literal.type().is_valid() ? literal.type() : Type::int_type();
+      tir::Value result = function.allocate_value(lit_type);
+      tir::Op op;
+      op.kind = tir::OpKind::ConstantInt;
+      op.location = literal.location();
+      op.result = result;
+      op.integer_value = literal.value();
+      function.add_operation(std::move(op));
+      return result;
+    }
+    case Expr::Kind::CharLiteral: {
+      const auto& literal = static_cast<const CharLiteralExpr&>(expr);
+      tir::Value result = function.allocate_value(Type::char_type());
       tir::Op op;
       op.kind = tir::OpKind::ConstantInt;
       op.location = literal.location();

@@ -4,7 +4,7 @@
 Accepted
 
 ## Context
-Across early design notes and ROADMAP documents, both `.nrqba` and `.nq` appeared. A single canonical source extension is needed for tooling, build systems, syntax highlighters, and compiler diagnostics.
+Across early design notes and ROADMAP documents, both `.nrqba` and `.nrqba` appeared. A single canonical source extension is needed for tooling, build systems, syntax highlighters, and compiler diagnostics.
 
 ## Decision
 Use `.nrqba` as the official and only accepted source file extension for Nirqoba programs.

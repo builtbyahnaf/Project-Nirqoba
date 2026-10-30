@@ -1,9 +1,4 @@
-// Abstract syntax tree for the Phase 1 grammar.
-//
-// The tree is a small class hierarchy with a tag on every node, not a variant
-// or a visitor framework: Phase 1 has eleven node kinds and adding a visitor
-// layer would be abstraction the phase does not need (AGENTS 2). Every node
-// carries the SourceLocation that diagnostics and `--emit=ast` refer to.
+// Abstract syntax tree for Nirqoba (Phase 2).
 #pragma once
 
 #include <memory>
@@ -20,7 +15,18 @@ namespace nirq {
 
 class Expr {
  public:
-  enum class Kind { IntegerLiteral, StringLiteral, BoolLiteral, Name, Call, Unary, Binary };
+  enum class Kind {
+    IntegerLiteral,
+    FloatLiteral,
+    CharLiteral,
+    StringLiteral,
+    BoolLiteral,
+    Name,
+    Call,
+    Unary,
+    Binary,
+    Cast
+  };
 
   Expr(Kind kind, SourceLocation location) : kind_(kind), location_(std::move(location)) {}
   virtual ~Expr() = default;
@@ -28,8 +34,6 @@ class Expr {
   Kind kind() const { return kind_; }
   const SourceLocation& location() const { return location_; }
 
-  // Filled in by the type checker; default is the error type so an unchecked
-  // tree can never be mistaken for a well-typed one.
   Type type() const { return type_; }
   void set_type(Type type) { type_ = type; }
 
@@ -43,12 +47,36 @@ using ExprPtr = std::unique_ptr<Expr>;
 
 class IntegerLiteralExpr : public Expr {
  public:
-  IntegerLiteralExpr(SourceLocation location, long long value)
-      : Expr(Kind::IntegerLiteral, std::move(location)), value_(value) {}
+  IntegerLiteralExpr(SourceLocation location, long long value, std::string suffix = "")
+      : Expr(Kind::IntegerLiteral, std::move(location)), value_(value), suffix_(std::move(suffix)) {}
   long long value() const { return value_; }
+  const std::string& suffix() const { return suffix_; }
 
  private:
   long long value_;
+  std::string suffix_;
+};
+
+class FloatLiteralExpr : public Expr {
+ public:
+  FloatLiteralExpr(SourceLocation location, double value, std::string suffix = "")
+      : Expr(Kind::FloatLiteral, std::move(location)), value_(value), suffix_(std::move(suffix)) {}
+  double value() const { return value_; }
+  const std::string& suffix() const { return suffix_; }
+
+ private:
+  double value_;
+  std::string suffix_;
+};
+
+class CharLiteralExpr : public Expr {
+ public:
+  CharLiteralExpr(SourceLocation location, uint32_t value)
+      : Expr(Kind::CharLiteral, std::move(location)), value_(value) {}
+  uint32_t value() const { return value_; }
+
+ private:
+  uint32_t value_;
 };
 
 class StringLiteralExpr : public Expr {
@@ -94,8 +122,28 @@ class CallExpr : public Expr {
   std::vector<ExprPtr> arguments_;
 };
 
-enum class UnaryOp { Negate };
-enum class BinaryOp { Add, Subtract, Multiply, Divide, Remainder };
+enum class UnaryOp { Negate, Plus, LogicalNot, BitwiseNot };
+enum class BinaryOp {
+  Add,
+  Subtract,
+  Multiply,
+  Divide,
+  Remainder,
+  Exponentiate,
+  BitwiseAnd,
+  BitwiseOr,
+  BitwiseXor,
+  ShiftLeft,
+  ShiftRight,
+  Equal,
+  NotEqual,
+  Less,
+  LessEqual,
+  Greater,
+  GreaterEqual,
+  LogicalAnd,
+  LogicalOr
+};
 
 std::string_view unary_op_spelling(UnaryOp op);
 std::string_view binary_op_spelling(BinaryOp op);
@@ -127,11 +175,23 @@ class BinaryExpr : public Expr {
   ExprPtr rhs_;
 };
 
+class CastExpr : public Expr {
+ public:
+  CastExpr(SourceLocation location, ExprPtr operand, Type target_type)
+      : Expr(Kind::Cast, std::move(location)), operand_(std::move(operand)), target_type_(target_type) {}
+  const Expr& operand() const { return *operand_; }
+  Type target_type() const { return target_type_; }
+
+ private:
+  ExprPtr operand_;
+  Type target_type_;
+};
+
 // ----------------------------------------------------------------- statements
 
 class Stmt {
  public:
-  enum class Kind { Block, VariableDeclaration, Assignment, Return, Expression };
+  enum class Kind { Block, VariableDeclaration, Assignment, CompoundAssignment, Return, Expression };
 
   Stmt(Kind kind, SourceLocation location) : kind_(kind), location_(std::move(location)) {}
   virtual ~Stmt() = default;
@@ -156,10 +216,7 @@ class BlockStmt : public Stmt {
   std::vector<StmtPtr> statements_;
 };
 
-// `let`, `var` and `const` bindings. Phase 1 has no `const` folding, so the
-// difference between the three is mutability only (documented in the report).
 enum class BindingKind { Let, Var, Const };
-
 std::string_view binding_kind_spelling(BindingKind kind);
 
 class VariableDeclarationStmt : public Stmt {
@@ -183,7 +240,6 @@ class VariableDeclarationStmt : public Stmt {
   ExprPtr initializer_;
 };
 
-// `name = value;` — Phase 1 targets a plain local only.
 class AssignmentStmt : public Stmt {
  public:
   AssignmentStmt(SourceLocation location, std::string name, ExprPtr value, SourceLocation name_location)
@@ -194,6 +250,23 @@ class AssignmentStmt : public Stmt {
   const SourceLocation& name_location() const { return name_location_; }
 
  private:
+  std::string name_;
+  ExprPtr value_;
+  SourceLocation name_location_;
+};
+
+class CompoundAssignmentStmt : public Stmt {
+ public:
+  CompoundAssignmentStmt(SourceLocation location, BinaryOp op, std::string name, ExprPtr value, SourceLocation name_location)
+      : Stmt(Kind::CompoundAssignment, std::move(location)), op_(op), name_(std::move(name)),
+        value_(std::move(value)), name_location_(std::move(name_location)) {}
+  BinaryOp op() const { return op_; }
+  const std::string& name() const { return name_; }
+  const Expr& value() const { return *value_; }
+  const SourceLocation& name_location() const { return name_location_; }
+
+ private:
+  BinaryOp op_;
   std::string name_;
   ExprPtr value_;
   SourceLocation name_location_;
