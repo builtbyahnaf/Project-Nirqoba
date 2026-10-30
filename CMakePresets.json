@@ -1,0 +1,61 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-msvc-release",
+      "displayName": "Windows MSVC Release",
+      "description": "Optimised release build using the pinned MSVC toolchain and Ninja.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/msvc-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL",
+        "NIRQOBA_WERROR": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc-dev",
+      "displayName": "Windows MSVC RelWithDebInfo (development)",
+      "description": "Release with debug info. Assertions enabled. Used for local development and CI.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/msvc-dev",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL",
+        "NIRQOBA_WERROR": "OFF",
+        "NIRQOBA_ENABLE_ASSERTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-msvc-release",
+      "configurePreset": "windows-msvc-release"
+    },
+    {
+      "name": "windows-msvc-dev",
+      "configurePreset": "windows-msvc-dev"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-msvc-release",
+      "configurePreset": "windows-msvc-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-msvc-dev",
+      "configurePreset": "windows-msvc-dev",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
