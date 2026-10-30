@@ -27,7 +27,7 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
     }
 
     const tir::Op& last = operations.back();
-    if (last.kind != tir::OpKind::Return) {
+    if (last.kind != tir::OpKind::Return && last.kind != tir::OpKind::Branch) {
       diagnostics.error(kStructure, last.location,
                         "internal: function '" + function->name() +
                             "' does not end in a return operation");
@@ -47,13 +47,15 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
 
       switch (op.kind) {
         case tir::OpKind::ConstantInt:
+        case tir::OpKind::ConstantFloat:
         case tir::OpKind::ConstantString:
         case tir::OpKind::Alloca:
         case tir::OpKind::Store:
-          break;
         case tir::OpKind::PrintString:
-          // The literal travels as an attribute, so there is no operand to
-          // type-check; an empty literal is legal (print writes a newline).
+        case tir::OpKind::Print:
+        case tir::OpKind::Label:
+        case tir::OpKind::Branch:
+        case tir::OpKind::BranchCond:
           break;
         case tir::OpKind::Load: {
           if (op.lhs.is_valid() && function->value_type(op.lhs.id) != op.result.type) {
@@ -65,11 +67,24 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
           }
           break;
         }
+        case tir::OpKind::Unary: {
+          if (op.operand.is_valid() && !value_in_range(*function, op.operand)) {
+            diagnostics.error(kType, op.location, "internal: unary operand invalid");
+            ok = false;
+          }
+          break;
+        }
+        case tir::OpKind::Cast: {
+          if (op.operand.is_valid() && !value_in_range(*function, op.operand)) {
+            diagnostics.error(kType, op.location, "internal: cast operand invalid");
+            ok = false;
+          }
+          break;
+        }
         case tir::OpKind::Binary: {
           for (const tir::Value operand : {op.lhs, op.rhs}) {
-            if (operand.is_valid() && !function->value_type(operand.id).is_int()) {
-              diagnostics.error(kType, op.location,
-                                "internal: arithmetic operand is not i64");
+            if (operand.is_valid() && !value_in_range(*function, operand)) {
+              diagnostics.error(kType, op.location, "internal: binary operand invalid");
               ok = false;
             }
           }
@@ -86,9 +101,9 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
                                 "internal: return type does not match function type");
               ok = false;
             }
-          } else if (function->return_type().is_int()) {
+          } else if (!function->return_type().is_void()) {
             diagnostics.error(kType, op.location,
-                              "internal: non-void function returns no value");
+                                "internal: non-void function returns no value");
             ok = false;
           }
           break;

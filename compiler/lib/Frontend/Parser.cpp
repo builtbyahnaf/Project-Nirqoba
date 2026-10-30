@@ -107,7 +107,7 @@ void Parser::report_phase_gap(const Token& token, std::string_view feature,
                              std::string_view phase) {
   diagnostics_.error(diag::kNotImplementedInPhase1, token.location,
                      "'" + std::string(feature) + "' is specified for " + std::string(phase) +
-                         " and is not available in Phase 1");
+                         " and is not available in Phase 2");
 }
 
 void Parser::synchronize() {
@@ -138,8 +138,6 @@ std::unique_ptr<Program> Parser::parse_program() {
   auto program = std::make_unique<Program>();
   while (!check(TokenKind::EndOfFile)) {
     if (check(TokenKind::KwFunction)) {
-      // `function main()` without a return type: the type is mandatory in
-      // Phase 1 so no implicit int is invented.
       error_at(peek(), kUnknownType,
                "function declaration requires an explicit return type before 'function'");
       advance();
@@ -236,7 +234,6 @@ Type Parser::parse_type_annotation() {
   advance();
   if (check(TokenKind::LBracket)) {
     report_phase_gap(peek(), "array type", "Phase 4");
-    // Skip the bracketed suffix so the rest of the declaration parses.
     int depth = 0;
     while (!check(TokenKind::EndOfFile)) {
       if (check(TokenKind::LBracket)) ++depth;
@@ -262,8 +259,6 @@ std::unique_ptr<BlockStmt> Parser::parse_block() {
     if (statement) {
       block->statements().push_back(std::move(statement));
     } else if (position_ == before) {
-      // parse_statement always reports before returning nullptr; advancing here
-      // guarantees progress even if recovery could not find a boundary.
       advance();
     }
   }
@@ -292,7 +287,6 @@ StmtPtr Parser::parse_statement() {
     return nullptr;
   }
   if (check(TokenKind::Semicolon)) {
-    // Empty statement: legal and ignored, as in every C-family grammar.
     advance();
     return nullptr;
   }
@@ -322,7 +316,7 @@ StmtPtr Parser::parse_variable_declaration() {
 
   if (!check(TokenKind::Equal)) {
     error_at(peek(), kUnknownType,
-             "'" + name.text + "' must be initialized: Phase 1 has no uninitialized bindings");
+             "'" + name.text + "' must be initialized: variables require an initializer");
     synchronize();
     return nullptr;
   }
@@ -335,30 +329,37 @@ StmtPtr Parser::parse_variable_declaration() {
 }
 
 StmtPtr Parser::parse_assignment_or_expression() {
-  // A statement starting with `IDENT =` is an assignment; anything else is an
-  // expression statement. Two tokens of lookahead are enough for Phase 1.
-  if (check(TokenKind::Identifier) && peek(1).kind == TokenKind::Equal) {
-    const Token name = advance();
-    advance();  // '='
-    ExprPtr value = parse_expression();
-    expect(TokenKind::Semicolon, "after the assignment");
-    return std::make_unique<AssignmentStmt>(name.location, name.text, std::move(value),
-                                            name.location);
-  }
   if (check(TokenKind::Identifier)) {
+    if (peek(1).kind == TokenKind::Equal) {
+      const Token name = advance();
+      advance();  // '='
+      ExprPtr value = parse_expression();
+      expect(TokenKind::Semicolon, "after the assignment");
+      return std::make_unique<AssignmentStmt>(name.location, name.text, std::move(value),
+                                              name.location);
+    }
+    BinaryOp comp_op;
+    bool is_compound = false;
     switch (peek(1).kind) {
-      case TokenKind::PlusEqual:
-      case TokenKind::MinusEqual:
-      case TokenKind::StarEqual:
-      case TokenKind::SlashEqual:
-      case TokenKind::PipeEqual:
-        report_phase_gap(peek(1), token_kind_name(peek(1).kind), "Phase 2");
-        advance();
-        advance();
-        synchronize();
-        return nullptr;
-      default:
-        break;
+      case TokenKind::PlusEqual: comp_op = BinaryOp::Add; is_compound = true; break;
+      case TokenKind::MinusEqual: comp_op = BinaryOp::Subtract; is_compound = true; break;
+      case TokenKind::StarEqual: comp_op = BinaryOp::Multiply; is_compound = true; break;
+      case TokenKind::SlashEqual: comp_op = BinaryOp::Divide; is_compound = true; break;
+      case TokenKind::PercentEqual: comp_op = BinaryOp::Remainder; is_compound = true; break;
+      case TokenKind::AmpEqual: comp_op = BinaryOp::BitwiseAnd; is_compound = true; break;
+      case TokenKind::PipeEqual: comp_op = BinaryOp::BitwiseOr; is_compound = true; break;
+      case TokenKind::CaretEqual: comp_op = BinaryOp::BitwiseXor; is_compound = true; break;
+      case TokenKind::LessLessEqual: comp_op = BinaryOp::ShiftLeft; is_compound = true; break;
+      case TokenKind::GreaterGreaterEqual: comp_op = BinaryOp::ShiftRight; is_compound = true; break;
+      default: break;
+    }
+    if (is_compound) {
+      const Token name = advance();
+      advance();  // compound op
+      ExprPtr value = parse_expression();
+      expect(TokenKind::Semicolon, "after the compound assignment");
+      return std::make_unique<CompoundAssignmentStmt>(name.location, comp_op, name.text,
+                                                      std::move(value), name.location);
     }
   }
   const Token start = peek();
@@ -377,95 +378,168 @@ std::vector<ExprPtr> Parser::parse_argument_list() {
   return arguments;
 }
 
-ExprPtr Parser::parse_expression() { return parse_additive(); }
+ExprPtr Parser::parse_expression() { return parse_logical_or(); }
 
-// Operators the lexer recognizes that Phase 2 owns. Reporting them here, with
-// the operand already consumed, keeps the binary loop from mistaking them for
-// the end of an expression and emitting a second, unrelated diagnostic.
-bool is_phase2_binary_operator(TokenKind kind) {
-  switch (kind) {
-    case TokenKind::StarStar:
-    case TokenKind::EqualEqual:
-    case TokenKind::BangEqual:
-    case TokenKind::Less:
-    case TokenKind::LessEqual:
-    case TokenKind::Greater:
-    case TokenKind::GreaterEqual:
-    case TokenKind::AmpAmp:
-    case TokenKind::PipePipe:
-    case TokenKind::Amp:
-    case TokenKind::Pipe:
-    case TokenKind::Caret:
-    case TokenKind::LessLess:
-    case TokenKind::GreaterGreater:
-      return true;
-    default:
-      return false;
-  }
-}
-
-ExprPtr Parser::parse_additive() {
-  ExprPtr lhs = parse_multiplicative();
-  while (true) {
-    BinaryOp op;
-    if (check(TokenKind::Plus)) {
-      op = BinaryOp::Add;
-    } else if (check(TokenKind::Minus)) {
-      op = BinaryOp::Subtract;
-    } else if (is_phase2_binary_operator(peek().kind)) {
-      report_phase_gap(peek(), token_kind_name(peek().kind), "Phase 2");
-      advance();
-      parse_multiplicative();  // parse and discard so the tail is still checked
-      continue;
-    } else {
-      break;
-    }
-    const Token operator_token = advance();
-    ExprPtr rhs = parse_multiplicative();
-    lhs = std::make_unique<BinaryExpr>(operator_token.location, op, std::move(lhs),
+ExprPtr Parser::parse_logical_or() {
+  ExprPtr lhs = parse_logical_and();
+  while (check(TokenKind::PipePipe)) {
+    const Token op_tok = advance();
+    ExprPtr rhs = parse_logical_and();
+    lhs = std::make_unique<BinaryExpr>(op_tok.location, BinaryOp::LogicalOr, std::move(lhs),
                                        std::move(rhs));
   }
   return lhs;
 }
 
-ExprPtr Parser::parse_multiplicative() {
-  ExprPtr lhs = parse_unary();
-  while (true) {
-    BinaryOp op;
-    if (check(TokenKind::Star)) {
-      op = BinaryOp::Multiply;
-    } else if (check(TokenKind::Slash)) {
-      op = BinaryOp::Divide;
-    } else if (check(TokenKind::Percent)) {
-      op = BinaryOp::Remainder;
-    } else if (is_phase2_binary_operator(peek().kind)) {
-      report_phase_gap(peek(), token_kind_name(peek().kind), "Phase 2");
-      advance();
-      parse_unary();
-      continue;
-    } else {
-      break;
-    }
-    const Token operator_token = advance();
-    ExprPtr rhs = parse_unary();
-    lhs = std::make_unique<BinaryExpr>(operator_token.location, op, std::move(lhs),
+ExprPtr Parser::parse_logical_and() {
+  ExprPtr lhs = parse_bitwise_or();
+  while (check(TokenKind::AmpAmp)) {
+    const Token op_tok = advance();
+    ExprPtr rhs = parse_bitwise_or();
+    lhs = std::make_unique<BinaryExpr>(op_tok.location, BinaryOp::LogicalAnd, std::move(lhs),
                                        std::move(rhs));
+  }
+  return lhs;
+}
+
+ExprPtr Parser::parse_bitwise_or() {
+  ExprPtr lhs = parse_bitwise_xor();
+  while (check(TokenKind::Pipe)) {
+    const Token op_tok = advance();
+    ExprPtr rhs = parse_bitwise_xor();
+    lhs = std::make_unique<BinaryExpr>(op_tok.location, BinaryOp::BitwiseOr, std::move(lhs),
+                                       std::move(rhs));
+  }
+  return lhs;
+}
+
+ExprPtr Parser::parse_bitwise_xor() {
+  ExprPtr lhs = parse_bitwise_and();
+  while (check(TokenKind::Caret)) {
+    const Token op_tok = advance();
+    ExprPtr rhs = parse_bitwise_and();
+    lhs = std::make_unique<BinaryExpr>(op_tok.location, BinaryOp::BitwiseXor, std::move(lhs),
+                                       std::move(rhs));
+  }
+  return lhs;
+}
+
+ExprPtr Parser::parse_bitwise_and() {
+  ExprPtr lhs = parse_equality();
+  while (check(TokenKind::Amp)) {
+    const Token op_tok = advance();
+    ExprPtr rhs = parse_equality();
+    lhs = std::make_unique<BinaryExpr>(op_tok.location, BinaryOp::BitwiseAnd, std::move(lhs),
+                                       std::move(rhs));
+  }
+  return lhs;
+}
+
+ExprPtr Parser::parse_equality() {
+  ExprPtr lhs = parse_relational();
+  while (check(TokenKind::EqualEqual) || check(TokenKind::BangEqual)) {
+    const Token op_tok = advance();
+    const BinaryOp op = op_tok.kind == TokenKind::EqualEqual ? BinaryOp::Equal : BinaryOp::NotEqual;
+    ExprPtr rhs = parse_relational();
+    lhs = std::make_unique<BinaryExpr>(op_tok.location, op, std::move(lhs), std::move(rhs));
+  }
+  return lhs;
+}
+
+ExprPtr Parser::parse_relational() {
+  ExprPtr lhs = parse_shift();
+  while (check(TokenKind::Less) || check(TokenKind::LessEqual) ||
+         check(TokenKind::Greater) || check(TokenKind::GreaterEqual)) {
+    const Token op_tok = advance();
+    BinaryOp op = BinaryOp::Less;
+    switch (op_tok.kind) {
+      case TokenKind::Less: op = BinaryOp::Less; break;
+      case TokenKind::LessEqual: op = BinaryOp::LessEqual; break;
+      case TokenKind::Greater: op = BinaryOp::Greater; break;
+      case TokenKind::GreaterEqual: op = BinaryOp::GreaterEqual; break;
+      default: break;
+    }
+    ExprPtr rhs = parse_shift();
+    lhs = std::make_unique<BinaryExpr>(op_tok.location, op, std::move(lhs), std::move(rhs));
+  }
+  return lhs;
+}
+
+ExprPtr Parser::parse_shift() {
+  ExprPtr lhs = parse_additive();
+  while (check(TokenKind::LessLess) || check(TokenKind::GreaterGreater)) {
+    const Token op_tok = advance();
+    const BinaryOp op =
+        op_tok.kind == TokenKind::LessLess ? BinaryOp::ShiftLeft : BinaryOp::ShiftRight;
+    ExprPtr rhs = parse_additive();
+    lhs = std::make_unique<BinaryExpr>(op_tok.location, op, std::move(lhs), std::move(rhs));
+  }
+  return lhs;
+}
+
+ExprPtr Parser::parse_additive() {
+  ExprPtr lhs = parse_multiplicative();
+  while (check(TokenKind::Plus) || check(TokenKind::Minus)) {
+    const Token op_tok = advance();
+    const BinaryOp op = op_tok.kind == TokenKind::Plus ? BinaryOp::Add : BinaryOp::Subtract;
+    ExprPtr rhs = parse_multiplicative();
+    lhs = std::make_unique<BinaryExpr>(op_tok.location, op, std::move(lhs), std::move(rhs));
+  }
+  return lhs;
+}
+
+ExprPtr Parser::parse_multiplicative() {
+  ExprPtr lhs = parse_cast();
+  while (check(TokenKind::Star) || check(TokenKind::Slash) || check(TokenKind::Percent)) {
+    const Token op_tok = advance();
+    const BinaryOp op = op_tok.kind == TokenKind::Star    ? BinaryOp::Multiply
+                        : op_tok.kind == TokenKind::Slash ? BinaryOp::Divide
+                                                          : BinaryOp::Remainder;
+    ExprPtr rhs = parse_cast();
+    lhs = std::make_unique<BinaryExpr>(op_tok.location, op, std::move(lhs), std::move(rhs));
+  }
+  return lhs;
+}
+
+ExprPtr Parser::parse_cast() {
+  ExprPtr lhs = parse_unary();
+  while (check(TokenKind::KwAs)) {
+    const Token as_tok = advance();
+    const Type target = parse_type_annotation();
+    lhs = std::make_unique<CastExpr>(as_tok.location, std::move(lhs), target);
   }
   return lhs;
 }
 
 ExprPtr Parser::parse_unary() {
   if (check(TokenKind::Minus)) {
-    const Token operator_token = advance();
-    return std::make_unique<UnaryExpr>(operator_token.location, UnaryOp::Negate,
-                                       parse_unary());
+    const Token op_tok = advance();
+    return std::make_unique<UnaryExpr>(op_tok.location, UnaryOp::Negate, parse_unary());
   }
-  if (check(TokenKind::Plus) || check(TokenKind::Bang) || check(TokenKind::Tilde)) {
-    report_phase_gap(peek(), token_kind_name(peek().kind), "Phase 2");
-    advance();
-    return parse_unary();
+  if (check(TokenKind::Plus)) {
+    const Token op_tok = advance();
+    return std::make_unique<UnaryExpr>(op_tok.location, UnaryOp::Plus, parse_unary());
   }
-  return parse_primary();
+  if (check(TokenKind::Bang)) {
+    const Token op_tok = advance();
+    return std::make_unique<UnaryExpr>(op_tok.location, UnaryOp::LogicalNot, parse_unary());
+  }
+  if (check(TokenKind::Tilde)) {
+    const Token op_tok = advance();
+    return std::make_unique<UnaryExpr>(op_tok.location, UnaryOp::BitwiseNot, parse_unary());
+  }
+  return parse_exponentiation();
+}
+
+ExprPtr Parser::parse_exponentiation() {
+  ExprPtr lhs = parse_primary();
+  if (check(TokenKind::StarStar)) {
+    const Token op_tok = advance();
+    ExprPtr rhs = parse_unary();
+    lhs = std::make_unique<BinaryExpr>(op_tok.location, BinaryOp::Exponentiate, std::move(lhs),
+                                       std::move(rhs));
+  }
+  return lhs;
 }
 
 ExprPtr Parser::parse_primary() {
@@ -473,7 +547,8 @@ ExprPtr Parser::parse_primary() {
   switch (token.kind) {
     case TokenKind::IntegerLiteral:
       advance();
-      return std::make_unique<IntegerLiteralExpr>(token.location, token.integer_value, token.suffix);
+      return std::make_unique<IntegerLiteralExpr>(token.location, token.integer_value,
+                                                 token.suffix);
     case TokenKind::FloatLiteral:
       advance();
       return std::make_unique<FloatLiteralExpr>(token.location, token.float_value, token.suffix);

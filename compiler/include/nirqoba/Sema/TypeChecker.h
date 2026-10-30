@@ -1,4 +1,4 @@
-// Name resolution and type checking for the Phase 1 language.
+// Name resolution and type checking for Phase 1 & 2 language.
 //
 // The checker annotates every expression with its resolved Type (so lowering
 // never re-derives types) and reports NRQ3xxx diagnostics. It does not stop at
@@ -25,6 +25,7 @@ class TypeChecker {
   void check_block(BlockStmt& block);
   void check_variable_declaration(VariableDeclarationStmt& declaration);
   void check_assignment(AssignmentStmt& assignment);
+  void check_compound_assignment(CompoundAssignmentStmt& assignment);
   void check_return(ReturnStmt& statement);
 
   Type check_expression(Expr& expr);

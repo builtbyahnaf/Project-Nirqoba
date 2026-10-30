@@ -1,31 +1,8 @@
 // TirToMlir.cpp — translates a TIR module into MLIR.
-//
-// Translation algorithm:
-//
-//   For each tir::Function:
-//     - Create a func.func with i64 return type (or void) and no arguments
-//       (Phase 1: no parameters).
-//     - For each tir::Op, translate to the appropriate MLIR op:
-//
-//       ConstantInt  -> llvm.mlir.constant i64
-//       ConstantString -> llvm.mlir.addressof + llvm.gep  (constant pool)
-//       Alloca       -> llvm.alloca i64  (one element)
-//       Store        -> llvm.store
-//       Load         -> llvm.load
-//       Binary       -> llvm.add / llvm.sub / llvm.mul / llvm.sdiv / llvm.srem
-//       PrintString  -> nrq.print_string (attr: the literal text)
-//       Return       -> func.return / llvm.return
-//
-//   The nrq.print_string op carries the literal as an attribute; the
-//   NrqToLLVMPass later materialises the global constant and the call.
-//   This two-step approach keeps the translation readable and ensures that
-//   `--emit=mlir` (before lowering) shows the high-level nrq op.
-//
-// Value numbering:
-//   tir::Value IDs map 1-to-1 to MLIR mlir::Values, stored in a flat vector
-//   indexed by id. An invalid tir::Value (id < 0) maps to a null mlir::Value.
 
 #include "nirqoba/Lowering/TirToMlir.h"
+
+#include <unordered_map>
 
 #include "mlir/Dialect/Func/IR/FuncDialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -42,31 +19,30 @@
 namespace nirq {
 namespace {
 
-// ---------------------------------------------------------------------------
-// Type mapping
-// ---------------------------------------------------------------------------
-
-// Maps a TIR Type to the MLIR type used in func.func bodies.
-// Note: string type becomes !llvm.ptr (opaque pointer). The nrq.print_string
-// op does not need a pointer value — it carries the literal as an attribute —
-// so the string LLVM type is only needed when a string variable is loaded.
 static mlir::Type tir_type_to_mlir(const Type& type, mlir::MLIRContext* ctx,
-                                    mlir::Builder& builder) {
-  if (type.is_int())    return builder.getI64Type();
-  if (type.is_bool())   return builder.getI1Type();
+                                   mlir::Builder& builder) {
+  if (type.is_bool()) return builder.getI1Type();
+  if (type.is_char()) return builder.getI32Type();
+  if (type.is_f32()) return builder.getF32Type();
+  if (type.is_f64()) return builder.getF64Type();
+  if (type.is_integer()) {
+    switch (type.bit_width()) {
+      case 8: return builder.getI8Type();
+      case 16: return builder.getI16Type();
+      case 32: return builder.getI32Type();
+      case 64: return builder.getI64Type();
+      default: return builder.getI64Type();
+    }
+  }
   if (type.is_string()) return mlir::LLVM::LLVMPointerType::get(ctx);
-  if (type.is_void())   return {};  // caller checks for void specially
+  if (type.is_void()) return {};
   return {};
 }
 
-// Returns the LLVM pointer type (for alloca results).
 static mlir::Type llvm_ptr_type(mlir::MLIRContext* ctx) {
   return mlir::LLVM::LLVMPointerType::get(ctx);
 }
 
-// ---------------------------------------------------------------------------
-// Unknown location sentinel
-// ---------------------------------------------------------------------------
 static mlir::Location to_mlir_loc(const SourceLocation& loc, mlir::MLIRContext* ctx) {
   if (!loc.is_valid()) return mlir::UnknownLoc::get(ctx);
   return mlir::FileLineColLoc::get(ctx,
@@ -75,20 +51,31 @@ static mlir::Location to_mlir_loc(const SourceLocation& loc, mlir::MLIRContext* 
     static_cast<unsigned>(loc.column));
 }
 
-// ---------------------------------------------------------------------------
-// Function translator
-// ---------------------------------------------------------------------------
+static mlir::LLVM::LLVMFuncOp ensure_runtime_fn(
+    mlir::ModuleOp module, mlir::OpBuilder& builder,
+    llvm::StringRef symbol, mlir::Type retTy, llvm::ArrayRef<mlir::Type> argTys) {
+  if (auto fn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(symbol)) {
+    return fn;
+  }
+  mlir::OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(module.getBody());
+  auto fnTy = mlir::LLVM::LLVMFunctionType::get(retTy, argTys);
+  return builder.create<mlir::LLVM::LLVMFuncOp>(
+      module.getLoc(), symbol, fnTy, mlir::LLVM::Linkage::External);
+}
 
 class FunctionTranslator {
  public:
-  FunctionTranslator(const tir::Function& tir_fn,
+  FunctionTranslator(mlir::ModuleOp module,
+                     const tir::Function& tir_fn,
                      mlir::func::FuncOp func_op,
                      mlir::OpBuilder& builder,
                      mlir::MLIRContext* ctx,
                      DiagnosticEngine& diag)
-      : tir_fn_(tir_fn), builder_(builder), ctx_(ctx), diag_(diag) {
-    mlir::Block* entry = func_op.addEntryBlock();
-    builder_.setInsertionPointToStart(entry);
+      : module_(module), tir_fn_(tir_fn), func_op_(func_op),
+        builder_(builder), ctx_(ctx), diag_(diag) {
+    entry_block_ = func_op.addEntryBlock();
+    builder_.setInsertionPointToStart(entry_block_);
     values_.resize(tir_fn.value_count());
   }
 
@@ -110,41 +97,68 @@ class FunctionTranslator {
     values_[static_cast<std::size_t>(v.id)] = mlir_val;
   }
 
+  mlir::Block* get_or_create_block(int label_id) {
+    auto it = label_blocks_.find(label_id);
+    if (it != label_blocks_.end()) return it->second;
+    mlir::Block* block = func_op_.addBlock();
+    label_blocks_[label_id] = block;
+    return block;
+  }
+
   bool translate_op(const tir::Op& op) {
     mlir::Location loc = to_mlir_loc(op.location, ctx_);
 
     switch (op.kind) {
+      case tir::OpKind::Label: {
+        mlir::Block* target_block = get_or_create_block(op.label_id);
+        mlir::Block* current = builder_.getBlock();
+        if (current != nullptr && (current->empty() || !current->back().hasTrait<mlir::OpTrait::IsTerminator>())) {
+          builder_.create<mlir::LLVM::BrOp>(loc, target_block);
+        }
+        builder_.setInsertionPointToStart(target_block);
+        return true;
+      }
+
+      case tir::OpKind::Branch: {
+        mlir::Block* target_block = get_or_create_block(op.label_id);
+        builder_.create<mlir::LLVM::BrOp>(loc, target_block);
+        return true;
+      }
+
+      case tir::OpKind::BranchCond: {
+        mlir::Block* true_block = get_or_create_block(op.true_label);
+        mlir::Block* false_block = get_or_create_block(op.false_label);
+        mlir::Value cond = get(op.operand);
+        builder_.create<mlir::LLVM::CondBrOp>(loc, cond, true_block, false_block);
+        return true;
+      }
+
       case tir::OpKind::ConstantInt: {
-        mlir::Type ty = op.result.type.is_bool()
-            ? static_cast<mlir::Type>(builder_.getI1Type())
-            : static_cast<mlir::Type>(builder_.getI64Type());
+        mlir::Type ty = tir_type_to_mlir(op.result.type, ctx_, builder_);
+        if (!ty) ty = builder_.getI64Type();
         mlir::Value v = builder_.create<mlir::LLVM::ConstantOp>(
-            loc, ty,
-            builder_.getIntegerAttr(ty, op.integer_value));
+            loc, ty, builder_.getIntegerAttr(ty, op.integer_value));
+        set(op.result, v);
+        return true;
+      }
+
+      case tir::OpKind::ConstantFloat: {
+        mlir::Type ty = tir_type_to_mlir(op.result.type, ctx_, builder_);
+        if (!ty) ty = builder_.getF64Type();
+        mlir::Value v = builder_.create<mlir::LLVM::ConstantOp>(
+            loc, ty, builder_.getFloatAttr(ty, op.float_value));
         set(op.result, v);
         return true;
       }
 
       case tir::OpKind::ConstantString: {
-        // Phase 1: string literals used as PrintString arguments are carried
-        // as attributes in nrq.print_string and never need a pointer value in
-        // the function body. If a string is stored into a variable and later
-        // loaded, we would need a global + GEP here. Phase 1 rejects that
-        // path in the type checker (print of non-literal → error), so this
-        // branch produces a null placeholder value. The verifier will catch
-        // any incorrect use before we reach code generation.
-        //
-        // When Phase 2 generalises string handling this branch must be
-        // replaced with a global constant + GEP, matching NrqToLLVMPass.
         mlir::Value placeholder = builder_.create<mlir::LLVM::ConstantOp>(
-            loc, builder_.getI64Type(),
-            builder_.getI64IntegerAttr(0));
+            loc, builder_.getI64Type(), builder_.getI64IntegerAttr(0));
         set(op.result, placeholder);
         return true;
       }
 
       case tir::OpKind::Alloca: {
-        // Allocate one element of the slot type on the stack.
         mlir::Type elem_type = tir_type_to_mlir(op.result.type, ctx_, builder_);
         if (!elem_type) {
           diag_.error("NRQ4005", op.location, "internal: alloca of unsupported type");
@@ -161,7 +175,7 @@ class FunctionTranslator {
       case tir::OpKind::Store: {
         mlir::Value ptr = get(op.lhs);
         mlir::Value val = get(op.operand);
-        if (!ptr || !val) return true;  // earlier error; skip silently
+        if (!ptr || !val) return true;
         builder_.create<mlir::LLVM::StoreOp>(loc, val, ptr);
         return true;
       }
@@ -174,9 +188,44 @@ class FunctionTranslator {
           diag_.error("NRQ4005", op.location, "internal: load of unsupported type");
           return false;
         }
-        mlir::Value loaded = builder_.create<mlir::LLVM::LoadOp>(
-            loc, elem_type, ptr);
+        mlir::Value loaded = builder_.create<mlir::LLVM::LoadOp>(loc, elem_type, ptr);
         set(op.result, loaded);
+        return true;
+      }
+
+      case tir::OpKind::Unary: {
+        mlir::Value val = get(op.operand);
+        if (!val) return true;
+        mlir::Value result;
+        const Type& ty = op.operand.type;
+
+        switch (op.unary_op) {
+          case tir::UnaryOp::Negate:
+            if (ty.is_float()) {
+              result = builder_.create<mlir::LLVM::FNegOp>(loc, val);
+            } else {
+              mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
+                  loc, val.getType(), builder_.getIntegerAttr(val.getType(), 0));
+              result = builder_.create<mlir::LLVM::SubOp>(loc, zero, val);
+            }
+            break;
+          case tir::UnaryOp::Plus:
+            result = val;
+            break;
+          case tir::UnaryOp::LogicalNot: {
+            mlir::Value true_val = builder_.create<mlir::LLVM::ConstantOp>(
+                loc, builder_.getI1Type(), builder_.getBoolAttr(true));
+            result = builder_.create<mlir::LLVM::XOrOp>(loc, val, true_val);
+            break;
+          }
+          case tir::UnaryOp::BitwiseNot: {
+            mlir::Value all_ones = builder_.create<mlir::LLVM::ConstantOp>(
+                loc, val.getType(), builder_.getIntegerAttr(val.getType(), -1));
+            result = builder_.create<mlir::LLVM::XOrOp>(loc, val, all_ones);
+            break;
+          }
+        }
+        set(op.result, result);
         return true;
       }
 
@@ -185,26 +234,220 @@ class FunctionTranslator {
         mlir::Value rhs = get(op.rhs);
         if (!lhs || !rhs) return true;
         mlir::Value result;
-        switch (op.binary_op) {
-          case tir::BinaryOp::Add:
-            result = builder_.create<mlir::LLVM::AddOp>(loc, lhs, rhs); break;
-          case tir::BinaryOp::Subtract:
-            result = builder_.create<mlir::LLVM::SubOp>(loc, lhs, rhs); break;
-          case tir::BinaryOp::Multiply:
-            result = builder_.create<mlir::LLVM::MulOp>(loc, lhs, rhs); break;
-          case tir::BinaryOp::Divide:
-            result = builder_.create<mlir::LLVM::SDivOp>(loc, lhs, rhs); break;
-          case tir::BinaryOp::Remainder:
-            result = builder_.create<mlir::LLVM::SRemOp>(loc, lhs, rhs); break;
+        const Type& lhs_type = op.lhs.type;
+
+        if (op.binary_op == tir::BinaryOp::Exponentiate) {
+          if (lhs_type.is_float()) {
+            auto pow_fn = ensure_runtime_fn(module_, builder_, "nrq_pow_f64",
+                                            builder_.getF64Type(),
+                                            {builder_.getF64Type(), builder_.getF64Type()});
+            mlir::Value l_f64 = lhs_type.is_f32()
+                ? builder_.create<mlir::LLVM::FPExtOp>(loc, builder_.getF64Type(), lhs)
+                : lhs;
+            mlir::Value r_f64 = op.rhs.type.is_f32()
+                ? builder_.create<mlir::LLVM::FPExtOp>(loc, builder_.getF64Type(), rhs)
+                : rhs;
+            result = builder_.create<mlir::LLVM::CallOp>(
+                loc, mlir::TypeRange{builder_.getF64Type()},
+                mlir::FlatSymbolRefAttr::get(ctx_, pow_fn.getSymName()),
+                mlir::ValueRange{l_f64, r_f64}).getResult();
+            if (lhs_type.is_f32()) {
+              result = builder_.create<mlir::LLVM::FPTruncOp>(loc, builder_.getF32Type(), result);
+            }
+          } else {
+            auto pow_fn = ensure_runtime_fn(module_, builder_, "nrq_pow_i64",
+                                            builder_.getI64Type(),
+                                            {builder_.getI64Type(), builder_.getI64Type()});
+            mlir::Value l_i64 = lhs;
+            if (lhs_type.bit_width() < 64) {
+              l_i64 = lhs_type.is_signed_integer()
+                  ? builder_.create<mlir::LLVM::SExtOp>(loc, builder_.getI64Type(), lhs)
+                  : builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), lhs);
+            }
+            mlir::Value r_i64 = rhs;
+            if (op.rhs.type.bit_width() < 64) {
+              r_i64 = op.rhs.type.is_signed_integer()
+                  ? builder_.create<mlir::LLVM::SExtOp>(loc, builder_.getI64Type(), rhs)
+                  : builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), rhs);
+            }
+            result = builder_.create<mlir::LLVM::CallOp>(
+                loc, mlir::TypeRange{builder_.getI64Type()},
+                mlir::FlatSymbolRefAttr::get(ctx_, pow_fn.getSymName()),
+                mlir::ValueRange{l_i64, r_i64}).getResult();
+            if (lhs_type.bit_width() < 64) {
+              mlir::Type orig_ty = tir_type_to_mlir(lhs_type, ctx_, builder_);
+              result = builder_.create<mlir::LLVM::TruncOp>(loc, orig_ty, result);
+            }
+          }
+          set(op.result, result);
+          return true;
+        }
+
+        if (lhs_type.is_float()) {
+          switch (op.binary_op) {
+            case tir::BinaryOp::Add: result = builder_.create<mlir::LLVM::FAddOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::Subtract: result = builder_.create<mlir::LLVM::FSubOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::Multiply: result = builder_.create<mlir::LLVM::FMulOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::Divide: result = builder_.create<mlir::LLVM::FDivOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::Remainder: result = builder_.create<mlir::LLVM::FRemOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::Equal:
+              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::oeq, lhs, rhs); break;
+            case tir::BinaryOp::NotEqual:
+              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::one, lhs, rhs); break;
+            case tir::BinaryOp::Less:
+              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::olt, lhs, rhs); break;
+            case tir::BinaryOp::LessEqual:
+              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::ole, lhs, rhs); break;
+            case tir::BinaryOp::Greater:
+              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::ogt, lhs, rhs); break;
+            case tir::BinaryOp::GreaterEqual:
+              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::oge, lhs, rhs); break;
+            default: break;
+          }
+        } else {
+          // Integer / bool / char
+          const bool is_signed = lhs_type.is_signed_integer();
+          switch (op.binary_op) {
+            case tir::BinaryOp::Add: result = builder_.create<mlir::LLVM::AddOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::Subtract: result = builder_.create<mlir::LLVM::SubOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::Multiply: result = builder_.create<mlir::LLVM::MulOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::Divide:
+              result = is_signed ? builder_.create<mlir::LLVM::SDivOp>(loc, lhs, rhs)
+                                 : builder_.create<mlir::LLVM::UDivOp>(loc, lhs, rhs);
+              break;
+            case tir::BinaryOp::Remainder:
+              result = is_signed ? builder_.create<mlir::LLVM::SRemOp>(loc, lhs, rhs)
+                                 : builder_.create<mlir::LLVM::URemOp>(loc, lhs, rhs);
+              break;
+            case tir::BinaryOp::BitwiseAnd: result = builder_.create<mlir::LLVM::AndOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::BitwiseOr: result = builder_.create<mlir::LLVM::OrOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::BitwiseXor: result = builder_.create<mlir::LLVM::XOrOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::ShiftLeft: result = builder_.create<mlir::LLVM::ShlOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::ShiftRight:
+              result = is_signed ? builder_.create<mlir::LLVM::AShrOp>(loc, lhs, rhs)
+                                 : builder_.create<mlir::LLVM::LShrOp>(loc, lhs, rhs);
+              break;
+            case tir::BinaryOp::Equal:
+              result = builder_.create<mlir::LLVM::ICmpOp>(loc, mlir::LLVM::ICmpPredicate::eq, lhs, rhs); break;
+            case tir::BinaryOp::NotEqual:
+              result = builder_.create<mlir::LLVM::ICmpOp>(loc, mlir::LLVM::ICmpPredicate::ne, lhs, rhs); break;
+            case tir::BinaryOp::Less:
+              result = builder_.create<mlir::LLVM::ICmpOp>(
+                  loc, is_signed ? mlir::LLVM::ICmpPredicate::slt : mlir::LLVM::ICmpPredicate::ult, lhs, rhs);
+              break;
+            case tir::BinaryOp::LessEqual:
+              result = builder_.create<mlir::LLVM::ICmpOp>(
+                  loc, is_signed ? mlir::LLVM::ICmpPredicate::sle : mlir::LLVM::ICmpPredicate::ule, lhs, rhs);
+              break;
+            case tir::BinaryOp::Greater:
+              result = builder_.create<mlir::LLVM::ICmpOp>(
+                  loc, is_signed ? mlir::LLVM::ICmpPredicate::sgt : mlir::LLVM::ICmpPredicate::ugt, lhs, rhs);
+              break;
+            case tir::BinaryOp::GreaterEqual:
+              result = builder_.create<mlir::LLVM::ICmpOp>(
+                  loc, is_signed ? mlir::LLVM::ICmpPredicate::sge : mlir::LLVM::ICmpPredicate::uge, lhs, rhs);
+              break;
+            default: break;
+          }
+        }
+        set(op.result, result);
+        return true;
+      }
+
+      case tir::OpKind::Cast: {
+        mlir::Value val = get(op.operand);
+        if (!val) return true;
+        mlir::Type target_ty = tir_type_to_mlir(op.result.type, ctx_, builder_);
+        mlir::Value result;
+
+        switch (op.cast_kind) {
+          case tir::CastKind::Trunc:
+            result = builder_.create<mlir::LLVM::TruncOp>(loc, target_ty, val);
+            break;
+          case tir::CastKind::SExt:
+            result = builder_.create<mlir::LLVM::SExtOp>(loc, target_ty, val);
+            break;
+          case tir::CastKind::ZExt:
+          case tir::CastKind::BoolToInt:
+          case tir::CastKind::CharToInt:
+            if (target_ty.getIntOrFloatBitWidth() < val.getType().getIntOrFloatBitWidth()) {
+              result = builder_.create<mlir::LLVM::TruncOp>(loc, target_ty, val);
+            } else if (target_ty.getIntOrFloatBitWidth() > val.getType().getIntOrFloatBitWidth()) {
+              result = builder_.create<mlir::LLVM::ZExtOp>(loc, target_ty, val);
+            } else {
+              result = val;
+            }
+            break;
+          case tir::CastKind::IntToChar:
+            if (val.getType().getIntOrFloatBitWidth() > 32) {
+              result = builder_.create<mlir::LLVM::TruncOp>(loc, target_ty, val);
+            } else if (val.getType().getIntOrFloatBitWidth() < 32) {
+              result = builder_.create<mlir::LLVM::ZExtOp>(loc, target_ty, val);
+            } else {
+              result = val;
+            }
+            break;
+          case tir::CastKind::SIToFP:
+            result = builder_.create<mlir::LLVM::SIToFPOp>(loc, target_ty, val);
+            break;
+          case tir::CastKind::UIToFP:
+            result = builder_.create<mlir::LLVM::UIToFPOp>(loc, target_ty, val);
+            break;
+          case tir::CastKind::FPToSI:
+            result = builder_.create<mlir::LLVM::FPToSIOp>(loc, target_ty, val);
+            break;
+          case tir::CastKind::FPToUI:
+            result = builder_.create<mlir::LLVM::FPToUIOp>(loc, target_ty, val);
+            break;
+          case tir::CastKind::FPExt:
+            result = builder_.create<mlir::LLVM::FPExtOp>(loc, target_ty, val);
+            break;
+          case tir::CastKind::FPTrunc:
+            result = builder_.create<mlir::LLVM::FPTruncOp>(loc, target_ty, val);
+            break;
+          case tir::CastKind::IntToBool: {
+            mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
+                loc, val.getType(), builder_.getIntegerAttr(val.getType(), 0));
+            result = builder_.create<mlir::LLVM::ICmpOp>(loc, mlir::LLVM::ICmpPredicate::ne, val, zero);
+            break;
+          }
         }
         set(op.result, result);
         return true;
       }
 
       case tir::OpKind::PrintString: {
-        // Keep the high-level nrq.print_string op; NrqToLLVMPass lowers it.
-        builder_.create<nrq::PrintStringOp>(
-            loc, builder_.getStringAttr(op.string_value));
+        builder_.create<nrq::PrintStringOp>(loc, builder_.getStringAttr(op.string_value));
+        return true;
+      }
+
+      case tir::OpKind::Print: {
+        mlir::Value val = get(op.operand);
+        if (!val) return true;
+        const Type& ty = op.operand.type;
+
+        if (ty.is_bool()) {
+          builder_.create<nrq::PrintBoolOp>(loc, val);
+        } else if (ty.is_char()) {
+          builder_.create<nrq::PrintCharOp>(loc, val);
+        } else if (ty.is_float()) {
+          mlir::Value f64_val = ty.is_f32()
+              ? builder_.create<mlir::LLVM::FPExtOp>(loc, builder_.getF64Type(), val)
+              : val;
+          builder_.create<nrq::PrintF64Op>(loc, f64_val);
+        } else if (ty.is_integer()) {
+          mlir::Value i64_val = val;
+          if (ty.bit_width() < 64) {
+            i64_val = ty.is_signed_integer()
+                ? builder_.create<mlir::LLVM::SExtOp>(loc, builder_.getI64Type(), val)
+                : builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), val);
+          }
+          if (ty.is_signed_integer()) {
+            builder_.create<nrq::PrintIntOp>(loc, i64_val);
+          } else {
+            builder_.create<nrq::PrintUintOp>(loc, i64_val);
+          }
+        }
         return true;
       }
 
@@ -225,18 +468,18 @@ class FunctionTranslator {
     return true;
   }
 
+  mlir::ModuleOp module_;
   const tir::Function& tir_fn_;
+  mlir::func::FuncOp func_op_;
   mlir::OpBuilder& builder_;
   mlir::MLIRContext* ctx_;
   DiagnosticEngine& diag_;
+  mlir::Block* entry_block_;
   std::vector<mlir::Value> values_;
+  std::unordered_map<int, mlir::Block*> label_blocks_;
 };
 
 }  // namespace
-
-// ---------------------------------------------------------------------------
-// Module translation
-// ---------------------------------------------------------------------------
 
 mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     const tir::Module& tir_module,
@@ -249,16 +492,16 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
   builder.setInsertionPointToStart(module->getBody());
 
   for (const auto& tir_fn : tir_module.functions()) {
-    // Build the func.func type.
     mlir::Type ret_type;
-    if (tir_fn->return_type().is_int()) {
-      ret_type = builder.getI64Type();
-    } else if (tir_fn->return_type().is_void()) {
+    if (tir_fn->return_type().is_void()) {
       ret_type = {};
     } else {
-      diagnostics.error("NRQ4005", SourceLocation{},
-                        "internal: unsupported function return type in TIR translation");
-      return nullptr;
+      ret_type = tir_type_to_mlir(tir_fn->return_type(), &context, builder);
+      if (!ret_type) {
+        diagnostics.error("NRQ4005", SourceLocation{},
+                          "internal: unsupported function return type in TIR translation");
+        return nullptr;
+      }
     }
 
     mlir::FunctionType fn_type;
@@ -271,10 +514,9 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     auto func_op = builder.create<mlir::func::FuncOp>(
         builder.getUnknownLoc(), tir_fn->name(), fn_type);
 
-    FunctionTranslator translator(*tir_fn, func_op, builder, &context, diagnostics);
+    FunctionTranslator translator(*module, *tir_fn, func_op, builder, &context, diagnostics);
     if (!translator.translate()) return nullptr;
 
-    // Reset insertion point after function for the next function.
     builder.setInsertionPointAfter(func_op);
   }
 

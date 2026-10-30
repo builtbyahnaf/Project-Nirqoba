@@ -9,11 +9,11 @@ std::string escape(const std::string& value) {
   std::string escaped;
   for (const char c : value) {
     switch (c) {
-      case '\n': escaped += "\n"; break;
-      case '\t': escaped += "\t"; break;
-      case '\r': escaped += "\r"; break;
+      case '\n': escaped += "\\n"; break;
+      case '\t': escaped += "\\t"; break;
+      case '\r': escaped += "\\r"; break;
       case '"': escaped += "\\\""; break;
-      case '\': escaped += "\\\\"; break;
+      case '\\': escaped += "\\\\"; break;
       default: escaped.push_back(c); break;
     }
   }
@@ -34,6 +34,10 @@ std::string print_tir(const tir::Module& module) {
         << " {\n";
     for (const tir::Op& op : function->operations()) {
       out << "    ";
+      if (op.kind == tir::OpKind::Label) {
+        out << "^bb" << op.label_id << ":\n";
+        continue;
+      }
       if (op.result.is_valid() && op.kind != tir::OpKind::Store) {
         out << value_name(op.result) << " = ";
       }
@@ -42,6 +46,9 @@ std::string print_tir(const tir::Module& module) {
       switch (op.kind) {
         case tir::OpKind::ConstantInt:
           out << " " << op.integer_value << " : " << op.result.type.mangle();
+          break;
+        case tir::OpKind::ConstantFloat:
+          out << " " << op.float_value << " : " << op.result.type.mangle();
           break;
         case tir::OpKind::ConstantString:
           out << " \"" << escape(op.string_value) << "\"";
@@ -55,15 +62,34 @@ std::string print_tir(const tir::Module& module) {
         case tir::OpKind::Load:
           out << " " << value_name(op.lhs) << " : " << op.result.type.mangle();
           break;
+        case tir::OpKind::Unary:
+          out << "." << tir::unary_op_name(op.unary_op) << " " << value_name(op.operand);
+          break;
         case tir::OpKind::Binary:
           out << "." << tir::binary_op_name(op.binary_op) << " " << value_name(op.lhs) << ", "
               << value_name(op.rhs);
           break;
+        case tir::OpKind::Cast:
+          out << "." << tir::cast_kind_name(op.cast_kind) << " " << value_name(op.operand)
+              << " : " << op.result.type.mangle();
+          break;
         case tir::OpKind::PrintString:
           out << " \"" << escape(op.string_value) << "\"";
           break;
+        case tir::OpKind::Print:
+          out << " " << value_name(op.operand) << " : " << op.operand.type.mangle();
+          break;
+        case tir::OpKind::Branch:
+          out << " ^bb" << op.label_id;
+          break;
+        case tir::OpKind::BranchCond:
+          out << " " << value_name(op.operand) << ", ^bb" << op.true_label << ", ^bb"
+              << op.false_label;
+          break;
         case tir::OpKind::Return:
           if (op.operand.is_valid()) out << " " << value_name(op.operand);
+          break;
+        case tir::OpKind::Label:
           break;
       }
       out << "\n";
