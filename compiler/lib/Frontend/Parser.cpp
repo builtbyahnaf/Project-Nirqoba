@@ -404,41 +404,38 @@ StmtPtr Parser::parse_variable_declaration() {
 }
 
 StmtPtr Parser::parse_assignment_or_expression() {
-  if (check(TokenKind::Identifier)) {
-    if (peek(1).kind == TokenKind::Equal) {
-      const Token name = advance();
-      advance();  // '='
-      ExprPtr value = parse_expression();
-      expect(TokenKind::Semicolon, "after the assignment");
-      return std::make_unique<AssignmentStmt>(name.location, name.text, std::move(value),
-                                              name.location);
-    }
-    BinaryOp comp_op;
-    bool is_compound = false;
-    switch (peek(1).kind) {
-      case TokenKind::PlusEqual: comp_op = BinaryOp::Add; is_compound = true; break;
-      case TokenKind::MinusEqual: comp_op = BinaryOp::Subtract; is_compound = true; break;
-      case TokenKind::StarEqual: comp_op = BinaryOp::Multiply; is_compound = true; break;
-      case TokenKind::SlashEqual: comp_op = BinaryOp::Divide; is_compound = true; break;
-      case TokenKind::PercentEqual: comp_op = BinaryOp::Remainder; is_compound = true; break;
-      case TokenKind::AmpEqual: comp_op = BinaryOp::BitwiseAnd; is_compound = true; break;
-      case TokenKind::PipeEqual: comp_op = BinaryOp::BitwiseOr; is_compound = true; break;
-      case TokenKind::CaretEqual: comp_op = BinaryOp::BitwiseXor; is_compound = true; break;
-      case TokenKind::LessLessEqual: comp_op = BinaryOp::ShiftLeft; is_compound = true; break;
-      case TokenKind::GreaterGreaterEqual: comp_op = BinaryOp::ShiftRight; is_compound = true; break;
-      default: break;
-    }
-    if (is_compound) {
-      const Token name = advance();
-      advance();  // compound op
-      ExprPtr value = parse_expression();
-      expect(TokenKind::Semicolon, "after the compound assignment");
-      return std::make_unique<CompoundAssignmentStmt>(name.location, comp_op, name.text,
-                                                      std::move(value), name.location);
-    }
-  }
   const Token start = peek();
   ExprPtr expr = parse_expression();
+  if (!expr) return nullptr;
+
+  if (match(TokenKind::Equal)) {
+    ExprPtr value = parse_expression();
+    expect(TokenKind::Semicolon, "after the assignment");
+    return std::make_unique<AssignmentStmt>(start.location, std::move(expr), std::move(value));
+  }
+
+  BinaryOp comp_op;
+  bool is_compound = false;
+  switch (peek().kind) {
+    case TokenKind::PlusEqual: comp_op = BinaryOp::Add; is_compound = true; break;
+    case TokenKind::MinusEqual: comp_op = BinaryOp::Subtract; is_compound = true; break;
+    case TokenKind::StarEqual: comp_op = BinaryOp::Multiply; is_compound = true; break;
+    case TokenKind::SlashEqual: comp_op = BinaryOp::Divide; is_compound = true; break;
+    case TokenKind::PercentEqual: comp_op = BinaryOp::Remainder; is_compound = true; break;
+    case TokenKind::AmpEqual: comp_op = BinaryOp::BitwiseAnd; is_compound = true; break;
+    case TokenKind::PipeEqual: comp_op = BinaryOp::BitwiseOr; is_compound = true; break;
+    case TokenKind::CaretEqual: comp_op = BinaryOp::BitwiseXor; is_compound = true; break;
+    case TokenKind::LessLessEqual: comp_op = BinaryOp::ShiftLeft; is_compound = true; break;
+    case TokenKind::GreaterGreaterEqual: comp_op = BinaryOp::ShiftRight; is_compound = true; break;
+    default: break;
+  }
+  if (is_compound) {
+    advance();  // compound op
+    ExprPtr value = parse_expression();
+    expect(TokenKind::Semicolon, "after the compound assignment");
+    return std::make_unique<CompoundAssignmentStmt>(start.location, comp_op, std::move(expr), std::move(value));
+  }
+
   expect(TokenKind::Semicolon, "after the expression");
   return std::make_unique<ExprStmt>(start.location, std::move(expr));
 }
@@ -504,17 +501,16 @@ StmtPtr Parser::parse_for() {
 
   StmtPtr step = nullptr;
   if (!check(TokenKind::RParen)) {
-    if (check(TokenKind::Identifier)) {
-      if (peek(1).kind == TokenKind::Equal) {
-        const Token name = advance();
-        advance();  // '='
+    const Token start = peek();
+    ExprPtr expr = parse_expression();
+    if (expr) {
+      if (match(TokenKind::Equal)) {
         ExprPtr value = parse_expression();
-        step = std::make_unique<AssignmentStmt>(name.location, name.text, std::move(value),
-                                                name.location);
+        step = std::make_unique<AssignmentStmt>(start.location, std::move(expr), std::move(value));
       } else {
         BinaryOp comp_op;
         bool is_compound = false;
-        switch (peek(1).kind) {
+        switch (peek().kind) {
           case TokenKind::PlusEqual: comp_op = BinaryOp::Add; is_compound = true; break;
           case TokenKind::MinusEqual: comp_op = BinaryOp::Subtract; is_compound = true; break;
           case TokenKind::StarEqual: comp_op = BinaryOp::Multiply; is_compound = true; break;
@@ -528,21 +524,13 @@ StmtPtr Parser::parse_for() {
           default: break;
         }
         if (is_compound) {
-          const Token name = advance();
           advance();  // compound op
           ExprPtr value = parse_expression();
-          step = std::make_unique<CompoundAssignmentStmt>(name.location, comp_op, name.text,
-                                                          std::move(value), name.location);
+          step = std::make_unique<CompoundAssignmentStmt>(start.location, comp_op, std::move(expr), std::move(value));
         } else {
-          const Token start = peek();
-          ExprPtr expr = parse_expression();
           step = std::make_unique<ExprStmt>(start.location, std::move(expr));
         }
       }
-    } else {
-      const Token start = peek();
-      ExprPtr expr = parse_expression();
-      step = std::make_unique<ExprStmt>(start.location, std::move(expr));
     }
   }
   expect(TokenKind::RParen, "after the 'for' loop clauses");

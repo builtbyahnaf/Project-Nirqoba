@@ -91,13 +91,15 @@ class Printer {
       case Stmt::Kind::Assignment: {
         const auto& assignment = static_cast<const AssignmentStmt&>(statement);
         indent();
-        out_ << "assign " << assignment.name() << " = " << expression(assignment.value()) << "\n";
+        out_ << "assign " << (assignment.is_simple_name() ? assignment.name() : expression(assignment.target()))
+             << " = " << expression(assignment.value()) << "\n";
         return;
       }
       case Stmt::Kind::CompoundAssignment: {
         const auto& compound = static_cast<const CompoundAssignmentStmt&>(statement);
         indent();
-        out_ << "assign " << compound.name() << " " << binary_op_spelling(compound.op()) << "= "
+        out_ << "assign " << (compound.is_simple_name() ? compound.name() : expression(compound.target()))
+             << " " << binary_op_spelling(compound.op()) << "= "
              << expression(compound.value()) << "\n";
         return;
       }
