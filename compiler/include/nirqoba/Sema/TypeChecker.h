@@ -1,4 +1,4 @@
-// Name resolution and type checking for Nirqoba Phase 1, 2, 3 & 4.
+// Name resolution and type checking for Nirqoba Phase 1, 2, 3, 4 & 5.
 #pragma once
 
 #include <string>
@@ -11,11 +11,15 @@
 
 namespace nirq {
 
+struct ModuleUnit;
+
 struct FunctionSignature {
   std::string name;
   Type return_type;
   std::vector<Type> parameter_types;
   SourceLocation location;
+  std::string module_name;
+  Visibility visibility = Visibility::Public;
 };
 
 // Lightweight catalog entry for a registered struct type.
@@ -23,6 +27,8 @@ struct StructInfo {
   std::string name;
   std::vector<Parameter> fields;  // ordered field list from StructDecl
   SourceLocation location;
+  std::string module_name;
+  Visibility visibility = Visibility::Public;
 };
 
 class TypeChecker {
@@ -30,6 +36,7 @@ class TypeChecker {
   explicit TypeChecker(DiagnosticEngine& diagnostics) : diagnostics_(diagnostics) {}
 
   bool check(Program& program);
+  bool check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& modules);
 
  private:
   void check_function(FunctionDecl& function);
@@ -64,6 +71,7 @@ class TypeChecker {
   SymbolTable symbols_;
   Type current_return_type_;
   int loop_depth_ = 0;
+  std::string current_module_;
   std::unordered_map<std::string, FunctionSignature> functions_;
   std::unordered_map<std::string, StructInfo> structs_;
 };

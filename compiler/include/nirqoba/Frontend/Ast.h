@@ -488,6 +488,46 @@ class ExprStmt : public Stmt {
 
 // ---------------------------------------------------------------- declarations
 
+enum class Visibility { Public, Private };
+
+inline std::string_view visibility_spelling(Visibility v) {
+  return v == Visibility::Private ? "private" : "public";
+}
+
+class ModuleDecl {
+ public:
+  ModuleDecl(std::string name, SourceLocation location)
+      : name_(std::move(name)), location_(std::move(location)) {}
+
+  const std::string& name() const { return name_; }
+  const SourceLocation& location() const { return location_; }
+
+ private:
+  std::string name_;
+  SourceLocation location_;
+};
+
+class ImportDecl {
+ public:
+  ImportDecl(std::string module_name, std::string item_name, std::string alias, SourceLocation location)
+      : module_name_(std::move(module_name)), item_name_(std::move(item_name)),
+        alias_(std::move(alias)), location_(std::move(location)) {}
+
+  const std::string& module_name() const { return module_name_; }
+  const std::string& item_name() const { return item_name_; }
+  const std::string& alias() const { return alias_; }
+  const SourceLocation& location() const { return location_; }
+
+  bool is_selective() const { return !item_name_.empty(); }
+  bool is_aliased() const { return !alias_.empty(); }
+
+ private:
+  std::string module_name_;
+  std::string item_name_;
+  std::string alias_;
+  SourceLocation location_;
+};
+
 struct Parameter {
   std::string name;
   Type type;
@@ -496,32 +536,40 @@ struct Parameter {
 
 class StructDecl {
  public:
-  StructDecl(std::string name, std::vector<Parameter> fields, SourceLocation location)
-      : name_(std::move(name)), fields_(std::move(fields)), location_(std::move(location)) {}
+  StructDecl(std::string name, std::vector<Parameter> fields, SourceLocation location,
+             Visibility visibility = Visibility::Public)
+      : name_(std::move(name)), fields_(std::move(fields)), location_(std::move(location)),
+        visibility_(visibility) {}
 
   const std::string& name() const { return name_; }
   const std::vector<Parameter>& fields() const { return fields_; }
   const SourceLocation& location() const { return location_; }
+  Visibility visibility() const { return visibility_; }
+  bool is_public() const { return visibility_ == Visibility::Public; }
 
  private:
   std::string name_;
   std::vector<Parameter> fields_;
   SourceLocation location_;
+  Visibility visibility_;
 };
 
 class FunctionDecl {
  public:
   FunctionDecl(Type return_type, std::string name, std::vector<Parameter> parameters,
-               std::unique_ptr<BlockStmt> body, SourceLocation location)
+               std::unique_ptr<BlockStmt> body, SourceLocation location,
+               Visibility visibility = Visibility::Public)
       : return_type_(return_type), name_(std::move(name)),
         parameters_(std::move(parameters)), body_(std::move(body)),
-        location_(std::move(location)) {}
+        location_(std::move(location)), visibility_(visibility) {}
 
   Type return_type() const { return return_type_; }
   const std::string& name() const { return name_; }
   const std::vector<Parameter>& parameters() const { return parameters_; }
   const BlockStmt& body() const { return *body_; }
   const SourceLocation& location() const { return location_; }
+  Visibility visibility() const { return visibility_; }
+  bool is_public() const { return visibility_ == Visibility::Public; }
 
  private:
   Type return_type_;
@@ -529,10 +577,21 @@ class FunctionDecl {
   std::vector<Parameter> parameters_;
   std::unique_ptr<BlockStmt> body_;
   SourceLocation location_;
+  Visibility visibility_;
 };
 
 class Program {
  public:
+  const ModuleDecl* module_decl() const { return module_.get(); }
+  void set_module(std::unique_ptr<ModuleDecl> mod) { module_ = std::move(mod); }
+  const std::string& module_name() const {
+    static const std::string empty;
+    return module_ ? module_->name() : empty;
+  }
+
+  std::vector<std::unique_ptr<ImportDecl>>& imports() { return imports_; }
+  const std::vector<std::unique_ptr<ImportDecl>>& imports() const { return imports_; }
+
   std::vector<std::unique_ptr<StructDecl>>& structs() { return structs_; }
   const std::vector<std::unique_ptr<StructDecl>>& structs() const { return structs_; }
 
@@ -540,6 +599,8 @@ class Program {
   const std::vector<std::unique_ptr<FunctionDecl>>& functions() const { return functions_; }
 
  private:
+  std::unique_ptr<ModuleDecl> module_;
+  std::vector<std::unique_ptr<ImportDecl>> imports_;
   std::vector<std::unique_ptr<StructDecl>> structs_;
   std::vector<std::unique_ptr<FunctionDecl>> functions_;
 };

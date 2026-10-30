@@ -448,6 +448,72 @@ class FunctionTranslator {
           mlir::Value arg_val = get(arg);
           if (arg_val) args.push_back(arg_val);
         }
+
+        // Check if this is a runtime library builtin call:
+        llvm::StringRef callee = op.callee;
+        std::string runtime_sym;
+        mlir::Type runtime_ret_ty;
+        std::vector<mlir::Type> runtime_arg_tys;
+
+        if (callee == "file.read_text") {
+          runtime_sym = "nrq_file_read_text";
+          runtime_ret_ty = llvm_ptr_type(ctx_);
+          runtime_arg_tys = {llvm_ptr_type(ctx_)};
+        } else if (callee == "file.write_text") {
+          runtime_sym = "nrq_file_write_text";
+          runtime_ret_ty = builder_.getI32Type();
+          runtime_arg_tys = {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)};
+        } else if (callee == "file.append_text") {
+          runtime_sym = "nrq_file_append_text";
+          runtime_ret_ty = builder_.getI32Type();
+          runtime_arg_tys = {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)};
+        } else if (callee == "file.exists") {
+          runtime_sym = "nrq_file_exists";
+          runtime_ret_ty = builder_.getI32Type();
+          runtime_arg_tys = {llvm_ptr_type(ctx_)};
+        } else if (callee == "time.now") {
+          runtime_sym = "nrq_time_now_ms";
+          runtime_ret_ty = builder_.getI64Type();
+          runtime_arg_tys = {};
+        } else if (callee == "system.exit") {
+          runtime_sym = "nrq_system_exit";
+          runtime_ret_ty = mlir::LLVM::LLVMVoidType::get(ctx_);
+          runtime_arg_tys = {builder_.getI32Type()};
+        } else if (callee == "math.sqrt" || callee == "sqrt") {
+          runtime_sym = "nrq_sqrt";
+          runtime_ret_ty = builder_.getF64Type();
+          runtime_arg_tys = {builder_.getF64Type()};
+        } else if (callee == "math.sin" || callee == "sin") {
+          runtime_sym = "nrq_sin";
+          runtime_ret_ty = builder_.getF64Type();
+          runtime_arg_tys = {builder_.getF64Type()};
+        } else if (callee == "math.cos" || callee == "cos") {
+          runtime_sym = "nrq_cos";
+          runtime_ret_ty = builder_.getF64Type();
+          runtime_arg_tys = {builder_.getF64Type()};
+        } else if (callee == "math.abs" || callee == "abs") {
+          runtime_sym = "nrq_abs";
+          runtime_ret_ty = builder_.getF64Type();
+          runtime_arg_tys = {builder_.getF64Type()};
+        } else if (callee == "math.floor" || callee == "floor") {
+          runtime_sym = "nrq_floor";
+          runtime_ret_ty = builder_.getF64Type();
+          runtime_arg_tys = {builder_.getF64Type()};
+        } else if (callee == "math.ceil" || callee == "ceil") {
+          runtime_sym = "nrq_ceil";
+          runtime_ret_ty = builder_.getF64Type();
+          runtime_arg_tys = {builder_.getF64Type()};
+        }
+
+        if (!runtime_sym.empty()) {
+          auto fn = ensure_runtime_fn(module_, builder_, runtime_sym, runtime_ret_ty, runtime_arg_tys);
+          auto call_op = builder_.create<mlir::LLVM::CallOp>(loc, fn, args);
+          if (op.result.is_valid()) {
+            set(op.result, call_op.getResult());
+          }
+          return true;
+        }
+
         if (op.result.is_valid()) {
           mlir::Type ret_ty = tir_type_to_mlir(op.result.type, ctx_, builder_);
           auto call_op = builder_.create<mlir::func::CallOp>(

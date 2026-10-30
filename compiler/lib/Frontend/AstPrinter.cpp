@@ -9,6 +9,15 @@ class Printer {
  public:
   std::string print(const Program& program) {
     out_ << "program\n";
+    if (program.module_decl()) {
+      out_ << "  module @" << program.module_decl()->name() << "\n";
+    }
+    for (const auto& imp : program.imports()) {
+      out_ << "  import @" << imp->module_name();
+      if (imp->is_selective()) out_ << "." << imp->item_name();
+      if (imp->is_aliased()) out_ << " as " << imp->alias();
+      out_ << "\n";
+    }
     for (const auto& str : program.structs()) {
       print_struct(*str);
     }
@@ -25,7 +34,8 @@ class Printer {
 
   void print_struct(const StructDecl& str) {
     indent();
-    out_ << "struct @" << str.name() << " (" << str.location().line << ":" << str.location().column << ")\n";
+    out_ << visibility_spelling(str.visibility()) << " struct @" << str.name()
+         << " (" << str.location().line << ":" << str.location().column << ")\n";
     ++depth_;
     for (const auto& field : str.fields()) {
       indent();
@@ -36,7 +46,8 @@ class Printer {
 
   void print_function(const FunctionDecl& function) {
     indent();
-    out_ << "function @" << function.name() << " : " << function.return_type().to_string();
+    out_ << visibility_spelling(function.visibility()) << " function @" << function.name()
+         << " : " << function.return_type().to_string();
     if (!function.return_type().is_valid()) out_ << " (error)";
     out_ << " (" << function.location().line << ":" << function.location().column << ")\n";
     ++depth_;

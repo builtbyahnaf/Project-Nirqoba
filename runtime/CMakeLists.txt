@@ -18,6 +18,8 @@ add_library(nrqoba_runtime STATIC
   src/fatal_windows.cpp
   src/runtime_version.cpp
   src/math.cpp
+  src/file_windows.cpp
+  src/system_windows.cpp
 )
 
 set_property(TARGET nrqoba_runtime PROPERTY CXX_STANDARD 20)
