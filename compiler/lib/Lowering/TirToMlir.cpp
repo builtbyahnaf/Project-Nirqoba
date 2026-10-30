@@ -37,6 +37,27 @@ static mlir::Type tir_type_to_mlir(const Type& type, mlir::MLIRContext* ctx,
   }
   if (type.is_string()) return mlir::LLVM::LLVMPointerType::get(ctx);
   if (type.is_void()) return {};
+  if (type.is_array()) {
+    mlir::Type elem = tir_type_to_mlir(type.element_type(), ctx, builder);
+    if (!elem) return {};
+    return mlir::LLVM::LLVMArrayType::get(elem, static_cast<unsigned>(type.array_length()));
+  }
+  if (type.is_tuple()) {
+    std::vector<mlir::Type> fields;
+    fields.reserve(type.tuple_elements().size());
+    for (const Type& t : type.tuple_elements()) {
+      mlir::Type ft = tir_type_to_mlir(t, ctx, builder);
+      if (!ft) return {};
+      fields.push_back(ft);
+    }
+    return mlir::LLVM::LLVMStructType::getLiteral(ctx, fields);
+  }
+  if (type.is_struct()) {
+    // Opaque struct type by name — fields will be resolved during a full lowering pass.
+    // We map it to an identified struct with the struct name.
+    auto stype = mlir::LLVM::LLVMStructType::getIdentified(ctx, type.struct_name());
+    return stype;
+  }
   return {};
 }
 
@@ -485,6 +506,93 @@ class FunctionTranslator {
         } else {
           builder_.create<mlir::func::ReturnOp>(loc, mlir::ValueRange{});
         }
+        return true;
+      }
+
+      case tir::OpKind::ArrayAlloca: {
+        // Alloca for a fixed-size array: llvm.alloca count x elem_type.
+        mlir::Type arr_mlir = tir_type_to_mlir(op.result.type, ctx_, builder_);
+        if (!arr_mlir) return true;
+        mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
+            loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1));
+        mlir::Value ptr = builder_.create<mlir::LLVM::AllocaOp>(
+            loc, llvm_ptr_type(ctx_), arr_mlir, one);
+        set(op.result, ptr);
+        return true;
+      }
+
+      case tir::OpKind::GetElementPtr: {
+        // Pointer into an array or struct field.
+        mlir::Value base_ptr = get(op.lhs);
+        if (!base_ptr) return true;
+
+        mlir::Type result_elem_type = tir_type_to_mlir(op.result.type, ctx_, builder_);
+        if (!result_elem_type) return true;
+
+        // Build GEP indices: [0, dynamic_index] for arrays, [0, const_field] for structs.
+        mlir::Value idx;
+        if (op.operand.is_valid()) {
+          idx = get(op.operand);
+        } else {
+          idx = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, builder_.getI64Type(),
+              builder_.getI64IntegerAttr(op.field_index >= 0 ? op.field_index : 0));
+        }
+
+        // The base type for GEP is the array/struct type; we use a zero-based outer index.
+        mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
+            loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0));
+
+        // Determine the pointee type from the base value's allocation type.
+        const Type& base_type = op.lhs.type;
+        mlir::Type pointee_type = tir_type_to_mlir(base_type, ctx_, builder_);
+        if (!pointee_type) {
+          // Fall back: opaque pointer arithmetic using i8 GEP.
+          set(op.result, base_ptr);
+          return true;
+        }
+
+        mlir::Value gep = builder_.create<mlir::LLVM::GEPOp>(
+            loc, llvm_ptr_type(ctx_), pointee_type, base_ptr,
+            mlir::ValueRange{zero, idx});
+        set(op.result, gep);
+        return true;
+      }
+
+      case tir::OpKind::AggregatePack: {
+        // Pack multiple values into a struct/tuple value using llvm.insertvalue.
+        mlir::Type agg_type = tir_type_to_mlir(op.result.type, ctx_, builder_);
+        if (!agg_type) {
+          // Unsupported aggregate type — emit undef.
+          set(op.result, {});
+          return true;
+        }
+
+        mlir::Value agg = builder_.create<mlir::LLVM::UndefOp>(loc, agg_type);
+        for (std::size_t i = 0; i < op.aggregate_elements.size(); ++i) {
+          mlir::Value elem = get(op.aggregate_elements[i]);
+          if (!elem) continue;
+          agg = builder_.create<mlir::LLVM::InsertValueOp>(
+              loc, agg, elem,
+              builder_.getDenseI64ArrayAttr({static_cast<int64_t>(i)}));
+        }
+        set(op.result, agg);
+        return true;
+      }
+
+      case tir::OpKind::AggregateExtract: {
+        // Extract a field from a struct/tuple/array value using llvm.extractvalue.
+        mlir::Value agg = get(op.operand);
+        if (!agg) return true;
+
+        mlir::Type result_type = tir_type_to_mlir(op.result.type, ctx_, builder_);
+        if (!result_type) return true;
+
+        const int idx = op.field_index >= 0 ? op.field_index : 0;
+        mlir::Value extracted = builder_.create<mlir::LLVM::ExtractValueOp>(
+            loc, agg,
+            builder_.getDenseI64ArrayAttr({static_cast<int64_t>(idx)}));
+        set(op.result, extracted);
         return true;
       }
     }

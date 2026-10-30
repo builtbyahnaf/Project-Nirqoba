@@ -28,6 +28,10 @@ std::string_view op_name(OpKind kind) {
     case OpKind::Branch: return "branch";
     case OpKind::BranchCond: return "branch_cond";
     case OpKind::Return: return "return";
+    case OpKind::ArrayAlloca: return "array_alloca";
+    case OpKind::GetElementPtr: return "gep";
+    case OpKind::AggregatePack: return "aggregate_pack";
+    case OpKind::AggregateExtract: return "aggregate_extract";
   }
   return "unknown";
 }
