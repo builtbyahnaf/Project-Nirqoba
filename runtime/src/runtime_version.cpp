@@ -13,7 +13,7 @@ extern "C" {
 
 const char* nrq_runtime_version(void) {
     // "major.minor.patch — Phase N" format used by `nirqoba version`.
-    return "0.1.0-phase1";
+    return "0.2.0-phase2";
 }
 
 }  // extern "C"
