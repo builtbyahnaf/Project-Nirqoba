@@ -12,7 +12,7 @@
 
 ## Overview
 
-**Nirqoba** is an ambitious, statically typed, high-performance programming language designed to bring general-purpose programming, artificial intelligence, numerical computing, graphics, and systems development into one coherent ecosystem.
+**Nirqoba** is an ambitious, statically typed, high-performance programming language built by Muhammad Tahmid Ahnaf. It is designed to bring general-purpose programming, artificial intelligence, numerical computing, graphics, and systems development into one coherent ecosystem.
 
 The project aims to combine the readability and developer-friendliness of modern high-level languages with the performance, memory control, and native interoperability expected from systems languages.
 
