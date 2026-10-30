@@ -12,3 +12,5 @@ out/
 *.obj
 *.exe
 __pycache__/
+.vscode
+.vscode/*
