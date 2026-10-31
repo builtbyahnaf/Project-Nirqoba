@@ -1055,6 +1055,11 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
     return Type::int_type();
   }
 
+  // Dynamic array .length property (for example `args.length`).
+  if (base_type.is_dynamic_array() && expr.member() == "length") {
+    return Type::int_type();
+  }
+
   diagnostics_.error(diag::kTypeMismatch, expr.location(),
                      "value of type '" + base_type.to_string() +
                          "' has no member '" + expr.member() + "'");

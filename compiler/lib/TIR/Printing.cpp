@@ -124,6 +124,15 @@ std::string print_tir(const tir::Module& module) {
           out << " " << value_name(op.operand) << "." << op.field_index
               << " : " << op.result.type.mangle();
           break;
+        case tir::OpKind::Length:
+          out << " " << value_name(op.operand) << " : " << op.operand.type.mangle();
+          break;
+        case tir::OpKind::DynamicIndex:
+          out << " " << value_name(op.lhs) << "[" << value_name(op.operand)
+              << "] : " << op.result.type.mangle();
+          break;
+        case tir::OpKind::Unreachable:
+          break;
       }
       out << "\n";
     }

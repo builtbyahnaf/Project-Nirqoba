@@ -11,6 +11,7 @@ enum class CommandKind {
   Build,
   Run,
   Check,
+  New,
   Version,
   Help,
   Unknown
@@ -22,6 +23,7 @@ struct CommandLineOptions {
   // through `import` declarations, not listed here.
   std::vector<std::string> source_paths;
   std::vector<std::string> module_paths;
+  std::string project_dir;  // For `nirqoba new <dir>`
   std::string output_path;
   std::string out_dir = ".";
   std::string help_topic;

@@ -32,6 +32,9 @@ std::string_view op_name(OpKind kind) {
     case OpKind::GetElementPtr: return "gep";
     case OpKind::AggregatePack: return "aggregate_pack";
     case OpKind::AggregateExtract: return "aggregate_extract";
+    case OpKind::Length: return "length";
+    case OpKind::DynamicIndex: return "dyn_index";
+    case OpKind::Unreachable: return "unreachable";
   }
   return "unknown";
 }
