@@ -198,7 +198,7 @@ if ($SkipToolchain) {
     }
     if (-not (Test-Path $extracted)) { 
         # List what was extracted
-        $dirs = Get-ChildItem $downloads -Directory | Where-Object { $_.Name -ne 'llvm-mlir_llvmorg-23.1.4_x86_64-pc-windows-msvc_noassert' }
+        $dirs = Get-ChildItem $downloads -Directory | Where-Object { $_.Name -like 'llvm-mlir_llvmorg-23.1.4_x86_64-pc-windows-msvc*' }
         if ($dirs.Count -eq 1) { $extracted = $dirs[0].FullName }
     }
     if (-not (Test-Path $extracted)) { Stop-WithError "Extracted directory '$extracted' was not found." }
