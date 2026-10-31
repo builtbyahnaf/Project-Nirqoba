@@ -181,7 +181,10 @@ std::unique_ptr<Program> Parser::parse_program() {
       synchronize();
       continue;
     }
-    if (is_type_keyword(peek().kind) || (check(TokenKind::Identifier) && peek(1).kind == TokenKind::KwFunction)) {
+    if (is_type_keyword(peek().kind) ||
+        (check(TokenKind::Identifier) &&
+         (peek(1).kind == TokenKind::KwFunction ||
+          (peek().text == "managed" && peek(1).kind == TokenKind::Less)))) {
       seen_declaration = true;
       const std::size_t before = position_;
       std::unique_ptr<FunctionDecl> function = parse_function(vis);
@@ -322,7 +325,14 @@ std::unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
 
 Type Parser::parse_type_annotation() {
   Type base_type = Type::error();
-  if (is_type_keyword(peek().kind)) {
+  if (check(TokenKind::Identifier) && peek().text == "managed" &&
+      peek(1).kind == TokenKind::Less) {
+    advance();
+    advance();
+    Type managed_type = parse_type_annotation();
+    expect(TokenKind::Greater, "after the managed type");
+    base_type = Type::managed_pointer_type(managed_type);
+  } else if (is_type_keyword(peek().kind)) {
     const Token token = advance();
     base_type = parse_type_name(token.text);
   } else if (check(TokenKind::Identifier)) {
@@ -366,6 +376,9 @@ Type Parser::parse_type_annotation() {
       expect(TokenKind::RBracket, "to close dynamic array type");
       base_type = Type::dynamic_array_type(base_type);
     }
+  }
+  while (match(TokenKind::Star)) {
+    base_type = Type::pointer_type(base_type);
   }
 
   return base_type;
@@ -932,6 +945,21 @@ ExprPtr Parser::parse_primary() {
     }
     case TokenKind::Identifier: {
       advance();
+      if ((token.text == "memory" || token.text == "array") && check(TokenKind::Dot) &&
+          peek(1).kind == TokenKind::Identifier && peek(1).text == "allocate" &&
+          peek(2).kind == TokenKind::Less) {
+        advance();  // '.'
+        advance();  // 'allocate'
+        advance();  // '<'
+        Type allocated_type = parse_type_annotation();
+        expect(TokenKind::Greater, "after the allocated element type");
+        expect(TokenKind::LParen, "after memory.allocate<T>");
+        std::vector<ExprPtr> arguments = parse_argument_list();
+        expect(TokenKind::RParen, "to close memory.allocate<T>");
+        return std::make_unique<CallExpr>(token.location,
+                                          token.text + ".allocate",
+                                          std::move(arguments), allocated_type);
+      }
       // `module.name` is a member access, except when it is immediately called:
       // then it is a call to a function in another module (Phase 5).
       if (check(TokenKind::Dot) && peek(1).kind == TokenKind::Identifier &&

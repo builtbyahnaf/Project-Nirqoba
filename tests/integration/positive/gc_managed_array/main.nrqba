@@ -1,0 +1,7 @@
+int function main() {
+    var values = array.allocate<int>(2);
+    values[0] = 42;
+    gc.collect();
+    print(values[0]);
+    return 42;
+}

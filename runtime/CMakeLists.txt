@@ -19,8 +19,10 @@ add_library(nrqoba_runtime STATIC
   src/runtime_version.cpp
   src/math.cpp
   src/file_windows.cpp
+  src/gc.cpp
   src/system_windows.cpp
   src/args_windows.cpp
+  src/allocator_windows.cpp
 )
 
 set_property(TARGET nrqoba_runtime PROPERTY CXX_STANDARD 20)

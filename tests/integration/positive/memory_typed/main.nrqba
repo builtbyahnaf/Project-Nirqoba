@@ -1,0 +1,7 @@
+int function main() {
+    var buffer = memory.allocate<byte>(8);
+    buffer[0] = 42 as byte;
+    print(buffer[0] as int);
+    memory.deallocate(buffer);
+    return 42;
+}

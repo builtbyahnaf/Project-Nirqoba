@@ -192,8 +192,14 @@ class CallExpr : public Expr {
   CallExpr(SourceLocation location, std::string callee, std::vector<ExprPtr> arguments)
       : Expr(Kind::Call, std::move(location)), callee_(std::move(callee)),
         arguments_(std::move(arguments)) {}
+  CallExpr(SourceLocation location, std::string callee, std::vector<ExprPtr> arguments,
+           Type generic_argument)
+      : Expr(Kind::Call, std::move(location)), callee_(std::move(callee)),
+        arguments_(std::move(arguments)), generic_argument_(generic_argument) {}
   const std::string& callee() const { return callee_; }
   const std::vector<ExprPtr>& arguments() const { return arguments_; }
+  bool has_generic_argument() const { return generic_argument_.is_valid(); }
+  Type generic_argument() const { return generic_argument_; }
 
   // Fully-qualified symbol semantic analysis resolved this call to, for
   // example `geometry.calculate_area` or `main`. Empty for builtins and for
@@ -206,6 +212,7 @@ class CallExpr : public Expr {
  private:
   std::string callee_;
   std::vector<ExprPtr> arguments_;
+  Type generic_argument_;
   std::string resolved_symbol_;
 };
 

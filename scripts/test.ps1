@@ -69,9 +69,12 @@ if ($UnitOnly) {
 }
 
 Write-Host '==> CLI/integration suite'
-$pythonExe = 'python'
-$pyLauncher = Get-Command py -ErrorAction SilentlyContinue
-if ($null -ne $pyLauncher) { $pythonExe = $pyLauncher.Source }
+$pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+if ($null -eq $pythonCommand) {
+    Write-Host 'Python was not found on PATH. Install Python or run scripts/bootstrap.ps1.' -ForegroundColor Red
+    exit 4
+}
+$pythonExe = $pythonCommand.Source
 & $pythonExe (Join-Path $RepoRoot 'tests/run_tests.py') --compiler $compiler --configuration $Configuration 2>&1 | Tee-Object -FilePath $integrationLog
 $integrationCode = $LASTEXITCODE
 if ($integrationCode -ne 0) { Write-Host "integration tests failed (exit $integrationCode)" -ForegroundColor Red }

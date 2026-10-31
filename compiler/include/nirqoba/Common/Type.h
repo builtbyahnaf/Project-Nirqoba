@@ -43,6 +43,8 @@ enum class TypeKind {
   String,
   Array,
   DynamicArray,
+  Pointer,
+  ManagedPointer,
   Tuple,
   Struct,
 };
@@ -79,6 +81,8 @@ class Type {
 
   static Type array_type(Type element_type, std::size_t length);
   static Type dynamic_array_type(Type element_type);
+  static Type pointer_type(Type element_type);
+  static Type managed_pointer_type(Type element_type);
   static Type tuple_type(std::vector<Type> elements);
   static Type struct_type(std::string name, std::vector<std::pair<std::string, Type>> fields = {});
 
@@ -94,6 +98,8 @@ class Type {
   bool is_u64() const { return kind_ == TypeKind::U64; }
   bool is_array() const { return kind_ == TypeKind::Array; }
   bool is_dynamic_array() const { return kind_ == TypeKind::DynamicArray; }
+  bool is_pointer() const { return kind_ == TypeKind::Pointer; }
+  bool is_managed_pointer() const { return kind_ == TypeKind::ManagedPointer; }
   bool is_tuple() const { return kind_ == TypeKind::Tuple; }
   bool is_struct() const { return kind_ == TypeKind::Struct; }
 

@@ -947,6 +947,13 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       // For struct member: we need to look up the field index.
       int computed_field_idx = field_idx;
       if (!mem.is_tuple_access() && base_val.type.is_struct()) {
+        const auto& fields = base_val.type.struct_fields();
+        for (std::size_t index = 0; index < fields.size(); ++index) {
+          if (fields[index].first == mem.member()) {
+            computed_field_idx = static_cast<int>(index);
+            break;
+          }
+        }
         // We can't look up the struct catalog from Builder, so we embed -1
         // and let MLIR lowering resolve by field name. For now use field_index
         // from the string_value (we'll use slot_name to carry the field name).
@@ -1010,7 +1017,10 @@ tir::Value TirBuilder::resolve_lvalue_ptr(const Expr& target, tir::Function& fun
   }
   if (target.kind() == Expr::Kind::Index) {
     const auto& idx_expr = static_cast<const IndexExpr&>(target);
-    tir::Value base_ptr = resolve_lvalue_ptr(idx_expr.base(), function);
+    tir::Value base_ptr = (idx_expr.base().type().is_pointer() ||
+                           idx_expr.base().type().is_managed_pointer())
+        ? lower_expression(idx_expr.base(), function)
+        : resolve_lvalue_ptr(idx_expr.base(), function);
     if (!base_ptr.is_valid()) return tir::Value{};
     tir::Value idx_val = lower_expression(idx_expr.index(), function);
     Type elem_type = idx_expr.type().is_valid() ? idx_expr.type() : base_ptr.type.element_type();
@@ -1035,6 +1045,15 @@ tir::Value TirBuilder::resolve_lvalue_ptr(const Expr& target, tir::Function& fun
     gep.location = mem_expr.location();
     gep.lhs = base_ptr;
     gep.field_index = mem_expr.is_tuple_access() ? mem_expr.tuple_index() : -1;
+    if (!mem_expr.is_tuple_access() && base_ptr.type.is_struct()) {
+      const auto& fields = base_ptr.type.struct_fields();
+      for (std::size_t index = 0; index < fields.size(); ++index) {
+        if (fields[index].first == mem_expr.member()) {
+          gep.field_index = static_cast<int>(index);
+          break;
+        }
+      }
+    }
     gep.string_value = mem_expr.member();
     gep.result = field_ptr;
     function.add_operation(std::move(gep));

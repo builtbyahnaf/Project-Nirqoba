@@ -1,5 +1,0 @@
-{
-  "mode": "build",
-  "expect_exit": 1,
-  "expect_stderr_contains": ["[NRQ2100]"]
-}

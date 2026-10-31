@@ -2,6 +2,7 @@
 
 #include "nirqoba/Lowering/TirToMlir.h"
 
+#include <algorithm>
 #include <unordered_map>
 #include <vector>
 
@@ -35,6 +36,8 @@ static mlir::Type tir_type_to_mlir(const Type& type, mlir::MLIRContext* ctx,
     }
   }
   if (type.is_string()) return mlir::LLVM::LLVMPointerType::get(ctx);
+  if (type.is_pointer() || type.is_managed_pointer())
+    return mlir::LLVM::LLVMPointerType::get(ctx);
   // A dynamic array is a pointer to a runtime-owned descriptor; the runtime
   // owns the element storage, so the compiler only ever handles the handle.
   if (type.is_dynamic_array()) return mlir::LLVM::LLVMPointerType::get(ctx);
@@ -55,6 +58,16 @@ static mlir::Type tir_type_to_mlir(const Type& type, mlir::MLIRContext* ctx,
     return mlir::LLVM::LLVMStructType::getLiteral(ctx, fields);
   }
   if (type.is_struct()) {
+    if (!type.struct_fields().empty()) {
+      std::vector<mlir::Type> fields;
+      fields.reserve(type.struct_fields().size());
+      for (const auto& field : type.struct_fields()) {
+        mlir::Type field_type = tir_type_to_mlir(field.second, ctx, builder);
+        if (!field_type) return {};
+        fields.push_back(field_type);
+      }
+      return mlir::LLVM::LLVMStructType::getLiteral(ctx, fields);
+    }
     // Opaque struct type by name — fields will be resolved during a full lowering pass.
     // We map it to an identified struct with the struct name.
     auto stype = mlir::LLVM::LLVMStructType::getIdentified(ctx, type.struct_name());
@@ -65,6 +78,84 @@ static mlir::Type tir_type_to_mlir(const Type& type, mlir::MLIRContext* ctx,
 
 static mlir::Type llvm_ptr_type(mlir::MLIRContext* ctx) {
   return mlir::LLVM::LLVMPointerType::get(ctx);
+}
+
+static uint64_t type_alignment(const Type& type) {
+  if (type.is_pointer() || type.is_managed_pointer() || type.is_string() ||
+      type.is_dynamic_array()) return 8;
+  if (type.is_array()) return type_alignment(type.element_type());
+  if (type.is_struct()) {
+    uint64_t alignment = 1;
+    for (const auto& field : type.struct_fields())
+      alignment = std::max(alignment, type_alignment(field.second));
+    return alignment;
+  }
+  if (type.is_float()) return type.is_f32() ? 4 : 8;
+  if (type.is_integer() || type.is_char())
+    return std::max<uint64_t>(1, std::min<uint64_t>(8, type.bit_width() / 8));
+  return 1;
+}
+
+static uint64_t type_size(const Type& type) {
+  if (type.is_pointer() || type.is_managed_pointer() || type.is_string() ||
+      type.is_dynamic_array()) return 8;
+  if (type.is_array()) return type.array_length() * type_size(type.element_type());
+  if (type.is_struct() || type.is_tuple()) {
+    uint64_t size = 0;
+    uint64_t aggregate_alignment = 1;
+    auto append_field = [&](const Type& field_type) {
+      const uint64_t alignment = type_alignment(field_type);
+      aggregate_alignment = std::max(aggregate_alignment, alignment);
+      size = (size + alignment - 1) & ~(alignment - 1);
+      size += type_size(field_type);
+    };
+    if (type.is_struct()) {
+      for (const auto& field : type.struct_fields()) append_field(field.second);
+    } else {
+      for (const Type& field : type.tuple_elements()) append_field(field);
+    }
+    return (size + aggregate_alignment - 1) & ~(aggregate_alignment - 1);
+  }
+  if (type.is_float()) return type.is_f32() ? 4 : 8;
+  if (type.is_bool()) return 1;
+  if (type.is_integer() || type.is_char())
+    return std::max<uint64_t>(1, type.bit_width() / 8);
+  return 0;
+}
+
+static void collect_managed_reference_offsets(const Type& type, uint64_t base,
+                                              std::vector<uint64_t>& offsets) {
+  if (type.is_managed_pointer()) {
+    offsets.push_back(base);
+    return;
+  }
+  if (type.is_array()) {
+    const uint64_t stride = type_size(type.element_type());
+    for (std::size_t index = 0; index < type.array_length(); ++index)
+      collect_managed_reference_offsets(type.element_type(),
+                                        base + index * stride, offsets);
+    return;
+  }
+  if (type.is_struct() || type.is_tuple()) {
+    uint64_t field_offset = 0;
+    auto append_field = [&](const Type& field_type) {
+      const uint64_t alignment = type_alignment(field_type);
+      field_offset = (field_offset + alignment - 1) & ~(alignment - 1);
+      collect_managed_reference_offsets(field_type, base + field_offset, offsets);
+      field_offset += type_size(field_type);
+    };
+    if (type.is_struct()) {
+      for (const auto& field : type.struct_fields()) append_field(field.second);
+    } else {
+      for (const Type& field : type.tuple_elements()) append_field(field);
+    }
+  }
+}
+
+static bool collect_has_managed_reference(const Type& type) {
+  std::vector<uint64_t> offsets;
+  collect_managed_reference_offsets(type, 0, offsets);
+  return !offsets.empty();
 }
 
 static mlir::Location to_mlir_loc(const SourceLocation& loc, mlir::MLIRContext* ctx) {
@@ -105,6 +196,27 @@ class FunctionTranslator {
     for (std::size_t i = 0; i < tir_fn.parameters().size(); ++i) {
       set(tir_fn.parameters()[i].value, entry_block_->getArgument(i));
     }
+
+    auto begin_frame = ensure_runtime_fn(module_, builder_, "nrq_gc_root_frame_begin",
+                                         builder_.getI64Type(), {});
+    gc_root_frame_marker_ = builder_.create<mlir::LLVM::CallOp>(
+        mlir::UnknownLoc::get(ctx_), begin_frame, mlir::ValueRange{}).getResult();
+    for (std::size_t i = 0; i < tir_fn.parameters().size(); ++i) {
+      std::vector<uint64_t> offsets;
+      collect_managed_reference_offsets(tir_fn.parameters()[i].type, 0, offsets);
+      if (offsets.empty()) continue;
+      mlir::Type value_type = tir_type_to_mlir(tir_fn.parameters()[i].type, ctx_, builder_);
+      if (!value_type) continue;
+      mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
+          mlir::UnknownLoc::get(ctx_), builder_.getI64Type(),
+          builder_.getI64IntegerAttr(1)).getResult();
+      mlir::Value slot = builder_.create<mlir::LLVM::AllocaOp>(
+          mlir::UnknownLoc::get(ctx_), llvm_ptr_type(ctx_), value_type, one).getResult();
+      builder_.create<mlir::LLVM::StoreOp>(mlir::UnknownLoc::get(ctx_),
+                                           entry_block_->getArgument(i), slot);
+      register_gc_root(slot, tir_fn.parameters()[i].type,
+                       mlir::UnknownLoc::get(ctx_));
+    }
   }
 
   bool translate() {
@@ -123,6 +235,46 @@ class FunctionTranslator {
   void set(tir::Value v, mlir::Value mlir_val) {
     if (!v.is_valid()) return;
     values_[static_cast<std::size_t>(v.id)] = mlir_val;
+  }
+
+  void register_gc_root(mlir::Value slot, const Type& value_type,
+                        mlir::Location loc) {
+    std::vector<uint64_t> offsets;
+    collect_managed_reference_offsets(value_type, 0, offsets);
+    if (offsets.empty()) return;
+    const std::string symbol = "nrq_gc_root_register_typed";
+    auto register_fn = ensure_runtime_fn(module_, builder_, symbol,
+                                         mlir::LLVM::LLVMVoidType::get(ctx_),
+                                         {llvm_ptr_type(ctx_), builder_.getI64Type(),
+                                          llvm_ptr_type(ctx_), builder_.getI64Type()});
+    auto offsets_type = mlir::LLVM::LLVMArrayType::get(
+        builder_.getI64Type(), static_cast<unsigned>(offsets.size()));
+    mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
+    mlir::Value offsets_slot = builder_.create<mlir::LLVM::AllocaOp>(
+        loc, llvm_ptr_type(ctx_), offsets_type, one).getResult();
+    mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
+    for (std::size_t index = 0; index < offsets.size(); ++index) {
+      mlir::Value index_value = builder_.create<mlir::LLVM::ConstantOp>(
+          loc, builder_.getI64Type(),
+          builder_.getI64IntegerAttr(static_cast<int64_t>(index))).getResult();
+      mlir::Value field_slot = builder_.create<mlir::LLVM::GEPOp>(
+          loc, llvm_ptr_type(ctx_), offsets_type, offsets_slot,
+          mlir::ValueRange{zero, index_value}).getResult();
+      mlir::Value offset_value = builder_.create<mlir::LLVM::ConstantOp>(
+          loc, builder_.getI64Type(),
+          builder_.getI64IntegerAttr(static_cast<int64_t>(offsets[index]))).getResult();
+      builder_.create<mlir::LLVM::StoreOp>(loc, offset_value, field_slot);
+    }
+    mlir::Value object_size = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI64Type(),
+        builder_.getI64IntegerAttr(type_size(value_type))).getResult();
+    mlir::Value reference_count = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI64Type(),
+        builder_.getI64IntegerAttr(static_cast<int64_t>(offsets.size()))).getResult();
+    builder_.create<mlir::LLVM::CallOp>(loc, register_fn,
+        mlir::ValueRange{slot, object_size, offsets_slot, reference_count});
   }
 
   // Converts a runtime call's ABI result to the type the language assigned to
@@ -254,6 +406,14 @@ class FunctionTranslator {
             loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
         mlir::Value slot = builder_.create<mlir::LLVM::AllocaOp>(
             loc, llvm_ptr_type(ctx_), elem_type, one).getResult();
+        std::vector<uint64_t> root_offsets;
+        collect_managed_reference_offsets(op.result.type, 0, root_offsets);
+        if (!root_offsets.empty()) {
+          mlir::Value zero_value = builder_.create<mlir::LLVM::ZeroOp>(
+              loc, elem_type).getResult();
+          builder_.create<mlir::LLVM::StoreOp>(loc, zero_value, slot);
+          register_gc_root(slot, op.result.type, loc);
+        }
         set(op.result, slot);
         return true;
       }
@@ -262,7 +422,30 @@ class FunctionTranslator {
         mlir::Value ptr = get(op.lhs);
         mlir::Value val = get(op.operand);
         if (!ptr || !val) return true;
-        builder_.create<mlir::LLVM::StoreOp>(loc, val, ptr);
+        if (op.operand.type.is_managed_pointer()) {
+          auto store_fn = ensure_runtime_fn(module_, builder_, "nrq_gc_root_store",
+                                            mlir::LLVM::LLVMVoidType::get(ctx_),
+                                            {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)});
+          builder_.create<mlir::LLVM::CallOp>(loc, store_fn,
+                                              mlir::ValueRange{ptr, val});
+        } else if (!collect_has_managed_reference(op.operand.type)) {
+          builder_.create<mlir::LLVM::StoreOp>(loc, val, ptr);
+        } else {
+          mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
+          mlir::Value temporary = builder_.create<mlir::LLVM::AllocaOp>(
+              loc, llvm_ptr_type(ctx_), val.getType(), one).getResult();
+          builder_.create<mlir::LLVM::StoreOp>(loc, val, temporary);
+          auto copy_fn = ensure_runtime_fn(module_, builder_, "nrq_gc_root_copy",
+                                           mlir::LLVM::LLVMVoidType::get(ctx_),
+                                           {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_),
+                                            builder_.getI64Type()});
+          mlir::Value bytes = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, builder_.getI64Type(),
+              builder_.getI64IntegerAttr(type_size(op.operand.type))).getResult();
+          builder_.create<mlir::LLVM::CallOp>(loc, copy_fn,
+                                              mlir::ValueRange{ptr, temporary, bytes});
+        }
         return true;
       }
 
@@ -513,7 +696,96 @@ class FunctionTranslator {
         // while the runtime ABI uses void*. Keep that boundary conversion
         // explicit so the call is emitted as an LLVM runtime call (rather
         // than an unresolved func.call to the runtime symbol).
-        if (op.callee == "nrq_memory_allocate") {
+        if (op.callee == "array.allocate" && op.result.is_valid() &&
+            op.result.type.is_managed_pointer()) {
+          const Type& element_type = op.result.type.element_type();
+          const uint64_t element_size = type_size(element_type);
+          if (element_size == 0 || args.empty()) {
+            diag_.error("NRQ4005", op.location,
+                        "internal: invalid element type or missing count for array.allocate<T>");
+            return false;
+          }
+          mlir::Value count = args[0];
+          if (count.getType() != builder_.getI64Type()) {
+            const unsigned bits = count.getType().getIntOrFloatBitWidth();
+            count = bits < 64
+                ? builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), count).getResult()
+                : builder_.create<mlir::LLVM::TruncOp>(loc, builder_.getI64Type(), count).getResult();
+          }
+          std::vector<uint64_t> reference_offsets;
+          collect_managed_reference_offsets(element_type, 0, reference_offsets);
+          mlir::Value offsets_pointer = builder_.create<mlir::LLVM::ZeroOp>(
+              loc, llvm_ptr_type(ctx_)).getResult();
+          if (!reference_offsets.empty()) {
+            auto offsets_type = mlir::LLVM::LLVMArrayType::get(
+                builder_.getI64Type(), static_cast<unsigned>(reference_offsets.size()));
+            mlir::Value offset_count = builder_.create<mlir::LLVM::ConstantOp>(
+                loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
+            offsets_pointer = builder_.create<mlir::LLVM::AllocaOp>(
+                loc, llvm_ptr_type(ctx_), offsets_type, offset_count).getResult();
+            mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
+                loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
+            for (std::size_t index = 0; index < reference_offsets.size(); ++index) {
+              mlir::Value index_value = builder_.create<mlir::LLVM::ConstantOp>(
+                  loc, builder_.getI64Type(),
+                  builder_.getI64IntegerAttr(static_cast<int64_t>(index))).getResult();
+              mlir::Value slot = builder_.create<mlir::LLVM::GEPOp>(
+                  loc, llvm_ptr_type(ctx_), offsets_type, offsets_pointer,
+                  mlir::ValueRange{zero, index_value}).getResult();
+              mlir::Value offset_value = builder_.create<mlir::LLVM::ConstantOp>(
+                  loc, builder_.getI64Type(),
+                  builder_.getI64IntegerAttr(static_cast<int64_t>(reference_offsets[index]))).getResult();
+              builder_.create<mlir::LLVM::StoreOp>(loc, offset_value, slot);
+            }
+          }
+          auto fn = ensure_runtime_fn(module_, builder_, "nrq_gc_allocate_array_typed",
+                                     llvm_ptr_type(ctx_),
+                                     {builder_.getI64Type(), builder_.getI64Type(),
+                                      llvm_ptr_type(ctx_), builder_.getI64Type()});
+          mlir::Value size = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, builder_.getI64Type(),
+              builder_.getI64IntegerAttr(element_size)).getResult();
+          mlir::Value ref_count = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, builder_.getI64Type(),
+              builder_.getI64IntegerAttr(static_cast<int64_t>(reference_offsets.size()))).getResult();
+          mlir::Value result = builder_.create<mlir::LLVM::CallOp>(
+              loc, fn, mlir::ValueRange{count, size, offsets_pointer, ref_count}).getResult();
+          set(op.result, result);
+          return true;
+        }
+        if (op.callee == "memory.allocate" && op.result.is_valid() &&
+            op.result.type.is_pointer()) {
+          auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_allocate",
+                                     llvm_ptr_type(ctx_),
+                                     {builder_.getI64Type(), builder_.getI64Type()});
+          mlir::Value bytes = args.empty() ? mlir::Value{} : args[0];
+          if (!bytes) {
+            diag_.error("NRQ4005", op.location,
+                        "internal: memory.allocate<T> has no byte-count operand");
+            return false;
+          }
+          if (bytes.getType() != builder_.getI64Type()) {
+            const unsigned bits = bytes.getType().getIntOrFloatBitWidth();
+            bytes = bits < 64
+                ? builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), bytes).getResult()
+                : builder_.create<mlir::LLVM::TruncOp>(loc, builder_.getI64Type(), bytes).getResult();
+          }
+          mlir::Value alignment = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, builder_.getI64Type(),
+              builder_.getI64IntegerAttr(type_alignment(op.result.type.element_type()))).getResult();
+          mlir::Value result = builder_.create<mlir::LLVM::CallOp>(
+              loc, fn, mlir::ValueRange{bytes, alignment}).getResult();
+          set(op.result, result);
+          return true;
+        }
+        if (op.callee == "memory.deallocate") {
+          auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_deallocate_checked",
+                                     mlir::LLVM::LLVMVoidType::get(ctx_),
+                                     {llvm_ptr_type(ctx_)});
+          if (!args.empty()) builder_.create<mlir::LLVM::CallOp>(loc, fn, args);
+          return true;
+        }
+        if (op.callee == "nrq_memory_allocate" || op.callee == "memory.allocate") {
           auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_allocate",
                                      llvm_ptr_type(ctx_),
                                      {builder_.getI64Type(), builder_.getI64Type()});
@@ -534,6 +806,57 @@ class FunctionTranslator {
                                      mlir::LLVM::LLVMVoidType::get(ctx_),
                                      {llvm_ptr_type(ctx_), builder_.getI64Type(),
                                       builder_.getI64Type()});
+          builder_.create<mlir::LLVM::CallOp>(loc, fn, args);
+          return true;
+        }
+        if (op.callee == "gc.get_statistics") {
+          static constexpr const char* stat_symbols[] = {
+              "nrq_gc_get_allocated_bytes", "nrq_gc_get_collected_bytes",
+              "nrq_gc_get_collection_count", "nrq_gc_get_live_objects"};
+          mlir::Type stats_type = tir_type_to_mlir(op.result.type, ctx_, builder_);
+          mlir::Value stats = builder_.create<mlir::LLVM::UndefOp>(loc, stats_type).getResult();
+          for (int index = 0; index < 4; ++index) {
+            auto getter = ensure_runtime_fn(module_, builder_, stat_symbols[index],
+                                            builder_.getI64Type(), {});
+            mlir::Value field = builder_.create<mlir::LLVM::CallOp>(
+                loc, getter, mlir::ValueRange{}).getResult();
+            stats = builder_.create<mlir::LLVM::InsertValueOp>(
+                loc, stats, field,
+                builder_.getDenseI64ArrayAttr({index})).getResult();
+          }
+          set(op.result, stats);
+          return true;
+        }
+        if (op.callee == "gc.set_threshold") {
+          auto setter = ensure_runtime_fn(module_, builder_, "nrq_gc_set_threshold",
+                                         mlir::LLVM::LLVMVoidType::get(ctx_),
+                                         {builder_.getI64Type()});
+          if (!args.empty()) {
+            mlir::Value threshold = args[0];
+            if (threshold.getType() != builder_.getI64Type()) {
+              const unsigned bits = threshold.getType().getIntOrFloatBitWidth();
+              threshold = bits < 64
+                  ? builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), threshold).getResult()
+                  : builder_.create<mlir::LLVM::TruncOp>(loc, builder_.getI64Type(), threshold).getResult();
+            }
+            builder_.create<mlir::LLVM::CallOp>(loc, setter, mlir::ValueRange{threshold});
+          }
+          return true;
+        }
+        if (op.callee == "nrq_gc_init" || op.callee == "nrq_gc_enable" ||
+            op.callee == "gc.enable" || op.callee == "nrq_gc_shutdown" ||
+            op.callee == "nrq_gc_disable" || op.callee == "gc.disable" ||
+            op.callee == "nrq_gc_collect" || op.callee == "gc.collect") {
+          const char* runtime_sym =
+              (op.callee == "nrq_gc_init" || op.callee == "nrq_gc_enable" ||
+               op.callee == "gc.enable")
+                  ? "nrq_gc_enable"
+                  : (op.callee == "nrq_gc_shutdown" || op.callee == "nrq_gc_disable" ||
+                     op.callee == "gc.disable")
+                        ? "nrq_gc_disable"
+                        : "nrq_gc_collect";
+          auto fn = ensure_runtime_fn(module_, builder_, runtime_sym,
+                                     mlir::LLVM::LLVMVoidType::get(ctx_), {});
           builder_.create<mlir::LLVM::CallOp>(loc, fn, args);
           return true;
         }
@@ -661,6 +984,11 @@ class FunctionTranslator {
       }
 
       case tir::OpKind::Return: {
+        auto end_frame = ensure_runtime_fn(module_, builder_, "nrq_gc_root_frame_end",
+                                           mlir::LLVM::LLVMVoidType::get(ctx_),
+                                           {builder_.getI64Type()});
+        builder_.create<mlir::LLVM::CallOp>(loc, end_frame,
+                                            mlir::ValueRange{gc_root_frame_marker_});
         if (op.operand.is_valid()) {
           mlir::Value val = get(op.operand);
           if (val) {
@@ -715,16 +1043,22 @@ class FunctionTranslator {
 
         // Determine the pointee type from the base value's allocation type.
         const Type& base_type = op.lhs.type;
-        mlir::Type pointee_type = tir_type_to_mlir(base_type, ctx_, builder_);
+        mlir::Type pointee_type = (base_type.is_pointer() || base_type.is_managed_pointer())
+            ? tir_type_to_mlir(op.result.type, ctx_, builder_)
+            : tir_type_to_mlir(base_type, ctx_, builder_);
         if (!pointee_type) {
           // Fall back: opaque pointer arithmetic using i8 GEP.
           set(op.result, base_ptr);
           return true;
         }
 
-        mlir::Value gep = builder_.create<mlir::LLVM::GEPOp>(
-            loc, llvm_ptr_type(ctx_), pointee_type, base_ptr,
-            mlir::ValueRange{zero, idx}).getResult();
+        mlir::Value gep = (base_type.is_pointer() || base_type.is_managed_pointer())
+            ? builder_.create<mlir::LLVM::GEPOp>(
+                  loc, llvm_ptr_type(ctx_), pointee_type, base_ptr,
+                  mlir::ValueRange{idx}).getResult()
+            : builder_.create<mlir::LLVM::GEPOp>(
+                  loc, llvm_ptr_type(ctx_), pointee_type, base_ptr,
+                  mlir::ValueRange{zero, idx}).getResult();
         set(op.result, gep);
         return true;
       }
@@ -843,6 +1177,7 @@ class FunctionTranslator {
   std::unordered_map<int, mlir::Block*> label_blocks_;
   std::unordered_map<std::string, std::string> string_literals_;
   int string_literal_counter_ = 0;
+  mlir::Value gc_root_frame_marker_;
 };
 
 // The Windows CRT calls `main(int argc, char** argv)`. A Nirqoba entry point

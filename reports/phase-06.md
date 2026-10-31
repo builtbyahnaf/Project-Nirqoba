@@ -5,7 +5,7 @@
 - **Phase Identifier:** Phase 6
 - **Phase Title:** Garbage Collection, Memory Allocation, and Windows Installer Foundation
 - **Implementation Date:** 2026-10-31
-- **Status:** Complete
+- **Status:** Partial foundation; Phase 6 is not complete against `project_context/ROADMAP.md`.
 - **Objective:** Implement garbage collection framework (Phase 6.5), dynamic memory allocation with selectable allocator strategies (Phase 6.7), and foundation for Windows application deployment and installer generation.
 
 ## 2. Scope
@@ -238,9 +238,10 @@ Added test cases:
 
 ## 6. Known Issues & Limitations
 
-- **MSVC `stdint.h` include path**: Pre-existing environment issue prevents full rebuild and runtime testing on Windows. Code changes are structurally correct.
-- **GC is no-op by default**: Phase 6.5 provides framework and diagnostics but no actual collection. Users must opt-in via `nrq_gc_enable()` and implement a collector for production use.
-- **Allocator strategies**: Default heap allocator works but is basic; GC-aware allocators (pool, bump pointer, etc.) are future work.
+- **Tracing GC is not implemented**: There is no managed heap, object tracing, root tracking, automatic collection, threshold, or meaningful allocation accounting. The current collect routine only increments a counter when enabled.
+- **GC statistics are runtime-only and incomplete**: `nrq_gc_get_stats()` is declared but not exposed as a language builtin; tracked allocated bytes are never incremented.
+- **Allocator strategies are not implemented**: The runtime provides a process-heap allocator only. Pool, arena, stack, slab, buddy, free-list, TLSF, and custom allocator selection remain future work.
+- **Memory safety guarantees are incomplete**: The API does not track ownership, diagnose double frees, detect use-after-free, or prevent allocator-domain mismatches.
 - **Windows installer**: Inno Setup script is complete and visually modern; actual compilation requires Inno Setup 6.x installed on Windows.
 
 ## 7. Documentation Changes
@@ -269,7 +270,9 @@ Added test cases:
 
 ## 8. Final Verdict
 
-**PASS**
+**PARTIAL**
+
+The completion statements below are historical and are superseded by this verdict and the limitations above. The tracing collector and selectable allocator system required by `project_context/ROADMAP.md` remain unimplemented; Phase 6 is not ready to be considered complete.
 
 Phase 6 complete — Garbage collection framework, dynamic memory allocation with extensible allocator strategies, and full Windows installer foundation (including modern UI, C++ GUI application, and Inno Setup scripts) are implemented, documented, and ready. The code changes provide clean C ABI boundaries for the runtime, a portable memory allocation interface designed for GC integration, and a professional installation experience for end users.
 

@@ -1,6 +1,7 @@
 #include "nirqoba/Sema/TypeChecker.h"
 
 #include <algorithm>
+#include <functional>
 #include <unordered_set>
 
 #include "nirqoba/Driver/ModuleResolver.h"
@@ -984,7 +985,8 @@ Type TypeChecker::check_index_expr(IndexExpr& expr) {
     return Type::error();
   }
 
-  if (base_type.is_array() || base_type.is_dynamic_array()) {
+  if (base_type.is_array() || base_type.is_dynamic_array() ||
+      base_type.is_pointer() || base_type.is_managed_pointer()) {
     // Constant-index bounds check for fixed arrays.
     if (base_type.is_array() && expr.index().kind() == Expr::Kind::IntegerLiteral) {
       const auto& lit = static_cast<const IntegerLiteralExpr&>(expr.index());
@@ -996,7 +998,17 @@ Type TypeChecker::check_index_expr(IndexExpr& expr) {
         return Type::error();
       }
     }
-    return base_type.element_type();
+    Type element_type = base_type.element_type();
+    if (element_type.is_struct() && element_type.struct_fields().empty()) {
+      if (const StructInfo* info = find_struct(element_type.struct_name())) {
+        std::vector<std::pair<std::string, Type>> fields;
+        fields.reserve(info->fields.size());
+        for (const Parameter& field : info->fields)
+          fields.emplace_back(field.name, field.type);
+        element_type = Type::struct_type(element_type.struct_name(), std::move(fields));
+      }
+    }
+    return element_type;
   }
 
   if (base_type.is_string()) {
@@ -1035,6 +1047,14 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
 
   // Struct field access: obj.field
   if (base_type.is_struct()) {
+    if (base_type.struct_name() == "GcStatistics") {
+      for (const auto& field : base_type.struct_fields()) {
+        if (field.first == expr.member()) return field.second;
+      }
+      diagnostics_.error(diag::kUnknownField, expr.location(),
+                         "GC statistics have no field '" + expr.member() + "'");
+      return Type::error();
+    }
     const std::string& sname = base_type.struct_name();
     const StructInfo* info = find_struct(sname);
     if (info == nullptr) {
@@ -1128,10 +1148,41 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
     }
   }
 
-  return Type::struct_type(expr.struct_name());
+  std::vector<std::pair<std::string, Type>> resolved_fields;
+  resolved_fields.reserve(fields.size());
+  for (const Parameter& field : fields)
+    resolved_fields.emplace_back(field.name, field.type);
+  return Type::struct_type(expr.struct_name(), std::move(resolved_fields));
 }
 
 Type TypeChecker::check_call(CallExpr& call) {
+  std::unordered_set<std::string> active_structs;
+  std::function<Type(Type)> resolve_generic_type = [&](Type type) -> Type {
+    if (type.is_array())
+      return Type::array_type(resolve_generic_type(type.element_type()), type.array_length());
+    if (type.is_dynamic_array())
+      return Type::dynamic_array_type(resolve_generic_type(type.element_type()));
+    if (type.is_pointer())
+      return Type::pointer_type(type.element_type());
+    if (type.is_managed_pointer())
+      return Type::managed_pointer_type(type.element_type());
+    if (!type.is_struct() || !type.struct_fields().empty() ||
+        active_structs.contains(type.struct_name())) return type;
+    const StructInfo* info = find_struct(type.struct_name());
+    if (!info) {
+      diagnostics_.error(diag::kUndefinedName, call.location(),
+                         "undefined allocated type '" + type.struct_name() + "'");
+      return Type::error();
+    }
+    active_structs.insert(type.struct_name());
+    std::vector<std::pair<std::string, Type>> fields;
+    fields.reserve(info->fields.size());
+    for (const Parameter& field : info->fields)
+      fields.emplace_back(field.name, resolve_generic_type(field.type));
+    active_structs.erase(type.struct_name());
+    return Type::struct_type(type.struct_name(), std::move(fields));
+  };
+
   // Builtin 'print'
   if (call.callee() == kPrintBuiltin) {
     if (call.arguments().size() != 1) {
@@ -1222,8 +1273,98 @@ Type TypeChecker::check_call(CallExpr& call) {
     return Type::void_type();
   }
 
+  // Namespaced GC API from Phase 6.5. Statistics are a value with named
+  // fields so callers can inspect individual counters without runtime casts.
+  if (call.callee() == "gc.enable" || call.callee() == "gc.disable" ||
+      call.callee() == "gc.collect") {
+    if (!call.arguments().empty()) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "' takes no arguments, but " +
+                             std::to_string(call.arguments().size()) + " were given");
+    }
+    for (const ExprPtr& argument : call.arguments())
+      check_expression(const_cast<Expr&>(*argument));
+    return Type::void_type();
+  }
+  if (call.callee() == "gc.set_threshold") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'gc.set_threshold' takes exactly one integer argument");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::void_type();
+    }
+    const Type threshold = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (threshold.is_valid() && !threshold.is_integer()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'gc.set_threshold' requires an integer byte count");
+    }
+    return Type::void_type();
+  }
+  if (call.callee() == "gc.get_statistics") {
+    if (!call.arguments().empty()) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'gc.get_statistics' takes no arguments");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+    }
+    return Type::struct_type("GcStatistics", {
+        {"allocated_bytes", Type::u64_type()},
+        {"collected_bytes", Type::u64_type()},
+        {"collections", Type::u64_type()},
+        {"live_objects", Type::u64_type()}});
+  }
+
   // Builtin 'nrq_memory_allocate'
-  if (call.callee() == "nrq_memory_allocate") {
+  if (call.callee() == "memory.allocate" && call.has_generic_argument()) {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.allocate<T>' takes exactly one byte-count argument");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::pointer_type(resolve_generic_type(call.generic_argument()));
+    }
+    const Type size_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (size_type.is_valid() && !size_type.is_integer()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'memory.allocate<T>' requires an integer byte count");
+    }
+    return Type::pointer_type(resolve_generic_type(call.generic_argument()));
+  }
+
+  if (call.callee() == "array.allocate" && call.has_generic_argument()) {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'array.allocate<T>' takes exactly one element-count argument");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::managed_pointer_type(resolve_generic_type(call.generic_argument()));
+    }
+    const Type count_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (count_type.is_valid() && !count_type.is_integer()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'array.allocate<T>' requires an integer element count");
+    }
+    return Type::managed_pointer_type(resolve_generic_type(call.generic_argument()));
+  }
+
+  if (call.callee() == "memory.deallocate") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.deallocate' takes exactly one pointer argument");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::void_type();
+    }
+    const Type pointer_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (pointer_type.is_valid() && !pointer_type.is_pointer()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'memory.deallocate' requires an explicitly allocated pointer");
+    }
+    return Type::void_type();
+  }
+
+  if (call.callee() == "nrq_memory_allocate" || call.callee() == "memory.allocate") {
     if (call.arguments().size() != 2) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'nrq_memory_allocate' takes exactly two arguments (bytes, alignment), but " +
@@ -1244,7 +1385,7 @@ Type TypeChecker::check_call(CallExpr& call) {
   }
 
   // Builtin 'nrq_memory_deallocate'
-  if (call.callee() == "nrq_memory_deallocate") {
+  if (call.callee() == "nrq_memory_deallocate" || call.callee() == "memory.deallocate") {
     if (call.arguments().size() != 3) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'nrq_memory_deallocate' takes exactly three arguments (ptr, bytes, alignment), but " +
