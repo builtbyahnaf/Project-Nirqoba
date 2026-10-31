@@ -269,9 +269,13 @@ class Printer {
 
 }  // namespace
 
-std::string print_ast(const Program& program) {
+std::string print_program(const Program& program) {
   Printer printer;
   return printer.print(program);
+}
+
+std::string print_ast(const Program& program) {
+  return print_program(program);
 }
 
 }  // namespace nirq

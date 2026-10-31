@@ -1,5 +1,6 @@
 #include "nirqoba/Backend/ObjectEmitter.h"
 #include "nirqoba/Backend/TargetInfo.h"
+#include "nirqoba/Version.h"  // NIRQOBA_DEFAULT_TARGET_TRIPLE
 
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/MC/TargetRegistry.h"
@@ -34,8 +35,9 @@ bool emit_object_file(llvm::Module& llvm_module,
 
   // --- Resolve the target triple.
   const std::string triple = default_target_triple();
+  const llvm::Triple target_triple(triple);
   std::string error_message;
-  const llvm::Target* target = llvm::TargetRegistry::lookupTarget(triple, error_message);
+  const llvm::Target* target = llvm::TargetRegistry::lookupTarget(target_triple, error_message);
   if (target == nullptr) {
     diagnostics.error(diag::kInternalError, SourceLocation{},
                       "LLVM target lookup failed for '" + triple + "': " + error_message);
@@ -50,7 +52,7 @@ bool emit_object_file(llvm::Module& llvm_module,
   llvm::TargetOptions target_options;
   std::unique_ptr<llvm::TargetMachine> target_machine(
       target->createTargetMachine(
-          triple,
+          target_triple,
           /*CPU=*/"generic",
           /*Features=*/"",
           target_options,
@@ -66,7 +68,7 @@ bool emit_object_file(llvm::Module& llvm_module,
 
   // Set the data layout on the module so it agrees with the TargetMachine.
   llvm_module.setDataLayout(target_machine->createDataLayout());
-  llvm_module.setTargetTriple(triple);
+  llvm_module.setTargetTriple(target_triple);
 
   // --- Open the output file.
   std::error_code ec;

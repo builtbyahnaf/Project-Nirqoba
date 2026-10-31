@@ -195,9 +195,18 @@ class CallExpr : public Expr {
   const std::string& callee() const { return callee_; }
   const std::vector<ExprPtr>& arguments() const { return arguments_; }
 
+  // Fully-qualified symbol semantic analysis resolved this call to, for
+  // example `geometry.calculate_area` or `main`. Empty for builtins and for
+  // calls that failed to resolve (a diagnostic has already been emitted).
+  // TIR lowering uses this instead of the spelling written at the call site.
+  void set_resolved_symbol(std::string symbol) { resolved_symbol_ = std::move(symbol); }
+  const std::string& resolved_symbol() const { return resolved_symbol_; }
+  bool has_resolved_symbol() const { return !resolved_symbol_.empty(); }
+
  private:
   std::string callee_;
   std::vector<ExprPtr> arguments_;
+  std::string resolved_symbol_;
 };
 
 enum class UnaryOp { Negate, Plus, LogicalNot, BitwiseNot };

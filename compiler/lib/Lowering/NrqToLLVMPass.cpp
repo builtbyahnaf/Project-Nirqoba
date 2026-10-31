@@ -91,17 +91,16 @@ class NrqToLLVMPass : public mlir::PassWrapper<NrqToLLVMPass, mlir::OperationPas
         mlir::Location loc = op.getLoc();
 
         mlir::LLVM::GlobalOp global = get_or_create_string_global(module, builder, text, string_cache);
+        // The address of a private byte array is already a pointer to its
+        // first element, so no GEP is needed to pass it as `const char*`.
         mlir::Value addr = builder.create<mlir::LLVM::AddressOfOp>(loc, ptrTy, global.getSymName());
-        mlir::Value zero = builder.create<mlir::LLVM::ConstantOp>(loc, i64Ty, builder.getI64IntegerAttr(0));
-        mlir::Value gep = builder.create<mlir::LLVM::GEPOp>(
-            loc, ptrTy, global.getType(), addr, mlir::ValueRange{zero, zero}, /*inbounds=*/true);
         mlir::Value len_val = builder.create<mlir::LLVM::ConstantOp>(
             loc, i64Ty, builder.getI64IntegerAttr(static_cast<int64_t>(text.size())));
 
         builder.create<mlir::LLVM::CallOp>(
             loc, mlir::TypeRange{i32Ty},
             mlir::FlatSymbolRefAttr::get(ctx, fn.getSymName()),
-            mlir::ValueRange{gep, len_val});
+            mlir::ValueRange{addr, len_val});
         op.erase();
       }
     }

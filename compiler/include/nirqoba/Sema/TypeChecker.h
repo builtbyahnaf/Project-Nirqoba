@@ -20,6 +20,11 @@ struct FunctionSignature {
   SourceLocation location;
   std::string module_name;
   Visibility visibility = Visibility::Public;
+  // Link-time symbol. Functions of the root module keep their bare name so
+  // the entry point is emitted as `main`; every other module's functions are
+  // qualified as `module.name` to keep modules link-compatible without a
+  // separate name-mangling table.
+  std::string symbol;
 };
 
 // Lightweight catalog entry for a registered struct type.
@@ -64,8 +69,14 @@ class TypeChecker {
   void require_type(const Expr& expr, Type expected, const char* context);
   bool block_can_fall_through(const BlockStmt& block) const;
 
-  // Struct catalog lookup helpers.
+  // Struct catalog lookup helpers. `name` may be module-qualified; a bare name
+  // first resolves against the module currently being checked, then against the
+  // root module's catalog.
   const StructInfo* find_struct(const std::string& name) const;
+
+  // Looks a function up by the spelling used at the call site, falling back to
+  // the current module's namespace for unqualified names.
+  const FunctionSignature* find_function(const std::string& name) const;
 
   DiagnosticEngine& diagnostics_;
   SymbolTable symbols_;
