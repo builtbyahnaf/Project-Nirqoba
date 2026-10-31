@@ -88,3 +88,33 @@ TEST(SemaTest, RejectsMainParameters) {
   ASSERT_TRUE(diag.has_errors());
   ASSERT_EQ(diag.diagnostics()[0].code, diag::kMainParameters);
 }
+
+TEST(SemaTest, AcceptsGcInitShutdown) {
+  {
+    DiagnosticEngine diag;
+    auto prog = parse_string("int function main() { nrq_gc_init(); nrq_gc_shutdown(); return 0; }", diag);
+    TypeChecker checker(diag);
+    ASSERT_TRUE(checker.check(*prog));
+    ASSERT_FALSE(diag.has_errors());
+  }
+}
+
+TEST(SemaTest, AcceptsGcCollect) {
+  {
+    DiagnosticEngine diag;
+    auto prog = parse_string("int function main() { nrq_gc_collect(); return 0; }", diag);
+    TypeChecker checker(diag);
+    ASSERT_TRUE(checker.check(*prog));
+    ASSERT_FALSE(diag.has_errors());
+  }
+}
+
+TEST(SemaTest, AcceptsMemoryAllocateDeallocate) {
+  {
+    DiagnosticEngine diag;
+    auto prog = parse_string("int function main() { auto p = nrq_memory_allocate(16, 8); nrq_memory_deallocate(p, 16, 8); return 0; }", diag);
+    TypeChecker checker(diag);
+    ASSERT_TRUE(checker.check(*prog));
+    ASSERT_FALSE(diag.has_errors());
+  }
+}

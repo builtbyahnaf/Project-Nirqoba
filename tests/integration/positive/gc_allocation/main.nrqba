@@ -1,0 +1,6 @@
+int function main() {
+    nrq_gc_init();
+    nrq_gc_collect();
+    nrq_gc_shutdown();
+    return 42;
+}
