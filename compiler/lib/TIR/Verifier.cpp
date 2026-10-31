@@ -27,7 +27,8 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
     }
 
     const tir::Op& last = operations.back();
-    if (last.kind != tir::OpKind::Return && last.kind != tir::OpKind::Branch) {
+    if (last.kind != tir::OpKind::Return && last.kind != tir::OpKind::Branch &&
+        last.kind != tir::OpKind::BranchCond && last.kind != tir::OpKind::Unreachable) {
       diagnostics.error(kStructure, last.location,
                         "internal: function '" + function->name() +
                             "' does not end in a return or branch operation");
@@ -69,6 +70,9 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
         case tir::OpKind::GetElementPtr:
         case tir::OpKind::AggregatePack:
         case tir::OpKind::AggregateExtract:
+        case tir::OpKind::Length:
+        case tir::OpKind::DynamicIndex:
+        case tir::OpKind::Unreachable:
           break;
         case tir::OpKind::Load: {
           if (op.lhs.is_valid() && function->value_type(op.lhs.id) != op.result.type) {

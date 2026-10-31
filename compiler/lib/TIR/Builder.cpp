@@ -110,11 +110,38 @@ void TirBuilder::lower_function(const FunctionDecl& function, const std::string&
 
   lower_block(function.body(), *function_ir);
   pop_scope();
+
+  // Every block must end in a terminator. A void function may fall off the end
+  // of its body, so it gets an implicit `return`. A non-void function can still
+  // end on a merge label when every branch already returned (sema proves there
+  // is no real fall-through), and that leftover block is simply unreachable.
+  if (!block_terminated(*function_ir)) {
+    tir::Op terminator;
+    terminator.kind = function.return_type().is_void() ? tir::OpKind::Return
+                                                       : tir::OpKind::Unreachable;
+    terminator.location = function.location();
+    function_ir->add_operation(std::move(terminator));
+  }
+}
+
+bool TirBuilder::block_terminated(const tir::Function& function) {
+  if (function.operations().empty()) return false;
+  switch (function.operations().back().kind) {
+    case tir::OpKind::Return:
+    case tir::OpKind::Branch:
+    case tir::OpKind::BranchCond:
+      return true;
+    default:
+      return false;
+  }
 }
 
 void TirBuilder::lower_block(const BlockStmt& block, tir::Function& function) {
   push_scope();
   for (const StmtPtr& statement : block.statements()) {
+    // Statements after `return`, `break` or `continue` are unreachable; the
+    // backend cannot represent operations behind a terminator, so skip them.
+    if (block_terminated(function)) break;
     lower_statement(*statement, function);
   }
   pop_scope();
@@ -279,10 +306,12 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       then_lbl.label_id = then_label;
       function.add_operation(std::move(then_lbl));
       lower_block(if_stmt.then_branch(), function);
-      tir::Op br_then;
-      br_then.kind = tir::OpKind::Branch;
-      br_then.label_id = merge_label;
-      function.add_operation(std::move(br_then));
+      if (!block_terminated(function)) {
+        tir::Op br_then;
+        br_then.kind = tir::OpKind::Branch;
+        br_then.label_id = merge_label;
+        function.add_operation(std::move(br_then));
+      }
 
       // Else block
       if (if_stmt.has_else()) {
@@ -291,10 +320,12 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
         else_lbl.label_id = else_label;
         function.add_operation(std::move(else_lbl));
         lower_statement(*if_stmt.else_branch(), function);
-        tir::Op br_else;
-        br_else.kind = tir::OpKind::Branch;
-        br_else.label_id = merge_label;
-        function.add_operation(std::move(br_else));
+        if (!block_terminated(function)) {
+          tir::Op br_else;
+          br_else.kind = tir::OpKind::Branch;
+          br_else.label_id = merge_label;
+          function.add_operation(std::move(br_else));
+        }
       }
 
       // Merge block
@@ -337,10 +368,12 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       body_lbl.label_id = body_label;
       function.add_operation(std::move(body_lbl));
       lower_block(while_stmt.body(), function);
-      tir::Op br_loop;
-      br_loop.kind = tir::OpKind::Branch;
-      br_loop.label_id = header_label;
-      function.add_operation(std::move(br_loop));
+      if (!block_terminated(function)) {
+        tir::Op br_loop;
+        br_loop.kind = tir::OpKind::Branch;
+        br_loop.label_id = header_label;
+        function.add_operation(std::move(br_loop));
+      }
 
       // Exit block
       tir::Op exit_lbl;
@@ -397,10 +430,12 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       body_lbl.label_id = body_label;
       function.add_operation(std::move(body_lbl));
       lower_block(for_stmt.body(), function);
-      tir::Op br_step;
-      br_step.kind = tir::OpKind::Branch;
-      br_step.label_id = step_label;
-      function.add_operation(std::move(br_step));
+      if (!block_terminated(function)) {
+        tir::Op br_step;
+        br_step.kind = tir::OpKind::Branch;
+        br_step.label_id = step_label;
+        function.add_operation(std::move(br_step));
+      }
 
       // Step block
       tir::Op step_lbl;
@@ -410,10 +445,12 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       if (for_stmt.has_step()) {
         lower_statement(*for_stmt.step(), function);
       }
-      tir::Op br_next;
-      br_next.kind = tir::OpKind::Branch;
-      br_next.label_id = header_label;
-      function.add_operation(std::move(br_next));
+      if (!block_terminated(function)) {
+        tir::Op br_next;
+        br_next.kind = tir::OpKind::Branch;
+        br_next.label_id = header_label;
+        function.add_operation(std::move(br_next));
+      }
 
       // Exit block
       tir::Op exit_lbl;
@@ -688,6 +725,19 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         arg_vals.push_back(lower_expression(*argument, function));
       }
 
+      // `length(value)` is the call spelling of the `.length` property.
+      if (call.callee() == "length" && arg_vals.size() == 1) {
+        tir::Value result = function.allocate_value(
+            call.type().is_valid() ? call.type() : Type::int_type());
+        tir::Op length;
+        length.kind = tir::OpKind::Length;
+        length.location = call.location();
+        length.operand = arg_vals.front();
+        length.result = result;
+        function.add_operation(std::move(length));
+        return result;
+      }
+
       tir::Value result;
       if (call.type().is_valid() && !call.type().is_void()) {
         result = function.allocate_value(call.type());
@@ -797,10 +847,57 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
     }
     case Expr::Kind::Index: {
       const auto& idx_expr = static_cast<const IndexExpr&>(expr);
-      const tir::Value base_val = lower_expression(idx_expr.base(), function);
-      const tir::Value index_val = lower_expression(idx_expr.index(), function);
-
+      const Expr& base_expr = idx_expr.base();
+      const Type base_type = base_expr.type();
       const Type result_type = expr.type().is_valid() ? expr.type() : Type::error();
+
+      // A dynamic array owns its storage, so its elements are fetched through
+      // the runtime instead of a stack GEP.
+      if (base_type.is_dynamic_array()) {
+        const tir::Value array = lower_expression(base_expr, function);
+        const tir::Value index_val = lower_expression(idx_expr.index(), function);
+
+        tir::Value element = function.allocate_value(result_type);
+        tir::Op index;
+        index.kind = tir::OpKind::DynamicIndex;
+        index.location = idx_expr.location();
+        index.lhs = array;
+        index.operand = index_val;
+        index.result = element;
+        function.add_operation(std::move(index));
+        return element;
+      }
+
+      // A fixed array lives in storage, so it is indexed through its address.
+      // GEP on the loaded array value itself would be invalid IR.
+      tir::Value base_val;
+      if (base_type.is_array()) {
+        base_val = resolve_lvalue_ptr(base_expr, function);
+        if (!base_val.is_valid()) {
+          // Not an lvalue (for example an array literal): give it a slot first.
+          const tir::Value array_value = lower_expression(base_expr, function);
+          base_val = function.allocate_value(array_value.type);
+
+          tir::Op alloca;
+          alloca.kind = tir::OpKind::Alloca;
+          alloca.location = base_expr.location();
+          alloca.result = base_val;
+          alloca.slot_name = "$index_base";
+          function.add_operation(std::move(alloca));
+
+          tir::Op store;
+          store.kind = tir::OpKind::Store;
+          store.location = base_expr.location();
+          store.lhs = base_val;
+          store.operand = array_value;
+          store.result = base_val;
+          function.add_operation(std::move(store));
+        }
+      } else {
+        base_val = lower_expression(base_expr, function);
+      }
+
+      const tir::Value index_val = lower_expression(idx_expr.index(), function);
 
       // GEP to the element pointer.
       tir::Value elem_ptr = function.allocate_value(result_type);
@@ -832,6 +929,20 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       const tir::Value base_val = lower_expression(mem.base(), function);
       const Type result_type = expr.type().is_valid() ? expr.type() : Type::error();
       const int field_idx = mem.is_tuple_access() ? mem.tuple_index() : -1;
+
+      // `value.length` on a string or a dynamic array is a length query, not a
+      // field of an aggregate.
+      if (mem.member() == "length" &&
+          (base_val.type.is_string() || base_val.type.is_dynamic_array())) {
+        tir::Value result = function.allocate_value(result_type);
+        tir::Op length;
+        length.kind = tir::OpKind::Length;
+        length.location = mem.location();
+        length.operand = base_val;
+        length.result = result;
+        function.add_operation(std::move(length));
+        return result;
+      }
 
       // For struct member: we need to look up the field index.
       int computed_field_idx = field_idx;

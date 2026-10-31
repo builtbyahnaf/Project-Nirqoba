@@ -37,6 +37,11 @@ class TirBuilder {
   tir::Value lower_expression(const Expr& expr, tir::Function& function);
   tir::Value resolve_lvalue_ptr(const Expr& target, tir::Function& function);
 
+  // True when the block currently being built already ends in a terminator
+  // (return, branch or conditional branch). Used to avoid emitting unreachable
+  // operations after `return`, `break` or `continue`.
+  static bool block_terminated(const tir::Function& function);
+
   void push_scope() { scopes_.emplace_back(); }
   void pop_scope() { scopes_.pop_back(); }
   tir::Value lookup_slot(const std::string& name) const;

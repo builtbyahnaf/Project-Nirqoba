@@ -35,6 +35,9 @@ static mlir::Type tir_type_to_mlir(const Type& type, mlir::MLIRContext* ctx,
     }
   }
   if (type.is_string()) return mlir::LLVM::LLVMPointerType::get(ctx);
+  // A dynamic array is a pointer to a runtime-owned descriptor; the runtime
+  // owns the element storage, so the compiler only ever handles the handle.
+  if (type.is_dynamic_array()) return mlir::LLVM::LLVMPointerType::get(ctx);
   if (type.is_void()) return {};
   if (type.is_array()) {
     mlir::Type elem = tir_type_to_mlir(type.element_type(), ctx, builder);
@@ -642,6 +645,11 @@ class FunctionTranslator {
         return true;
       }
 
+      case tir::OpKind::Unreachable: {
+        builder_.create<mlir::LLVM::UnreachableOp>(loc);
+        return true;
+      }
+
       case tir::OpKind::ArrayAlloca: {
         // Alloca for a fixed-size array: llvm.alloca count x elem_type.
         mlir::Type arr_mlir = tir_type_to_mlir(op.result.type, ctx_, builder_);
@@ -728,6 +736,69 @@ class FunctionTranslator {
         set(op.result, extracted);
         return true;
       }
+
+      case tir::OpKind::Length: {
+        mlir::Value value = get(op.operand);
+        if (!value) return true;
+
+        std::string runtime_sym;
+        if (op.operand.type.is_string()) {
+          runtime_sym = "nrq_strlen";
+        } else if (op.operand.type.is_dynamic_array()) {
+          runtime_sym = "nrq_args_length";
+        } else {
+          diag_.error("NRQ4005", op.location,
+                      "internal: no length operation for type '" +
+                          op.operand.type.to_string() + "'");
+          return false;
+        }
+
+        auto fn = ensure_runtime_fn(module_, builder_, runtime_sym,
+                                    builder_.getI64Type(), {llvm_ptr_type(ctx_)});
+        mlir::Value length = builder_.create<mlir::LLVM::CallOp>(
+            loc, fn, mlir::ValueRange{value}).getResult();
+        set(op.result, adapt_runtime_result(length, op.result.type, loc));
+        return true;
+      }
+
+      case tir::OpKind::DynamicIndex: {
+        mlir::Value array = get(op.lhs);
+        mlir::Value index = get(op.operand);
+        if (!array || !index) return true;
+
+        if (!op.lhs.type.is_dynamic_array()) {
+          diag_.error("NRQ4005", op.location,
+                      "internal: dynamic indexing of non-dynamic array type '" +
+                          op.lhs.type.to_string() + "'");
+          return false;
+        }
+
+        // The runtime ABI takes a 64-bit index.
+        mlir::Type i64 = builder_.getI64Type();
+        if (index.getType() != i64) {
+          if (!mlir::isa<mlir::IntegerType>(index.getType())) {
+            diag_.error("NRQ4005", op.location,
+                        "internal: dynamic array index is not an integer");
+            return false;
+          }
+          const unsigned bits = index.getType().getIntOrFloatBitWidth();
+          if (bits < 64) {
+            index = op.operand.type.is_signed_integer()
+                        ? builder_.create<mlir::LLVM::SExtOp>(loc, i64, index).getResult()
+                        : builder_.create<mlir::LLVM::ZExtOp>(loc, i64, index).getResult();
+          } else {
+            index = builder_.create<mlir::LLVM::TruncOp>(loc, i64, index).getResult();
+          }
+        }
+
+        auto fn = ensure_runtime_fn(module_, builder_, "nrq_args_get",
+                                    llvm_ptr_type(ctx_),
+                                    {llvm_ptr_type(ctx_), i64});
+        mlir::Value element = builder_.create<mlir::LLVM::CallOp>(
+            loc, fn, mlir::ValueRange{array, index}).getResult();
+        set(op.result, element);
+        return true;
+      }
     }
     return true;
   }
@@ -744,6 +815,68 @@ class FunctionTranslator {
   std::unordered_map<std::string, std::string> string_literals_;
   int string_literal_counter_ = 0;
 };
+
+// The Windows CRT calls `main(int argc, char** argv)`. A Nirqoba entry point
+// that declares `string[] args` needs a different signature, so it is emitted as
+// `nrq_entry_args` and this wrapper marshals the native arguments into the
+// runtime-managed array before calling it.
+static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
+                               const tir::Function& user_main,
+                               llvm::StringRef user_symbol,
+                               DiagnosticEngine& diagnostics) {
+  mlir::MLIRContext* ctx = module.getContext();
+  mlir::Location loc = mlir::UnknownLoc::get(ctx);
+  mlir::Type i32 = builder.getI32Type();
+  mlir::Type ptr = llvm_ptr_type(ctx);
+
+  mlir::Type user_ret;
+  if (!user_main.return_type().is_void()) {
+    user_ret = tir_type_to_mlir(user_main.return_type(), ctx, builder);
+    if (!user_ret) {
+      diagnostics.error("NRQ4005", SourceLocation{},
+                        "internal: unsupported 'main' return type in entry wrapper");
+      return false;
+    }
+  }
+
+  builder.setInsertionPointToEnd(module.getBody());
+  auto wrapper = builder.create<mlir::func::FuncOp>(
+      loc, "main", mlir::FunctionType::get(ctx, {i32, ptr}, {i32}));
+  mlir::Block* entry = wrapper.addEntryBlock();
+  builder.setInsertionPointToStart(entry);
+
+  auto args_build = ensure_runtime_fn(module, builder, "nrq_args_build", ptr, {i32, ptr});
+  mlir::Value array = builder.create<mlir::LLVM::CallOp>(
+      loc, args_build,
+      mlir::ValueRange{entry->getArgument(0), entry->getArgument(1)}).getResult();
+
+  mlir::Value exit_code;
+  if (user_ret) {
+    mlir::Value result = builder.create<mlir::func::CallOp>(
+        loc, user_symbol, mlir::TypeRange{user_ret}, mlir::ValueRange{array}).getResult(0);
+
+    if (result.getType() == i32) {
+      exit_code = result;
+    } else if (mlir::isa<mlir::IntegerType>(result.getType())) {
+      const unsigned bits = result.getType().getIntOrFloatBitWidth();
+      exit_code = bits < 32
+          ? builder.create<mlir::LLVM::SExtOp>(loc, i32, result).getResult()
+          : builder.create<mlir::LLVM::TruncOp>(loc, i32, result).getResult();
+    } else {
+      diagnostics.error("NRQ4005", SourceLocation{},
+                        "internal: 'main' must return an integer in the entry wrapper");
+      return false;
+    }
+  } else {
+    builder.create<mlir::func::CallOp>(
+        loc, user_symbol, mlir::TypeRange{}, mlir::ValueRange{array});
+    exit_code = builder.create<mlir::LLVM::ConstantOp>(
+        loc, i32, builder.getI32IntegerAttr(0)).getResult();
+  }
+
+  builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange{exit_code});
+  return true;
+}
 
 }  // namespace
 
@@ -789,13 +922,24 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
       fn_type = mlir::FunctionType::get(&context, param_types, {});
     }
 
+    // An entry point that takes `string[] args` cannot be the C `main`, so it
+    // is emitted under an internal name and reached through the wrapper below.
+    const bool is_entry_with_args =
+        tir_fn->name() == "main" && !tir_fn->parameters().empty();
+    const std::string symbol = is_entry_with_args ? "nrq_entry_args" : tir_fn->name();
+
     auto func_op = builder.create<mlir::func::FuncOp>(
-        builder.getUnknownLoc(), tir_fn->name(), fn_type);
+        builder.getUnknownLoc(), symbol, fn_type);
 
     FunctionTranslator translator(*module, *tir_fn, func_op, builder, &context, diagnostics);
     if (!translator.translate()) return nullptr;
 
     builder.setInsertionPointAfter(func_op);
+
+    if (is_entry_with_args &&
+        !emit_entry_wrapper(*module, builder, *tir_fn, symbol, diagnostics)) {
+      return nullptr;
+    }
   }
 
   return module;

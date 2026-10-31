@@ -43,6 +43,10 @@ enum class OpKind {
   GetElementPtr,     // result = ptr to element: base_ptr + index (array) or field_index (struct/tuple)
   AggregatePack,     // pack multiple operands into an aggregate (tuple/struct) slot
   AggregateExtract,  // result = extract field_index from aggregate operand
+  // Phase 5 sequence operations:
+  Length,            // result = element count of operand (string or dynamic array)
+  DynamicIndex,      // result = element lhs[operand] of a dynamic array
+  Unreachable,       // marks a block control never reaches (emitted at a dead merge point)
 };
 
 enum class UnaryOp {
