@@ -14,32 +14,19 @@ cmake_minimum_required(VERSION 3.28)
 # include. The output lives in the build tree; the include path below exposes
 # it to everything that includes NrqDialect.h or NrqOps.h.
 
-set(TABLEGEN_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/include/nirqoba/Lowering")
+# mlir_tablegen's first argument is the *output* file name, resolved against
+# this directory's binary dir; the input .td comes from LLVM_TARGET_DEFINITIONS
+# and must stay relative to this source dir. `add_public_tablegen_target` then
+# publishes TABLEGEN_OUTPUT as a target the compiler library depends on.
+set(LLVM_TARGET_DEFINITIONS include/nirqoba/Lowering/NrqOps.td)
+set(NRQ_TABLEGEN_SUBDIR include/nirqoba/Lowering)
 
-mlir_tablegen(
-  "${CMAKE_CURRENT_SOURCE_DIR}/include/nirqoba/Lowering/NrqOps.td"
-  -gen-dialect-decls   -o "${TABLEGEN_OUTPUT_DIR}/NrqDialect.h.inc"
-)
-mlir_tablegen(
-  "${CMAKE_CURRENT_SOURCE_DIR}/include/nirqoba/Lowering/NrqOps.td"
-  -gen-dialect-defs    -o "${TABLEGEN_OUTPUT_DIR}/NrqDialect.cpp.inc"
-)
-mlir_tablegen(
-  "${CMAKE_CURRENT_SOURCE_DIR}/include/nirqoba/Lowering/NrqOps.td"
-  -gen-op-decls        -o "${TABLEGEN_OUTPUT_DIR}/NrqOps.h.inc"
-)
-mlir_tablegen(
-  "${CMAKE_CURRENT_SOURCE_DIR}/include/nirqoba/Lowering/NrqOps.td"
-  -gen-op-defs         -o "${TABLEGEN_OUTPUT_DIR}/NrqOps.cpp.inc"
-)
+mlir_tablegen(${NRQ_TABLEGEN_SUBDIR}/NrqDialect.h.inc   -gen-dialect-decls)
+mlir_tablegen(${NRQ_TABLEGEN_SUBDIR}/NrqDialect.cpp.inc -gen-dialect-defs)
+mlir_tablegen(${NRQ_TABLEGEN_SUBDIR}/NrqOps.h.inc       -gen-op-decls)
+mlir_tablegen(${NRQ_TABLEGEN_SUBDIR}/NrqOps.cpp.inc     -gen-op-defs)
 
-# Create a custom target so the compiler library can depend on generation.
-add_custom_target(NrqDialectTableGen DEPENDS
-  "${TABLEGEN_OUTPUT_DIR}/NrqDialect.h.inc"
-  "${TABLEGEN_OUTPUT_DIR}/NrqDialect.cpp.inc"
-  "${TABLEGEN_OUTPUT_DIR}/NrqOps.h.inc"
-  "${TABLEGEN_OUTPUT_DIR}/NrqOps.cpp.inc"
-)
+add_public_tablegen_target(NrqDialectTableGen)
 
 # ---------------------------------------------------------------------------
 # Compiler library

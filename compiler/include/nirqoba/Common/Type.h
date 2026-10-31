@@ -49,13 +49,10 @@ enum class TypeKind {
 
 class Type;
 
-struct TypeData {
-  Type element_type;
-  std::size_t length = 0;
-  std::vector<Type> tuple_elements;
-  std::string struct_name;
-  std::vector<std::pair<std::string, Type>> struct_fields;
-};
+// Payload for aggregate types. Declared here and defined *after* `Type`, because
+// it stores a `Type` by value and `Type` is only complete once its own body ends.
+// `Type` holds it behind a shared_ptr, so an incomplete type is sufficient there.
+struct TypeData;
 
 class Type {
  public:
@@ -160,6 +157,14 @@ class Type {
  private:
   TypeKind kind_ = TypeKind::Error;
   std::shared_ptr<TypeData> data_;
+};
+
+struct TypeData {
+  Type element_type;
+  std::size_t length = 0;
+  std::vector<Type> tuple_elements;
+  std::string struct_name;
+  std::vector<std::pair<std::string, Type>> struct_fields;
 };
 
 Type parse_type_name(std::string_view spelling);

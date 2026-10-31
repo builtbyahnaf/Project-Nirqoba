@@ -24,7 +24,7 @@
 | String length & concatenation | `str.length()` or builtin `length(str)`; string concatenation via `+` operator | Standard ergonomic string manipulation built on native UTF-8 runtime buffers. |
 | Console input | `input()` and `input(prompt)` returning a `string` | Standard console input using Win32 `ReadFile` without CRT stdio. |
 | Mathematical standard functions | `math.sqrt`, `math.sin`, `math.cos`, `math.abs`, `math.floor`, `math.ceil` | Standard native hardware math operations exposed through compiler builtins/runtime. |
-
+| Array Initialization | int[5] ages = {21, 23, 11, 34, 45};
 ---
 
 ## 2. Prerequisites and Environment Baseline
@@ -127,7 +127,7 @@ In `compiler/include/nirqoba/Common/Type.h`:
    ```
 3. **Array & Tuple Expressions:**
    ```text
-   primary       := '[' (expr (',' expr)*)? ']'      // Array literal
+   primary       := '{' (expr (',' expr)*)? '}'      // Array literal
                   | '(' expr ',' (expr (',' expr)*)? ')' // Tuple literal
                   | IDENT '{' struct_inits? '}'        // Struct instantiation
                   | ...

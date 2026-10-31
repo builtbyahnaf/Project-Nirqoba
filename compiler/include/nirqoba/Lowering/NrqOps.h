@@ -1,9 +1,12 @@
 // Generated operation classes for the `nrq` dialect.
 #pragma once
 
+#include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Dialect.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/IR/Region.h"
 
 #include "nirqoba/Lowering/NrqDialect.h"
 
