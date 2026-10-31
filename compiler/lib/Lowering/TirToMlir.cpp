@@ -162,7 +162,7 @@ class FunctionTranslator {
         mlir::Type ty = tir_type_to_mlir(op.result.type, ctx_, builder_);
         if (!ty) ty = builder_.getI64Type();
         mlir::Value v = builder_.create<mlir::LLVM::ConstantOp>(
-            loc, ty, builder_.getIntegerAttr(ty, op.integer_value));
+            loc, ty, builder_.getIntegerAttr(ty, op.integer_value)).getResult();
         set(op.result, v);
         return true;
       }
@@ -171,14 +171,14 @@ class FunctionTranslator {
         mlir::Type ty = tir_type_to_mlir(op.result.type, ctx_, builder_);
         if (!ty) ty = builder_.getF64Type();
         mlir::Value v = builder_.create<mlir::LLVM::ConstantOp>(
-            loc, ty, builder_.getFloatAttr(ty, op.float_value));
+            loc, ty, builder_.getFloatAttr(ty, op.float_value)).getResult();
         set(op.result, v);
         return true;
       }
 
       case tir::OpKind::ConstantString: {
         mlir::Value placeholder = builder_.create<mlir::LLVM::ConstantOp>(
-            loc, builder_.getI64Type(), builder_.getI64IntegerAttr(0));
+            loc, builder_.getI64Type(), builder_.getI64IntegerAttr(0)).getResult();
         set(op.result, placeholder);
         return true;
       }
@@ -190,9 +190,9 @@ class FunctionTranslator {
           return false;
         }
         mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
-            loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1));
+            loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
         mlir::Value slot = builder_.create<mlir::LLVM::AllocaOp>(
-            loc, llvm_ptr_type(ctx_), elem_type, one);
+            loc, llvm_ptr_type(ctx_), elem_type, one).getResult();
         set(op.result, slot);
         return true;
       }
@@ -213,7 +213,7 @@ class FunctionTranslator {
           diag_.error("NRQ4005", op.location, "internal: load of unsupported type");
           return false;
         }
-        mlir::Value loaded = builder_.create<mlir::LLVM::LoadOp>(loc, elem_type, ptr);
+        mlir::Value loaded = builder_.create<mlir::LLVM::LoadOp>(loc, elem_type, ptr).getResult();
         set(op.result, loaded);
         return true;
       }
@@ -227,11 +227,11 @@ class FunctionTranslator {
         switch (op.unary_op) {
           case tir::UnaryOp::Negate:
             if (ty.is_float()) {
-              result = builder_.create<mlir::LLVM::FNegOp>(loc, val);
+              result = builder_.create<mlir::LLVM::FNegOp>(loc, val).getResult();
             } else {
               mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
-                  loc, val.getType(), builder_.getIntegerAttr(val.getType(), 0));
-              result = builder_.create<mlir::LLVM::SubOp>(loc, zero, val);
+                  loc, val.getType(), builder_.getIntegerAttr(val.getType(), 0)).getResult();
+              result = builder_.create<mlir::LLVM::SubOp>(loc, zero, val).getResult();
             }
             break;
           case tir::UnaryOp::Plus:
@@ -239,14 +239,14 @@ class FunctionTranslator {
             break;
           case tir::UnaryOp::LogicalNot: {
             mlir::Value true_val = builder_.create<mlir::LLVM::ConstantOp>(
-                loc, builder_.getI1Type(), builder_.getBoolAttr(true));
-            result = builder_.create<mlir::LLVM::XOrOp>(loc, val, true_val);
+                loc, builder_.getI1Type(), builder_.getBoolAttr(true)).getResult();
+            result = builder_.create<mlir::LLVM::XOrOp>(loc, val, true_val).getResult();
             break;
           }
           case tir::UnaryOp::BitwiseNot: {
             mlir::Value all_ones = builder_.create<mlir::LLVM::ConstantOp>(
-                loc, val.getType(), builder_.getIntegerAttr(val.getType(), -1));
-            result = builder_.create<mlir::LLVM::XOrOp>(loc, val, all_ones);
+                loc, val.getType(), builder_.getIntegerAttr(val.getType(), -1)).getResult();
+            result = builder_.create<mlir::LLVM::XOrOp>(loc, val, all_ones).getResult();
             break;
           }
         }
@@ -267,17 +267,17 @@ class FunctionTranslator {
                                             builder_.getF64Type(),
                                             {builder_.getF64Type(), builder_.getF64Type()});
             mlir::Value l_f64 = lhs_type.is_f32()
-                ? builder_.create<mlir::LLVM::FPExtOp>(loc, builder_.getF64Type(), lhs)
+                ? builder_.create<mlir::LLVM::FPExtOp>(loc, builder_.getF64Type(), lhs).getResult()
                 : lhs;
             mlir::Value r_f64 = op.rhs.type.is_f32()
-                ? builder_.create<mlir::LLVM::FPExtOp>(loc, builder_.getF64Type(), rhs)
+                ? builder_.create<mlir::LLVM::FPExtOp>(loc, builder_.getF64Type(), rhs).getResult()
                 : rhs;
             result = builder_.create<mlir::LLVM::CallOp>(
                 loc, mlir::TypeRange{builder_.getF64Type()},
                 mlir::FlatSymbolRefAttr::get(ctx_, pow_fn.getSymName()),
                 mlir::ValueRange{l_f64, r_f64}).getResult();
             if (lhs_type.is_f32()) {
-              result = builder_.create<mlir::LLVM::FPTruncOp>(loc, builder_.getF32Type(), result);
+              result = builder_.create<mlir::LLVM::FPTruncOp>(loc, builder_.getF32Type(), result).getResult();
             }
           } else {
             auto pow_fn = ensure_runtime_fn(module_, builder_, "nrq_pow_i64",
@@ -286,14 +286,14 @@ class FunctionTranslator {
             mlir::Value l_i64 = lhs;
             if (lhs_type.bit_width() < 64) {
               l_i64 = lhs_type.is_signed_integer()
-                  ? builder_.create<mlir::LLVM::SExtOp>(loc, builder_.getI64Type(), lhs)
-                  : builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), lhs);
+                  ? builder_.create<mlir::LLVM::SExtOp>(loc, builder_.getI64Type(), lhs).getResult()
+                  : builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), lhs).getResult();
             }
             mlir::Value r_i64 = rhs;
             if (op.rhs.type.bit_width() < 64) {
               r_i64 = op.rhs.type.is_signed_integer()
-                  ? builder_.create<mlir::LLVM::SExtOp>(loc, builder_.getI64Type(), rhs)
-                  : builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), rhs);
+                  ? builder_.create<mlir::LLVM::SExtOp>(loc, builder_.getI64Type(), rhs).getResult()
+                  : builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), rhs).getResult();
             }
             result = builder_.create<mlir::LLVM::CallOp>(
                 loc, mlir::TypeRange{builder_.getI64Type()},
@@ -301,7 +301,7 @@ class FunctionTranslator {
                 mlir::ValueRange{l_i64, r_i64}).getResult();
             if (lhs_type.bit_width() < 64) {
               mlir::Type orig_ty = tir_type_to_mlir(lhs_type, ctx_, builder_);
-              result = builder_.create<mlir::LLVM::TruncOp>(loc, orig_ty, result);
+              result = builder_.create<mlir::LLVM::TruncOp>(loc, orig_ty, result).getResult();
             }
           }
           set(op.result, result);
@@ -310,66 +310,66 @@ class FunctionTranslator {
 
         if (lhs_type.is_float()) {
           switch (op.binary_op) {
-            case tir::BinaryOp::Add: result = builder_.create<mlir::LLVM::FAddOp>(loc, lhs, rhs); break;
-            case tir::BinaryOp::Subtract: result = builder_.create<mlir::LLVM::FSubOp>(loc, lhs, rhs); break;
-            case tir::BinaryOp::Multiply: result = builder_.create<mlir::LLVM::FMulOp>(loc, lhs, rhs); break;
-            case tir::BinaryOp::Divide: result = builder_.create<mlir::LLVM::FDivOp>(loc, lhs, rhs); break;
-            case tir::BinaryOp::Remainder: result = builder_.create<mlir::LLVM::FRemOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::Add: result = builder_.create<mlir::LLVM::FAddOp>(loc, lhs, rhs).getResult(); break;
+            case tir::BinaryOp::Subtract: result = builder_.create<mlir::LLVM::FSubOp>(loc, lhs, rhs).getResult(); break;
+            case tir::BinaryOp::Multiply: result = builder_.create<mlir::LLVM::FMulOp>(loc, lhs, rhs).getResult(); break;
+            case tir::BinaryOp::Divide: result = builder_.create<mlir::LLVM::FDivOp>(loc, lhs, rhs).getResult(); break;
+            case tir::BinaryOp::Remainder: result = builder_.create<mlir::LLVM::FRemOp>(loc, lhs, rhs).getResult(); break;
             case tir::BinaryOp::Equal:
-              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::oeq, lhs, rhs); break;
+              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::oeq, lhs, rhs).getResult(); break;
             case tir::BinaryOp::NotEqual:
-              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::one, lhs, rhs); break;
+              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::one, lhs, rhs).getResult(); break;
             case tir::BinaryOp::Less:
-              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::olt, lhs, rhs); break;
+              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::olt, lhs, rhs).getResult(); break;
             case tir::BinaryOp::LessEqual:
-              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::ole, lhs, rhs); break;
+              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::ole, lhs, rhs).getResult(); break;
             case tir::BinaryOp::Greater:
-              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::ogt, lhs, rhs); break;
+              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::ogt, lhs, rhs).getResult(); break;
             case tir::BinaryOp::GreaterEqual:
-              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::oge, lhs, rhs); break;
+              result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::oge, lhs, rhs).getResult(); break;
             default: break;
           }
         } else {
           const bool is_signed = lhs_type.is_signed_integer();
           switch (op.binary_op) {
-            case tir::BinaryOp::Add: result = builder_.create<mlir::LLVM::AddOp>(loc, lhs, rhs); break;
-            case tir::BinaryOp::Subtract: result = builder_.create<mlir::LLVM::SubOp>(loc, lhs, rhs); break;
-            case tir::BinaryOp::Multiply: result = builder_.create<mlir::LLVM::MulOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::Add: result = builder_.create<mlir::LLVM::AddOp>(loc, lhs, rhs).getResult(); break;
+            case tir::BinaryOp::Subtract: result = builder_.create<mlir::LLVM::SubOp>(loc, lhs, rhs).getResult(); break;
+            case tir::BinaryOp::Multiply: result = builder_.create<mlir::LLVM::MulOp>(loc, lhs, rhs).getResult(); break;
             case tir::BinaryOp::Divide:
-              result = is_signed ? builder_.create<mlir::LLVM::SDivOp>(loc, lhs, rhs)
-                                 : builder_.create<mlir::LLVM::UDivOp>(loc, lhs, rhs);
+              result = is_signed ? builder_.create<mlir::LLVM::SDivOp>(loc, lhs, rhs).getResult()
+                                 : builder_.create<mlir::LLVM::UDivOp>(loc, lhs, rhs).getResult();
               break;
             case tir::BinaryOp::Remainder:
-              result = is_signed ? builder_.create<mlir::LLVM::SRemOp>(loc, lhs, rhs)
-                                 : builder_.create<mlir::LLVM::URemOp>(loc, lhs, rhs);
+              result = is_signed ? builder_.create<mlir::LLVM::SRemOp>(loc, lhs, rhs).getResult()
+                                 : builder_.create<mlir::LLVM::URemOp>(loc, lhs, rhs).getResult();
               break;
-            case tir::BinaryOp::BitwiseAnd: result = builder_.create<mlir::LLVM::AndOp>(loc, lhs, rhs); break;
-            case tir::BinaryOp::BitwiseOr: result = builder_.create<mlir::LLVM::OrOp>(loc, lhs, rhs); break;
-            case tir::BinaryOp::BitwiseXor: result = builder_.create<mlir::LLVM::XOrOp>(loc, lhs, rhs); break;
-            case tir::BinaryOp::ShiftLeft: result = builder_.create<mlir::LLVM::ShlOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::BitwiseAnd: result = builder_.create<mlir::LLVM::AndOp>(loc, lhs, rhs).getResult(); break;
+            case tir::BinaryOp::BitwiseOr: result = builder_.create<mlir::LLVM::OrOp>(loc, lhs, rhs).getResult(); break;
+            case tir::BinaryOp::BitwiseXor: result = builder_.create<mlir::LLVM::XOrOp>(loc, lhs, rhs).getResult(); break;
+            case tir::BinaryOp::ShiftLeft: result = builder_.create<mlir::LLVM::ShlOp>(loc, lhs, rhs).getResult(); break;
             case tir::BinaryOp::ShiftRight:
-              result = is_signed ? builder_.create<mlir::LLVM::AShrOp>(loc, lhs, rhs)
-                                 : builder_.create<mlir::LLVM::LShrOp>(loc, lhs, rhs);
+              result = is_signed ? builder_.create<mlir::LLVM::AShrOp>(loc, lhs, rhs).getResult()
+                                 : builder_.create<mlir::LLVM::LShrOp>(loc, lhs, rhs).getResult();
               break;
             case tir::BinaryOp::Equal:
-              result = builder_.create<mlir::LLVM::ICmpOp>(loc, mlir::LLVM::ICmpPredicate::eq, lhs, rhs); break;
+              result = builder_.create<mlir::LLVM::ICmpOp>(loc, mlir::LLVM::ICmpPredicate::eq, lhs, rhs).getResult(); break;
             case tir::BinaryOp::NotEqual:
-              result = builder_.create<mlir::LLVM::ICmpOp>(loc, mlir::LLVM::ICmpPredicate::ne, lhs, rhs); break;
+              result = builder_.create<mlir::LLVM::ICmpOp>(loc, mlir::LLVM::ICmpPredicate::ne, lhs, rhs).getResult(); break;
             case tir::BinaryOp::Less:
               result = builder_.create<mlir::LLVM::ICmpOp>(
-                  loc, is_signed ? mlir::LLVM::ICmpPredicate::slt : mlir::LLVM::ICmpPredicate::ult, lhs, rhs);
+                  loc, is_signed ? mlir::LLVM::ICmpPredicate::slt : mlir::LLVM::ICmpPredicate::ult, lhs, rhs).getResult();
               break;
             case tir::BinaryOp::LessEqual:
               result = builder_.create<mlir::LLVM::ICmpOp>(
-                  loc, is_signed ? mlir::LLVM::ICmpPredicate::sle : mlir::LLVM::ICmpPredicate::ule, lhs, rhs);
+                  loc, is_signed ? mlir::LLVM::ICmpPredicate::sle : mlir::LLVM::ICmpPredicate::ule, lhs, rhs).getResult();
               break;
             case tir::BinaryOp::Greater:
               result = builder_.create<mlir::LLVM::ICmpOp>(
-                  loc, is_signed ? mlir::LLVM::ICmpPredicate::sgt : mlir::LLVM::ICmpPredicate::ugt, lhs, rhs);
+                  loc, is_signed ? mlir::LLVM::ICmpPredicate::sgt : mlir::LLVM::ICmpPredicate::ugt, lhs, rhs).getResult();
               break;
             case tir::BinaryOp::GreaterEqual:
               result = builder_.create<mlir::LLVM::ICmpOp>(
-                  loc, is_signed ? mlir::LLVM::ICmpPredicate::sge : mlir::LLVM::ICmpPredicate::uge, lhs, rhs);
+                  loc, is_signed ? mlir::LLVM::ICmpPredicate::sge : mlir::LLVM::ICmpPredicate::uge, lhs, rhs).getResult();
               break;
             default: break;
           }
@@ -386,53 +386,53 @@ class FunctionTranslator {
 
         switch (op.cast_kind) {
           case tir::CastKind::Trunc:
-            result = builder_.create<mlir::LLVM::TruncOp>(loc, target_ty, val);
+            result = builder_.create<mlir::LLVM::TruncOp>(loc, target_ty, val).getResult();
             break;
           case tir::CastKind::SExt:
-            result = builder_.create<mlir::LLVM::SExtOp>(loc, target_ty, val);
+            result = builder_.create<mlir::LLVM::SExtOp>(loc, target_ty, val).getResult();
             break;
           case tir::CastKind::ZExt:
           case tir::CastKind::BoolToInt:
           case tir::CastKind::CharToInt:
             if (target_ty.getIntOrFloatBitWidth() < val.getType().getIntOrFloatBitWidth()) {
-              result = builder_.create<mlir::LLVM::TruncOp>(loc, target_ty, val);
+              result = builder_.create<mlir::LLVM::TruncOp>(loc, target_ty, val).getResult();
             } else if (target_ty.getIntOrFloatBitWidth() > val.getType().getIntOrFloatBitWidth()) {
-              result = builder_.create<mlir::LLVM::ZExtOp>(loc, target_ty, val);
+              result = builder_.create<mlir::LLVM::ZExtOp>(loc, target_ty, val).getResult();
             } else {
               result = val;
             }
             break;
           case tir::CastKind::IntToChar:
             if (val.getType().getIntOrFloatBitWidth() > 32) {
-              result = builder_.create<mlir::LLVM::TruncOp>(loc, target_ty, val);
+              result = builder_.create<mlir::LLVM::TruncOp>(loc, target_ty, val).getResult();
             } else if (val.getType().getIntOrFloatBitWidth() < 32) {
-              result = builder_.create<mlir::LLVM::ZExtOp>(loc, target_ty, val);
+              result = builder_.create<mlir::LLVM::ZExtOp>(loc, target_ty, val).getResult();
             } else {
               result = val;
             }
             break;
           case tir::CastKind::SIToFP:
-            result = builder_.create<mlir::LLVM::SIToFPOp>(loc, target_ty, val);
+            result = builder_.create<mlir::LLVM::SIToFPOp>(loc, target_ty, val).getResult();
             break;
           case tir::CastKind::UIToFP:
-            result = builder_.create<mlir::LLVM::UIToFPOp>(loc, target_ty, val);
+            result = builder_.create<mlir::LLVM::UIToFPOp>(loc, target_ty, val).getResult();
             break;
           case tir::CastKind::FPToSI:
-            result = builder_.create<mlir::LLVM::FPToSIOp>(loc, target_ty, val);
+            result = builder_.create<mlir::LLVM::FPToSIOp>(loc, target_ty, val).getResult();
             break;
           case tir::CastKind::FPToUI:
-            result = builder_.create<mlir::LLVM::FPToUIOp>(loc, target_ty, val);
+            result = builder_.create<mlir::LLVM::FPToUIOp>(loc, target_ty, val).getResult();
             break;
           case tir::CastKind::FPExt:
-            result = builder_.create<mlir::LLVM::FPExtOp>(loc, target_ty, val);
+            result = builder_.create<mlir::LLVM::FPExtOp>(loc, target_ty, val).getResult();
             break;
           case tir::CastKind::FPTrunc:
-            result = builder_.create<mlir::LLVM::FPTruncOp>(loc, target_ty, val);
+            result = builder_.create<mlir::LLVM::FPTruncOp>(loc, target_ty, val).getResult();
             break;
           case tir::CastKind::IntToBool: {
             mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
-                loc, val.getType(), builder_.getIntegerAttr(val.getType(), 0));
-            result = builder_.create<mlir::LLVM::ICmpOp>(loc, mlir::LLVM::ICmpPredicate::ne, val, zero);
+                loc, val.getType(), builder_.getIntegerAttr(val.getType(), 0)).getResult();
+            result = builder_.create<mlir::LLVM::ICmpOp>(loc, mlir::LLVM::ICmpPredicate::ne, val, zero).getResult();
             break;
           }
         }
@@ -541,15 +541,15 @@ class FunctionTranslator {
           builder_.create<nrq::PrintCharOp>(loc, val);
         } else if (ty.is_float()) {
           mlir::Value f64_val = ty.is_f32()
-              ? builder_.create<mlir::LLVM::FPExtOp>(loc, builder_.getF64Type(), val)
+              ? builder_.create<mlir::LLVM::FPExtOp>(loc, builder_.getF64Type(), val).getResult()
               : val;
           builder_.create<nrq::PrintF64Op>(loc, f64_val);
         } else if (ty.is_integer()) {
           mlir::Value i64_val = val;
           if (ty.bit_width() < 64) {
             i64_val = ty.is_signed_integer()
-                ? builder_.create<mlir::LLVM::SExtOp>(loc, builder_.getI64Type(), val)
-                : builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), val);
+                ? builder_.create<mlir::LLVM::SExtOp>(loc, builder_.getI64Type(), val).getResult()
+                : builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), val).getResult();
           }
           if (ty.is_signed_integer()) {
             builder_.create<nrq::PrintIntOp>(loc, i64_val);
@@ -579,9 +579,9 @@ class FunctionTranslator {
         mlir::Type arr_mlir = tir_type_to_mlir(op.result.type, ctx_, builder_);
         if (!arr_mlir) return true;
         mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
-            loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1));
+            loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
         mlir::Value ptr = builder_.create<mlir::LLVM::AllocaOp>(
-            loc, llvm_ptr_type(ctx_), arr_mlir, one);
+            loc, llvm_ptr_type(ctx_), arr_mlir, one).getResult();
         set(op.result, ptr);
         return true;
       }
@@ -601,12 +601,12 @@ class FunctionTranslator {
         } else {
           idx = builder_.create<mlir::LLVM::ConstantOp>(
               loc, builder_.getI64Type(),
-              builder_.getI64IntegerAttr(op.field_index >= 0 ? op.field_index : 0));
+              builder_.getI64IntegerAttr(op.field_index >= 0 ? op.field_index : 0)).getResult();
         }
 
         // The base type for GEP is the array/struct type; we use a zero-based outer index.
         mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
-            loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0));
+            loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
 
         // Determine the pointee type from the base value's allocation type.
         const Type& base_type = op.lhs.type;
@@ -619,7 +619,7 @@ class FunctionTranslator {
 
         mlir::Value gep = builder_.create<mlir::LLVM::GEPOp>(
             loc, llvm_ptr_type(ctx_), pointee_type, base_ptr,
-            mlir::ValueRange{zero, idx});
+            mlir::ValueRange{zero, idx}).getResult();
         set(op.result, gep);
         return true;
       }
@@ -633,13 +633,13 @@ class FunctionTranslator {
           return true;
         }
 
-        mlir::Value agg = builder_.create<mlir::LLVM::UndefOp>(loc, agg_type);
+        mlir::Value agg = builder_.create<mlir::LLVM::UndefOp>(loc, agg_type).getResult();
         for (std::size_t i = 0; i < op.aggregate_elements.size(); ++i) {
           mlir::Value elem = get(op.aggregate_elements[i]);
           if (!elem) continue;
           agg = builder_.create<mlir::LLVM::InsertValueOp>(
               loc, agg, elem,
-              builder_.getDenseI64ArrayAttr({static_cast<int64_t>(i)}));
+              builder_.getDenseI64ArrayAttr({static_cast<int64_t>(i)})).getResult();
         }
         set(op.result, agg);
         return true;
@@ -656,7 +656,7 @@ class FunctionTranslator {
         const int idx = op.field_index >= 0 ? op.field_index : 0;
         mlir::Value extracted = builder_.create<mlir::LLVM::ExtractValueOp>(
             loc, agg,
-            builder_.getDenseI64ArrayAttr({static_cast<int64_t>(idx)}));
+            builder_.getDenseI64ArrayAttr({static_cast<int64_t>(idx)})).getResult();
         set(op.result, extracted);
         return true;
       }

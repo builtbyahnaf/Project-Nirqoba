@@ -127,6 +127,11 @@ void Parser::synchronize() {
 
 std::unique_ptr<Program> Parser::parse_program() {
   auto program = std::make_unique<Program>();
+  // `module` must open the file and every `import` must precede the first
+  // declaration; both rules keep a module's dependency list readable at a
+  // glance instead of scattering it through the file.
+  bool seen_declaration = false;
+  bool seen_import = false;
   while (!check(TokenKind::EndOfFile)) {
     if (check(TokenKind::KwModule)) {
       auto mod = parse_module();
@@ -134,6 +139,9 @@ std::unique_ptr<Program> Parser::parse_program() {
         if (program->module_decl()) {
           diagnostics_.error(diag::kDuplicateModule, mod->location(),
                              "only one 'module' declaration is allowed per source file");
+        } else if (seen_declaration || seen_import) {
+          diagnostics_.error(diag::kUnexpectedToken, mod->location(),
+                             "the 'module' declaration must be the first item in a source file");
         } else {
           program->set_module(std::move(mod));
         }
@@ -142,7 +150,14 @@ std::unique_ptr<Program> Parser::parse_program() {
     }
     if (check(TokenKind::KwImport)) {
       auto imp = parse_import();
-      if (imp) program->imports().push_back(std::move(imp));
+      if (imp) {
+        if (seen_declaration) {
+          diagnostics_.error(diag::kUnexpectedToken, imp->location(),
+                             "import statements must appear before any declaration");
+        }
+        program->imports().push_back(std::move(imp));
+      }
+      seen_import = true;
       continue;
     }
 
@@ -153,11 +168,13 @@ std::unique_ptr<Program> Parser::parse_program() {
     }
 
     if (check(TokenKind::KwStruct)) {
+      seen_declaration = true;
       std::unique_ptr<StructDecl> s = parse_struct(vis);
       if (s) program->structs().push_back(std::move(s));
       continue;
     }
     if (check(TokenKind::KwFunction)) {
+      seen_declaration = true;
       error_at(peek(), kUnknownType,
                "function declaration requires an explicit return type before 'function'");
       advance();
@@ -165,6 +182,7 @@ std::unique_ptr<Program> Parser::parse_program() {
       continue;
     }
     if (is_type_keyword(peek().kind) || (check(TokenKind::Identifier) && peek(1).kind == TokenKind::KwFunction)) {
+      seen_declaration = true;
       const std::size_t before = position_;
       std::unique_ptr<FunctionDecl> function = parse_function(vis);
       if (function) {
@@ -309,7 +327,20 @@ Type Parser::parse_type_annotation() {
     base_type = parse_type_name(token.text);
   } else if (check(TokenKind::Identifier)) {
     const Token token = advance();
-    base_type = Type::struct_type(token.text);
+    // A struct declared in another module is named `module.Type` (Phase 5).
+    // The qualified spelling is kept verbatim in the type so semantic analysis
+    // and the TIR keep one name for the type across modules.
+    std::string name = token.text;
+    while (check(TokenKind::Dot)) {
+      advance();
+      if (!check(TokenKind::Identifier)) {
+        error_at(peek(), kUnknownType,
+                 "expected a type name after '.' in qualified type");
+        break;
+      }
+      name += "." + advance().text;
+    }
+    base_type = Type::struct_type(name);
   } else if (match(TokenKind::LParen)) {
     std::vector<Type> tuple_elements;
     if (!check(TokenKind::RParen)) {

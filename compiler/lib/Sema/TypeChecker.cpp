@@ -141,35 +141,39 @@ bool TypeChecker::check(Program& program) {
 bool TypeChecker::check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& modules) {
   functions_.clear();
   structs_.clear();
+  current_module_.clear();
   const FunctionDecl* main_function = nullptr;
   int main_count = 0;
 
-  // Pass 0: Register all structs across all modules.
+  // Pass 0: register every struct under its module-qualified name. The root
+  // module also owns the bare names, which keeps a single-file program
+  // resolving exactly as it did before modules existed.
   for (const auto& unit : modules) {
     if (!unit || !unit->ast) continue;
-    const std::string& mod_name = unit->name;
     for (const auto& decl : unit->ast->structs()) {
       StructInfo info;
       info.name = decl->name();
       info.fields = decl->fields();
       info.location = decl->location();
-      info.module_name = mod_name;
+      info.module_name = unit->name;
       info.visibility = decl->visibility();
 
-      // Register qualified: mod.StructName
-      structs_[mod_name + "." + decl->name()] = info;
-
-      // Register bare name for root module or public structs
-      if (unit->is_root || decl->is_public()) {
+      if (!structs_.emplace(unit->name + "." + decl->name(), info).second) {
+        diagnostics_.error(diag::kDuplicateName, decl->location(),
+                           "struct '" + decl->name() + "' is already defined in module '" +
+                               unit->name + "'");
+      }
+      if (unit->is_root) {
         structs_.emplace(decl->name(), info);
       }
     }
   }
 
-  // Pass 1: Register all function signatures across all modules.
+  // Pass 1: register function signatures. Symbols are `module.name` except in
+  // the root module, whose functions keep bare names so the entry point is
+  // emitted as `main`.
   for (const auto& unit : modules) {
     if (!unit || !unit->ast) continue;
-    const std::string& mod_name = unit->name;
     for (const auto& function : unit->ast->functions()) {
       std::vector<Type> param_types;
       param_types.reserve(function->parameters().size());
@@ -182,16 +186,16 @@ bool TypeChecker::check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& 
           function->return_type(),
           std::move(param_types),
           function->location(),
-          mod_name,
-          function->visibility()
+          unit->name,
+          function->visibility(),
+          unit->is_root ? function->name() : unit->name + "." + function->name()
       };
 
-      // Register qualified: mod.func_name
-      functions_[mod_name + "." + function->name()] = sig;
-
-      // Register bare name for root module
-      if (unit->is_root) {
-        functions_.emplace(function->name(), sig);
+      const std::string key = unit->is_root ? function->name() : sig.symbol;
+      if (!functions_.emplace(key, sig).second) {
+        diagnostics_.error(diag::kDuplicateFunction, function->location(),
+                           "function '" + function->name() +
+                               "' is already defined in this module");
       }
 
       if (function->name() == "main" && unit->is_root) {
@@ -201,22 +205,72 @@ bool TypeChecker::check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& 
     }
   }
 
-  // Handle selective & aliased imports.
+  // Pass 2: apply imports. A selective import binds one item into the importing
+  // module's namespace; an aliased import binds every item of the target under
+  // the alias. Both only expose `public` declarations.
   for (const auto& unit : modules) {
     if (!unit || !unit->ast) continue;
     for (const auto& imp : unit->ast->imports()) {
+      const std::string module = imp->module_name();
+
       if (imp->is_selective()) {
-        std::string qualified = imp->module_name() + "." + imp->item_name();
-        auto it = functions_.find(qualified);
-        if (it != functions_.end()) {
-          functions_.emplace(imp->item_name(), it->second);
-        }
-      }
-      if (imp->is_aliased()) {
-        for (const auto& kv : functions_) {
-          if (kv.second.module_name == imp->module_name()) {
-            functions_[imp->alias() + "." + kv.second.name] = kv.second;
+        const std::string qualified = module + "." + imp->item_name();
+        auto fn = functions_.find(qualified);
+        if (fn != functions_.end()) {
+          if (fn->second.visibility == Visibility::Private) {
+            diagnostics_.error(diag::kPrivateAccessViolation, imp->location(),
+                               "cannot import private function '" + qualified + "'");
+            continue;
           }
+          auto inserted = functions_.emplace(imp->item_name(), fn->second);
+          if (!inserted.second && inserted.first->second.symbol != fn->second.symbol) {
+            diagnostics_.error(diag::kImportConflict, imp->location(),
+                               "import of '" + qualified + "' conflicts with an existing '" +
+                                   imp->item_name() + "'");
+          }
+          continue;
+        }
+        auto st = structs_.find(qualified);
+        if (st != structs_.end()) {
+          if (st->second.visibility == Visibility::Private) {
+            diagnostics_.error(diag::kPrivateAccessViolation, imp->location(),
+                               "cannot import private struct '" + qualified + "'");
+            continue;
+          }
+          auto inserted = structs_.emplace(imp->item_name(), st->second);
+          if (!inserted.second &&
+              inserted.first->second.module_name != st->second.module_name) {
+            diagnostics_.error(diag::kImportConflict, imp->location(),
+                               "import of '" + qualified + "' conflicts with an existing '" +
+                                   imp->item_name() + "'");
+          }
+          continue;
+        }
+        diagnostics_.error(diag::kUndefinedName, imp->location(),
+                           "module '" + module + "' has no public item '" + imp->item_name() + "'");
+        continue;
+      }
+
+      if (imp->is_aliased()) {
+        // Snapshot first: the loop below inserts into the same map.
+        std::vector<FunctionSignature> module_functions;
+        for (const auto& kv : functions_) {
+          if (kv.second.module_name == module && kv.second.visibility == Visibility::Public) {
+            module_functions.push_back(kv.second);
+          }
+        }
+        for (const FunctionSignature& sig : module_functions) {
+          functions_.emplace(imp->alias() + "." + sig.name, sig);
+        }
+
+        std::vector<StructInfo> module_structs;
+        for (const auto& kv : structs_) {
+          if (kv.second.module_name == module && kv.second.visibility == Visibility::Public) {
+            module_structs.push_back(kv.second);
+          }
+        }
+        for (const StructInfo& info : module_structs) {
+          structs_.emplace(imp->alias() + "." + info.name, info);
         }
       }
     }
@@ -832,8 +886,30 @@ Type TypeChecker::check_expression(Expr& expr) {
 }
 
 const StructInfo* TypeChecker::find_struct(const std::string& name) const {
+  // Qualified names are looked up verbatim.
+  if (name.find('.') != std::string::npos) {
+    auto it = structs_.find(name);
+    return it != structs_.end() ? &it->second : nullptr;
+  }
+  // A bare name first means "the struct in the module I am checking", which is
+  // what a file uses for its own declarations. Falling back to the root module
+  // keeps single-file programs and the root module's own names working.
+  if (!current_module_.empty()) {
+    auto local = structs_.find(current_module_ + "." + name);
+    if (local != structs_.end()) return &local->second;
+  }
   auto it = structs_.find(name);
   return it != structs_.end() ? &it->second : nullptr;
+}
+
+const FunctionSignature* TypeChecker::find_function(const std::string& name) const {
+  auto it = functions_.find(name);
+  if (it != functions_.end()) return &it->second;
+  if (name.find('.') == std::string::npos && !current_module_.empty()) {
+    auto local = functions_.find(current_module_ + "." + name);
+    if (local != functions_.end()) return &local->second;
+  }
+  return nullptr;
 }
 
 Type TypeChecker::check_array_literal(ArrayLiteralExpr& expr) {
