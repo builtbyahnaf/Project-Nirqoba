@@ -1,0 +1,3 @@
+-interface
+-ifcOutput "runtime\CMakeFiles\@cmake_cxx_std@synth_0.dir\std.compat.ifc"
+-reference "std=runtime\CMakeFiles\@cmake_cxx_std@synth_0.dir\std.ifc"

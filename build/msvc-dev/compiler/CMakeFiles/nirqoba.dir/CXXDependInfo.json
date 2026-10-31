@@ -1,0 +1,46 @@
+{
+	"bmi-installation" : null,
+	"compiler-frontend-variant" : "MSVC",
+	"compiler-id" : "MSVC",
+	"compiler-simulate-id" : "",
+	"config" : "RelWithDebInfo",
+	"cxx-interface-objects" : 
+	{
+		"module-objects" : 
+		{
+			"std" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev/runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/C_/Program_Files/Microsoft_Visual_Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/modules/std.ixx.obj",
+			"std.compat" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev/runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/C_/Program_Files/Microsoft_Visual_Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/modules/std.compat.ixx.obj"
+		},
+		"rsp-file" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/CMakeFiles/nirqoba.dir/CXXInterfaceObjects.rsp"
+	},
+	"cxx-modules" : {},
+	"database-info" : null,
+	"dir-cur-bld" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler",
+	"dir-cur-src" : "D:/Actual Project Files/Project Nirqoba/compiler",
+	"dir-top-bld" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev",
+	"dir-top-src" : "D:/Actual Project Files/Project Nirqoba",
+	"exports" : [],
+	"forward-modules-from-target-dirs" : [],
+	"include-dirs" : 
+	[
+		"include",
+		"D:\\Actual Project Files\\Project Nirqoba\\compiler\\include",
+		"compiler\\include",
+		"D:\\Actual Project Files\\Project Nirqoba\\runtime\\include",
+		"D:\\Actual Project Files\\Project Nirqoba\\toolchain\\llvm-23.1.4\\include"
+	],
+	"language" : "CXX",
+	"linked-target-dirs" : 
+	[
+		"D:/Actual Project Files/Project Nirqoba/build/msvc-dev/runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir"
+	],
+	"module-dir" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/CMakeFiles/nirqoba.dir",
+	"sources" : 
+	{
+		"compiler/CMakeFiles/nirqoba.dir/tools/nirqoba/main.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/tools/nirqoba/main.cpp"
+		}
+	}
+}

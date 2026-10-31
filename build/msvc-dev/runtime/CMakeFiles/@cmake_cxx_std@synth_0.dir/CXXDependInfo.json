@@ -1,0 +1,68 @@
+{
+	"bmi-installation" : null,
+	"compiler-frontend-variant" : "MSVC",
+	"compiler-id" : "MSVC",
+	"compiler-simulate-id" : "",
+	"config" : "RelWithDebInfo",
+	"cxx-modules" : 
+	{
+		"runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/C_/Program_Files/Microsoft_Visual_Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/modules/std.compat.ixx.obj" : 
+		{
+			"bmi-only" : false,
+			"compile-features" : [],
+			"compile-options" : 
+			[
+				"/W4",
+				"/permissive-",
+				"/EHsc",
+				"/wd4100",
+				"/wd4127",
+				"/wd4244",
+				"/wd4267"
+			],
+			"definitions" : [],
+			"destination" : null,
+			"include-directories" : [],
+			"name" : "CXX_MODULES",
+			"relative-directory" : "Program Files/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/modules",
+			"source" : "C:/Program Files/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/modules/std.compat.ixx",
+			"type" : "CXX_MODULES",
+			"visibility" : "PUBLIC"
+		},
+		"runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/C_/Program_Files/Microsoft_Visual_Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/modules/std.ixx.obj" : 
+		{
+			"bmi-only" : false,
+			"compile-features" : [],
+			"compile-options" : 
+			[
+				"/W4",
+				"/permissive-",
+				"/EHsc",
+				"/wd4100",
+				"/wd4127",
+				"/wd4244",
+				"/wd4267"
+			],
+			"definitions" : [],
+			"destination" : null,
+			"include-directories" : [],
+			"name" : "CXX_MODULES",
+			"relative-directory" : "Program Files/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/modules",
+			"source" : "C:/Program Files/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/modules/std.ixx",
+			"type" : "CXX_MODULES",
+			"visibility" : "PUBLIC"
+		}
+	},
+	"database-info" : null,
+	"dir-cur-bld" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev/runtime",
+	"dir-cur-src" : "D:/Actual Project Files/Project Nirqoba/runtime",
+	"dir-top-bld" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev",
+	"dir-top-src" : "D:/Actual Project Files/Project Nirqoba",
+	"exports" : [],
+	"forward-modules-from-target-dirs" : [],
+	"include-dirs" : [],
+	"language" : "CXX",
+	"linked-target-dirs" : [],
+	"module-dir" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev/runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir",
+	"sources" : {}
+}

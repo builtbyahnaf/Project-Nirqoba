@@ -1,0 +1,36 @@
+{
+	"interface-objects" : {},
+	"modules" : 
+	{
+		"std" : 
+		{
+			"bmi" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev/runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/std.ifc",
+			"is-private" : false
+		},
+		"std.compat" : 
+		{
+			"bmi" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev/runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/std.compat.ifc",
+			"is-private" : false
+		}
+	},
+	"references" : 
+	{
+		"std" : 
+		{
+			"lookup-method" : "by-name",
+			"path" : "runtime\\CMakeFiles\\@cmake_cxx_std@synth_0.dir\\std.ifc"
+		},
+		"std.compat" : 
+		{
+			"lookup-method" : "by-name",
+			"path" : "runtime\\CMakeFiles\\@cmake_cxx_std@synth_0.dir\\std.compat.ifc"
+		}
+	},
+	"usages" : 
+	{
+		"std.compat" : 
+		[
+			"std"
+		]
+	}
+}

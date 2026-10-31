@@ -1,0 +1,252 @@
+# ninja log v7
+42	126	8151300636953720	runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/C_/Program_Files/Microsoft_Visual_Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/modules/std.compat.ixx.obj.ddi	34cf1eb708ba657e
+78	220	8151319043973487	compiler/include/nirqoba/Lowering/NrqDialect.cpp.inc	d6446540e0d5a4b4
+78	220	8151319043973487	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqDialect.cpp.inc	d6446540e0d5a4b4
+91	236	8151319044100661	compiler/include/nirqoba/Lowering/NrqDialect.h.inc	6ecb6d16a49ac56f
+91	236	8151319044100661	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqDialect.h.inc	6ecb6d16a49ac56f
+102	253	8151319044213816	compiler/include/nirqoba/Lowering/NrqOps.cpp.inc	7cc026208bda004e
+102	253	8151319044213816	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqOps.cpp.inc	7cc026208bda004e
+113	260	8151319044310820	compiler/include/nirqoba/Lowering/NrqOps.h.inc	d662b3974bbb6f7a
+113	260	8151319044310820	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqOps.h.inc	d662b3974bbb6f7a
+51	327	8151300637046157	runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/C_/Program_Files/Microsoft_Visual_Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/modules/std.ixx.obj.ddi	4095a3256ad20223
+72	124	8151319043901398	runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/CXX.dd	82447684ff14d8bb
+72	124	8151319043901398	runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/CXXModules.json	82447684ff14d8bb
+72	124	8151319043901398	runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/C_/Program_Files/Microsoft_Visual_Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/modules/std.compat.ixx.obj.modmap	82447684ff14d8bb
+72	124	8151319043901398	runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/C_/Program_Files/Microsoft_Visual_Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/modules/std.ixx.obj.modmap	82447684ff14d8bb
+373	476	8151300640263527	runtime/CMakeFiles/nrqoba_runtime.dir/src/runtime_version.cpp.obj.ddi	d28ace27fc3148f4
+377	535	8151300640309847	runtime/CMakeFiles/nrqoba_runtime.dir/src/math.cpp.obj.ddi	c1b3b34cc01f8e93
+402	637	8151300640551835	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Diagnostics/DiagnosticEngine.cpp.obj.ddi	90c2ca653021767a
+410	645	8151300640638054	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Diagnostics/DiagnosticRenderer.cpp.obj.ddi	d72fbd19428e377
+423	652	8151300640761696	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/Token.cpp.obj.ddi	5d2f0884a0e383f9
+395	683	8151300640488385	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Common/Type.cpp.obj.ddi	68a04d475c0727e1
+417	691	8151300640707684	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/SourceFile.cpp.obj.ddi	e17e8ad56f074ec5
+428	725	8151300640807123	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/Lexer.cpp.obj.ddi	21d08f1ec48dffe9
+435	738	8151300640900569	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/AstPrinter.cpp.obj.ddi	d7a984a115b41ecd
+443	758	8151300640959016	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/Parser.cpp.obj.ddi	7d22524eb2801ca3
+383	791	8151300640373350	runtime/CMakeFiles/nrqoba_runtime.dir/src/file_windows.cpp.obj.ddi	8c716edfe347ebc4
+367	799	8151300640211978	runtime/CMakeFiles/nrqoba_runtime.dir/src/fatal_windows.cpp.obj.ddi	985b5e9cccfa8604
+361	806	8151300640148996	runtime/CMakeFiles/nrqoba_runtime.dir/src/io_windows.cpp.obj.ddi	db2b16b20f5694dd
+389	815	8151300640432657	runtime/CMakeFiles/nrqoba_runtime.dir/src/system_windows.cpp.obj.ddi	fc3ea91587501c81
+476	881	8151300641297077	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Sema/SymbolTable.cpp.obj.ddi	cb4ad2190fd60a2a
+260	533	8151319045789578	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/IR.cpp.obj.ddi	60b45a85d465c96c
+268	552	8151319045870502	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Builder.cpp.obj.ddi	65db29cbf024e3
+284	555	8151319046022604	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Verifier.cpp.obj.ddi	43105f773d6fa17
+275	565	8151319045942972	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Printing.cpp.obj.ddi	f52f1528b83e3dd3
+343	1205	8151313395526881	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Sema/TypeChecker.cpp.obj.ddi	398fc974208aaa40
+969	1209	8151300646228757	compiler/CMakeFiles/nirqoba.dir/tools/nirqoba/main.cpp.obj.ddi	eb7de6f42b3d8252
+881	1288	8151300645342149	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/ModuleResolver.cpp.obj.ddi	a2364f3671d0a42b
+806	1295	8151300644595114	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/ProcessRunner.cpp.obj.ddi	5522e9b62b7a078a
+1002	1302	8151300646556476	tests/CMakeFiles/nirqoba_unit_tests.dir/support/unit_test_main.cpp.obj.ddi	8fca720ed5303096
+126	189	8151319044448175	runtime/CMakeFiles/nrqoba_runtime.dir/CXX.dd	3f1b0c4ef5804d73
+126	189	8151319044448175	runtime/CMakeFiles/nrqoba_runtime.dir/CXXModules.json	3f1b0c4ef5804d73
+126	189	8151319044448175	runtime/CMakeFiles/nrqoba_runtime.dir/CXXInterfaceObjects.rsp	3f1b0c4ef5804d73
+126	189	8151319044448175	runtime/CMakeFiles/nrqoba_runtime.dir/src/io_windows.cpp.obj.modmap	3f1b0c4ef5804d73
+126	189	8151319044448175	runtime/CMakeFiles/nrqoba_runtime.dir/src/fatal_windows.cpp.obj.modmap	3f1b0c4ef5804d73
+126	189	8151319044448175	runtime/CMakeFiles/nrqoba_runtime.dir/src/runtime_version.cpp.obj.modmap	3f1b0c4ef5804d73
+126	189	8151319044448175	runtime/CMakeFiles/nrqoba_runtime.dir/src/math.cpp.obj.modmap	3f1b0c4ef5804d73
+126	189	8151319044448175	runtime/CMakeFiles/nrqoba_runtime.dir/src/file_windows.cpp.obj.modmap	3f1b0c4ef5804d73
+126	189	8151319044448175	runtime/CMakeFiles/nrqoba_runtime.dir/src/system_windows.cpp.obj.modmap	3f1b0c4ef5804d73
+936	1330	8151300645900518	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/CLI/Driver.cpp.obj.ddi	27b2dbb51e036ae8
+692	1353	8151300643450955	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/NrqDialect.cpp.obj.ddi	354c25c473a1d77f
+799	1375	8151300644531757	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/LinkerEnvironment.cpp.obj.ddi	42ab8b9b6b7c2204
+1042	1414	8151300646955887	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/lexer_test.cpp.obj.ddi	a72005fb6068f4d1
+791	1519	8151300644452609	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Backend/ObjectEmitter.cpp.obj.ddi	c9354819cf4bb7e5
+739	1526	8151300643919693	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/PassPipeline.cpp.obj.ddi	dd3a530fcde29ac3
+725	1533	8151300643788205	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/NrqToLLVMPass.cpp.obj.ddi	69badf97f1e8a37
+291	886	8151319046102887	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/TirToMlir.cpp.obj.ddi	de9f5211dd14218b
+1209	1581	8151300648623847	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/parser_test.cpp.obj.ddi	bb83b5ea890373b7
+1288	1602	8151300649419559	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/sema_test.cpp.obj.ddi	869c19a4710f6f40
+1414	1603	8151300650678646	runtime/CMakeFiles/nrqoba_runtime.dir/src/runtime_version.cpp.obj	9e945dae3cdea300
+1303	1615	8151300649566752	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/tir_test.cpp.obj.ddi	6d8279687957eedb
+1295	1626	8151300649489804	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/diagnostics_test.cpp.obj.ddi	59b64d044ec7f7cc
+312	375	8151319046306408	compiler/CMakeFiles/nirqoba.dir/CXX.dd	4441898951586b0b
+312	375	8151319046306408	compiler/CMakeFiles/nirqoba.dir/CXXModules.json	4441898951586b0b
+312	375	8151319046306408	compiler/CMakeFiles/nirqoba.dir/CXXInterfaceObjects.rsp	4441898951586b0b
+312	375	8151319046306408	compiler/CMakeFiles/nirqoba.dir/tools/nirqoba/main.cpp.obj.modmap	4441898951586b0b
+1330	1667	8151300649831387	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/cli_test.cpp.obj.ddi	ab46f2236f74c390
+301	1016	8151319046204262	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/CompilationPipeline.cpp.obj.ddi	a5c4cc4a7c044abd
+1519	1775	8151300651734094	runtime/CMakeFiles/nrqoba_runtime.dir/src/math.cpp.obj	3cdb08063c881106
+1309	1796	8151300649627710	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/nrq_dialect_test.cpp.obj.ddi	562bef833dc295ad
+1375	1870	8151300650286035	runtime/CMakeFiles/nrqoba_runtime.dir/src/fatal_windows.cpp.obj	53cf934a21162a30
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/CXX.dd	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/CXXModules.json	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/CXXInterfaceObjects.rsp	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Common/Type.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Diagnostics/DiagnosticEngine.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Diagnostics/DiagnosticRenderer.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/SourceFile.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/Token.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/Lexer.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/AstPrinter.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/Parser.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Sema/SymbolTable.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Sema/TypeChecker.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/IR.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Builder.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Printing.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Verifier.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/NrqDialect.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/NrqToLLVMPass.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/PassPipeline.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/TirToMlir.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Backend/ObjectEmitter.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/LinkerEnvironment.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/ProcessRunner.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/CompilationPipeline.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/ModuleResolver.cpp.obj.modmap	9cf8a81628d19934
+1017	1070	8151319053356367	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/CLI/Driver.cpp.obj.modmap	9cf8a81628d19934
+1353	1936	8151300650075135	runtime/CMakeFiles/nrqoba_runtime.dir/src/io_windows.cpp.obj	c7b547156d85ebf6
+1796	1944	8151300655699848	tests/CMakeFiles/nirqoba_unit_tests.dir/CXX.dd	69a48706b760d603
+1796	1944	8151300655699848	tests/CMakeFiles/nirqoba_unit_tests.dir/CXXModules.json	69a48706b760d603
+1796	1944	8151300655699848	tests/CMakeFiles/nirqoba_unit_tests.dir/CXXInterfaceObjects.rsp	69a48706b760d603
+1796	1944	8151300655699848	tests/CMakeFiles/nirqoba_unit_tests.dir/support/unit_test_main.cpp.obj.modmap	69a48706b760d603
+1796	1944	8151300655699848	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/lexer_test.cpp.obj.modmap	69a48706b760d603
+1796	1944	8151300655699848	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/parser_test.cpp.obj.modmap	69a48706b760d603
+1796	1944	8151300655699848	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/sema_test.cpp.obj.modmap	69a48706b760d603
+1796	1944	8151300655699848	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/diagnostics_test.cpp.obj.modmap	69a48706b760d603
+1796	1944	8151300655699848	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/tir_test.cpp.obj.modmap	69a48706b760d603
+1796	1944	8151300655699848	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/nrq_dialect_test.cpp.obj.modmap	69a48706b760d603
+1796	1944	8151300655699848	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/cli_test.cpp.obj.modmap	69a48706b760d603
+1533	2089	8151300651863090	runtime/CMakeFiles/nrqoba_runtime.dir/src/system_windows.cpp.obj	9af0ec77e914cb3d
+1527	2264	8151300651799849	runtime/CMakeFiles/nrqoba_runtime.dir/src/file_windows.cpp.obj	910b92dcdacaeb1c
+1876	2937	8151300655304435	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Diagnostics/DiagnosticEngine.cpp.obj	b4f48846b473621a
+1638	2947	8151300652911757	compiler/CMakeFiles/nirqoba.dir/tools/nirqoba/main.cpp.obj	c4a250c524006f6e
+1882	3166	8151300655361156	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Diagnostics/DiagnosticRenderer.cpp.obj	b89d3c5cc33f4a8a
+1899	3225	8151300655521414	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/Token.cpp.obj	2a9c077cf52189c6
+1890	3237	8151300655445177	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/SourceFile.cpp.obj	f8645638e46bb807
+1072	2514	8151319053898283	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/IR.cpp.obj	286abc324c9ca3df
+1872	4075	8151300655252182	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Common/Type.cpp.obj	5e0fa3d58f27e332
+1929	4155	8151300655825918	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Sema/SymbolTable.cpp.obj	42b50a32557f5c13
+1908	4739	8151300655613290	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/Lexer.cpp.obj	6831a52125a0e4d5
+1916	5765	8151300655699848	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/AstPrinter.cpp.obj	1b79693e8cebe492
+1084	3767	8151319054021807	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Printing.cpp.obj	a93e0c922726a58b
+1090	3780	8151319054080589	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Verifier.cpp.obj	9231f7120ddb225e
+2309	2557	8151313415173680	lib/nrqoba_runtime.lib	79c7c91e1dc08082
+4156	7045	8151300678096130	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/ProcessRunner.cpp.obj	ea5305093a892bb1
+1922	7448	8151300655755061	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/Parser.cpp.obj	352cc3031ddb6a4b
+4076	8068	8151300677294544	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/LinkerEnvironment.cpp.obj	f05d56f77403a5f9
+1077	5136	8151319053958309	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Builder.cpp.obj	ea86d029c6eae7c8
+6818	9015	8151300704720286	tests/CMakeFiles/nirqoba_unit_tests.dir/support/unit_test_main.cpp.obj	386eeddba7c0d81a
+7448	13392	8151300711019685	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/parser_test.cpp.obj	97409333c561d65f
+8068	15790	8151300717225172	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/sema_test.cpp.obj	de5168b514f1e695
+6266	16847	8151300699204566	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/CLI/Driver.cpp.obj	64d7695a8d99820a
+9015	17332	8151300726695276	tests/CMakeFiles/nirqoba_unit_tests.dir/unit/tir_test.cpp.obj	6f378d9273c84f4e
+5765	18909	8151300694186496	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/ModuleResolver.cpp.obj	c003b6931031d206
+1635	13229	8151313408442800	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Sema/TypeChecker.cpp.obj	33ea83c872e07bb3
+3787	20681	8151300674413476	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Backend/ObjectEmitter.cpp.obj	f593036345ffad21
+2947	22194	8151300666005515	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/NrqDialect.cpp.obj	dbe4be93f50012e
+1105	10263	8151319054234400	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/CompilationPipeline.cpp.obj	3b8ef1567f4d81fd
+3225	30059	8151300668789843	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/PassPipeline.cpp.obj	c14de11d77b68584
+3167	31643	8151300668200900	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/NrqToLLVMPass.cpp.obj	1951bdcf356060a7
+1096	14128	8151319054146537	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/TirToMlir.cpp.obj	c66a1bedef56d2ca
+14128	14253	8151319184473707	compiler/nirqoba_compiler_lib.lib	75f1e1e6c847091f
+14253	15460	8151319185719262	bin/nirqoba.exe	b0e4ab8b12c3eb87
+140	1186	8151313393484518	runtime/CMakeFiles/nrqoba_runtime.dir/src/args_windows.cpp.obj.ddi	b8733ec738055abc
+126	189	8151319044448175	runtime/CMakeFiles/nrqoba_runtime.dir/src/args_windows.cpp.obj.modmap	3f1b0c4ef5804d73
+1344	2309	8151313405524104	runtime/CMakeFiles/nrqoba_runtime.dir/src/args_windows.cpp.obj	b4d4f6562cf2bab4
+67	113	8151322017638344	runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/CXX.dd	82447684ff14d8bb
+67	113	8151322017638344	runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/CXXModules.json	82447684ff14d8bb
+67	113	8151322017638344	runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/C_/Program_Files/Microsoft_Visual_Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/modules/std.compat.ixx.obj.modmap	82447684ff14d8bb
+67	113	8151322017638344	runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/C_/Program_Files/Microsoft_Visual_Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/modules/std.ixx.obj.modmap	82447684ff14d8bb
+116	164	8151322018134794	runtime/CMakeFiles/nrqoba_runtime.dir/CXX.dd	3f1b0c4ef5804d73
+116	164	8151322018134794	runtime/CMakeFiles/nrqoba_runtime.dir/CXXModules.json	3f1b0c4ef5804d73
+116	164	8151322018134794	runtime/CMakeFiles/nrqoba_runtime.dir/CXXInterfaceObjects.rsp	3f1b0c4ef5804d73
+116	164	8151322018134794	runtime/CMakeFiles/nrqoba_runtime.dir/src/io_windows.cpp.obj.modmap	3f1b0c4ef5804d73
+116	164	8151322018134794	runtime/CMakeFiles/nrqoba_runtime.dir/src/fatal_windows.cpp.obj.modmap	3f1b0c4ef5804d73
+116	164	8151322018134794	runtime/CMakeFiles/nrqoba_runtime.dir/src/runtime_version.cpp.obj.modmap	3f1b0c4ef5804d73
+116	164	8151322018134794	runtime/CMakeFiles/nrqoba_runtime.dir/src/math.cpp.obj.modmap	3f1b0c4ef5804d73
+116	164	8151322018134794	runtime/CMakeFiles/nrqoba_runtime.dir/src/file_windows.cpp.obj.modmap	3f1b0c4ef5804d73
+116	164	8151322018134794	runtime/CMakeFiles/nrqoba_runtime.dir/src/system_windows.cpp.obj.modmap	3f1b0c4ef5804d73
+116	164	8151322018134794	runtime/CMakeFiles/nrqoba_runtime.dir/src/args_windows.cpp.obj.modmap	3f1b0c4ef5804d73
+72	184	8151322017697821	compiler/include/nirqoba/Lowering/NrqDialect.cpp.inc	d6446540e0d5a4b4
+72	184	8151322017697821	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqDialect.cpp.inc	d6446540e0d5a4b4
+83	192	8151322017804739	compiler/include/nirqoba/Lowering/NrqDialect.h.inc	6ecb6d16a49ac56f
+83	192	8151322017804739	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqDialect.h.inc	6ecb6d16a49ac56f
+92	205	8151322017893751	compiler/include/nirqoba/Lowering/NrqOps.cpp.inc	7cc026208bda004e
+92	205	8151322017893751	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqOps.cpp.inc	7cc026208bda004e
+102	212	8151322017993978	compiler/include/nirqoba/Lowering/NrqOps.h.inc	d662b3974bbb6f7a
+102	212	8151322017993978	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqOps.h.inc	d662b3974bbb6f7a
+218	249	8151322019156625	compiler/CMakeFiles/nirqoba.dir/CXX.dd	4441898951586b0b
+218	249	8151322019156625	compiler/CMakeFiles/nirqoba.dir/CXXModules.json	4441898951586b0b
+218	249	8151322019156625	compiler/CMakeFiles/nirqoba.dir/CXXInterfaceObjects.rsp	4441898951586b0b
+218	249	8151322019156625	compiler/CMakeFiles/nirqoba.dir/tools/nirqoba/main.cpp.obj.modmap	4441898951586b0b
+213	334	8151322019105638	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Builder.cpp.obj.ddi	65db29cbf024e3
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/CXX.dd	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/CXXModules.json	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/CXXInterfaceObjects.rsp	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Common/Type.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Diagnostics/DiagnosticEngine.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Diagnostics/DiagnosticRenderer.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/SourceFile.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/Token.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/Lexer.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/AstPrinter.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/Parser.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Sema/SymbolTable.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Sema/TypeChecker.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/IR.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Builder.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Printing.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Verifier.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/NrqDialect.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/NrqToLLVMPass.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/PassPipeline.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/TirToMlir.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Backend/ObjectEmitter.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/LinkerEnvironment.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/ProcessRunner.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/CompilationPipeline.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/ModuleResolver.cpp.obj.modmap	9cf8a81628d19934
+335	371	8151322020330287	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/CLI/Driver.cpp.obj.modmap	9cf8a81628d19934
+373	2203	8151322020709454	compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Builder.cpp.obj	ea86d029c6eae7c8
+2203	2307	8151322039006442	compiler/nirqoba_compiler_lib.lib	75f1e1e6c847091f
+2307	2699	8151322040049947	bin/nirqoba.exe	b0e4ab8b12c3eb87
+32	192	8151326522530777	compiler/include/nirqoba/Lowering/NrqDialect.cpp.inc	d6446540e0d5a4b4
+32	192	8151326522530777	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqDialect.cpp.inc	d6446540e0d5a4b4
+45	204	8151326522660419	compiler/include/nirqoba/Lowering/NrqDialect.h.inc	6ecb6d16a49ac56f
+45	204	8151326522660419	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqDialect.h.inc	6ecb6d16a49ac56f
+58	214	8151326522791605	compiler/include/nirqoba/Lowering/NrqOps.cpp.inc	7cc026208bda004e
+58	214	8151326522791605	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqOps.cpp.inc	7cc026208bda004e
+70	233	8151326522907911	compiler/include/nirqoba/Lowering/NrqOps.h.inc	d662b3974bbb6f7a
+70	233	8151326522907911	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqOps.h.inc	d662b3974bbb6f7a
+23	121	8151327413193234	compiler/include/nirqoba/Lowering/NrqDialect.cpp.inc	d6446540e0d5a4b4
+23	121	8151327413193234	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqDialect.cpp.inc	d6446540e0d5a4b4
+38	136	8151327413344257	compiler/include/nirqoba/Lowering/NrqDialect.h.inc	6ecb6d16a49ac56f
+38	136	8151327413344257	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqDialect.h.inc	6ecb6d16a49ac56f
+51	150	8151327413473171	compiler/include/nirqoba/Lowering/NrqOps.cpp.inc	7cc026208bda004e
+51	150	8151327413473171	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqOps.cpp.inc	7cc026208bda004e
+62	156	8151327413590209	compiler/include/nirqoba/Lowering/NrqOps.h.inc	d662b3974bbb6f7a
+62	156	8151327413590209	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqOps.h.inc	d662b3974bbb6f7a
+26	130	8151327702233850	compiler/include/nirqoba/Lowering/NrqDialect.cpp.inc	d6446540e0d5a4b4
+26	130	8151327702233850	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqDialect.cpp.inc	d6446540e0d5a4b4
+40	145	8151327702376876	compiler/include/nirqoba/Lowering/NrqDialect.h.inc	6ecb6d16a49ac56f
+40	145	8151327702376876	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqDialect.h.inc	6ecb6d16a49ac56f
+53	151	8151327702502769	compiler/include/nirqoba/Lowering/NrqOps.cpp.inc	7cc026208bda004e
+53	151	8151327702502769	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqOps.cpp.inc	7cc026208bda004e
+63	160	8151327702609253	compiler/include/nirqoba/Lowering/NrqOps.h.inc	d662b3974bbb6f7a
+63	160	8151327702609253	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqOps.h.inc	d662b3974bbb6f7a
+29	162	8151333754772716	compiler/include/nirqoba/Lowering/NrqDialect.cpp.inc	d6446540e0d5a4b4
+29	162	8151333754772716	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqDialect.cpp.inc	d6446540e0d5a4b4
+47	177	8151333754963907	compiler/include/nirqoba/Lowering/NrqDialect.h.inc	6ecb6d16a49ac56f
+47	177	8151333754963907	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqDialect.h.inc	6ecb6d16a49ac56f
+59	190	8151333755080598	compiler/include/nirqoba/Lowering/NrqOps.cpp.inc	7cc026208bda004e
+59	190	8151333755080598	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqOps.cpp.inc	7cc026208bda004e
+73	198	8151333755212986	compiler/include/nirqoba/Lowering/NrqOps.h.inc	d662b3974bbb6f7a
+73	198	8151333755212986	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqOps.h.inc	d662b3974bbb6f7a
+5	27	8151334510231960	help	45957b20c26863e9
+26	137	8151334559074896	compiler/include/nirqoba/Lowering/NrqDialect.cpp.inc	d6446540e0d5a4b4
+26	137	8151334559074896	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqDialect.cpp.inc	d6446540e0d5a4b4
+38	155	8151334559202141	compiler/include/nirqoba/Lowering/NrqDialect.h.inc	6ecb6d16a49ac56f
+38	155	8151334559202141	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqDialect.h.inc	6ecb6d16a49ac56f
+51	171	8151334559330941	compiler/include/nirqoba/Lowering/NrqOps.cpp.inc	7cc026208bda004e
+51	171	8151334559330941	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqOps.cpp.inc	7cc026208bda004e
+64	179	8151334559458237	compiler/include/nirqoba/Lowering/NrqOps.h.inc	d662b3974bbb6f7a
+64	179	8151334559458237	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqOps.h.inc	d662b3974bbb6f7a
+21	143	8151337293458165	compiler/include/nirqoba/Lowering/NrqDialect.cpp.inc	d6446540e0d5a4b4
+21	143	8151337293458165	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqDialect.cpp.inc	d6446540e0d5a4b4
+34	151	8151337293587186	compiler/include/nirqoba/Lowering/NrqDialect.h.inc	6ecb6d16a49ac56f
+34	151	8151337293587186	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqDialect.h.inc	6ecb6d16a49ac56f
+46	158	8151337293712064	compiler/include/nirqoba/Lowering/NrqOps.cpp.inc	7cc026208bda004e
+46	158	8151337293712064	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqOps.cpp.inc	7cc026208bda004e
+56	173	8151337293809703	compiler/include/nirqoba/Lowering/NrqOps.h.inc	d662b3974bbb6f7a
+56	173	8151337293809703	D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/include/nirqoba/Lowering/NrqOps.h.inc	d662b3974bbb6f7a
