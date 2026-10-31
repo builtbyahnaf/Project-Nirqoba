@@ -23,6 +23,7 @@ add_library(nrqoba_runtime STATIC
   src/system_windows.cpp
   src/args_windows.cpp
   src/allocator_windows.cpp
+  src/mapping_windows.cpp
 )
 
 set_property(TARGET nrqoba_runtime PROPERTY CXX_STANDARD 20)

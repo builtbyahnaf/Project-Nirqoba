@@ -1,0 +1,72 @@
+int function main() {
+    var allocators = 0;
+    var previous = memory.use_allocator(memory.general_allocator());
+    var value = memory.allocate<byte>(8);
+    value[0] = 1 as byte;
+    memory.deallocate(value);
+    memory.use_allocator(previous);
+
+    var pool = memory.pool_allocator(64);
+    previous = memory.use_allocator(pool);
+    value = memory.allocate<byte>(8);
+    value[0] = 2 as byte;
+    memory.deallocate(value);
+    memory.use_allocator(previous);
+    memory.destroy_allocator(pool);
+
+    var arena = memory.arena_allocator(4096);
+    previous = memory.use_allocator(arena);
+    value = memory.allocate<byte>(8);
+    value[0] = 3 as byte;
+    memory.deallocate(value);
+    memory.use_allocator(previous);
+    memory.reset_allocator(arena);
+    memory.destroy_allocator(arena);
+
+    var stack = memory.stack_allocator(4096);
+    previous = memory.use_allocator(stack);
+    value = memory.allocate<byte>(8);
+    value[0] = 4 as byte;
+    memory.deallocate(value);
+    memory.use_allocator(previous);
+    memory.reset_allocator(stack);
+    memory.destroy_allocator(stack);
+
+    var slab = memory.slab_allocator(64);
+    previous = memory.use_allocator(slab);
+    value = memory.allocate<byte>(8);
+    value[0] = 5 as byte;
+    memory.deallocate(value);
+    memory.use_allocator(previous);
+    memory.reset_allocator(slab);
+    memory.destroy_allocator(slab);
+
+    var buddy = memory.buddy_allocator(4096);
+    previous = memory.use_allocator(buddy);
+    value = memory.allocate<byte>(8);
+    value[0] = 6 as byte;
+    memory.deallocate(value);
+    memory.use_allocator(previous);
+    memory.reset_allocator(buddy);
+    memory.destroy_allocator(buddy);
+
+    var free_list = memory.free_list_allocator(4096);
+    previous = memory.use_allocator(free_list);
+    value = memory.allocate<byte>(8);
+    value[0] = 7 as byte;
+    memory.deallocate(value);
+    memory.use_allocator(previous);
+    memory.reset_allocator(free_list);
+    memory.destroy_allocator(free_list);
+
+    var tlsf = memory.tlsf_allocator(4096);
+    previous = memory.use_allocator(tlsf);
+    value = memory.allocate<byte>(8);
+    value[0] = 8 as byte;
+    memory.deallocate(value);
+    memory.use_allocator(previous);
+    memory.reset_allocator(tlsf);
+    memory.destroy_allocator(tlsf);
+    print(42);
+    return 42;
+}

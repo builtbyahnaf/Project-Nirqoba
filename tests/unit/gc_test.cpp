@@ -59,3 +59,32 @@ TEST(GcTest, ExplicitCollectionStillRunsWhenAutomaticCollectionIsDisabled) {
   nrq_gc_enable();
   nrq_gc_set_threshold(1024 * 1024);
 }
+
+TEST(GcTest, AllocationThresholdTriggersAutomaticCollection) {
+  nrq_gc_enable();
+  nrq_gc_set_threshold(1);
+  nrq_gc_collect();
+  const auto before = nrq_gc_get_stats();
+  void* first = nrq_gc_allocate(32, nullptr);
+  ASSERT_NE(first, nullptr);
+  void* second = nrq_gc_allocate(32, nullptr);
+  ASSERT_NE(second, nullptr);
+  const auto after = nrq_gc_get_stats();
+  ASSERT_TRUE(after.collections > before.collections);
+  ASSERT_EQ(after.live_objects, static_cast<uint64_t>(1));
+  nrq_gc_collect();
+  nrq_gc_set_threshold(1024 * 1024);
+}
+
+TEST(GcTest, PinnedObjectSurvivesUntilItIsUnpinned) {
+  nrq_gc_enable();
+  nrq_gc_collect();
+  void* object = nrq_gc_allocate(24, nullptr);
+  ASSERT_NE(object, nullptr);
+  ASSERT_EQ(nrq_gc_pin(object), object);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{1});
+  nrq_gc_unpin(object);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}

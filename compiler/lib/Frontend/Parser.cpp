@@ -946,19 +946,42 @@ ExprPtr Parser::parse_primary() {
     case TokenKind::Identifier: {
       advance();
       if ((token.text == "memory" || token.text == "array") && check(TokenKind::Dot) &&
-          peek(1).kind == TokenKind::Identifier && peek(1).text == "allocate" &&
+          peek(1).kind == TokenKind::Identifier &&
+          (peek(1).text == "allocate" || peek(1).text == "secure_allocate") &&
           peek(2).kind == TokenKind::Less) {
         advance();  // '.'
-        advance();  // 'allocate'
+        const Token operation = advance();
         advance();  // '<'
         Type allocated_type = parse_type_annotation();
         expect(TokenKind::Greater, "after the allocated element type");
-        expect(TokenKind::LParen, "after memory.allocate<T>");
+        expect(TokenKind::LParen, "after the typed memory allocation operation");
         std::vector<ExprPtr> arguments = parse_argument_list();
         expect(TokenKind::RParen, "to close memory.allocate<T>");
         return std::make_unique<CallExpr>(token.location,
-                                          token.text + ".allocate",
+                                          token.text + "." + operation.text,
                                           std::move(arguments), allocated_type);
+      }
+      // A dotted callable such as memory.profiler.capture() is distinguished
+      // from member access by the final parenthesis. Preserve the complete
+      // qualified name for semantic analysis and lowering.
+      size_t qualified_parts = 0;
+      size_t lookahead = 0;
+      while (peek(lookahead).kind == TokenKind::Dot &&
+             peek(lookahead + 1).kind == TokenKind::Identifier) {
+        ++qualified_parts;
+        lookahead += 2;
+      }
+      if (qualified_parts != 0 && peek(lookahead).kind == TokenKind::LParen) {
+        std::string qualified_name = token.text;
+        for (size_t part = 0; part < qualified_parts; ++part) {
+          advance();  // '.'
+          qualified_name += "." + advance().text;
+        }
+        advance();  // '('
+        std::vector<ExprPtr> arguments = parse_argument_list();
+        expect(TokenKind::RParen, "to close the qualified call");
+        return std::make_unique<CallExpr>(token.location, std::move(qualified_name),
+                                          std::move(arguments));
       }
       // `module.name` is a member access, except when it is immediately called:
       // then it is a call to a function in another module (Phase 5).
