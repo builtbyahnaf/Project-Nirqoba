@@ -33,6 +33,7 @@ set(NIRQOBA_MSVC_WARNING_FLAGS
   /wd4127         # Conditional expression is constant — generated code pattern.
   /wd4244         # Narrowing conversion — MLIR frequently converts size_t <-> int.
   /wd4267         # Same as 4244 but for size_t.
+  /wd4996         # MLIR 23 marks its OpBuilder::create compatibility API deprecated.
 )
 
 if(NIRQOBA_WERROR)

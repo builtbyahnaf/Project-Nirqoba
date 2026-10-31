@@ -860,12 +860,17 @@ class FunctionTranslator {
         if (op.callee == "memory.profiler.capture") {
           static constexpr const char* getters[] = {
               "nrq_memory_profiler_get_current_bytes",
+              "nrq_memory_profiler_get_total_bytes",
               "nrq_memory_profiler_get_peak_bytes",
               "nrq_memory_profiler_get_allocations",
-              "nrq_memory_profiler_get_deallocations"};
+              "nrq_memory_profiler_get_deallocations",
+              "nrq_memory_profiler_get_gc_allocated_bytes",
+              "nrq_memory_profiler_get_gc_collected_bytes",
+              "nrq_memory_profiler_get_gc_collections",
+              "nrq_memory_profiler_get_gc_live_objects"};
           mlir::Type profile_type = tir_type_to_mlir(op.result.type, ctx_, builder_);
           mlir::Value profile = builder_.create<mlir::LLVM::UndefOp>(loc, profile_type).getResult();
-          for (int index = 0; index < 4; ++index) {
+          for (int index = 0; index < 9; ++index) {
             auto getter = ensure_runtime_fn(module_, builder_, getters[index],
                                             builder_.getI64Type(), {});
             mlir::Value field = builder_.create<mlir::LLVM::CallOp>(

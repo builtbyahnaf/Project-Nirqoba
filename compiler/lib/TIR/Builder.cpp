@@ -83,6 +83,7 @@ void TirBuilder::lower_function(const FunctionDecl& function, const std::string&
 
   scopes_.clear();
   loop_stack_.clear();
+  deferred_expressions_.clear();
   push_scope();
 
   for (const Parameter& parameter : function.parameters()) {
@@ -138,13 +139,39 @@ bool TirBuilder::block_terminated(const tir::Function& function) {
 
 void TirBuilder::lower_block(const BlockStmt& block, tir::Function& function) {
   push_scope();
+  deferred_expressions_.emplace_back();
   for (const StmtPtr& statement : block.statements()) {
     // Statements after `return`, `break` or `continue` are unreachable; the
     // backend cannot represent operations behind a terminator, so skip them.
     if (block_terminated(function)) break;
     lower_statement(*statement, function);
   }
+  if (!block_terminated(function))
+    emit_deferred_from(deferred_expressions_.size() - 1, function);
+  deferred_expressions_.pop_back();
   pop_scope();
+}
+
+void TirBuilder::emit_deferred_from(std::size_t scope_depth, tir::Function& function) {
+  for (std::size_t depth = deferred_expressions_.size(); depth > scope_depth; --depth) {
+    const auto& expressions = deferred_expressions_[depth - 1];
+    for (auto deferred = expressions.rbegin(); deferred != expressions.rend(); ++deferred) {
+      if (deferred->callee == "print" && deferred->arguments.size() == 1) {
+        tir::Op print;
+        print.kind = tir::OpKind::Print;
+        print.location = deferred->location;
+        print.operand = deferred->arguments.front();
+        function.add_operation(std::move(print));
+        continue;
+      }
+      tir::Op call;
+      call.kind = tir::OpKind::Call;
+      call.location = deferred->location;
+      call.callee = deferred->callee;
+      call.arguments = deferred->arguments;
+      function.add_operation(std::move(call));
+    }
+  }
 }
 
 void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function) {
@@ -341,7 +368,8 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       int body_label = function.allocate_label();
       int exit_label = function.allocate_label();
 
-      loop_stack_.push_back(LoopContext{exit_label, header_label});
+      loop_stack_.push_back(LoopContext{exit_label, header_label,
+                                        deferred_expressions_.size()});
 
       tir::Op br_head;
       br_head.kind = tir::OpKind::Branch;
@@ -396,7 +424,8 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       int step_label = function.allocate_label();
       int exit_label = function.allocate_label();
 
-      loop_stack_.push_back(LoopContext{exit_label, step_label});
+      loop_stack_.push_back(LoopContext{exit_label, step_label,
+                                        deferred_expressions_.size()});
 
       tir::Op br_head;
       br_head.kind = tir::OpKind::Branch;
@@ -463,6 +492,7 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       return;
     }
     case Stmt::Kind::Break: {
+      emit_deferred_from(loop_stack_.back().deferred_scope_depth, function);
       tir::Op br;
       br.kind = tir::OpKind::Branch;
       br.location = statement.location();
@@ -471,6 +501,7 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       return;
     }
     case Stmt::Kind::Continue: {
+      emit_deferred_from(loop_stack_.back().deferred_scope_depth, function);
       tir::Op br;
       br.kind = tir::OpKind::Branch;
       br.location = statement.location();
@@ -486,7 +517,20 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       if (return_statement.has_value()) {
         op.operand = lower_expression(*return_statement.value(), function);
       }
+      emit_deferred_from(0, function);
       function.add_operation(std::move(op));
+      return;
+    }
+    case Stmt::Kind::DeferredCleanup: {
+      const auto& deferred = static_cast<const DeferredCleanupStmt&>(statement);
+      const auto& call = static_cast<const CallExpr&>(deferred.expression());
+      DeferredCall lowered;
+      lowered.callee = call.has_resolved_symbol() ? call.resolved_symbol() : call.callee();
+      lowered.location = call.location();
+      lowered.arguments.reserve(call.arguments().size());
+      for (const ExprPtr& argument : call.arguments())
+        lowered.arguments.push_back(lower_expression(*argument, function));
+      deferred_expressions_.back().push_back(std::move(lowered));
       return;
     }
     case Stmt::Kind::Expression: {

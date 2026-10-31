@@ -43,6 +43,8 @@ static bool statement_can_fall_through(const Stmt& stmt) {
 
 }  // namespace
 
+static const Symbol* find_root_symbol(const Expr& expr, const SymbolTable& symbols);
+
 bool TypeChecker::check(Program& program) {
   functions_.clear();
   structs_.clear();
@@ -368,9 +370,27 @@ void TypeChecker::check_function(FunctionDecl& function) {
 
 void TypeChecker::check_block(BlockStmt& block) {
   symbols_.push_scope();
+  deferred_calls_.emplace_back();
   for (StmtPtr& statement : block.statements()) {
     check_statement(*statement);
   }
+  for (auto call = deferred_calls_.back().rbegin();
+       call != deferred_calls_.back().rend(); ++call) {
+    const std::string& callee = (*call)->callee();
+    if ((callee == "memory.deallocate" || callee == "memory.secure_release" ||
+         callee == "memory.unmap_file") && !(*call)->arguments().empty()) {
+      const Symbol* pointer = find_root_symbol(*(*call)->arguments()[0], symbols_);
+      if (pointer && pointer->type.is_pointer()) {
+        if (pointer->moved) {
+          diagnostics_.error(diag::kUseAfterFree, (*call)->location(),
+                             "deferred cleanup releases an allocation that was already released");
+        } else {
+          symbols_.mark_allocation_moved(pointer->allocation_id);
+        }
+      }
+    }
+  }
+  deferred_calls_.pop_back();
   symbols_.pop_scope();
 }
 
@@ -409,10 +429,27 @@ void TypeChecker::check_statement(Stmt& statement) {
     case Stmt::Kind::Return:
       check_return(static_cast<ReturnStmt&>(statement));
       return;
+    case Stmt::Kind::DeferredCleanup:
+      check_deferred_cleanup(static_cast<DeferredCleanupStmt&>(statement));
+      return;
     case Stmt::Kind::Expression:
       check_expression(const_cast<Expr&>(static_cast<ExprStmt&>(statement).expr()));
       return;
   }
+}
+
+void TypeChecker::check_deferred_cleanup(DeferredCleanupStmt& statement) {
+  Expr& expression = const_cast<Expr&>(statement.expression());
+  if (expression.kind() != Expr::Kind::Call) {
+    diagnostics_.error(diag::kTypeMismatch, expression.location(),
+                       "defer requires a function call expression");
+    check_expression(expression);
+    return;
+  }
+  checking_deferred_cleanup_ = true;
+  check_expression(expression);
+  checking_deferred_cleanup_ = false;
+  deferred_calls_.back().push_back(static_cast<const CallExpr*>(&expression));
 }
 
 void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaration) {
@@ -1397,8 +1434,13 @@ Type TypeChecker::check_call(CallExpr& call) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'memory.profiler.capture' takes no arguments");
     return Type::struct_type("MemoryProfile", {
-        {"current_bytes", Type::u64_type()}, {"peak_bytes", Type::u64_type()},
-        {"allocations", Type::u64_type()}, {"deallocations", Type::u64_type()}});
+        {"current_bytes", Type::u64_type()}, {"total_bytes", Type::u64_type()},
+        {"peak_bytes", Type::u64_type()}, {"allocations", Type::u64_type()},
+        {"deallocations", Type::u64_type()},
+        {"gc_allocated_bytes", Type::u64_type()},
+        {"gc_collected_bytes", Type::u64_type()},
+        {"gc_collections", Type::u64_type()},
+        {"gc_live_objects", Type::u64_type()}});
   }
   if (call.callee() == "memory.available_bytes") {
     if (!call.arguments().empty())
@@ -1452,7 +1494,8 @@ Type TypeChecker::check_call(CallExpr& call) {
         diagnostics_.error(diag::kTypeMismatch, argument->location(),
                            "argument must be a pointer");
     }
-    if ((call.callee() == "memory.secure_release" ||
+    if (!checking_deferred_cleanup_ &&
+        (call.callee() == "memory.secure_release" ||
          call.callee() == "memory.unmap_file") && !call.arguments().empty()) {
       const Symbol* pointer_symbol = find_root_symbol(*call.arguments()[0], symbols_);
       if (pointer_symbol && pointer_symbol->type.is_pointer())
@@ -1598,7 +1641,7 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "'memory.deallocate' requires an explicitly allocated pointer");
     }
     const Symbol* pointer_symbol = find_root_symbol(*call.arguments()[0], symbols_);
-    if (pointer_symbol && pointer_symbol->type.is_pointer())
+    if (!checking_deferred_cleanup_ && pointer_symbol && pointer_symbol->type.is_pointer())
       symbols_.mark_allocation_moved(pointer_symbol->allocation_id);
     return Type::void_type();
   }

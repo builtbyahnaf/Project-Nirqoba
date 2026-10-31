@@ -426,6 +426,13 @@ StmtPtr Parser::parse_statement() {
   if (check(TokenKind::KwContinue)) {
     return parse_continue();
   }
+  if (check(TokenKind::KwDefer)) {
+    const Token keyword = advance();
+    ExprPtr expression = parse_expression();
+    expect(TokenKind::Semicolon, "after the deferred cleanup call");
+    return std::make_unique<DeferredCleanupStmt>(keyword.location,
+                                                 std::move(expression));
+  }
   if (check(TokenKind::KwReturn)) {
     const Token keyword = advance();
     ExprPtr value;

@@ -1,0 +1,6 @@
+int function main() {
+    var buffer = memory.allocate<byte>(8);
+    defer memory.deallocate(buffer);
+    memory.deallocate(buffer);
+    return 0;
+}
