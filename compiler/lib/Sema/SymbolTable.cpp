@@ -21,4 +21,23 @@ const Symbol* SymbolTable::lookup(const std::string& name) const {
   return nullptr;
 }
 
+void SymbolTable::mark_allocation_moved(uint64_t allocation_id) {
+  if (allocation_id == 0) return;
+  for (auto& scope : scopes_)
+    for (auto& entry : scope)
+      if (entry.second.allocation_id == allocation_id)
+        entry.second.moved = true;
+}
+
+void SymbolTable::rebind_pointer(const std::string& name, uint64_t allocation_id) {
+  for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+    auto found = scope->find(name);
+    if (found != scope->end()) {
+      found->second.allocation_id = allocation_id;
+      found->second.moved = false;
+      return;
+    }
+  }
+}
+
 }  // namespace nirq

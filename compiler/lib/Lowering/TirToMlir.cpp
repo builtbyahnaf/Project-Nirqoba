@@ -755,9 +755,6 @@ class FunctionTranslator {
         }
         if (op.callee == "memory.allocate" && op.result.is_valid() &&
             op.result.type.is_pointer()) {
-          auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_allocate",
-                                     llvm_ptr_type(ctx_),
-                                     {builder_.getI64Type(), builder_.getI64Type()});
           mlir::Value bytes = args.empty() ? mlir::Value{} : args[0];
           if (!bytes) {
             diag_.error("NRQ4005", op.location,
@@ -773,8 +770,28 @@ class FunctionTranslator {
           mlir::Value alignment = builder_.create<mlir::LLVM::ConstantOp>(
               loc, builder_.getI64Type(),
               builder_.getI64IntegerAttr(type_alignment(op.result.type.element_type()))).getResult();
-          mlir::Value result = builder_.create<mlir::LLVM::CallOp>(
-              loc, fn, mlir::ValueRange{bytes, alignment}).getResult();
+          mlir::Value result;
+          if (args.size() == 2) {
+            mlir::Value allocator = args[1];
+            if (allocator.getType() != builder_.getI64Type()) {
+              const unsigned bits = allocator.getType().getIntOrFloatBitWidth();
+              allocator = bits < 64
+                  ? builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), allocator).getResult()
+                  : builder_.create<mlir::LLVM::TruncOp>(loc, builder_.getI64Type(), allocator).getResult();
+            }
+            allocator = builder_.create<mlir::LLVM::IntToPtrOp>(
+                loc, llvm_ptr_type(ctx_), allocator).getResult();
+            auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_allocate_from",
+                llvm_ptr_type(ctx_),
+                {llvm_ptr_type(ctx_), builder_.getI64Type(), builder_.getI64Type()});
+            result = builder_.create<mlir::LLVM::CallOp>(
+                loc, fn, mlir::ValueRange{allocator, bytes, alignment}).getResult();
+          } else {
+            auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_allocate",
+                llvm_ptr_type(ctx_), {builder_.getI64Type(), builder_.getI64Type()});
+            result = builder_.create<mlir::LLVM::CallOp>(
+                loc, fn, mlir::ValueRange{bytes, alignment}).getResult();
+          }
           set(op.result, result);
           return true;
         }
@@ -796,6 +813,39 @@ class FunctionTranslator {
               builder_.getI64IntegerAttr(type_alignment(op.result.type.element_type()))).getResult();
           set(op.result, builder_.create<mlir::LLVM::CallOp>(
               loc, fn, mlir::ValueRange{bytes, alignment}).getResult());
+          return true;
+        }
+        if (op.callee == "memory.mapped_read" ||
+            op.callee == "memory.mapped_write") {
+          const bool write = op.callee == "memory.mapped_write";
+          if (args.size() != (write ? 3u : 2u)) return false;
+          mlir::Value offset = args[1];
+          if (offset.getType() != builder_.getI64Type()) {
+            const unsigned bits = offset.getType().getIntOrFloatBitWidth();
+            offset = bits < 64
+                ? builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), offset).getResult()
+                : builder_.create<mlir::LLVM::TruncOp>(loc, builder_.getI64Type(), offset).getResult();
+          }
+          mlir::Type element_type = tir_type_to_mlir(
+              write ? op.arguments[2].type : op.result.type, ctx_, builder_);
+          mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
+          mlir::Value temporary = builder_.create<mlir::LLVM::AllocaOp>(
+              loc, llvm_ptr_type(ctx_), element_type, one).getResult();
+          mlir::Value byte_count = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, builder_.getI64Type(),
+              builder_.getI64IntegerAttr(type_size(write ? op.arguments[2].type
+                                                         : op.result.type))).getResult();
+          auto fn = ensure_runtime_fn(module_, builder_,
+              write ? "nrq_memory_mapping_write" : "nrq_memory_mapping_read",
+              builder_.getI32Type(),
+              {llvm_ptr_type(ctx_), builder_.getI64Type(), builder_.getI64Type(),
+               llvm_ptr_type(ctx_)});
+          if (write) builder_.create<mlir::LLVM::StoreOp>(loc, args[2], temporary);
+          builder_.create<mlir::LLVM::CallOp>(loc, fn,
+              mlir::ValueRange{args[0], offset, byte_count, temporary});
+          if (!write) set(op.result, builder_.create<mlir::LLVM::LoadOp>(
+              loc, element_type, temporary).getResult());
           return true;
         }
         if (op.callee == "memory.profiler.start" ||
@@ -831,6 +881,27 @@ class FunctionTranslator {
                                       builder_.getI64Type(), {});
           set(op.result, builder_.create<mlir::LLVM::CallOp>(
               loc, fn, mlir::ValueRange{}).getResult());
+          return true;
+        }
+        if (op.callee == "memory.start_ref_count" ||
+            op.callee == "memory.stop_ref_count") {
+          auto fn = ensure_runtime_fn(module_, builder_,
+              op.callee == "memory.start_ref_count" ? "nrq_gc_ref_count_start"
+                                                      : "nrq_gc_ref_count_stop",
+              mlir::LLVM::LLVMVoidType::get(ctx_), {});
+          builder_.create<mlir::LLVM::CallOp>(loc, fn, mlir::ValueRange{});
+          return true;
+        }
+        if (op.callee == "memory.get_ref_count") {
+          if (args.empty()) return false;
+          mlir::Value pointer = args[0];
+          if (!mlir::isa<mlir::LLVM::LLVMPointerType>(pointer.getType()))
+            pointer = builder_.create<mlir::LLVM::IntToPtrOp>(
+                loc, llvm_ptr_type(ctx_), pointer).getResult();
+          auto fn = ensure_runtime_fn(module_, builder_, "nrq_gc_get_ref_count",
+              builder_.getI64Type(), {llvm_ptr_type(ctx_)});
+          set(op.result, builder_.create<mlir::LLVM::CallOp>(
+              loc, fn, mlir::ValueRange{pointer}).getResult());
           return true;
         }
         if (op.callee == "memory.map_file") {
@@ -897,7 +968,8 @@ class FunctionTranslator {
         {
           static const std::unordered_map<std::string, int> allocator_kinds = {
               {"memory.general_allocator", 0}, {"memory.pool_allocator", 1},
-              {"memory.arena_allocator", 2}, {"memory.stack_allocator", 3},
+              {"memory.arena_allocator", 2}, {"memory.region", 2},
+              {"memory.stack_allocator", 3},
               {"memory.slab_allocator", 4}, {"memory.buddy_allocator", 5},
               {"memory.free_list_allocator", 6}, {"memory.tlsf_allocator", 7}};
           auto constructor = allocator_kinds.find(op.callee);

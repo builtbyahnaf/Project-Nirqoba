@@ -1,0 +1,7 @@
+int function main() {
+    var buffer = memory.allocate<byte>(8);
+    var alias = buffer;
+    memory.deallocate(buffer);
+    print(alias[0] as int);
+    return 0;
+}

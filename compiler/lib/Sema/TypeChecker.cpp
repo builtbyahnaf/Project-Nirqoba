@@ -344,8 +344,10 @@ void TypeChecker::check_function(FunctionDecl& function) {
   loop_depth_ = 0;
 
   for (const Parameter& parameter : function.parameters()) {
-    if (!symbols_.declare(Symbol{parameter.name, parameter.type, BindingKind::Let,
-                                 parameter.location})) {
+    Symbol symbol{parameter.name, parameter.type, BindingKind::Let,
+                  parameter.location};
+    if (parameter.type.is_pointer()) symbol.allocation_id = next_allocation_id_++;
+    if (!symbols_.declare(std::move(symbol))) {
       diagnostics_.error(diag::kDuplicateName, parameter.location,
                          "parameter '" + parameter.name + "' is already declared");
     }
@@ -429,8 +431,17 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
     binding_type = declaration.annotation();
   }
 
-  if (!symbols_.declare(Symbol{declaration.name(), binding_type, declaration.binding(),
-                               declaration.location()})) {
+  Symbol symbol{declaration.name(), binding_type, declaration.binding(),
+                declaration.location()};
+  if (binding_type.is_pointer()) {
+    if (declaration.initializer().kind() == Expr::Kind::Name) {
+      const auto& source_name = static_cast<const NameExpr&>(declaration.initializer());
+      const Symbol* source = symbols_.lookup(source_name.name());
+      if (source && source->type.is_pointer()) symbol.allocation_id = source->allocation_id;
+    }
+    if (symbol.allocation_id == 0) symbol.allocation_id = next_allocation_id_++;
+  }
+  if (!symbols_.declare(std::move(symbol))) {
     diagnostics_.error(diag::kDuplicateName, declaration.location(),
                        "'" + declaration.name() + "' is already declared in this scope");
   }
@@ -516,7 +527,10 @@ static const Symbol* find_root_symbol(const Expr& expr, const SymbolTable& symbo
 
 void TypeChecker::check_assignment(AssignmentStmt& assignment) {
   const Type value_type = check_expression(const_cast<Expr&>(assignment.value()));
-  const Type target_type = check_expression(const_cast<Expr&>(assignment.target()));
+  const Type target_type = assignment.is_simple_name()
+      ? (symbols_.lookup(assignment.name())
+             ? symbols_.lookup(assignment.name())->type : Type::error())
+      : check_expression(const_cast<Expr&>(assignment.target()));
 
   const Symbol* symbol = find_root_symbol(assignment.target(), symbols_);
   if (symbol == nullptr && assignment.is_simple_name()) {
@@ -535,6 +549,18 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
                        "cannot assign a value of type '" + value_type.to_string() +
                            "' to target of type '" + target_type.to_string() + "'");
+  }
+  if (assignment.is_simple_name() && symbol && symbol->is_mutable() &&
+      target_type.is_pointer()) {
+    uint64_t allocation_id = 0;
+    if (assignment.value().kind() == Expr::Kind::Name) {
+      const auto& source_name = static_cast<const NameExpr&>(assignment.value());
+      const Symbol* source = symbols_.lookup(source_name.name());
+      if (source && !source->moved && source->type.is_pointer())
+        allocation_id = source->allocation_id;
+    }
+    if (allocation_id == 0) allocation_id = next_allocation_id_++;
+    symbols_.rebind_pointer(assignment.name(), allocation_id);
   }
 }
 
@@ -739,6 +765,11 @@ Type TypeChecker::check_expression(Expr& expr) {
                            "use of undeclared variable '" + name.name() + "'");
       } else {
         type = symbol->type;
+        if (symbol->moved) {
+          diagnostics_.error(diag::kUseAfterFree, name.location(),
+                             "use of '" + name.name() +
+                                 "' after its allocation was deallocated");
+        }
       }
       break;
     }
@@ -1330,6 +1361,29 @@ Type TypeChecker::check_call(CallExpr& call) {
     }
     return Type::pointer_type(resolve_generic_type(call.generic_argument()));
   }
+  if ((call.callee() == "memory.mapped_read" ||
+       call.callee() == "memory.mapped_write") && call.has_generic_argument()) {
+    const bool write = call.callee() == "memory.mapped_write";
+    const size_t expected = write ? 3 : 2;
+    if (call.arguments().size() != expected)
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "<T>' takes a mapping, byte offset" +
+                             (write ? ", and value" : ""));
+    for (size_t index = 0; index < call.arguments().size(); ++index) {
+      const Type type = check_expression(const_cast<Expr&>(*call.arguments()[index]));
+      if (index == 0 && type.is_valid() && !type.is_pointer())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[index]->location(),
+                           "mapped access requires a mapping pointer");
+      if (index == 1 && type.is_valid() && !type.is_integer())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[index]->location(),
+                           "mapped access offset must be an integer");
+      if (write && index == 2 && type.is_valid() &&
+          type != resolve_generic_type(call.generic_argument()))
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[index]->location(),
+                           "mapped write value must match its type argument");
+    }
+    return write ? Type::void_type() : resolve_generic_type(call.generic_argument());
+  }
 
   if (call.callee() == "memory.profiler.start" ||
       call.callee() == "memory.profiler.stop") {
@@ -1351,6 +1405,24 @@ Type TypeChecker::check_call(CallExpr& call) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'memory.available_bytes' takes no arguments");
     return Type::u64_type();
+  }
+  if (call.callee() == "memory.start_ref_count" ||
+      call.callee() == "memory.stop_ref_count") {
+    if (!call.arguments().empty())
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "' takes no arguments");
+    return Type::void_type();
+  }
+  if (call.callee() == "memory.get_ref_count") {
+    if (call.arguments().size() != 1)
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.get_ref_count' takes one managed pointer");
+    if (call.arguments().empty()) return Type::i64_type();
+    const Type type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (type.is_valid() && !type.is_managed_pointer())
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "reference diagnostics require a managed pointer");
+    return Type::i64_type();
   }
 
   if (call.callee() == "memory.secure_zero") {
@@ -1379,6 +1451,12 @@ Type TypeChecker::check_call(CallExpr& call) {
       if (type.is_valid() && !type.is_pointer() && !type.is_managed_pointer())
         diagnostics_.error(diag::kTypeMismatch, argument->location(),
                            "argument must be a pointer");
+    }
+    if ((call.callee() == "memory.secure_release" ||
+         call.callee() == "memory.unmap_file") && !call.arguments().empty()) {
+      const Symbol* pointer_symbol = find_root_symbol(*call.arguments()[0], symbols_);
+      if (pointer_symbol && pointer_symbol->type.is_pointer())
+        symbols_.mark_allocation_moved(pointer_symbol->allocation_id);
     }
     return call.callee() == "memory.unmap_file" ? Type::i32_type()
                                                   : Type::void_type();
@@ -1425,7 +1503,8 @@ Type TypeChecker::check_call(CallExpr& call) {
   // source language; the runtime validates each handle before using it.
   const std::unordered_map<std::string, bool> allocator_constructors = {
       {"memory.general_allocator", false}, {"memory.pool_allocator", true},
-      {"memory.arena_allocator", true}, {"memory.stack_allocator", true},
+      {"memory.arena_allocator", true}, {"memory.region", true},
+      {"memory.stack_allocator", true},
       {"memory.slab_allocator", true}, {"memory.buddy_allocator", true},
       {"memory.free_list_allocator", true}, {"memory.tlsf_allocator", true}};
   if (auto allocator = allocator_constructors.find(call.callee());
@@ -1467,9 +1546,9 @@ Type TypeChecker::check_call(CallExpr& call) {
 
   // Builtin 'nrq_memory_allocate'
   if (call.callee() == "memory.allocate" && call.has_generic_argument()) {
-    if (call.arguments().size() != 1) {
+    if (call.arguments().size() != 1 && call.arguments().size() != 2) {
       diagnostics_.error(diag::kPrintArity, call.location(),
-                         "'memory.allocate<T>' takes exactly one byte-count argument");
+                         "'memory.allocate<T>' takes a byte count and optional allocator handle");
       for (const ExprPtr& argument : call.arguments())
         check_expression(const_cast<Expr&>(*argument));
       return Type::pointer_type(resolve_generic_type(call.generic_argument()));
@@ -1478,6 +1557,13 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (size_type.is_valid() && !size_type.is_integer()) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "'memory.allocate<T>' requires an integer byte count");
+    }
+    if (call.arguments().size() == 2) {
+      const Type allocator_type = check_expression(
+          const_cast<Expr&>(*call.arguments()[1]));
+      if (allocator_type.is_valid() && !allocator_type.is_integer())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
+                           "allocator handle must be an integer");
     }
     return Type::pointer_type(resolve_generic_type(call.generic_argument()));
   }
@@ -1511,6 +1597,9 @@ Type TypeChecker::check_call(CallExpr& call) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "'memory.deallocate' requires an explicitly allocated pointer");
     }
+    const Symbol* pointer_symbol = find_root_symbol(*call.arguments()[0], symbols_);
+    if (pointer_symbol && pointer_symbol->type.is_pointer())
+      symbols_.mark_allocation_moved(pointer_symbol->allocation_id);
     return Type::void_type();
   }
 

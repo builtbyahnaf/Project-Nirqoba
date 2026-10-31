@@ -2,6 +2,7 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
 #include <unordered_map>
 #include <vector>
 
@@ -83,6 +84,7 @@ class TypeChecker {
   Type current_return_type_;
   int loop_depth_ = 0;
   std::string current_module_;
+  uint64_t next_allocation_id_ = 1;
   std::unordered_map<std::string, FunctionSignature> functions_;
   std::unordered_map<std::string, StructInfo> structs_;
 };

@@ -55,6 +55,9 @@ uint64_t nrq_gc_get_collection_count(void);
 uint64_t nrq_gc_get_live_objects(void);
 void* nrq_gc_pin(void* object);
 void nrq_gc_unpin(void* object);
+void nrq_gc_ref_count_start(void);
+void nrq_gc_ref_count_stop(void);
+int64_t nrq_gc_get_ref_count(void* object);
 
 #ifdef __cplusplus
 }

@@ -438,6 +438,7 @@ class TlsfAllocator final : public Allocator {
     if (consumed_end < original_end) {
       auto remainder = blocks_.insert(std::next(block),
           FreeBlock{consumed_end, original_end - consumed_end, true});
+      block_positions_.emplace(&*remainder, remainder);
       insert_bin(&*remainder);
     }
     return pointer;
@@ -454,6 +455,7 @@ class TlsfAllocator final : public Allocator {
       if (previous->free) {
         remove_bin(&*previous);
         previous->size += block->size;
+        block_positions_.erase(&*block);
         block = blocks_.erase(block);
         block = previous;
       }
@@ -462,6 +464,7 @@ class TlsfAllocator final : public Allocator {
     if (next != blocks_.end() && next->free) {
       remove_bin(&*next);
       block->size += next->size;
+      block_positions_.erase(&*next);
       blocks_.erase(next);
     }
     insert_bin(&*block);
@@ -471,9 +474,12 @@ class TlsfAllocator final : public Allocator {
     live_.clear();
     blocks_.clear();
     clear_bins();
+    free_positions_.clear();
+    block_positions_.clear();
     if (!base_) base_ = _aligned_malloc(capacity_, capacity_);
     if (!base_) return false;
     blocks_.push_back(FreeBlock{0, capacity_, true});
+    block_positions_.emplace(&blocks_.front(), blocks_.begin());
     insert_bin(&blocks_.front());
     return true;
   }
@@ -481,7 +487,8 @@ class TlsfAllocator final : public Allocator {
  private:
   static constexpr size_t kSecondLevels = 8;
   static constexpr size_t kFirstLevels = 64;
-  struct Bin { std::list<FreeBlock*> blocks; };
+  using BinList = std::list<FreeBlock*>;
+  struct Bin { BinList blocks; };
   using Iterator = std::list<FreeBlock>::iterator;
 
   std::pair<size_t, size_t> mapping(size_t size) const {
@@ -490,23 +497,27 @@ class TlsfAllocator final : public Allocator {
     while (value >>= 1) ++first;
     if (first >= kFirstLevels) first = kFirstLevels - 1;
     const size_t base = size_t{1} << first;
-    const size_t second = first == 0 ? 0 :
-        std::min(kSecondLevels - 1, ((size - base) * kSecondLevels) / base);
+    const size_t unit = std::max<size_t>(1, base / kSecondLevels);
+    const size_t second = std::min(kSecondLevels - 1, (size - base) / unit);
     return {first, second};
   }
 
   Iterator find_block(size_t required) {
-    const auto start = mapping(required);
+    auto start = mapping(required);
+    const size_t base = size_t{1} << start.first;
+    const size_t unit = std::max<size_t>(1, base / kSecondLevels);
+    const size_t bucket_lower_bound = base + start.second * unit;
+    if (required > bucket_lower_bound && ++start.second == kSecondLevels) {
+      start.second = 0;
+      ++start.first;
+    }
     for (size_t first = start.first; first < kFirstLevels; ++first) {
       const size_t first_second = first == start.first ? start.second : 0;
       for (size_t second = first_second; second < kSecondLevels; ++second) {
-        auto& bin = bins_[first * kSecondLevels + second].blocks;
-        for (FreeBlock* candidate : bin) {
-          if (candidate->size >= required) {
-            for (auto it = blocks_.begin(); it != blocks_.end(); ++it)
-              if (&*it == candidate) return it;
-          }
-        }
+        const auto& bin = bins_[first * kSecondLevels + second].blocks;
+        if (bin.empty()) continue;
+        auto position = block_positions_.find(bin.front());
+        if (position != block_positions_.end()) return position->second;
       }
     }
     return blocks_.end();
@@ -514,13 +525,17 @@ class TlsfAllocator final : public Allocator {
 
   void insert_bin(FreeBlock* block) {
     const auto [first, second] = mapping(block->size);
-    bins_[first * kSecondLevels + second].blocks.push_back(block);
+    auto& bin = bins_[first * kSecondLevels + second].blocks;
+    auto position = bin.insert(bin.end(), block);
+    free_positions_.emplace(block, position);
   }
 
   void remove_bin(FreeBlock* block) {
+    auto position = free_positions_.find(block);
+    if (position == free_positions_.end()) return;
     const auto [first, second] = mapping(block->size);
-    auto& bin = bins_[first * kSecondLevels + second].blocks;
-    bin.remove(block);
+    bins_[first * kSecondLevels + second].blocks.erase(position->second);
+    free_positions_.erase(position);
   }
 
   void clear_bins() {
@@ -536,6 +551,8 @@ class TlsfAllocator final : public Allocator {
   std::list<FreeBlock> blocks_;
   std::array<Bin, kFirstLevels * kSecondLevels> bins_;
   std::unordered_map<void*, Iterator> live_;
+  std::unordered_map<FreeBlock*, Iterator> block_positions_;
+  std::unordered_map<FreeBlock*, BinList::iterator> free_positions_;
 };
 
 std::mutex allocator_mutex;
@@ -651,9 +668,8 @@ void* nrq_memory_use_allocator(void* handle) {
   return previous;
 }
 
-void* nrq_memory_allocate(size_t bytes, size_t alignment) {
-  std::lock_guard<std::mutex> lock(allocator_mutex);
-  Allocator* allocator = active_allocator();
+static void* allocate_with_allocator(Allocator* allocator, size_t bytes,
+                                     size_t alignment) {
   void* pointer = nullptr;
   try {
     pointer = allocator->allocate(bytes, alignment);
@@ -674,6 +690,19 @@ void* nrq_memory_allocate(size_t bytes, size_t alignment) {
     ++memory_profile.allocations;
   }
   return pointer;
+}
+
+void* nrq_memory_allocate(size_t bytes, size_t alignment) {
+  std::lock_guard<std::mutex> lock(allocator_mutex);
+  return allocate_with_allocator(active_allocator(), bytes, alignment);
+}
+
+void* nrq_memory_allocate_from(void* handle, size_t bytes, size_t alignment) {
+  std::lock_guard<std::mutex> lock(allocator_mutex);
+  if (!handle) return allocate_with_allocator(&default_allocator, bytes, alignment);
+  auto found = allocator_handles.find(handle);
+  if (found == allocator_handles.end()) return nullptr;
+  return allocate_with_allocator(found->second.get(), bytes, alignment);
 }
 
 void nrq_memory_deallocate_checked(void* pointer) {

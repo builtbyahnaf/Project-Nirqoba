@@ -37,3 +37,8 @@ These strategies are correctness choices, not measured performance claims.
 The current language API selects allocators per thread. Per-allocation,
 collection, function, and scope selection are not implemented. User-defined
 allocator implementations and reallocation are also not implemented.
+
+Use `memory.profiler.start()`, `.capture()`, and `.stop()` to track explicit
+allocator memory. Secure buffers allocated through `memory.secure_allocate`
+are also tracked and can be released with the zeroing
+`memory.secure_release` API.

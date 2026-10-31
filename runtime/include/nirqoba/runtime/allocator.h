@@ -34,6 +34,7 @@ int32_t nrq_allocator_reset(void* allocator);
 void* nrq_memory_get_allocator(void);
 void* nrq_memory_use_allocator(void* allocator);
 void* nrq_memory_allocate(size_t bytes, size_t alignment);
+void* nrq_memory_allocate_from(void* allocator, size_t bytes, size_t alignment);
 void nrq_memory_deallocate_checked(void* pointer);
 void nrq_memory_profiler_start(void);
 void nrq_memory_profiler_stop(void);
@@ -49,6 +50,10 @@ uint64_t nrq_memory_available_bytes(void);
 void* nrq_memory_map_file(const char* path, int32_t writable);
 int32_t nrq_memory_unmap_file(void* address);
 uint64_t nrq_memory_mapping_size(void* address);
+int32_t nrq_memory_mapping_read(void* address, size_t offset, size_t bytes,
+                                void* output);
+int32_t nrq_memory_mapping_write(void* address, size_t offset, size_t bytes,
+                                 const void* input);
 
 #ifdef __cplusplus
 }

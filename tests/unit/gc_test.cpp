@@ -1,6 +1,9 @@
 #include "test_harness.h"
 
 #include <cstddef>
+#include <atomic>
+#include <thread>
+#include <vector>
 
 #include "nirqoba/runtime/gc.h"
 
@@ -87,4 +90,47 @@ TEST(GcTest, PinnedObjectSurvivesUntilItIsUnpinned) {
   nrq_gc_unpin(object);
   nrq_gc_collect();
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
+TEST(GcTest, ReferenceDiagnosticsCountHeapAndRootReferencesWhenEnabled) {
+  nrq_gc_enable();
+  nrq_gc_collect();
+  auto* first = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  auto* second = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  first->next = second;
+  second->next = nullptr;
+  nrq_gc_root_register(reinterpret_cast<void**>(&first));
+  nrq_gc_ref_count_stop();
+  ASSERT_EQ(nrq_gc_get_ref_count(first), int64_t{-1});
+  nrq_gc_ref_count_start();
+  ASSERT_EQ(nrq_gc_get_ref_count(first), int64_t{1});
+  ASSERT_EQ(nrq_gc_get_ref_count(second), int64_t{1});
+  nrq_gc_ref_count_stop();
+  nrq_gc_root_unregister(reinterpret_cast<void**>(&first));
+  first = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
+TEST(GcTest, ConcurrentAllocationIsSerializedAndReclaimed) {
+  nrq_gc_enable();
+  nrq_gc_set_threshold(1024 * 1024 * 1024);
+  nrq_gc_collect();
+  std::atomic<bool> succeeded = true;
+  std::vector<std::thread> workers;
+  for (int worker = 0; worker < 4; ++worker) {
+    workers.emplace_back([&succeeded] {
+      for (int index = 0; index < 128; ++index) {
+        if (!nrq_gc_allocate(48, nullptr)) succeeded = false;
+      }
+    });
+  }
+  for (std::thread& worker : workers) worker.join();
+  ASSERT_TRUE(succeeded.load());
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{512});
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+  nrq_gc_set_threshold(1024 * 1024);
 }
