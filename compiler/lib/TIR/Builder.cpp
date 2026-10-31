@@ -169,6 +169,8 @@ void TirBuilder::emit_deferred_from(std::size_t scope_depth, tir::Function& func
       call.location = deferred->location;
       call.callee = deferred->callee;
       call.arguments = deferred->arguments;
+      if (deferred->result_type.is_valid() && !deferred->result_type.is_void())
+        call.result = function.allocate_value(deferred->result_type);
       function.add_operation(std::move(call));
     }
   }
@@ -527,6 +529,7 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       DeferredCall lowered;
       lowered.callee = call.has_resolved_symbol() ? call.resolved_symbol() : call.callee();
       lowered.location = call.location();
+      lowered.result_type = call.type();
       lowered.arguments.reserve(call.arguments().size());
       for (const ExprPtr& argument : call.arguments())
         lowered.arguments.push_back(lower_expression(*argument, function));

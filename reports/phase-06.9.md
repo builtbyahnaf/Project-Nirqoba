@@ -1,93 +1,40 @@
-# Phase 6.9 Report â€” Advanced Memory Utilities
+# Phase 6.9 Report — Advanced Memory Utilities
 
-## 1. Phase Overview
+## Status
 
-- **Phase:** 6.9 â€” Advanced Runtime Utilities and Specialized Memory Features
-- **Date:** 2026-10-31
-- **Status:** Partial implementation
-- **Objective:** Add optional diagnostics and specialized memory/resource
-  facilities described in `project_context/ROADMAP.md`.
-- **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
+Partial implementation. Windows x64, MSVC, LLVM/MLIR 23.1.4.
 
-## 2. Scope
+## Implemented features
 
-Implemented optional reference-count diagnostics, an explicit-allocation
-profiler, read/write Windows mappings with checked typed access helpers,
-explicit GC pin/unpin, secure allocation/zeroization, and available physical
-memory reporting. This is a subset of the complete roadmap scope.
+- Optional on-demand reference diagnostics for managed references.
+- Memory profiler: explicit-allocation current, cumulative total, peak, allocation and deallocation counters; each capture also snapshots GC live bytes, collected bytes, collection count, and live objects.
+- Read/write mapping for existing non-empty files, explicit unmap, mapping length, and checked typed reads/writes.
+- Explicit pin/unpin for non-moving managed objects, with scoped release using `defer`.
+- Secure allocation and optimizer-resistant zeroization on Windows.
+- Available physical-memory estimate.
+- Lexical `defer call(...)` cleanup, with argument capture at registration and LIFO execution on block exit, return, break, and continue. `memory.use_allocator` can pair with a deferred restore for block/function scoped selection; pins can pair with deferred `memory.unpin`.
 
-## 3. Architecture and Design
+## Known limits
 
-The Windows mapping registry owns file and section handles until explicit
-unmap. Checked mapped read/write APIs validate offset and width before copying.
-Pinning adds a GC root, which is sufficient for the current non-moving
-collector. Reference counts are computed on demand while diagnostics are
-enabled and represent observed managed references, not ownership. Secure
-buffers use `SecureZeroMemory` before release.
+The profiler does not provide fragmentation estimates, allocator-specific attribution, allocation-size histograms, or hotspots. GC counters are snapshots; the profiler's explicit allocation current/peak/total counters do not include the GC heap. Raw mapping pointer indexing cannot be checked; use the typed mapped access APIs. Pin scopes use `defer memory.unpin`; excessive-pin diagnostics are absent. Introspection reports available physical memory, runtime version, logical CPU count, and built-in allocator kind; thread/task/device details are absent. The runtime lacks native resource wrapper types, exception-unwind cleanup, and non-Windows support.
 
-## 4. Implementation Details
+## Validation
 
-The profiler tracks explicit-allocation current, total, and peak bytes plus
-allocation/free counts. Each capture includes a snapshot of GC live bytes,
-collected bytes, collection count, and live objects. It does not report
-fragmentation or allocator/hotspot breakdown. Mappings support existing
-non-empty files. `defer` provides LIFO call cleanup on lexical block exits;
-scope-bound pin guards and generalized resource wrappers remain incomplete.
+- Unit tests verify explicit totals and the GC snapshot fields against the GC's own counters.
+- Integration tests cover profiler fields, secure memory, mapping, reference diagnostics, pinning, deferred cleanup order and exit paths, deferred frees, and scoped allocator restoration.
+- Release and RelWithDebInfo builds succeeded; CTest passed 1/1 and all 23 integration tests passed in each configuration. The latest RelWithDebInfo run, including scoped pinning, passed CTest 1/1 and all 24 integration tests.
+- Profiler overhead, resource pressure, and fragmentation benchmarks have not been measured.
 
-## 5. Modified Files
-
-This report documents the phase gap. Phase 6 GC and allocator code is covered
-by `reports/phase-06.5.md` and `reports/phase-06.7.md`.
-
-## 6. Language/API Changes
-
-Added cumulative explicit-allocation bytes and GC statistics to
-`memory.profiler.capture()`.
-
-## 7. Testing
-
-The last verified run before the deferred-cleanup addition passed CTest 1/1
-and 19/19 integration tests in Release and RelWithDebInfo. Profiler unit tests
-cover explicit totals and GC snapshot accuracy. The language integration test
-exercises profiler fields, secure memory, mapping, reference counts, and
-pinning. Current suite validation is pending. Overhead and resource-pressure
-tests were not run.
-
-## 8. Performance
-
-No Phase 6.9 performance measurements were performed.
-
-## 9. Known Issues
-
-Fragmentation estimates, allocator/hotspot breakdown, scoped pin guards,
-generalized deterministic resource wrappers, broader runtime
-introspection, and overhead/performance measurements remain open. Raw mapping
-pointer indexing is unchecked; use the checked mapped read/write APIs.
-
-## 10. Documentation Changes
-
-Updated `project_context/SYNTAX.md` and `docs/memory/management.md` with the
-implemented APIs and their limitations.
-
-## 11. Acceptance Criteria
+## Acceptance snapshot
 
 | Requirement | Status |
 |---|---|
 | Reference-count diagnostics | Implemented; on-demand managed reference counts |
-| Memory profiler | Partial; explicit counters and GC snapshots, no fragmentation or attribution |
+| Memory profiler | Partial; explicit counters plus GC snapshots, without fragmentation or attribution |
 | Memory mapping | Partial; Windows mappings and checked typed access |
-| Memory pinning | Implemented for non-moving managed objects; explicit unpin required |
-| Deterministic resource destruction | Partial; `defer` call cleanup, no general resource wrappers |
+| Memory pinning | Partial; explicit pin/unpin and scoped cleanup with `defer`; excessive-pin diagnostics absent |
+| Deterministic resource destruction | Partial; `defer` call cleanup and scoped allocator restoration, no native wrapper types or unwind support |
 | Secure memory | Implemented; Windows zeroization |
-| Runtime introspection | Partial; available physical memory estimate |
+| Runtime introspection | Partial; available memory, version, CPU count, and allocator kind |
 
-## 12. Final Verdict
-
-**FAIL** â€” optional memory facilities are implemented and tested, but general
-deterministic cleanup, complete profiling/introspection, and checked semantics
-for ordinary pointer indexing remain incomplete.
-- `memory.profiler`: partial, covering explicit allocator calls/bytes only; GC heap, fragmentation, and allocation hotspots are not reported.
-- `memory.map_file`: Windows only, supports existing non-empty files, with explicit unmap and checked typed read/write helpers.
-- `memory.pin`: explicit pin/unpin; no scoped guard or excessive-pin diagnostic.
-- Deterministic cleanup scopes and general foreign-resource wrappers are not implemented.
-- Runtime introspection is limited; CPU/thread/task/device information is not exposed.
+**Verdict:** Phase 6.9 remains incomplete. Generalized resource integration, full profiler attribution, scoped pinning, and broader introspection remain required.

@@ -13,10 +13,12 @@
 Implemented typed raw allocation/deallocation, allocation ownership tracking,
 invalid and duplicate free diagnostics, selectable general/pool/arena/stack/
 slab/buddy/free-list/TLSF strategies, opaque allocator handles and reset/destroy
-controls, per-allocation selection, arena-backed regions, and a limited static
-use-after-free check for direct aliases. Custom allocator implementations,
-scoped selection, reallocation, and complete pointer lifetime checking remain
-incomplete.
+controls, per-allocation selection, arena-backed regions, limited static
+use-after-free diagnostics, and a native C callback interface for custom
+allocators. Nirqoba source-level custom allocator declarations,
+container/module/application selection, reallocation, and complete pointer
+lifetime checking remain incomplete. Function/block selection can use `defer`
+to restore the prior thread-local selection.
 
 ## 3. Architecture and Design
 
@@ -35,7 +37,8 @@ strategies use free-block metadata or size/order bins as appropriate. Allocator
 reset invalidates its outstanding pointers, while destruction is rejected when
 an allocator remains selected or owns live allocations. The compiler lowers
 allocator handles through pointer/integer conversions and checks source-level
-argument counts and integer types.
+argument counts and integer types. Native embedders can register callbacks;
+the runtime tracks their allocation identity and original size/alignment.
 
 ## 5. Modified Files
 
@@ -60,8 +63,8 @@ the default allocator.
 - Command: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test.ps1 -Configuration RelWithDebInfo`
 - Environment: Windows x64, MSVC, LLVM/MLIR 23.1.4.
 - Actual result: build succeeded; CTest passed 1/1; the final expanded suite
-  passed 19/19 integration tests. A Release build and full Release test run
-  also succeeded; CTest passed 1/1 and all 19 integration tests passed.
+  passed 23/23 integration tests. The Release build and full Release test run
+  also succeeded; CTest passed 1/1 and all 23 integration tests passed.
 - The allocator integration case creates/selects each strategy, allocates,
   reads/writes and frees a typed byte, restores the prior allocator, then resets
   and destroys region strategies.
@@ -76,10 +79,12 @@ No allocator benchmarks were run; no relative performance claim is made.
 
 The compiler rejects uses through direct aliases after `memory.deallocate`,
 `memory.secure_release`, or `memory.unmap_file`; it cannot check raw pointer
-dereferences generally, pointer aliases created by later assignment, or
-interprocedural escapes/frees. The compiler does not enforce a complete
-ownership/borrowing model. Container/scope selection and user-defined allocator
-interfaces are absent. This runtime
+dereferences generally, aliases hidden in aggregates, or interprocedural
+escapes/frees. It tracks direct variable aliases created by declaration or
+simple assignment. The compiler does not enforce a complete
+ownership/borrowing model. Container, module, application-wide selection, and
+user-defined allocator interfaces are absent. Function/block selection can be
+paired with `defer` to restore the prior thread-local allocator. This runtime
 implementation is Windows-only. Strategy-specific edge and stress tests remain
 needed.
 
@@ -97,7 +102,9 @@ Updated `project_context/SYNTAX.md`; added `docs/memory/allocators.md` and
 | Failure, alignment, mismatch and double-free behavior | Partial; invalid frees checked, broader failure/alignment tests absent |
 | Direct alias use-after-free diagnostic | Partial; static direct aliases only |
 | Per-allocation and region selection | Implemented for typed explicit allocations |
-| Custom allocator and container/function/module selection | Incomplete |
+| Native C callback allocator interface | Implemented; unit tested |
+| Nirqoba custom allocator declarations and container/module/application selection | Incomplete |
+| Function/block allocator selection with deferred restoration | Implemented; integration tested |
 | Stress, concurrency and benchmarks | Not run |
 
 ## 12. Final Verdict

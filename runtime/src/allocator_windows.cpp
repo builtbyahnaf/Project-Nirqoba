@@ -39,6 +39,26 @@ size_t align_up(size_t value, size_t alignment) {
   return (value + alignment - 1) & ~(alignment - 1);
 }
 
+bool checked_align_up(size_t value, size_t alignment, size_t& result) {
+  if (alignment == 0 || (alignment & (alignment - 1)) != 0 ||
+      value > std::numeric_limits<size_t>::max() - (alignment - 1))
+    return false;
+  result = align_up(value, alignment);
+  return true;
+}
+
+bool checked_align_address(uintptr_t value, size_t alignment,
+                           uintptr_t& result) {
+  static_assert(sizeof(size_t) == sizeof(uintptr_t));
+  if (alignment == 0 || (alignment & (alignment - 1)) != 0 ||
+      value > std::numeric_limits<uintptr_t>::max() -
+                  static_cast<uintptr_t>(alignment - 1))
+    return false;
+  const uintptr_t mask = static_cast<uintptr_t>(alignment - 1);
+  result = (value + mask) & ~mask;
+  return true;
+}
+
 size_t next_power_of_two(size_t value) {
   if (value <= 1) return 1;
   --value;
@@ -75,6 +95,7 @@ class Allocator {
   virtual bool can_deallocate(void*) const { return true; }
   virtual bool reset() = 0;
   virtual bool can_destroy() const { return true; }
+  virtual NrqAllocatorKind kind() const { return NRQ_ALLOCATOR_GENERAL; }
   size_t capacity() const { return capacity_; }
 
  protected:
@@ -89,6 +110,63 @@ class GeneralAllocator final : public Allocator {
   }
   void deallocate(void* pointer) override { heap_free_aligned(pointer); }
   bool reset() override { return true; }
+};
+
+class CustomAllocator final : public Allocator {
+ public:
+  explicit CustomAllocator(const NrqCustomAllocatorVTable& callbacks)
+      : Allocator(0), callbacks_(callbacks) {}
+
+  ~CustomAllocator() override {
+    for (const auto& allocation : live_) {
+      try {
+        callbacks_.deallocate(callbacks_.context, allocation.first,
+                              allocation.second.bytes, allocation.second.alignment);
+      } catch (...) {
+      }
+    }
+    if (callbacks_.destroy) {
+      try { callbacks_.destroy(callbacks_.context); } catch (...) {}
+    }
+  }
+
+  void* allocate(size_t bytes, size_t alignment) override {
+    if (bytes == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0)
+      return nullptr;
+    void* pointer = callbacks_.allocate(callbacks_.context, bytes, alignment);
+    if (!pointer) return nullptr;
+    try {
+      auto [entry, inserted] = live_.emplace(pointer, Request{bytes, alignment});
+      (void)entry;
+      if (!inserted) return nullptr;
+    } catch (...) {
+      try { callbacks_.deallocate(callbacks_.context, pointer, bytes, alignment); }
+      catch (...) {}
+      return nullptr;
+    }
+    return pointer;
+  }
+
+  void deallocate(void* pointer) override {
+    auto found = live_.find(pointer);
+    if (found == live_.end())
+      nrq_runtime_fatal("custom allocator received an unknown allocation");
+    try {
+      callbacks_.deallocate(callbacks_.context, pointer,
+                            found->second.bytes, found->second.alignment);
+    } catch (...) {
+      nrq_runtime_fatal("custom allocator deallocation callback threw an exception");
+    }
+    live_.erase(found);
+  }
+
+  bool reset() override { return false; }
+  NrqAllocatorKind kind() const override { return NRQ_ALLOCATOR_CUSTOM; }
+
+ private:
+  struct Request { size_t bytes; size_t alignment; };
+  NrqCustomAllocatorVTable callbacks_;
+  std::unordered_map<void*, Request> live_;
 };
 
 struct PoolBucket {
@@ -108,14 +186,16 @@ class FixedPoolAllocator final : public Allocator {
   void* allocate(size_t bytes, size_t alignment) override {
     if (bytes == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0 ||
         (!slab_ && bytes > capacity_)) return nullptr;
-    const size_t size_class = slab_
-        ? std::max<size_t>(16, next_power_of_two(std::max(bytes, alignment)))
-        : next_power_of_two(std::max(capacity_, alignment));
+    size_t size_class = next_power_of_two(
+        slab_ ? std::max(bytes, alignment) : std::max(capacity_, alignment));
+    if (size_class == 0) return nullptr;
+    if (slab_) size_class = std::max<size_t>(16, size_class);
     const auto key = std::make_pair(size_class, alignment);
     PoolBucket& bucket = buckets_[key];
     if (bucket.stride == 0) {
       bucket.alignment = std::max<size_t>(alignment, 16);
-      bucket.stride = align_up(size_class, bucket.alignment);
+      if (!checked_align_up(size_class, bucket.alignment, bucket.stride))
+        return nullptr;
     }
     if (bucket.free_slots.empty() && !add_chunk(bucket)) return nullptr;
     void* result = bucket.free_slots.back();
@@ -141,22 +221,51 @@ class FixedPoolAllocator final : public Allocator {
     buckets_.clear();
     return true;
   }
+  NrqAllocatorKind kind() const override {
+    return slab_ ? NRQ_ALLOCATOR_SLAB : NRQ_ALLOCATOR_POOL;
+  }
 
  private:
   bool add_chunk(PoolBucket& bucket) {
+    const size_t old_free_count = bucket.free_slots.size();
+    const size_t old_chunk_count = bucket.raw_chunks.size();
     const size_t slots = std::max<size_t>(8, 64 * 1024 / bucket.stride);
     if (slots > (std::numeric_limits<size_t>::max() - bucket.alignment) /
                     bucket.stride) return false;
+    if (slots > std::numeric_limits<size_t>::max() - old_free_count ||
+        slots > std::numeric_limits<size_t>::max() - old_chunk_count ||
+        slots > std::numeric_limits<size_t>::max() - bucket.slot_chunk.size())
+      return false;
     const size_t total = slots * bucket.stride + bucket.alignment - 1;
+    try {
+      bucket.free_slots.reserve(old_free_count + slots);
+      bucket.raw_chunks.reserve(old_chunk_count + 1);
+      bucket.slot_chunk.reserve(bucket.slot_chunk.size() + slots);
+    } catch (...) {
+      return false;
+    }
     void* raw = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, total);
     if (!raw) return false;
-    const uintptr_t base = align_up(
-        reinterpret_cast<uintptr_t>(raw), bucket.alignment);
-    bucket.raw_chunks.push_back(raw);
-    for (size_t index = 0; index < slots; ++index) {
-      void* slot = reinterpret_cast<void*>(base + index * bucket.stride);
-      bucket.free_slots.push_back(slot);
-      bucket.slot_chunk.emplace(slot, bucket.raw_chunks.size() - 1);
+    uintptr_t base = 0;
+    if (!checked_align_address(reinterpret_cast<uintptr_t>(raw),
+                               bucket.alignment, base)) {
+      HeapFree(GetProcessHeap(), 0, raw);
+      return false;
+    }
+    try {
+      bucket.raw_chunks.push_back(raw);
+      for (size_t index = 0; index < slots; ++index) {
+        void* slot = reinterpret_cast<void*>(base + index * bucket.stride);
+        bucket.free_slots.push_back(slot);
+        bucket.slot_chunk.emplace(slot, old_chunk_count);
+      }
+    } catch (...) {
+      for (size_t index = old_free_count; index < bucket.free_slots.size(); ++index)
+        bucket.slot_chunk.erase(bucket.free_slots[index]);
+      bucket.free_slots.resize(old_free_count);
+      bucket.raw_chunks.resize(old_chunk_count);
+      HeapFree(GetProcessHeap(), 0, raw);
+      return false;
     }
     return true;
   }
@@ -181,12 +290,19 @@ class ArenaAllocator : public Allocator {
     if (bytes == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0)
       return nullptr;
     if (chunks_.empty() || !fits(chunks_.back(), bytes, alignment)) {
+      if (bytes > std::numeric_limits<size_t>::max() - (alignment - 1))
+        return nullptr;
       const size_t request = bytes + alignment - 1;
       if (!add_chunk(std::max(capacity_, request))) return nullptr;
     }
     ArenaChunk& chunk = chunks_.back();
-    const size_t aligned_offset = align_up(chunk.used, alignment);
-    void* result = reinterpret_cast<void*>(chunk.base + aligned_offset);
+    uintptr_t aligned_address = 0;
+    if (!checked_align_address(chunk.base + chunk.used, alignment,
+                               aligned_address)) return nullptr;
+    const size_t aligned_offset = static_cast<size_t>(aligned_address - chunk.base);
+    if (aligned_offset > chunk.size || bytes > chunk.size - aligned_offset)
+      return nullptr;
+    void* result = reinterpret_cast<void*>(aligned_address);
     chunk.used = aligned_offset + bytes;
     return result;
   }
@@ -199,18 +315,36 @@ class ArenaAllocator : public Allocator {
     chunks_.clear();
     return true;
   }
+  NrqAllocatorKind kind() const override { return NRQ_ALLOCATOR_ARENA; }
 
  protected:
   bool fits(const ArenaChunk& chunk, size_t bytes, size_t alignment) const {
-    const size_t offset = align_up(chunk.used, alignment);
+    if (chunk.used > chunk.size ||
+        chunk.base > std::numeric_limits<uintptr_t>::max() - chunk.used)
+      return false;
+    uintptr_t aligned_address = 0;
+    if (!checked_align_address(chunk.base + chunk.used, alignment,
+                               aligned_address) || aligned_address < chunk.base)
+      return false;
+    const size_t offset = static_cast<size_t>(aligned_address - chunk.base);
     return offset <= chunk.size && bytes <= chunk.size - offset;
   }
 
   bool add_chunk(size_t bytes) {
+    if (bytes > std::numeric_limits<size_t>::max() - 63) return false;
     void* raw = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes + 63);
     if (!raw) return false;
-    const uintptr_t base = align_up(reinterpret_cast<uintptr_t>(raw), 64);
-    chunks_.push_back(ArenaChunk{raw, base, bytes, 0});
+    uintptr_t base = 0;
+    if (!checked_align_address(reinterpret_cast<uintptr_t>(raw), 64, base)) {
+      HeapFree(GetProcessHeap(), 0, raw);
+      return false;
+    }
+    try {
+      chunks_.push_back(ArenaChunk{raw, base, bytes, 0});
+    } catch (...) {
+      HeapFree(GetProcessHeap(), 0, raw);
+      return false;
+    }
     return true;
   }
 
@@ -220,19 +354,31 @@ class ArenaAllocator : public Allocator {
 class StackAllocator final : public ArenaAllocator {
  public:
   explicit StackAllocator(size_t capacity) : ArenaAllocator(capacity) {}
+  NrqAllocatorKind kind() const override { return NRQ_ALLOCATOR_STACK; }
   void* allocate(size_t bytes, size_t alignment) override {
     if (bytes == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0)
       return nullptr;
     if (chunks_.empty() || !fits(chunks_.back(), bytes, alignment)) {
+      if (bytes > std::numeric_limits<size_t>::max() - (alignment - 1))
+        return nullptr;
       const size_t request = bytes + alignment - 1;
       if (!add_chunk(std::max(capacity_, request))) return nullptr;
     }
     ArenaChunk& chunk = chunks_.back();
     const size_t previous = chunk.used;
-    const size_t aligned_offset = align_up(previous, alignment);
-    void* result = reinterpret_cast<void*>(chunk.base + aligned_offset);
+    uintptr_t aligned_address = 0;
+    if (!checked_align_address(chunk.base + previous, alignment,
+                               aligned_address)) return nullptr;
+    const size_t aligned_offset = static_cast<size_t>(aligned_address - chunk.base);
+    if (aligned_offset > chunk.size || bytes > chunk.size - aligned_offset)
+      return nullptr;
+    void* result = reinterpret_cast<void*>(aligned_address);
+    try {
+      stack_.push_back({result, chunks_.size() - 1, previous});
+    } catch (...) {
+      return nullptr;
+    }
     chunk.used = aligned_offset + bytes;
-    stack_.push_back({result, chunks_.size() - 1, previous});
     return result;
   }
   void deallocate(void* pointer) override {
@@ -271,6 +417,7 @@ class BuddyAllocator final : public Allocator {
         (alignment & (alignment - 1)) != 0 || alignment > capacity_) return nullptr;
     const size_t wanted = next_power_of_two(
         std::max({bytes, alignment, kMinimumBlockBytes}));
+    if (wanted == 0) return nullptr;
     int order = order_for(wanted);
     if (order < minimum_order_ || order > maximum_order_) return nullptr;
     int found = order;
@@ -311,6 +458,7 @@ class BuddyAllocator final : public Allocator {
     initialize_free_lists();
     return base_ != nullptr;
   }
+  NrqAllocatorKind kind() const override { return NRQ_ALLOCATOR_BUDDY; }
 
  private:
   int order_for(size_t bytes) const {
@@ -354,10 +502,11 @@ class FreeListAllocator : public Allocator {
 
   void* allocate(size_t bytes, size_t alignment) override {
     if (!base_ || bytes == 0 || alignment == 0 ||
-        (alignment & (alignment - 1)) != 0) return nullptr;
+        (alignment & (alignment - 1)) != 0 || alignment > capacity_) return nullptr;
     for (auto block = blocks_.begin(); block != blocks_.end(); ++block) {
       if (!block->free) continue;
-      const size_t aligned = align_up(block->offset, alignment);
+      size_t aligned = 0;
+      if (!checked_align_up(block->offset, alignment, aligned)) continue;
       const size_t prefix = aligned - block->offset;
       if (prefix > block->size || bytes > block->size - prefix) continue;
       const size_t original_end = block->offset + block->size;
@@ -408,6 +557,7 @@ class FreeListAllocator : public Allocator {
     blocks_.push_back(FreeBlock{0, capacity_, true});
     return true;
   }
+  NrqAllocatorKind kind() const override { return NRQ_ALLOCATOR_FREE_LIST; }
 
  protected:
   struct BlockList : std::list<FreeBlock> {};
@@ -424,12 +574,17 @@ class TlsfAllocator final : public Allocator {
   void* allocate(size_t bytes, size_t alignment) override {
     if (!base_ || bytes == 0 || alignment == 0 ||
         (alignment & (alignment - 1)) != 0 ||
-        bytes > std::numeric_limits<size_t>::max() - alignment) return nullptr;
+        alignment > capacity_ ||
+        bytes > std::numeric_limits<size_t>::max() - (alignment - 1)) return nullptr;
     const size_t required = bytes + alignment - 1;
     auto block = find_block(required);
     if (block == blocks_.end()) return nullptr;
     remove_bin(&*block);
-    const size_t aligned_offset = align_up(block->offset, alignment);
+    size_t aligned_offset = 0;
+    if (!checked_align_up(block->offset, alignment, aligned_offset)) {
+      insert_bin(&*block);
+      return nullptr;
+    }
     const size_t consumed_end = aligned_offset + bytes;
     const size_t original_end = block->offset + block->size;
     block->size = consumed_end - block->offset;
@@ -484,6 +639,7 @@ class TlsfAllocator final : public Allocator {
     insert_bin(&blocks_.front());
     return true;
   }
+  NrqAllocatorKind kind() const override { return NRQ_ALLOCATOR_TLSF; }
 
  private:
   static constexpr size_t kSecondLevels = 8;
@@ -587,9 +743,16 @@ std::unique_ptr<Allocator> make_allocator(NrqAllocatorKind kind, size_t capacity
     case NRQ_ALLOCATOR_ARENA: return std::make_unique<ArenaAllocator>(capacity);
     case NRQ_ALLOCATOR_STACK: return std::make_unique<StackAllocator>(capacity);
     case NRQ_ALLOCATOR_SLAB: return std::make_unique<FixedPoolAllocator>(capacity, true);
-    case NRQ_ALLOCATOR_BUDDY: return std::make_unique<BuddyAllocator>(capacity);
-    case NRQ_ALLOCATOR_FREE_LIST: return std::make_unique<FreeListAllocator>(capacity);
-    case NRQ_ALLOCATOR_TLSF: return std::make_unique<TlsfAllocator>(capacity);
+    case NRQ_ALLOCATOR_BUDDY:
+      if (next_power_of_two(capacity) == 0) return nullptr;
+      return std::make_unique<BuddyAllocator>(capacity);
+    case NRQ_ALLOCATOR_FREE_LIST:
+      if (next_power_of_two(capacity) == 0) return nullptr;
+      return std::make_unique<FreeListAllocator>(capacity);
+    case NRQ_ALLOCATOR_TLSF:
+      if (next_power_of_two(capacity) == 0) return nullptr;
+      return std::make_unique<TlsfAllocator>(capacity);
+    case NRQ_ALLOCATOR_CUSTOM: return nullptr;
   }
   return nullptr;
 }
@@ -606,6 +769,20 @@ void* nrq_allocator_create(NrqAllocatorKind kind, size_t capacity) {
     std::lock_guard<std::mutex> lock(allocator_mutex);
     allocator_handles.emplace(handle, std::move(allocator));
     return handle;
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+void* nrq_allocator_create_custom(const NrqCustomAllocatorVTable* callbacks) {
+  if (!callbacks || !callbacks->allocate || !callbacks->deallocate) return nullptr;
+  try {
+    auto allocator = std::make_unique<CustomAllocator>(*callbacks);
+    void* handle = allocator.get();
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    auto [entry, inserted] = allocator_handles.emplace(handle, std::move(allocator));
+    (void)entry;
+    return inserted ? handle : nullptr;
   } catch (...) {
     return nullptr;
   }
@@ -642,6 +819,14 @@ int32_t nrq_allocator_reset(void* handle) {
     } else ++it;
   }
   return 1;
+}
+
+int32_t nrq_memory_allocator_kind(uint64_t allocator_handle) {
+  if (allocator_handle == 0) return NRQ_ALLOCATOR_GENERAL;
+  void* handle = reinterpret_cast<void*>(static_cast<uintptr_t>(allocator_handle));
+  std::lock_guard<std::mutex> lock(allocator_mutex);
+  auto found = allocator_handles.find(handle);
+  return found == allocator_handles.end() ? -1 : found->second->kind();
 }
 
 void* nrq_memory_get_allocator(void) {
@@ -734,7 +919,6 @@ void nrq_memory_profiler_start(void) {
   memory_profile = {};
   for (const auto& allocation : live_allocations)
     memory_profile.current_bytes += allocation.second.bytes;
-  memory_profile.total_bytes = memory_profile.current_bytes;
   memory_profile.peak_bytes = memory_profile.current_bytes;
   memory_profiler_enabled = true;
 }
@@ -752,6 +936,10 @@ NrqMemoryProfile nrq_memory_profiler_capture(void) {
   profile.gc_collections = nrq_gc_get_collection_count();
   profile.gc_live_objects = nrq_gc_get_live_objects();
   return profile;
+}
+
+void nrq_memory_profiler_capture_into(NrqMemoryProfile* output) {
+  if (output) *output = nrq_memory_profiler_capture();
 }
 
 uint64_t nrq_memory_profiler_get_current_bytes(void) {

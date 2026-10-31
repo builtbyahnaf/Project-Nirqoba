@@ -12,6 +12,7 @@ extern "C" {
 
 // Returns milliseconds since Unix epoch (January 1, 1970).
 int64_t nrq_time_now_ms(void);
+int32_t nrq_system_cpu_count(void);
 
 // Exits the process with the given exit code.
 void nrq_system_exit(int32_t exit_code);

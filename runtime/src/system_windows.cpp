@@ -32,6 +32,12 @@ int64_t nrq_time_now_ms(void) {
     return static_cast<int64_t>(unix_100ns / 10000ULL);
 }
 
+int32_t nrq_system_cpu_count(void) {
+    SYSTEM_INFO system_info{};
+    GetSystemInfo(&system_info);
+    return static_cast<int32_t>(system_info.dwNumberOfProcessors);
+}
+
 void nrq_system_exit(int32_t exit_code) {
     ExitProcess(static_cast<UINT>(exit_code));
 }

@@ -16,8 +16,25 @@ typedef enum NrqAllocatorKind {
   NRQ_ALLOCATOR_SLAB = 4,
   NRQ_ALLOCATOR_BUDDY = 5,
   NRQ_ALLOCATOR_FREE_LIST = 6,
-  NRQ_ALLOCATOR_TLSF = 7
+  NRQ_ALLOCATOR_TLSF = 7,
+  NRQ_ALLOCATOR_CUSTOM = 8
 } NrqAllocatorKind;
+
+typedef void* (*NrqCustomAllocateFn)(void* context, size_t bytes,
+                                     size_t alignment);
+typedef void (*NrqCustomDeallocateFn)(void* context, void* pointer,
+                                      size_t bytes, size_t alignment);
+typedef void (*NrqCustomAllocatorDestroyFn)(void* context);
+
+// The runtime serializes callbacks under its allocator registry lock. Callbacks
+// must not re-enter allocator APIs and must pair each pointer with its original
+// size and alignment. The runtime copies this table at registration time.
+typedef struct NrqCustomAllocatorVTable {
+  void* context;
+  NrqCustomAllocateFn allocate;
+  NrqCustomDeallocateFn deallocate;
+  NrqCustomAllocatorDestroyFn destroy;
+} NrqCustomAllocatorVTable;
 
 typedef struct NrqMemoryProfile {
   uint64_t current_bytes;
@@ -34,8 +51,10 @@ typedef struct NrqMemoryProfile {
 // `capacity` is the fixed region size for arena, stack, buddy, free-list, and
 // TLSF allocators; it is the largest object size for pool and slab allocators.
 void* nrq_allocator_create(NrqAllocatorKind kind, size_t capacity);
+void* nrq_allocator_create_custom(const NrqCustomAllocatorVTable* callbacks);
 int32_t nrq_allocator_destroy(void* allocator);
 int32_t nrq_allocator_reset(void* allocator);
+int32_t nrq_memory_allocator_kind(uint64_t allocator_handle);
 void* nrq_memory_get_allocator(void);
 void* nrq_memory_use_allocator(void* allocator);
 void* nrq_memory_allocate(size_t bytes, size_t alignment);
@@ -44,6 +63,7 @@ void nrq_memory_deallocate_checked(void* pointer);
 void nrq_memory_profiler_start(void);
 void nrq_memory_profiler_stop(void);
 NrqMemoryProfile nrq_memory_profiler_capture(void);
+void nrq_memory_profiler_capture_into(NrqMemoryProfile* output);
 uint64_t nrq_memory_profiler_get_current_bytes(void);
 uint64_t nrq_memory_profiler_get_total_bytes(void);
 uint64_t nrq_memory_profiler_get_peak_bytes(void);

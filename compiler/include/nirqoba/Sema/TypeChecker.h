@@ -45,6 +45,10 @@ class TypeChecker {
   bool check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& modules);
 
  private:
+  struct DeferredCleanup {
+    const CallExpr* call = nullptr;
+    uint64_t allocation_id = 0;
+  };
   void check_function(FunctionDecl& function);
   void check_statement(Stmt& statement);
   void check_block(BlockStmt& block);
@@ -87,7 +91,7 @@ class TypeChecker {
   std::string current_module_;
   uint64_t next_allocation_id_ = 1;
   bool checking_deferred_cleanup_ = false;
-  std::vector<std::vector<const CallExpr*>> deferred_calls_;
+  std::vector<std::vector<DeferredCleanup>> deferred_calls_;
   std::unordered_map<std::string, FunctionSignature> functions_;
   std::unordered_map<std::string, StructInfo> structs_;
 };

@@ -1,0 +1,18 @@
+int function main() {
+    var arena = memory.arena_allocator(1024);
+    if (memory.allocator_kind(arena) != (2 as i32)) {
+        return 1;
+    }
+    if (memory.cpu_count() < (1 as i32)) {
+        return 1;
+    }
+    defer memory.destroy_allocator(arena);
+    {
+        var previous = memory.use_allocator(arena);
+        defer memory.use_allocator(previous);
+        var buffer = memory.allocate<byte>(16);
+        defer memory.deallocate(buffer);
+        buffer[0] = 42 as byte;
+    }
+    return 42;
+}

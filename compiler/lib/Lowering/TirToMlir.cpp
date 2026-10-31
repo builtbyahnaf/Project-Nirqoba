@@ -858,27 +858,17 @@ class FunctionTranslator {
           return true;
         }
         if (op.callee == "memory.profiler.capture") {
-          static constexpr const char* getters[] = {
-              "nrq_memory_profiler_get_current_bytes",
-              "nrq_memory_profiler_get_total_bytes",
-              "nrq_memory_profiler_get_peak_bytes",
-              "nrq_memory_profiler_get_allocations",
-              "nrq_memory_profiler_get_deallocations",
-              "nrq_memory_profiler_get_gc_allocated_bytes",
-              "nrq_memory_profiler_get_gc_collected_bytes",
-              "nrq_memory_profiler_get_gc_collections",
-              "nrq_memory_profiler_get_gc_live_objects"};
           mlir::Type profile_type = tir_type_to_mlir(op.result.type, ctx_, builder_);
-          mlir::Value profile = builder_.create<mlir::LLVM::UndefOp>(loc, profile_type).getResult();
-          for (int index = 0; index < 9; ++index) {
-            auto getter = ensure_runtime_fn(module_, builder_, getters[index],
-                                            builder_.getI64Type(), {});
-            mlir::Value field = builder_.create<mlir::LLVM::CallOp>(
-                loc, getter, mlir::ValueRange{}).getResult();
-            profile = builder_.create<mlir::LLVM::InsertValueOp>(
-                loc, profile, field, builder_.getDenseI64ArrayAttr({index})).getResult();
-          }
-          set(op.result, profile);
+          mlir::Value count = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
+          mlir::Value slot = builder_.create<mlir::LLVM::AllocaOp>(
+              loc, llvm_ptr_type(ctx_), profile_type, count).getResult();
+          auto capture = ensure_runtime_fn(module_, builder_,
+              "nrq_memory_profiler_capture_into",
+              mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
+          builder_.create<mlir::LLVM::CallOp>(loc, capture, mlir::ValueRange{slot});
+          set(op.result, builder_.create<mlir::LLVM::LoadOp>(
+              loc, profile_type, slot).getResult());
           return true;
         }
         if (op.callee == "memory.available_bytes") {
@@ -886,6 +876,40 @@ class FunctionTranslator {
                                       builder_.getI64Type(), {});
           set(op.result, builder_.create<mlir::LLVM::CallOp>(
               loc, fn, mlir::ValueRange{}).getResult());
+          return true;
+        }
+        if (op.callee == "memory.runtime_version") {
+          auto fn = ensure_runtime_fn(module_, builder_, "nrq_runtime_version",
+                                      llvm_ptr_type(ctx_), {});
+          set(op.result, builder_.create<mlir::LLVM::CallOp>(
+              loc, fn, mlir::ValueRange{}).getResult());
+          return true;
+        }
+        if (op.callee == "memory.cpu_count") {
+          auto fn = ensure_runtime_fn(module_, builder_, "nrq_system_cpu_count",
+                                      builder_.getI32Type(), {});
+          set(op.result, builder_.create<mlir::LLVM::CallOp>(
+              loc, fn, mlir::ValueRange{}).getResult());
+          return true;
+        }
+        if (op.callee == "memory.allocator_kind") {
+          mlir::Value handle;
+          if (args.empty()) {
+            handle = builder_.create<mlir::LLVM::ConstantOp>(
+                loc, builder_.getI64Type(), builder_.getI64IntegerAttr(0)).getResult();
+          } else {
+            handle = args.front();
+          }
+          if (handle.getType() != builder_.getI64Type()) {
+            const unsigned bits = handle.getType().getIntOrFloatBitWidth();
+            handle = bits < 64
+                ? builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), handle).getResult()
+                : builder_.create<mlir::LLVM::TruncOp>(loc, builder_.getI64Type(), handle).getResult();
+          }
+          auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_allocator_kind",
+              builder_.getI32Type(), {builder_.getI64Type()});
+          set(op.result, builder_.create<mlir::LLVM::CallOp>(
+              loc, fn, mlir::ValueRange{handle}).getResult());
           return true;
         }
         if (op.callee == "memory.start_ref_count" ||

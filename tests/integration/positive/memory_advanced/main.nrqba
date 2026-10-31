@@ -28,5 +28,6 @@ int function main() {
     print(pinned[0].value);
     memory.unpin(pinned);
     memory.profiler.stop();
+    print(memory.runtime_version());
     return 42;
 }

@@ -57,7 +57,8 @@ Implemented `managed<T>`, `array.allocate<T>(count)`, `gc.enable()`,
 - Command: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test.ps1 -Configuration RelWithDebInfo`
 - Environment: Windows x64, MSVC, LLVM/MLIR 23.1.4.
 - Actual result: build succeeded; CTest passed 1/1; the final expanded suite
-  passed 19/19 integration tests.
+  passed 24/24 integration tests after adding lexical deferred cleanup, scoped
+  allocator restoration, and scoped pin release.
 - GC integration cases cover controls, allocation, managed arrays and a cyclic
   graph surviving explicit collection.
 - Multithreaded and async/coroutine GC tests were not run because those language
@@ -71,9 +72,9 @@ performance overhead has not been characterized.
 ## 9. Known Issues
 
 Thread-safe heap metadata does not imply complete mutator coordination across
-threads. Async roots, pinning, finalization, deterministic resource cleanup,
-and non-GC ownership modes remain incomplete. The implementation is Windows
-only.
+threads. Async roots, finalization, native resource wrappers, unwind cleanup,
+and non-GC ownership modes remain incomplete. `defer` supports explicit
+function-call cleanup on lexical exits. The implementation is Windows only.
 
 ## 10. Documentation Changes
 
@@ -87,8 +88,8 @@ Updated `project_context/SYNTAX.md`; added `docs/memory/management.md`.
 | Default-on automatic GC and manual controls | Implemented; covered by tests |
 | Threshold and statistics | Implemented; covered by integration tests |
 | Async roots and concurrent collection | Incomplete |
-| Deferred call cleanup on lexical block exits | Implemented; current suite pending |
-| Explicit pin/unpin for non-moving managed objects | Implemented; tested |
+| Deferred call cleanup on lexical block exits | Implemented; integration tested |
+| Explicit and scoped pin/unpin for non-moving managed objects | Implemented; unit and integration tested using `defer` |
 | Performance benchmark | Not run |
 
 ## 12. Final Verdict
