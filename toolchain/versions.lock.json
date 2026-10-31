@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "comment": "Pinned toolchain for Project Nirqoba. Bootstrap verifies every entry; nothing here is advisory.",
+  "llvm": {
+    "version": "23.1.4",
+    "release_tag": "2026.10.28",
+    "asset": "llvm-mlir_llvmorg-23.1.4_x86_64-pc-windows-msvc_noassert.tar.zst",
+    "url": "https://github.com/munich-quantum-software/portable-mlir-toolchain/releases/download/2026.10.28/llvm-mlir_llvmorg-23.1.4_x86_64-pc-windows-msvc_noassert.tar.zst",
+    "sha256": "83d46bbc26da3269de7c027bdf086171f860e1b054ffd8a59da6081ba7d78d79",
+    "bytes": 237021423,
+    "install_dir": "toolchain/llvm-23.1.4",
+    "abi": "msvc",
+    "crt": "dynamic-release",
+    "why": "The portable-mlir-toolchain release provides a prebuilt LLVM+MLIR SDK with MLIRConfig.cmake, mlir-tblgen.exe, and lld-link.exe. The noassert variant uses a smaller zstd window size for compatibility with standard decompression tools.",
+    "known_limitations": [
+      "Release build: no LLVM/MLIR C++ assertions (noassert variant).",
+      "Only the release backends are enabled: AArch64, ARM, X86, BPF, WebAssembly, RISCV, NVPTX. X86 covers the Windows x64 target.",
+      "MSVC ABI with the dynamic Release CRT; a debug-CRT build cannot link against it."
+    ]
+  },
+  "cmake": { "minimum": "3.28", "pinned": "4.5.0", "note": "Local 4.5.0-rc2 is accepted if the minimum is met; bootstrap records the exact version used." },
+  "ninja": { "minimum": "1.11" },
+  "python": { "minimum": "3.10" },
+  "msvc": { "minimum_toolset": "14.40", "minimum_cl_major": 19, "minimum_windows_sdk": "10.0.22000.0" },
+  "test_dependencies": { "note": "None. Unit tests use the in-repo harness in tests/support; no GoogleTest, fmt or vcpkg." }
+}
