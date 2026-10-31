@@ -53,6 +53,8 @@ uint64_t nrq_gc_get_allocated_bytes(void);
 uint64_t nrq_gc_get_collected_bytes(void);
 uint64_t nrq_gc_get_collection_count(void);
 uint64_t nrq_gc_get_live_objects(void);
+void* nrq_gc_pin(void* object);
+void nrq_gc_unpin(void* object);
 
 #ifdef __cplusplus
 }

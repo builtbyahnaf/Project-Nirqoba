@@ -1047,12 +1047,14 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
 
   // Struct field access: obj.field
   if (base_type.is_struct()) {
-    if (base_type.struct_name() == "GcStatistics") {
+    if (base_type.struct_name() == "GcStatistics" ||
+        base_type.struct_name() == "MemoryProfile") {
       for (const auto& field : base_type.struct_fields()) {
         if (field.first == expr.member()) return field.second;
       }
       diagnostics_.error(diag::kUnknownField, expr.location(),
-                         "GC statistics have no field '" + expr.member() + "'");
+                         "'" + base_type.struct_name() + "' has no field '" +
+                             expr.member() + "'");
       return Type::error();
     }
     const std::string& sname = base_type.struct_name();
@@ -1313,6 +1315,154 @@ Type TypeChecker::check_call(CallExpr& call) {
         {"collected_bytes", Type::u64_type()},
         {"collections", Type::u64_type()},
         {"live_objects", Type::u64_type()}});
+  }
+  if (call.callee() == "memory.secure_allocate" && call.has_generic_argument()) {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.secure_allocate<T>' takes one byte-count argument");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+    } else {
+      const Type size = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+      if (size.is_valid() && !size.is_integer())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "secure allocation size must be an integer");
+    }
+    return Type::pointer_type(resolve_generic_type(call.generic_argument()));
+  }
+
+  if (call.callee() == "memory.profiler.start" ||
+      call.callee() == "memory.profiler.stop") {
+    if (!call.arguments().empty())
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "' takes no arguments");
+    return Type::void_type();
+  }
+  if (call.callee() == "memory.profiler.capture") {
+    if (!call.arguments().empty())
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.profiler.capture' takes no arguments");
+    return Type::struct_type("MemoryProfile", {
+        {"current_bytes", Type::u64_type()}, {"peak_bytes", Type::u64_type()},
+        {"allocations", Type::u64_type()}, {"deallocations", Type::u64_type()}});
+  }
+  if (call.callee() == "memory.available_bytes") {
+    if (!call.arguments().empty())
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.available_bytes' takes no arguments");
+    return Type::u64_type();
+  }
+
+  if (call.callee() == "memory.secure_zero") {
+    if (call.arguments().size() != 2)
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.secure_zero' takes a pointer and byte count");
+    for (size_t index = 0; index < call.arguments().size(); ++index) {
+      const Type type = check_expression(const_cast<Expr&>(*call.arguments()[index]));
+      if (index == 0 && type.is_valid() && !type.is_pointer())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[index]->location(),
+                           "secure zero requires a pointer");
+      if (index == 1 && type.is_valid() && !type.is_integer())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[index]->location(),
+                           "secure zero byte count must be an integer");
+    }
+    return Type::void_type();
+  }
+  if (call.callee() == "memory.secure_release" ||
+      call.callee() == "memory.unmap_file" ||
+      call.callee() == "memory.unpin") {
+    if (call.arguments().size() != 1)
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "' takes one pointer");
+    for (const ExprPtr& argument : call.arguments()) {
+      const Type type = check_expression(const_cast<Expr&>(*argument));
+      if (type.is_valid() && !type.is_pointer() && !type.is_managed_pointer())
+        diagnostics_.error(diag::kTypeMismatch, argument->location(),
+                           "argument must be a pointer");
+    }
+    return call.callee() == "memory.unmap_file" ? Type::i32_type()
+                                                  : Type::void_type();
+  }
+  if (call.callee() == "memory.map_file") {
+    if (call.arguments().size() != 2)
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.map_file' takes a path and writable flag");
+    if (!call.arguments().empty()) {
+      const Type path = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+      if (path.is_valid() && !path.is_string())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "mapping path must be a string");
+    }
+    if (call.arguments().size() > 1) {
+      const Type writable = check_expression(const_cast<Expr&>(*call.arguments()[1]));
+      if (writable.is_valid() && !writable.is_bool())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
+                           "mapping writable flag must be bool");
+    }
+    return Type::pointer_type(Type::u8_type());
+  }
+  if (call.callee() == "memory.mapping_size") {
+    if (call.arguments().size() != 1)
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.mapping_size' takes one mapped pointer");
+    for (const ExprPtr& argument : call.arguments())
+      check_expression(const_cast<Expr&>(*argument));
+    return Type::u64_type();
+  }
+  if (call.callee() == "memory.pin") {
+    if (call.arguments().size() != 1)
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.pin' takes one managed pointer");
+    if (call.arguments().empty()) return Type::pointer_type(Type::void_type());
+    const Type pointer = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (pointer.is_valid() && !pointer.is_managed_pointer())
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "memory.pin requires a managed pointer");
+    return pointer;
+  }
+
+  // Explicit allocator handles are represented as opaque u64 values in the
+  // source language; the runtime validates each handle before using it.
+  const std::unordered_map<std::string, bool> allocator_constructors = {
+      {"memory.general_allocator", false}, {"memory.pool_allocator", true},
+      {"memory.arena_allocator", true}, {"memory.stack_allocator", true},
+      {"memory.slab_allocator", true}, {"memory.buddy_allocator", true},
+      {"memory.free_list_allocator", true}, {"memory.tlsf_allocator", true}};
+  if (auto allocator = allocator_constructors.find(call.callee());
+      allocator != allocator_constructors.end()) {
+    const size_t expected = allocator->second ? 1 : 0;
+    if (call.arguments().size() != expected)
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "' takes " +
+                             (expected ? "one capacity argument" : "no arguments"));
+    for (const ExprPtr& argument : call.arguments()) {
+      const Type type = check_expression(const_cast<Expr&>(*argument));
+      if (!type.is_integer())
+        diagnostics_.error(diag::kTypeMismatch, argument->location(),
+                           "allocator capacity must be an integer");
+    }
+    return Type::u64_type();
+  }
+  if (call.callee() == "memory.get_allocator") {
+    if (!call.arguments().empty())
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.get_allocator' takes no arguments");
+    return Type::u64_type();
+  }
+  if (call.callee() == "memory.use_allocator" ||
+      call.callee() == "memory.reset_allocator" ||
+      call.callee() == "memory.destroy_allocator") {
+    if (call.arguments().size() != 1)
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "' takes one allocator handle");
+    for (const ExprPtr& argument : call.arguments()) {
+      const Type type = check_expression(const_cast<Expr&>(*argument));
+      if (!type.is_integer())
+        diagnostics_.error(diag::kTypeMismatch, argument->location(),
+                           "allocator handle must be an integer");
+    }
+    return call.callee() == "memory.use_allocator" ? Type::u64_type()
+                                                       : Type::i32_type();
   }
 
   // Builtin 'nrq_memory_allocate'

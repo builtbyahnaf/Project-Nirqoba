@@ -34,6 +34,7 @@ struct RootInfo {
   std::vector<size_t> reference_offsets;
 };
 std::unordered_map<void*, RootInfo> roots;
+std::unordered_map<void*, size_t> pinned_objects;
 thread_local std::vector<void*> thread_roots;
 bool automatic_collection_enabled = true;
 size_t collection_threshold = 1024 * 1024;
@@ -63,6 +64,9 @@ void collect_locked() {
       std::memcpy(&reference, bytes + offset, sizeof(reference));
       if (reference) context.pending.push_back(reference);
     }
+  }
+  for (const auto& pinned : pinned_objects) {
+    if (pinned.second != 0) context.pending.push_back(pinned.first);
   }
 
   while (!context.pending.empty()) {
@@ -293,6 +297,26 @@ uint64_t nrq_gc_get_collection_count(void) {
 
 uint64_t nrq_gc_get_live_objects(void) {
   return nrq_gc_get_stats().live_objects;
+}
+
+void* nrq_gc_pin(void* object) {
+  if (!object) return nullptr;
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  if (object_index.find(object) == object_index.end()) return nullptr;
+  try {
+    ++pinned_objects[object];
+    return object;
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+void nrq_gc_unpin(void* object) {
+  if (!object) return;
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  auto found = pinned_objects.find(object);
+  if (found == pinned_objects.end()) return;
+  if (--found->second == 0) pinned_objects.erase(found);
 }
 
 }  // extern "C"

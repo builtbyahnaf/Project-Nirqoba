@@ -1,0 +1,24 @@
+struct Node {
+    int value;
+}
+
+int function main() {
+    memory.profiler.start();
+    var secret = memory.secure_allocate<byte>(16);
+    secret[0] = 42 as byte;
+    var profile = memory.profiler.capture();
+    if (profile.current_bytes < 16 as u64) {
+        return 1;
+    }
+    memory.secure_zero(secret, 16);
+    memory.secure_release(secret);
+
+    var object = array.allocate<Node>(1);
+    object[0].value = 42;
+    var pinned = memory.pin(object);
+    gc.collect();
+    print(pinned[0].value);
+    memory.unpin(pinned);
+    memory.profiler.stop();
+    return 42;
+}
