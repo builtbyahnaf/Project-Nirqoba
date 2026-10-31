@@ -46,6 +46,19 @@ if ($Clean) {
         Write-Host "==> removing $buildDir"
         Remove-Item $buildDir -Recurse -Force
     }
+} else {
+    $cacheFile = Join-Path $buildDir 'CMakeCache.txt'
+    if (Test-Path $cacheFile) {
+        $cacheContent = Get-Content $cacheFile -Raw
+        if ($cacheContent -match 'CMAKE_CACHEFILE_DIR:INTERNAL=(.+)') {
+            $cachedDir = $matches[1].Trim().Replace('/', '\')
+            $currentDir = $buildDir.Replace('/', '\')
+            if ($cachedDir -ne $currentDir) {
+                Write-Host "==> Stale CMakeCache.txt detected (cached for '$cachedDir', current is '$currentDir'). Cleaning build directory..." -ForegroundColor Yellow
+                Remove-Item $buildDir -Recurse -Force
+            }
+        }
+    }
 }
 
 $logDir = Join-Path $RepoRoot 'build/logs'
