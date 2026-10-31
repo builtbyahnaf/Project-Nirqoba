@@ -91,6 +91,29 @@ if (-not $ninjaPath) { $ninjaPath = $ninja.FullName }
 $ninjaVersion = (Get-CommandVersion $ninjaPath @('--version'))
 Write-Ok "$ninjaVersion"
 
+# --- Prerequisite: zstd -------------------------------------------------------
+Write-Step 'Checking zstd'
+$zstd = Get-Command zstd -ErrorAction SilentlyContinue
+$zstdPath = $null
+if ($null -eq $zstd) {
+    $commonZstd = @(
+        Join-Path $env:ProgramFiles 'zstd\zstd.exe',
+        Join-Path ${env:ProgramFiles(x86)} 'zstd\zstd.exe',
+        'C:\msys64\ucrt64\bin\zstd.exe',
+        'C:\msys64\usr\bin\zstd.exe'
+    )
+    foreach ($c in $commonZstd) {
+        if (Test-Path $c) { $zstdPath = $c; break }
+    }
+    if (-not $zstdPath) {
+        Stop-WithError "zstd not found. Install it with: winget install Facebook.Zstandard"
+    }
+} else {
+    $zstdPath = if ($zstd.Source) { $zstd.Source } else { $zstd.FullName }
+}
+$zstdVersion = (Get-CommandVersion $zstdPath @('--version')).Split("`n")[0].Trim()
+Write-Ok "$zstdVersion"
+
 # --- Prerequisite: MSVC Build Tools --------------------------------------------
 Write-Step "Checking MSVC Build Tools (toolset $($lock.msvc.minimum_toolset)+)"
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
@@ -181,22 +204,54 @@ if ($SkipToolchain) {
     
     # Extract zstd-compressed tarball
     $tempTar = $archive -replace '\.zst$', '.tar'
+    if (Test-Path $tempTar) { Remove-Item $tempTar -Force -ErrorAction SilentlyContinue }
     Write-Step "Decompressing zstd archive"
-    & zstd.exe -d --memory=1024MB -o $tempTar $archive
+    & $zstdPath -d -f --memory=1024MB -o $tempTar $archive
     if ($LASTEXITCODE -ne 0) { Stop-WithError "zstd decompression failed with exit code $LASTEXITCODE." }
     
+    $stagingDir = Join-Path $downloads 'staging'
+    if (Test-Path $stagingDir) { Remove-Item $stagingDir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
+
     Write-Step "Extracting tar archive"
-    & tar.exe -xf $tempTar -C $downloads
-    if ($LASTEXITCODE -ne 0) { Stop-WithError "tar extraction failed with exit code $LASTEXITCODE." }
+    & tar.exe -xf $tempTar -C $stagingDir
+    if ($LASTEXITCODE -ne 0) {
+        Remove-Item $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+        Stop-WithError "tar extraction failed with exit code $LASTEXITCODE."
+    }
     
-    # Find the directory containing MLIRConfig.cmake
-    $mlirConfigPath = Get-ChildItem $downloads -Recurse -Filter "MLIRConfig.cmake" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $mlirConfigPath) { Stop-WithError "MLIRConfig.cmake not found in extracted archive." }
-    $extracted = Split-Path (Split-Path $mlirConfigPath.FullName -Parent) -Parent
-    Write-Ok "Found MLIR SDK at $extracted"
+    # Find MLIRConfig.cmake in the extracted files
+    $mlirConfigFile = Get-ChildItem -Path $stagingDir -Recurse -Filter "MLIRConfig.cmake" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $mlirConfigFile) {
+        Remove-Item $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+        Stop-WithError "MLIRConfig.cmake not found in extracted archive."
+    }
+    
+    # MLIRConfig.cmake is located at <SDK_ROOT>/lib/cmake/mlir/MLIRConfig.cmake.
+    # Locate SDK root: traverse up until we find the directory containing 'bin' and 'lib'.
+    $sdkRoot = $null
+    $curr = $mlirConfigFile.Directory
+    while ($curr -and ($curr.FullName -ne (Split-Path $curr.FullName -Qualifier))) {
+        if ((Test-Path (Join-Path $curr.FullName 'bin')) -and (Test-Path (Join-Path $curr.FullName 'lib'))) {
+            $sdkRoot = $curr.FullName
+            break
+        }
+        $curr = $curr.Parent
+    }
+    if (-not $sdkRoot) {
+        # Fallback: standard layout <root>/lib/cmake/mlir/MLIRConfig.cmake (4 levels up from file)
+        $sdkRoot = Split-Path (Split-Path (Split-Path (Split-Path $mlirConfigFile.FullName -Parent) -Parent) -Parent) -Parent
+    }
+    Write-Ok "Found MLIR SDK at $sdkRoot"
     
     if (Test-Path $llvmRoot) { Remove-Item $llvmRoot -Recurse -Force }
-    Move-Item $extracted $llvmRoot
+
+    if ($sdkRoot -eq $stagingDir) {
+        Move-Item $stagingDir $llvmRoot
+    } else {
+        Move-Item $sdkRoot $llvmRoot
+        Remove-Item $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
     Remove-Item $tempTar -Force -ErrorAction SilentlyContinue
     Write-Ok "extracted to $llvmRoot"
 }
