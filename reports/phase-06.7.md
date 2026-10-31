@@ -56,7 +56,8 @@ the default allocator.
 
 - Command: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test.ps1 -Configuration RelWithDebInfo`
 - Environment: Windows x64, MSVC, LLVM/MLIR 23.1.4.
-- Actual result: build succeeded; CTest passed 1/1; integration passed 17/17.
+- Actual result: build succeeded; CTest passed 1/1; the final expanded suite
+  passed 18/18 integration tests.
 - The allocator integration case creates/selects each strategy, allocates,
   reads/writes and frees a typed byte, restores the prior allocator, then resets
   and destroys region strategies.

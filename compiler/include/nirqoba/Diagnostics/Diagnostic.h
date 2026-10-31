@@ -50,6 +50,7 @@ inline constexpr const char* kCyclicDependency = "NRQ3029";
 inline constexpr const char* kPrivateAccessViolation = "NRQ3030";
 inline constexpr const char* kDuplicateModule = "NRQ3031";
 inline constexpr const char* kImportConflict = "NRQ3032";
+inline constexpr const char* kUseAfterFree = "NRQ3033";
 inline constexpr const char* kMissingSourceFile = "NRQ5001";
 inline constexpr const char* kInvalidCommandLine = "NRQ5002";
 inline constexpr const char* kToolchainUnavailable = "NRQ5003";

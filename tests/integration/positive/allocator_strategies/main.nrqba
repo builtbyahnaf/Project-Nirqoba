@@ -14,6 +14,19 @@ int function main() {
     memory.use_allocator(previous);
     memory.destroy_allocator(pool);
 
+    var per_allocation = memory.arena_allocator(4096);
+    value = memory.allocate<byte>(8, per_allocation);
+    value[0] = 9 as byte;
+    memory.deallocate(value);
+    memory.destroy_allocator(per_allocation);
+
+    var region = memory.region(4096);
+    value = memory.allocate<byte>(32, region);
+    value[0] = 10 as byte;
+    memory.deallocate(value);
+    memory.reset_allocator(region);
+    memory.destroy_allocator(region);
+
     var arena = memory.arena_allocator(4096);
     previous = memory.use_allocator(arena);
     value = memory.allocate<byte>(8);

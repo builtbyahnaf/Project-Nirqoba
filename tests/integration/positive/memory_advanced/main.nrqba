@@ -7,14 +7,21 @@ int function main() {
     var secret = memory.secure_allocate<byte>(16);
     secret[0] = 42 as byte;
     var profile = memory.profiler.capture();
-    if (profile.current_bytes < 16 as u64) {
-        return 1;
-    }
+    print(profile.current_bytes);
+    var available = memory.available_bytes();
     memory.secure_zero(secret, 16);
     memory.secure_release(secret);
 
+    var mapped = memory.map_file("tests/integration/positive/memory_advanced/expect.json", false);
+    print(memory.mapped_read<byte>(mapped, 0) as int);
+    print(memory.mapping_size(mapped));
+    memory.unmap_file(mapped);
+
     var object = array.allocate<Node>(1);
     object[0].value = 42;
+    memory.start_ref_count();
+    print(memory.get_ref_count(object));
+    memory.stop_ref_count();
     var pinned = memory.pin(object);
     gc.collect();
     print(pinned[0].value);

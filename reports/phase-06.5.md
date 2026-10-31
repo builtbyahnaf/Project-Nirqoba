@@ -16,8 +16,9 @@ root frames; default-enabled automatic triggers; enable, disable, collect,
 threshold and statistics APIs.
 
 Not implemented: owned, borrowed and shared language modes; deterministic
-resource cleanup; asynchronous roots, pinning, concurrent collection, or
-generational/incremental collection.
+resource cleanup; asynchronous roots; concurrent collection; or
+generational/incremental collection. Explicit pin/unpin is implemented for the
+non-moving collector.
 
 ## 3. Architecture and Design
 
@@ -55,7 +56,8 @@ Implemented `managed<T>`, `array.allocate<T>(count)`, `gc.enable()`,
 
 - Command: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test.ps1 -Configuration RelWithDebInfo`
 - Environment: Windows x64, MSVC, LLVM/MLIR 23.1.4.
-- Actual result: build succeeded; CTest passed 1/1; integration passed 17/17.
+- Actual result: build succeeded; CTest passed 1/1; the final expanded suite
+  passed 18/18 integration tests.
 - GC integration cases cover controls, allocation, managed arrays and a cyclic
   graph surviving explicit collection.
 - Multithreaded and async/coroutine GC tests were not run because those language
@@ -84,7 +86,8 @@ Updated `project_context/SYNTAX.md`; added `docs/memory/management.md`.
 | Precise tracing, cycles, unreachable reclamation | Implemented; covered by tests |
 | Default-on automatic GC and manual controls | Implemented; covered by tests |
 | Threshold and statistics | Implemented; covered by integration tests |
-| Async, multithreaded roots, pinning and resources | Incomplete |
+| Async roots, concurrent collection, deterministic resource cleanup | Incomplete |
+| Explicit pin/unpin for non-moving managed objects | Implemented; tested |
 | Performance benchmark | Not run |
 
 ## 12. Final Verdict

@@ -6,6 +6,7 @@
 
 #include "nirqoba/runtime/gc.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -17,6 +18,7 @@ namespace {
 
 struct ObjectHeader {
   ObjectHeader* next = nullptr;
+  ObjectHeader* mark_next = nullptr;
   void* object = nullptr;
   size_t size = 0;
   size_t element_size = 0;
@@ -35,6 +37,7 @@ struct RootInfo {
 };
 std::unordered_map<void*, RootInfo> roots;
 std::unordered_map<void*, size_t> pinned_objects;
+bool reference_diagnostics_enabled = false;
 thread_local std::vector<void*> thread_roots;
 bool automatic_collection_enabled = true;
 size_t collection_threshold = 1024 * 1024;
@@ -42,13 +45,26 @@ size_t bytes_since_collection = 0;
 nrq_gc_stats statistics{};
 
 struct MarkContext {
-  std::vector<void*> pending;
+  ObjectHeader* pending = nullptr;
 };
 
 void enqueue_reference(void* object, void* opaque_context) {
   if (!object) return;
   auto* context = static_cast<MarkContext*>(opaque_context);
-  context->pending.push_back(object);
+  auto found = object_index.find(object);
+  // Roots may refer to static/native objects. Only collector-owned objects
+  // enter the intrusive mark stack, so marking never allocates auxiliary heap.
+  if (found == object_index.end() || found->second->marked) return;
+  ObjectHeader* header = found->second;
+  header->marked = true;
+  header->mark_next = context->pending;
+  context->pending = header;
+}
+
+void count_reference(void* object, void* opaque_context) {
+  if (!object) return;
+  auto* counts = static_cast<std::unordered_map<void*, uint64_t>*>(opaque_context);
+  if (object_index.find(object) != object_index.end()) ++(*counts)[object];
 }
 
 void collect_locked() {
@@ -62,23 +78,18 @@ void collect_locked() {
           sizeof(void*) > root.second.object_size - offset) continue;
       void* reference = nullptr;
       std::memcpy(&reference, bytes + offset, sizeof(reference));
-      if (reference) context.pending.push_back(reference);
+      enqueue_reference(reference, &context);
     }
   }
   for (const auto& pinned : pinned_objects) {
-    if (pinned.second != 0) context.pending.push_back(pinned.first);
+    if (pinned.second != 0) enqueue_reference(pinned.first, &context);
   }
 
-  while (!context.pending.empty()) {
-    void* object = context.pending.back();
-    context.pending.pop_back();
-    auto found = object_index.find(object);
-    // A root may point to a native or static object. It is not owned by this
-    // heap and therefore is neither marked nor traversed by the collector.
-    if (found == object_index.end()) continue;
-    ObjectHeader* header = found->second;
-    if (header->marked) continue;
-    header->marked = true;
+  while (context.pending) {
+    ObjectHeader* header = context.pending;
+    context.pending = header->mark_next;
+    header->mark_next = nullptr;
+    void* object = header->object;
     if (header->trace) {
       header->trace(object, header->size, enqueue_reference, &context);
     }
@@ -206,14 +217,33 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
   if (!slot || object_size == 0 || reference_count == 0 || !reference_offsets)
     return;
   std::lock_guard<std::mutex> lock(gc_mutex);
-  RootInfo& root = roots[slot];
-  if (root.references == 0) {
-    root.object_size = object_size;
-    root.reference_offsets.assign(reference_offsets,
-                                  reference_offsets + reference_count);
+  auto found = roots.find(slot);
+  bool inserted = false;
+  if (found == roots.end()) {
+    try {
+      RootInfo root;
+      root.object_size = object_size;
+      root.reference_offsets.assign(reference_offsets,
+                                    reference_offsets + reference_count);
+      auto result = roots.emplace(slot, std::move(root));
+      found = result.first;
+      inserted = result.second;
+    } catch (...) {
+      return;
+    }
+  } else if (found->second.object_size != object_size ||
+             found->second.reference_offsets.size() != reference_count ||
+             !std::equal(found->second.reference_offsets.begin(),
+                         found->second.reference_offsets.end(), reference_offsets)) {
+    return;
   }
-  ++root.references;
-  thread_roots.push_back(slot);
+  try {
+    thread_roots.push_back(slot);
+  } catch (...) {
+    if (inserted) roots.erase(found);
+    return;
+  }
+  ++found->second.references;
 }
 
 void nrq_gc_root_unregister(void** slot) {
@@ -317,6 +347,42 @@ void nrq_gc_unpin(void* object) {
   auto found = pinned_objects.find(object);
   if (found == pinned_objects.end()) return;
   if (--found->second == 0) pinned_objects.erase(found);
+}
+
+void nrq_gc_ref_count_start(void) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  reference_diagnostics_enabled = true;
+}
+
+void nrq_gc_ref_count_stop(void) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  reference_diagnostics_enabled = false;
+}
+
+int64_t nrq_gc_get_ref_count(void* object) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  if (!reference_diagnostics_enabled) return -1;
+  if (!object || object_index.find(object) == object_index.end()) return 0;
+  try {
+    std::unordered_map<void*, uint64_t> counts;
+    for (ObjectHeader* header = objects; header; header = header->next)
+      if (header->trace)
+        header->trace(header->object, header->size, count_reference, &counts);
+    for (const auto& root : roots) {
+      auto* bytes = static_cast<const unsigned char*>(root.first);
+      for (size_t offset : root.second.reference_offsets) {
+        if (offset > root.second.object_size ||
+            sizeof(void*) > root.second.object_size - offset) continue;
+        void* reference = nullptr;
+        std::memcpy(&reference, bytes + offset, sizeof(reference));
+        count_reference(reference, &counts);
+      }
+    }
+    auto found = counts.find(object);
+    return found == counts.end() ? 0 : static_cast<int64_t>(found->second);
+  } catch (...) {
+    return -1;
+  }
 }
 
 }  // extern "C"

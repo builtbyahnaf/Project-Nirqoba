@@ -7,6 +7,7 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
 #include <unordered_map>
 #include <vector>
 
@@ -21,6 +22,10 @@ struct Symbol {
   Type type;
   BindingKind binding = BindingKind::Let;
   SourceLocation location;
+  // Pointer aliases share an allocation id so explicit deallocation invalidates
+  // every lexical alias visible to the current type-checking pass.
+  uint64_t allocation_id = 0;
+  bool moved = false;
 
   bool is_mutable() const { return binding == BindingKind::Var; }
 };
@@ -37,6 +42,8 @@ class SymbolTable {
 
   // Innermost binding of `name`, or nullptr.
   const Symbol* lookup(const std::string& name) const;
+  void mark_allocation_moved(uint64_t allocation_id);
+  void rebind_pointer(const std::string& name, uint64_t allocation_id);
 
   std::size_t scope_depth() const { return scopes_.size(); }
 

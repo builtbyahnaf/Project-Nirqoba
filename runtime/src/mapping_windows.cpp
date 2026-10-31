@@ -4,11 +4,13 @@
 #endif
 
 #include "nirqoba/runtime/allocator.h"
+#include "nirqoba/runtime/fatal.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 #include <mutex>
+#include <cstring>
 #include <string>
 #include <unordered_map>
 
@@ -17,6 +19,7 @@ struct Mapping {
   HANDLE file = INVALID_HANDLE_VALUE;
   HANDLE section = nullptr;
   size_t bytes = 0;
+  bool writable = false;
 };
 std::mutex mapping_mutex;
 std::unordered_map<void*, Mapping> mappings;
@@ -67,7 +70,7 @@ void* nrq_memory_map_file(const char* path, int32_t writable) {
     try {
       std::lock_guard<std::mutex> lock(mapping_mutex);
       mappings.emplace(address, Mapping{file, section,
-          static_cast<size_t>(file_size.QuadPart)});
+          static_cast<size_t>(file_size.QuadPart), writable != 0});
     } catch (...) {
       UnmapViewOfFile(address);
       CloseHandle(section);
@@ -97,6 +100,34 @@ uint64_t nrq_memory_mapping_size(void* address) {
   std::lock_guard<std::mutex> lock(mapping_mutex);
   auto found = mappings.find(address);
   return found == mappings.end() ? 0 : static_cast<uint64_t>(found->second.bytes);
+}
+
+int32_t nrq_memory_mapping_read(void* address, size_t offset, size_t bytes,
+                                void* output) {
+  if (!output) return 0;
+  std::lock_guard<std::mutex> lock(mapping_mutex);
+  auto found = mappings.find(address);
+  if (found == mappings.end() || offset > found->second.bytes ||
+      bytes > found->second.bytes - offset) {
+    nrq_runtime_fatal("mapped file read is outside a live mapping");
+    return 0;
+  }
+  std::memcpy(output, static_cast<const unsigned char*>(address) + offset, bytes);
+  return 1;
+}
+
+int32_t nrq_memory_mapping_write(void* address, size_t offset, size_t bytes,
+                                 const void* input) {
+  if (!input) return 0;
+  std::lock_guard<std::mutex> lock(mapping_mutex);
+  auto found = mappings.find(address);
+  if (found == mappings.end() || !found->second.writable ||
+      offset > found->second.bytes || bytes > found->second.bytes - offset) {
+    nrq_runtime_fatal("mapped file write is invalid or outside a writable mapping");
+    return 0;
+  }
+  std::memcpy(static_cast<unsigned char*>(address) + offset, input, bytes);
+  return 1;
 }
 
 }  // extern "C"

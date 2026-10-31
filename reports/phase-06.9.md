@@ -4,28 +4,33 @@
 
 - **Phase:** 6.9 — Advanced Runtime Utilities and Specialized Memory Features
 - **Date:** 2026-10-31
-- **Status:** Not implemented
+- **Status:** Partial implementation
 - **Objective:** Add optional diagnostics and specialized memory/resource
   facilities described in `project_context/ROADMAP.md`.
 - **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
 
 ## 2. Scope
 
-This phase report records the gap and does not claim implementation. The
-existing GC and allocator counters are not a complete memory profiler, and
-non-moving GC is not a scoped pinning API.
+Implemented optional reference-count diagnostics, an explicit-allocation
+profiler, read/write Windows mappings with checked typed access helpers,
+explicit GC pin/unpin, secure allocation/zeroization, and available physical
+memory reporting. This is a subset of the complete roadmap scope.
 
 ## 3. Architecture and Design
 
-No Phase 6.9 architecture has been added. These APIs need explicit contracts
-for mapped-region ownership and bounds, pin lifetime/rooting, secure-buffer
-handling, diagnostic overhead, and deterministic cleanup before integration.
+The Windows mapping registry owns file and section handles until explicit
+unmap. Checked mapped read/write APIs validate offset and width before copying.
+Pinning adds a GC root, which is sufficient for the current non-moving
+collector. Reference counts are computed on demand while diagnostics are
+enabled and represent observed managed references, not ownership. Secure
+buffers use `SecureZeroMemory` before release.
 
 ## 4. Implementation Details
 
-None. No runtime introspection, optional reference-count diagnostics, memory
-profiler, memory mapping, pinning API, deterministic cleanup scopes, or secure
-memory API was implemented in this change.
+The profiler counts explicit allocator bytes and allocation/free calls; it
+does not currently include GC heap accounting or fragmentation. Mappings
+support existing non-empty files. Deterministic cleanup scopes, generalized
+resource wrappers, and CPU/thread/device introspection are not implemented.
 
 ## 5. Modified Files
 
@@ -38,8 +43,12 @@ None for Phase 6.9.
 
 ## 7. Testing
 
-No Phase 6.9-specific tests were added or run. The full existing Windows build
-and test suite passed, but that result does not validate these absent features.
+Command: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test.ps1 -Configuration RelWithDebInfo`.
+Windows x64/MSVC/LLVM 23.1.4 build succeeded, CTest passed, and 18/18
+integration tests passed. Unit tests cover pin retention, diagnostic counts,
+secure zeroization/profiling, and mapping size/read/write/unmap. The language
+integration test exercises profiler, secure memory, mapping, reference counts,
+and pinning. Overhead and resource-pressure tests were not run.
 
 ## 8. Performance
 
@@ -47,29 +56,30 @@ No Phase 6.9 performance measurements were performed.
 
 ## 9. Known Issues
 
-All requirements in Phase 6.9 remain open, including optional reference-count
-diagnostics, profiler metrics, read/write mapped files and deterministic
-unmapping, scoped pinning, deterministic resource destruction, secure
-zeroization and runtime introspection.
+GC-aware profiler totals, fragmentation estimates, scoped pin guards,
+deterministic cleanup scopes for general resources, broader runtime
+introspection, and overhead/performance measurements remain open. Raw mapping
+pointer indexing is unchecked; use the checked mapped read/write APIs.
 
 ## 10. Documentation Changes
 
-`docs/memory/management.md` explicitly says that deterministic external
-resource cleanup is not provided by GC. No Phase 6.9 API is documented as
-implemented.
+Updated `project_context/SYNTAX.md` and `docs/memory/management.md` with the
+implemented APIs and their limitations.
 
 ## 11. Acceptance Criteria
 
 | Requirement | Status |
 |---|---|
-| Reference-count diagnostics | Not implemented |
-| Memory profiler | Not implemented |
-| Memory mapping | Not implemented |
-| Memory pinning | Not implemented |
-| Deterministic resource destruction | Not implemented |
-| Secure memory | Not implemented |
-| Runtime introspection | Not implemented |
+| Reference-count diagnostics | Implemented; on-demand managed reference counts |
+| Memory profiler | Partial; explicit allocations only |
+| Memory mapping | Partial; Windows mappings and checked typed access |
+| Memory pinning | Implemented for non-moving managed objects; explicit unpin required |
+| Deterministic resource destruction | Partial; mapping/allocation release is explicit |
+| Secure memory | Implemented; Windows zeroization |
+| Runtime introspection | Partial; available physical memory estimate |
 
 ## 12. Final Verdict
 
-**FAIL** — Phase 6.9 is not implemented.
+**FAIL** — optional memory facilities are implemented and tested, but general
+deterministic cleanup, complete profiling/introspection, and checked semantics
+for ordinary pointer indexing remain incomplete.

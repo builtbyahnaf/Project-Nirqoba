@@ -66,11 +66,12 @@ Added/implemented `managed<T>`, `array.allocate<T>(count)`, `memory.allocate<T>`
 
 - **Command:** `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test.ps1 -Configuration RelWithDebInfo`
 - **Environment:** Windows x64, MSVC, LLVM/MLIR 23.1.4.
-- **Result:** Build succeeded; CTest passed (1/1 test executable); all 17
-  integration cases passed.
-- Unit coverage includes reachable cycles, sweep after root removal, explicit
-  collection while automatic collection is disabled, all eight allocator
-  alignment/lifecycle paths, and pool capacity failure.
+- **Result:** Build succeeded; CTest passed (1/1 test executable); all 18
+  integration cases passed after the advanced memory utilities were added.
+- Unit coverage includes reachable cycles, threshold collection, pinning,
+  reference diagnostics, secure zeroization, mapped-file lifecycle, all eight
+  allocator alignment/lifecycle paths, concurrent allocator users, and pool
+  capacity failure.
 - The allocator integration fixture exercises each strategy through compiled
   Nirqoba source.
 - No installer build, sanitizer run, long stress test, or performance benchmark
