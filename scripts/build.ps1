@@ -96,6 +96,13 @@ Write-Host "    log: $logPath"
 $code = $LASTEXITCODE
 if ($code -ne 0) {
     Write-Host "build failed with exit code $code (see $logPath)" -ForegroundColor Red
+    if (Test-Path $logPath) {
+        Write-Host "`n--- Build Failure Diagnostics ---" -ForegroundColor Red
+        $errorLines = Get-Content $logPath | Where-Object { $_ -match '(\bFAILED:\b|:\s*error\s+[A-Z0-9]+:)' }
+        if ($errorLines) {
+            $errorLines | Select-Object -First 30 | ForEach-Object { Write-Host $_ -ForegroundColor Red }
+        }
+    }
     exit $code
 }
 Write-Host 'build succeeded' -ForegroundColor Green

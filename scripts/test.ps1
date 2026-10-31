@@ -51,13 +51,14 @@ $integrationLog = Join-Path $logDir 'integration.log'
 
 Write-Host "==> ctest ($preset)"
 $batPath = Join-Path $env:TEMP 'nirqoba-ctest.bat'
-$batLines = @(
-    '@echo off',
-    'call "' + $tc.vcvars64 + '" > "%TEMP%\nirqoba-vcvars.log" 2>&1 || exit /b 1',
-    'ctest --preset ' + $preset + ' --output-on-failure || exit /b 1'
-)
-Set-Content -Path $batPath -Value $batLines -Encoding ascii
-& cmd.exe /c $batPath 2>&1 | Tee-Object -FilePath $unitLog
+$batContent = @"
+@echo off
+call "$($tc.vcvars64)" > "%TEMP%\nirqoba-vcvars.log" 2>&1 || exit /b 1
+cd /d "$RepoRoot" || exit /b 1
+ctest --preset $preset --output-on-failure || exit /b 1
+"@
+Set-Content -Path $batPath -Value $batContent -Encoding ascii
+& $batPath 2>&1 | Tee-Object -FilePath $unitLog
 $unitCode = $LASTEXITCODE
 if ($unitCode -ne 0) { Write-Host "unit tests failed (exit $unitCode)" -ForegroundColor Red }
 

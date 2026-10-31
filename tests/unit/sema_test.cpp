@@ -53,13 +53,13 @@ TEST(SemaTest, RejectsDuplicateMain) {
   ASSERT_TRUE(diag.has_errors());
 }
 
-TEST(SemaTest, RejectsPrint42) {
+TEST(SemaTest, RejectsInvalidPrintType) {
   DiagnosticEngine diag;
-  auto prog = parse_string("int function main() { print(42); return 0; }", diag);
+  auto prog = parse_string("void function foo() {}\nint function main() { print(foo()); return 0; }", diag);
   TypeChecker checker(diag);
   ASSERT_FALSE(checker.check(*prog));
   ASSERT_TRUE(diag.has_errors());
-  ASSERT_EQ(diag.diagnostics()[0].code, diag::kPrintRequiresString);
+  ASSERT_EQ(diag.diagnostics()[0].code, diag::kTypeMismatch);
 }
 
 TEST(SemaTest, RejectsUndefinedVariable) {
@@ -112,7 +112,7 @@ TEST(SemaTest, AcceptsGcCollect) {
 TEST(SemaTest, AcceptsMemoryAllocateDeallocate) {
   {
     DiagnosticEngine diag;
-    auto prog = parse_string("int function main() { auto p = nrq_memory_allocate(16, 8); nrq_memory_deallocate(p, 16, 8); return 0; }", diag);
+    auto prog = parse_string("int function main() { let p = nrq_memory_allocate(16, 8); nrq_memory_deallocate(p, 16, 8); return 0; }", diag);
     TypeChecker checker(diag);
     ASSERT_TRUE(checker.check(*prog));
     ASSERT_FALSE(diag.has_errors());

@@ -5,8 +5,18 @@
 #include <vector>
 #include <functional>
 #include <sstream>
+#include <type_traits>
 
 namespace nirq::test {
+
+template <typename T>
+void format_value(std::ostream& os, const T& val) {
+  if constexpr (std::is_enum_v<T>) {
+    os << static_cast<std::underlying_type_t<T>>(val);
+  } else {
+    os << val;
+  }
+}
 
 struct TestCase {
   std::string suite;
@@ -72,8 +82,11 @@ class TestFailure : public std::exception {
   do { \
     if (!((a) == (b))) { \
       std::ostringstream ss; \
-      ss << __FILE__ << ":" << __LINE__ << ": ASSERT_EQ failed: " #a " == " #b \
-         << " (" << (a) << " != " << (b) << ")"; \
+      ss << __FILE__ << ":" << __LINE__ << ": ASSERT_EQ failed: " #a " == " #b " ("; \
+      ::nirq::test::format_value(ss, (a)); \
+      ss << " != "; \
+      ::nirq::test::format_value(ss, (b)); \
+      ss << ")"; \
       throw ::nirq::test::TestFailure(ss.str()); \
     } \
   } while (0)
@@ -82,7 +95,11 @@ class TestFailure : public std::exception {
   do { \
     if ((a) == (b)) { \
       std::ostringstream ss; \
-      ss << __FILE__ << ":" << __LINE__ << ": ASSERT_NE failed: " #a " != " #b; \
+      ss << __FILE__ << ":" << __LINE__ << ": ASSERT_NE failed: " #a " != " #b " ("; \
+      ::nirq::test::format_value(ss, (a)); \
+      ss << " == "; \
+      ::nirq::test::format_value(ss, (b)); \
+      ss << ")"; \
       throw ::nirq::test::TestFailure(ss.str()); \
     } \
   } while (0)

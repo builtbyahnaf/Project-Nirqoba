@@ -36,7 +36,8 @@ TEST(CliTest, ParseBuildCommand) {
   std::string err;
   ASSERT_TRUE(parse_command_line(6, argv, opts, err));
   ASSERT_EQ(opts.command, CommandKind::Build);
-  ASSERT_EQ(opts.source_path, "main.nrqba");
+  ASSERT_EQ(opts.source_paths.size(), 1u);
+  ASSERT_EQ(opts.source_paths[0], "main.nrqba");
   ASSERT_EQ(opts.output_path, "bin/main.exe");
   ASSERT_EQ(opts.emit, EmitKind::Obj);
 }
@@ -47,7 +48,8 @@ TEST(CliTest, ParseRunCommandWithTrailingArgs) {
   std::string err;
   ASSERT_TRUE(parse_command_line(6, argv, opts, err));
   ASSERT_EQ(opts.command, CommandKind::Run);
-  ASSERT_EQ(opts.source_path, "prog.nrqba");
+  ASSERT_EQ(opts.source_paths.size(), 1u);
+  ASSERT_EQ(opts.source_paths[0], "prog.nrqba");
   ASSERT_EQ(opts.trailing_args.size(), 2u);
   ASSERT_EQ(opts.trailing_args[0], "arg1");
   ASSERT_EQ(opts.trailing_args[1], "arg2");

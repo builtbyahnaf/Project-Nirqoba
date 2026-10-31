@@ -91,6 +91,7 @@ class Type {
   bool is_char() const { return kind_ == TypeKind::Char; }
   bool is_f32() const { return kind_ == TypeKind::F32; }
   bool is_f64() const { return kind_ == TypeKind::F64; }
+  bool is_u64() const { return kind_ == TypeKind::U64; }
   bool is_array() const { return kind_ == TypeKind::Array; }
   bool is_dynamic_array() const { return kind_ == TypeKind::DynamicArray; }
   bool is_tuple() const { return kind_ == TypeKind::Tuple; }
