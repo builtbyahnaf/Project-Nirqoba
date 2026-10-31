@@ -509,6 +509,35 @@ class FunctionTranslator {
           if (arg_val) args.push_back(arg_val);
         }
 
+        // Memory allocation is exposed as an integer handle in the language,
+        // while the runtime ABI uses void*. Keep that boundary conversion
+        // explicit so the call is emitted as an LLVM runtime call (rather
+        // than an unresolved func.call to the runtime symbol).
+        if (op.callee == "nrq_memory_allocate") {
+          auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_allocate",
+                                     llvm_ptr_type(ctx_),
+                                     {builder_.getI64Type(), builder_.getI64Type()});
+          auto call_op = builder_.create<mlir::LLVM::CallOp>(loc, fn, args);
+          if (op.result.is_valid()) {
+            mlir::Value result = builder_.create<mlir::LLVM::PtrToIntOp>(
+                loc, builder_.getI64Type(), call_op.getResult()).getResult();
+            set(op.result, result);
+          }
+          return true;
+        }
+        if (op.callee == "nrq_memory_deallocate") {
+          if (!args.empty()) {
+            args[0] = builder_.create<mlir::LLVM::IntToPtrOp>(
+                loc, llvm_ptr_type(ctx_), args[0]).getResult();
+          }
+          auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_deallocate",
+                                     mlir::LLVM::LLVMVoidType::get(ctx_),
+                                     {llvm_ptr_type(ctx_), builder_.getI64Type(),
+                                      builder_.getI64Type()});
+          builder_.create<mlir::LLVM::CallOp>(loc, fn, args);
+          return true;
+        }
+
         // Check if this is a runtime library builtin call:
         llvm::StringRef callee = op.callee;
         std::string runtime_sym;
