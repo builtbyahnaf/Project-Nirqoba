@@ -59,14 +59,26 @@ tir::CastKind determine_cast_kind(Type src, Type dst) {
 
 std::unique_ptr<tir::Module> TirBuilder::lower(const Program& program) {
   auto module = std::make_unique<tir::Module>();
-  for (const auto& function : program.functions()) {
-    lower_function(*function, *module);
-  }
+  lower_module("", program, *module);
   return module;
 }
 
-void TirBuilder::lower_function(const FunctionDecl& function, tir::Module& module) {
-  auto body = std::make_unique<tir::Function>(function.name(), function.return_type());
+void TirBuilder::lower_module(const std::string& symbol_prefix, const Program& program,
+                              tir::Module& module) {
+  for (const auto& function : program.functions()) {
+    // The entry point is emitted as `main` and must not be prefixed, otherwise
+    // the MSVC CRT would not find it.
+    const std::string symbol =
+        symbol_prefix.empty() || function->name() == "main"
+            ? function->name()
+            : symbol_prefix + "." + function->name();
+    lower_function(*function, symbol, module);
+  }
+}
+
+void TirBuilder::lower_function(const FunctionDecl& function, const std::string& symbol,
+                                tir::Module& module) {
+  auto body = std::make_unique<tir::Function>(symbol, function.return_type());
   tir::Function* function_ir = module.add_function(std::move(body));
 
   scopes_.clear();
@@ -684,7 +696,9 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       tir::Op op;
       op.kind = tir::OpKind::Call;
       op.location = call.location();
-      op.callee = call.callee();
+      // Prefer the symbol semantic analysis resolved; builtins keep their
+      // spelling because they lower to runtime entry points directly.
+      op.callee = call.has_resolved_symbol() ? call.resolved_symbol() : call.callee();
       op.arguments = std::move(arg_vals);
       op.result = result;
       function.add_operation(std::move(op));

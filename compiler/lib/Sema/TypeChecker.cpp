@@ -86,7 +86,8 @@ bool TypeChecker::check(Program& program) {
         std::move(param_types),
         function->location(),
         current_module_,
-        function->visibility()
+        function->visibility(),
+        function->name()  // single-module compilation links symbols by name
     };
 
     if (!functions_.emplace(function->name(), std::move(sig)).second) {
@@ -145,7 +146,21 @@ bool TypeChecker::check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& 
   const FunctionDecl* main_function = nullptr;
   int main_count = 0;
 
-  // Pass 0: register every struct under its module-qualified name. The root
+  // The module that defines `main` is the entry module. Only it claims the
+  // bare symbol names (so the entry point links as `main`), which also means a
+  // second file named on the command line cannot silently shadow its functions.
+  const ModuleUnit* entry_unit = nullptr;
+  for (const auto& unit : modules) {
+    if (!unit || !unit->ast) continue;
+    for (const auto& function : unit->ast->functions()) {
+      if (function->name() == "main") {
+        if (entry_unit == nullptr) entry_unit = unit.get();
+        ++main_count;
+      }
+    }
+  }
+
+  // Pass 0: register every struct under its module-qualified name. The entry
   // module also owns the bare names, which keeps a single-file program
   // resolving exactly as it did before modules existed.
   for (const auto& unit : modules) {
@@ -163,7 +178,7 @@ bool TypeChecker::check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& 
                            "struct '" + decl->name() + "' is already defined in module '" +
                                unit->name + "'");
       }
-      if (unit->is_root) {
+      if (unit.get() == entry_unit) {
         structs_.emplace(decl->name(), info);
       }
     }
@@ -181,6 +196,9 @@ bool TypeChecker::check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& 
         param_types.push_back(param.type);
       }
 
+      const bool is_entry = (unit.get() == entry_unit);
+      const std::string qualified = unit->name + "." + function->name();
+
       FunctionSignature sig{
           function->name(),
           function->return_type(),
@@ -188,18 +206,21 @@ bool TypeChecker::check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& 
           function->location(),
           unit->name,
           function->visibility(),
-          unit->is_root ? function->name() : unit->name + "." + function->name()
+          is_entry ? function->name() : qualified
       };
 
-      const std::string key = unit->is_root ? function->name() : sig.symbol;
-      if (!functions_.emplace(key, sig).second) {
+      // Every module is reachable by its qualified name, including the entry
+      // module, so `import app; app.helper()` keeps working.
+      if (!functions_.emplace(qualified, sig).second) {
         diagnostics_.error(diag::kDuplicateFunction, function->location(),
                            "function '" + function->name() +
-                               "' is already defined in this module");
+                               "' is already defined in module '" + unit->name + "'");
+      }
+      if (is_entry) {
+        functions_.emplace(function->name(), sig);
       }
 
-      if (function->name() == "main" && unit->is_root) {
-        ++main_count;
+      if (function->name() == "main" && is_entry && main_function == nullptr) {
         main_function = function.get();
       }
     }
@@ -1259,8 +1280,8 @@ Type TypeChecker::check_call(CallExpr& call) {
   }
 
   // User-defined function call
-  auto it = functions_.find(call.callee());
-  if (it == functions_.end()) {
+  const FunctionSignature* resolved = find_function(call.callee());
+  if (resolved == nullptr) {
     diagnostics_.error(diag::kUndefinedName, call.location(),
                        "call to undeclared function '" + call.callee() + "'");
     for (const ExprPtr& argument : call.arguments()) {
@@ -1269,13 +1290,16 @@ Type TypeChecker::check_call(CallExpr& call) {
     return Type::error();
   }
 
-  const FunctionSignature& sig = it->second;
+  const FunctionSignature& sig = *resolved;
   if (!current_module_.empty() && !sig.module_name.empty() &&
       current_module_ != sig.module_name && sig.visibility == Visibility::Private) {
     diagnostics_.error(diag::kPrivateAccessViolation, call.location(),
                        "cannot access private function '" + sig.name +
                            "' from outside module '" + sig.module_name + "'");
   }
+  // Record the link-time symbol so TIR lowering does not have to repeat the
+  // module-aware name resolution.
+  call.set_resolved_symbol(sig.symbol);
   if (call.arguments().size() != sig.parameter_types.size()) {
     diagnostics_.error(diag::kPrintArity, call.location(),
                        "function '" + call.callee() + "' expects " +

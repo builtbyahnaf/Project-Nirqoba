@@ -47,6 +47,14 @@ int32_t nrq_print_string(const char* utf8, size_t byte_len) {
     return write_all(h, &newline, 1);
 }
 
+int32_t nrq_print_cstr(const char* utf8) {
+    if (utf8 == nullptr) return nrq_print_string("", 0);
+
+    size_t len = 0;
+    while (utf8[len] != '\0') ++len;
+    return nrq_print_string(utf8, len);
+}
+
 int32_t nrq_print_int(int64_t val) {
     HANDLE h = get_stdout_handle();
     if (h == INVALID_HANDLE_VALUE || h == nullptr) return 0;

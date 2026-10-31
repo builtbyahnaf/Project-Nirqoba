@@ -932,6 +932,18 @@ ExprPtr Parser::parse_primary() {
     }
     case TokenKind::Identifier: {
       advance();
+      // `module.name` is a member access, except when it is immediately called:
+      // then it is a call to a function in another module (Phase 5).
+      if (check(TokenKind::Dot) && peek(1).kind == TokenKind::Identifier &&
+          peek(2).kind == TokenKind::LParen) {
+        advance();  // '.'
+        const Token member = advance();
+        advance();  // '('
+        std::vector<ExprPtr> arguments = parse_argument_list();
+        expect(TokenKind::RParen, "to close the call");
+        return std::make_unique<CallExpr>(token.location, token.text + "." + member.text,
+                                          std::move(arguments));
+      }
       if (check(TokenKind::LBrace)) {
         return parse_struct_init(token.text, token.location);
       }

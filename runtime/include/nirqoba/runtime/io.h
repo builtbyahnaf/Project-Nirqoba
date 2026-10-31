@@ -17,6 +17,11 @@ extern "C" {
 // Writes `byte_len` bytes from `utf8` followed by a newline ('\n') to stdout.
 int32_t nrq_print_string(const char* utf8, size_t byte_len);
 
+// Writes a NUL-terminated UTF-8 string followed by a newline to stdout.
+// Used when printing a `string` value (for example one returned by
+// `file.read_text`), where the length is not known statically.
+int32_t nrq_print_cstr(const char* utf8);
+
 // Scalar printing helpers (Phase 2): format value followed by '\n' to stdout.
 int32_t nrq_print_int(int64_t val);
 int32_t nrq_print_uint(uint64_t val);

@@ -23,11 +23,11 @@ static void print_version() {
 }
 
 static void print_general_help() {
-  std::cout << "Usage: nirqoba <command> [options]\n\n"
+  std::cout << "Usage: nirqoba <command> <file.nrqba>... [options]\n\n"
             << "Commands:\n"
-            << "  build <file.nrqba>   Compile Nirqoba source code\n"
-            << "  run   <file.nrqba>   Compile and run Nirqoba program\n"
-            << "  check <file.nrqba>   Check source code for syntax and semantic errors\n"
+            << "  build <files...>     Compile Nirqoba source code\n"
+            << "  run   <files...>     Compile and run Nirqoba program\n"
+            << "  check <files...>     Check source code for syntax and semantic errors\n"
             << "  version              Print compiler version and target information\n"
             << "  help [command]       Show help for a command\n\n"
             << "Global options:\n"
@@ -37,21 +37,24 @@ static void print_general_help() {
 
 static void print_command_help(std::string_view cmd) {
   if (cmd == "build") {
-    std::cout << "Usage: nirqoba build <file.nrqba> [options]\n\n"
+    std::cout << "Usage: nirqoba build <file.nrqba>... [options]\n\n"
               << "Options:\n"
               << "  -o <path>            Output executable or object file path\n"
               << "  --out-dir <dir>      Directory to place output artifacts\n"
+              << "  --module-path <dir>  Extra directory searched for imported modules\n"
               << "  --emit=<kind>        Emit intermediate stage and stop\n"
               << "                       Kinds: ast, tir, mlir, llvm, obj\n"
               << "  --verbose            Enable verbose output\n";
   } else if (cmd == "run") {
-    std::cout << "Usage: nirqoba run <file.nrqba> [options] [-- <args>...]\n\n"
+    std::cout << "Usage: nirqoba run <file.nrqba>... [options] [-- <args>...]\n\n"
               << "Options:\n"
               << "  --out-dir <dir>      Directory for temporary build artifacts\n"
+              << "  --module-path <dir>  Extra directory searched for imported modules\n"
               << "  --verbose            Enable verbose output\n";
   } else if (cmd == "check") {
-    std::cout << "Usage: nirqoba check <file.nrqba> [options]\n\n"
+    std::cout << "Usage: nirqoba check <file.nrqba>... [options]\n\n"
               << "Options:\n"
+              << "  --module-path <dir>  Extra directory searched for imported modules\n"
               << "  --emit=<kind>        Emit checked stage (ast or tir)\n";
   } else {
     print_general_help();
@@ -156,6 +159,18 @@ bool parse_command_line(int argc, const char* const* argv,
       options.out_dir = arg.substr(10);
       continue;
     }
+    if (arg == "--module-path") {
+      if (idx >= argc) {
+        error_message = "missing directory after '--module-path'";
+        return false;
+      }
+      options.module_paths.push_back(argv[idx++]);
+      continue;
+    }
+    if (arg.rfind("--module-path=", 0) == 0) {
+      options.module_paths.push_back(arg.substr(14));
+      continue;
+    }
     if (arg.rfind("--emit=", 0) == 0) {
       std::string_view kind_str = std::string_view(arg).substr(7);
       if (!parse_emit_kind(kind_str, options.emit)) {
@@ -171,15 +186,10 @@ bool parse_command_line(int argc, const char* const* argv,
       return false;
     }
 
-    if (options.source_path.empty()) {
-      options.source_path = std::move(arg);
-    } else {
-      error_message = "unexpected argument '" + arg + "'; only one source file is accepted";
-      return false;
-    }
+    options.source_paths.push_back(std::move(arg));
   }
 
-  if (options.source_path.empty()) {
+  if (options.source_paths.empty()) {
     error_message = "no source file specified for '" + first + "'";
     return false;
   }
@@ -220,8 +230,9 @@ int run_driver(int argc, const char* const* argv) {
     return 0;
   }
 
-  // Determine artifact paths.
-  fs::path src_path(options.source_path);
+  // Determine artifact paths. The first source file on the command line names
+  // the artifact; imported modules do not produce separate outputs.
+  fs::path src_path(options.source_paths.front());
   std::string stem = src_path.stem().string();
   fs::path out_directory = fs::path(options.out_dir);
 
@@ -237,7 +248,8 @@ int run_driver(int argc, const char* const* argv) {
   std::string obj_file = (out_directory / (stem + ".obj")).string();
 
   PipelineOptions pipe_opts;
-  pipe_opts.source_path = options.source_path;
+  pipe_opts.source_paths = options.source_paths;
+  pipe_opts.module_search_paths = options.module_paths;
   pipe_opts.output_path = output_file;
   pipe_opts.obj_path = obj_file;
   pipe_opts.verbose = options.verbose;

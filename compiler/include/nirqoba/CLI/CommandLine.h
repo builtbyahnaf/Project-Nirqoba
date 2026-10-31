@@ -18,7 +18,10 @@ enum class CommandKind {
 
 struct CommandLineOptions {
   CommandKind command = CommandKind::Unknown;
-  std::string source_path;
+  // Root source files named on the command line. Imported modules are found
+  // through `import` declarations, not listed here.
+  std::vector<std::string> source_paths;
+  std::vector<std::string> module_paths;
   std::string output_path;
   std::string out_dir = ".";
   std::string help_topic;

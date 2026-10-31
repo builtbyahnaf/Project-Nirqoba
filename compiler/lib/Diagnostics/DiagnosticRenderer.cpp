@@ -67,4 +67,20 @@ void render_diagnostics(const DiagnosticEngine& engine, const SourceFile* source
   }
 }
 
+void render_diagnostics(const DiagnosticEngine& engine,
+                        const std::vector<const SourceFile*>& sources) {
+  // Diagnostics may come from any module; pick the file the location names.
+  // A location with no match still renders its header and message.
+  for (const Diagnostic& diag : engine.diagnostics()) {
+    const SourceFile* match = nullptr;
+    for (const SourceFile* source : sources) {
+      if (source != nullptr && source->path() == diag.location.file) {
+        match = source;
+        break;
+      }
+    }
+    render_one(diag, match);
+  }
+}
+
 }  // namespace nirq
