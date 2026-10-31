@@ -122,6 +122,64 @@ class FunctionTranslator {
     values_[static_cast<std::size_t>(v.id)] = mlir_val;
   }
 
+  // Converts a runtime call's ABI result to the type the language assigned to
+  // the call, e.g. an i32 status code to a 64-bit `int` or a 0/1 code to
+  // `bool`. A no-op when the types already match.
+  mlir::Value adapt_runtime_result(mlir::Value result, const Type& wanted_type,
+                                   mlir::Location loc) {
+    if (!result) return result;
+    mlir::Type wanted = tir_type_to_mlir(wanted_type, ctx_, builder_);
+    if (!wanted || wanted == result.getType()) return result;
+
+    if (!mlir::isa<mlir::IntegerType>(result.getType()) ||
+        !mlir::isa<mlir::IntegerType>(wanted)) {
+      return result;
+    }
+
+    const unsigned result_bits = result.getType().getIntOrFloatBitWidth();
+    const unsigned wanted_bits = wanted.getIntOrFloatBitWidth();
+
+    // A 1-bit language type is `bool`; the runtime reports it as 0/1.
+    if (wanted_bits == 1 && result_bits > 1) {
+      mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
+          loc, result.getType(), builder_.getIntegerAttr(result.getType(), 0)).getResult();
+      return builder_.create<mlir::LLVM::ICmpOp>(loc, mlir::LLVM::ICmpPredicate::ne, result, zero)
+          .getResult();
+    }
+    if (wanted_bits == result_bits) return result;
+    if (wanted_bits < result_bits) {
+      return builder_.create<mlir::LLVM::TruncOp>(loc, wanted, result).getResult();
+    }
+    return wanted_type.is_unsigned_integer()
+               ? builder_.create<mlir::LLVM::ZExtOp>(loc, wanted, result).getResult()
+               : builder_.create<mlir::LLVM::SExtOp>(loc, wanted, result).getResult();
+  }
+
+  // Emits (once per distinct literal) a private global holding `text` plus a
+  // terminating NUL and returns a pointer to its first byte.
+  mlir::Value materialize_string(const std::string& text, mlir::Location loc) {
+    auto cached = string_literals_.find(text);
+    std::string symbol;
+    if (cached != string_literals_.end()) {
+      symbol = cached->second;
+    } else {
+      symbol = "__nrq_strlit_" + std::to_string(string_literal_counter_++);
+      const std::string stored = text + '\0';
+      auto array_type = mlir::LLVM::LLVMArrayType::get(
+          builder_.getI8Type(), static_cast<unsigned>(stored.size()));
+
+      // Globals live at module scope, not at the current insertion point.
+      mlir::OpBuilder::InsertionGuard guard(builder_);
+      builder_.setInsertionPointToStart(module_.getBody());
+      builder_.create<mlir::LLVM::GlobalOp>(loc, array_type, /*isConstant=*/true,
+                                            mlir::LLVM::Linkage::Private, symbol,
+                                            builder_.getStringAttr(stored));
+      string_literals_.emplace(text, symbol);
+    }
+    return builder_.create<mlir::LLVM::AddressOfOp>(loc, llvm_ptr_type(ctx_), symbol)
+        .getResult();
+  }
+
   mlir::Block* get_or_create_block(int label_id) {
     auto it = label_blocks_.find(label_id);
     if (it != label_blocks_.end()) return it->second;
@@ -177,9 +235,9 @@ class FunctionTranslator {
       }
 
       case tir::OpKind::ConstantString: {
-        mlir::Value placeholder = builder_.create<mlir::LLVM::ConstantOp>(
-            loc, builder_.getI64Type(), builder_.getI64IntegerAttr(0)).getResult();
-        set(op.result, placeholder);
+        // A string literal becomes the address of a private, NUL-terminated
+        // byte array, which is what the runtime ABI expects for `const char*`.
+        set(op.result, materialize_string(op.string_value, loc));
         return true;
       }
 
@@ -508,7 +566,11 @@ class FunctionTranslator {
           auto fn = ensure_runtime_fn(module_, builder_, runtime_sym, runtime_ret_ty, runtime_arg_tys);
           auto call_op = builder_.create<mlir::LLVM::CallOp>(loc, fn, args);
           if (op.result.is_valid()) {
-            set(op.result, call_op.getResult());
+            // The runtime ABI is deliberately narrow (i32 status codes, i64
+            // timestamps), while the language types the same call as `int`,
+            // `bool` or `string`. Bridge the two here so the TIR result type
+            // and the produced SSA value always agree.
+            set(op.result, adapt_runtime_result(call_op.getResult(), op.result.type, loc));
           }
           return true;
         }
@@ -537,6 +599,12 @@ class FunctionTranslator {
 
         if (ty.is_bool()) {
           builder_.create<nrq::PrintBoolOp>(loc, val);
+        } else if (ty.is_string()) {
+          // A string value (for example `file.read_text(...)`) is a NUL-terminated
+          // pointer at this point, so it is printed through the runtime.
+          auto print_fn = ensure_runtime_fn(module_, builder_, "nrq_print_cstr",
+                                            builder_.getI32Type(), {llvm_ptr_type(ctx_)});
+          builder_.create<mlir::LLVM::CallOp>(loc, print_fn, mlir::ValueRange{val});
         } else if (ty.is_char()) {
           builder_.create<nrq::PrintCharOp>(loc, val);
         } else if (ty.is_float()) {
@@ -673,6 +741,8 @@ class FunctionTranslator {
   mlir::Block* entry_block_;
   std::vector<mlir::Value> values_;
   std::unordered_map<int, mlir::Block*> label_blocks_;
+  std::unordered_map<std::string, std::string> string_literals_;
+  int string_literal_counter_ = 0;
 };
 
 }  // namespace

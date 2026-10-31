@@ -18,13 +18,20 @@ class TirBuilder {
 
   std::unique_ptr<tir::Module> lower(const Program& program);
 
+  // Lowers one module of a multi-file program. `symbol_prefix` is empty for the
+  // root module (functions keep their bare names so `main` links) and the module
+  // name otherwise, producing `module.function` symbols that calls resolve to.
+  void lower_module(const std::string& symbol_prefix, const Program& program,
+                    tir::Module& module);
+
  private:
   struct LoopContext {
     int break_label = -1;
     int continue_label = -1;
   };
 
-  void lower_function(const FunctionDecl& function, tir::Module& module);
+  void lower_function(const FunctionDecl& function, const std::string& symbol,
+                      tir::Module& module);
   void lower_block(const BlockStmt& block, tir::Function& function);
   void lower_statement(const Stmt& statement, tir::Function& function);
   tir::Value lower_expression(const Expr& expr, tir::Function& function);

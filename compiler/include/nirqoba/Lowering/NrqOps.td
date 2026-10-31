@@ -17,7 +17,9 @@ def Nrq_Dialect : Dialect {
     The `nrq` dialect represents language-level operations that are lowered to
     calls into the Nirqoba runtime.
   }];
-  let useDefaultAttributePrinterParser = 1;
+  // No dialect-specific attributes exist: every attribute carried by an `nrq`
+  // operation is a builtin (StringAttr), so the dialect keeps the base
+  // Dialect's attribute parser/printer instead of generating stubs.
 }
 
 class Nrq_Op<string mnemonic> : Op<Nrq_Dialect, mnemonic>;

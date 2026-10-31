@@ -1,0 +1,11 @@
+module geometry;
+
+// Area of a rectangle. Arguments are width and height in pixels.
+public int function calculate_area(int width, int height) {
+    return width * height;
+}
+
+// Not visible to other modules: importing this by name is an error.
+private int function scale(int value) {
+    return value * 2;
+}

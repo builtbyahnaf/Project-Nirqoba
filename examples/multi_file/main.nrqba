@@ -1,0 +1,14 @@
+module app;
+
+import geometry;
+
+int function main() {
+    let area = geometry.calculate_area(6, 7);
+    print(area);
+
+    if (geometry.calculate_area(2, 3) == 6) {
+        print("area check passed");
+    }
+
+    return 0;
+}

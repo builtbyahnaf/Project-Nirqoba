@@ -12,6 +12,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "nirqoba/Diagnostics/DiagnosticEngine.h"
 #include "nirqoba/Frontend/SourceFile.h"
@@ -25,5 +26,11 @@ namespace nirq {
 // errors before a file is opened); in that case the source-line underline is
 // skipped. Locations whose `file` field is empty are rendered without position.
 void render_diagnostics(const DiagnosticEngine& engine, const SourceFile* source);
+
+// Multi-file variant: each diagnostic is underlined against the file recorded
+// in its location. Used once compilation can span several modules, where a
+// single SourceFile is no longer enough to render a caret line.
+void render_diagnostics(const DiagnosticEngine& engine,
+                        const std::vector<const SourceFile*>& sources);
 
 }  // namespace nirq

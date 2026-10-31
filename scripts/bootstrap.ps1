@@ -57,7 +57,9 @@ if ($null -eq $python) { $python = Get-Command python -ErrorAction SilentlyConti
 if ($null -eq $python) {
     Stop-WithError "Python $($lock.python.minimum)+ not found. Install it with: winget install Python.Python.3.12"
 }
-$pythonVersion = (Get-CommandVersion $python.Source @('-c', 'import sys; print(str(sys.version_info[0]) + "." + str(sys.version_info[1]))'))
+# Passed inline rather than through Get-CommandVersion: PowerShell 5.1 splits an
+# array argument containing a ';' when it forwards it to a native executable.
+$pythonVersion = (& $python.Source -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>&1 | Out-String).Trim()
 Write-Ok "python $pythonVersion"
 
 # --- Prerequisite: CMake ------------------------------------------------------

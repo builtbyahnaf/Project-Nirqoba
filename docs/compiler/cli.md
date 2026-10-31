@@ -3,11 +3,33 @@
 ## Commands
 
 ```text
-nirqoba build <file.nrqba> [--out-dir DIR] [-o PATH] [--emit=ast|tir|mlir|llvm|obj] [--verbose]
-nirqoba run   <file.nrqba> [--out-dir DIR] [--verbose] [-- <args>...]
-nirqoba check <file.nrqba> [--emit=ast|tir]
+nirqoba build <file.nrqba>... [--out-dir DIR] [-o PATH] [--module-path DIR] [--emit=ast|tir|mlir|llvm|obj] [--verbose]
+nirqoba run   <file.nrqba>... [--out-dir DIR] [--module-path DIR] [--verbose] [-- <args>...]
+nirqoba check <file.nrqba>... [--module-path DIR] [--emit=ast|tir]
 nirqoba version | --version
 nirqoba help [command] | --help
+```
+
+### Multi-file projects
+
+Every file named on the command line is a root module. Modules reached through
+`import` statements are discovered automatically: the importer's directory is
+searched first, then each `--module-path` directory, for `<module>.nrqba`.
+
+```text
+nirqoba run src/main.nrqba --module-path src/lib
+```
+
+The module that defines `main` is the entry module: its functions keep their
+bare symbol names, while functions in every other module are emitted as
+`module.function`. The first file on the command line names the output artifact.
+
+```nirqoba
+module geometry;
+
+public int function calculate_area(int width, int height) {
+    return width * height;
+}
 ```
 
 ### Exit Codes
@@ -48,6 +70,11 @@ nirqoba help [command] | --help
 | `NRQ3016` | Error | Duplicate function definition |
 | `NRQ3017` | Error | Value required in return statement |
 | `NRQ3018` | Error | Incorrect arity in function call |
+| `NRQ3028` | Error | Imported module not found in the search paths |
+| `NRQ3029` | Error | Cyclic module dependency |
+| `NRQ3030` | Error | Access to a `private` declaration from another module |
+| `NRQ3031` | Error | Duplicate module declaration, or two files declaring the same module |
+| `NRQ3032` | Error | Imported name conflicts with an existing declaration |
 | `NRQ4001` | Error | Internal compiler error: unresolved symbol in TIR |
 | `NRQ4002` | Error | Internal compiler error: unsupported expression in TIR |
 | `NRQ4003` | Error | Internal compiler error: structural invariant violation in TIR |
