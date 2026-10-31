@@ -1,0 +1,14 @@
+void function pin_temporarily() {
+    var values = array.allocate<int>(1);
+    let pinned = memory.pin(values);
+    defer memory.unpin(pinned);
+}
+
+int function main() {
+    gc.disable();
+    pin_temporarily();
+    gc.collect();
+    let stats = gc.get_statistics();
+    print(stats.live_objects);
+    return 42;
+}

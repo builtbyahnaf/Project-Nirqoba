@@ -1,6 +1,7 @@
 #include "test_harness.h"
 
 #include <cstdint>
+#include <algorithm>
 #include <atomic>
 #include <thread>
 
@@ -11,6 +12,41 @@
 
 #include "nirqoba/runtime/allocator.h"
 
+namespace {
+
+struct CustomAllocatorState {
+  size_t last_bytes = 0;
+  size_t last_alignment = 0;
+  int allocations = 0;
+  int deallocations = 0;
+  bool destroyed = false;
+  bool fail_allocation = false;
+};
+
+void* custom_allocate(void* context, size_t bytes, size_t alignment) {
+  auto* state = static_cast<CustomAllocatorState*>(context);
+  if (state->fail_allocation) return nullptr;
+  state->last_bytes = bytes;
+  state->last_alignment = alignment;
+  ++state->allocations;
+  return _aligned_malloc(bytes, std::max(alignment, sizeof(void*)));
+}
+
+void custom_deallocate(void* context, void* pointer, size_t bytes,
+                       size_t alignment) {
+  auto* state = static_cast<CustomAllocatorState*>(context);
+  state->last_bytes = bytes;
+  state->last_alignment = alignment;
+  ++state->deallocations;
+  _aligned_free(pointer);
+}
+
+void custom_destroy(void* context) {
+  static_cast<CustomAllocatorState*>(context)->destroyed = true;
+}
+
+}  // namespace
+
 TEST(AllocatorTest, StrategiesHonorAlignmentAndLifecycle) {
   const NrqAllocatorKind kinds[] = {
       NRQ_ALLOCATOR_GENERAL, NRQ_ALLOCATOR_POOL, NRQ_ALLOCATOR_ARENA,
@@ -19,15 +55,47 @@ TEST(AllocatorTest, StrategiesHonorAlignmentAndLifecycle) {
   for (NrqAllocatorKind kind : kinds) {
     void* allocator = nrq_allocator_create(kind, 64 * 1024);
     ASSERT_NE(allocator, nullptr);
+    ASSERT_EQ(nrq_memory_allocator_kind(
+                  static_cast<uint64_t>(reinterpret_cast<uintptr_t>(allocator))),
+              static_cast<int32_t>(kind));
     void* previous = nrq_memory_use_allocator(allocator);
-    void* pointer = nrq_memory_allocate(37, 64);
+    void* pointer = nrq_memory_allocate(37, 4096);
     ASSERT_NE(pointer, nullptr);
-    ASSERT_EQ(reinterpret_cast<uintptr_t>(pointer) % 64, uintptr_t{0});
+    ASSERT_EQ(reinterpret_cast<uintptr_t>(pointer) % 4096, uintptr_t{0});
     nrq_memory_deallocate_checked(pointer);
     ASSERT_EQ(nrq_memory_use_allocator(previous), allocator);
     ASSERT_EQ(nrq_allocator_reset(allocator), int32_t{1});
     ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
   }
+  ASSERT_EQ(nrq_memory_allocator_kind(uint64_t{0}),
+            static_cast<int32_t>(NRQ_ALLOCATOR_GENERAL));
+  ASSERT_EQ(nrq_memory_allocator_kind(uint64_t{1}), int32_t{-1});
+}
+
+TEST(AllocatorTest, CustomCallbacksReceiveOriginalSizeAndAlignment) {
+  CustomAllocatorState state;
+  const NrqCustomAllocatorVTable callbacks{
+      &state, custom_allocate, custom_deallocate, custom_destroy};
+  void* allocator = nrq_allocator_create_custom(&callbacks);
+  ASSERT_NE(allocator, nullptr);
+  ASSERT_EQ(nrq_memory_allocator_kind(static_cast<uint64_t>(
+                reinterpret_cast<uintptr_t>(allocator))),
+            static_cast<int32_t>(NRQ_ALLOCATOR_CUSTOM));
+  void* previous = nrq_memory_use_allocator(allocator);
+  state.fail_allocation = true;
+  ASSERT_EQ(nrq_memory_allocate(31, 64), nullptr);
+  state.fail_allocation = false;
+  void* pointer = nrq_memory_allocate(31, 64);
+  ASSERT_NE(pointer, nullptr);
+  ASSERT_EQ(reinterpret_cast<uintptr_t>(pointer) % 64, uintptr_t{0});
+  ASSERT_EQ(state.allocations, 1);
+  nrq_memory_deallocate_checked(pointer);
+  ASSERT_EQ(state.deallocations, 1);
+  ASSERT_EQ(state.last_bytes, size_t{31});
+  ASSERT_EQ(state.last_alignment, size_t{64});
+  ASSERT_EQ(nrq_memory_use_allocator(previous), allocator);
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
+  ASSERT_TRUE(state.destroyed);
 }
 
 TEST(AllocatorTest, PoolRejectsRequestsLargerThanItsCapacity) {

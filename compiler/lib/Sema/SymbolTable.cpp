@@ -29,6 +29,15 @@ void SymbolTable::mark_allocation_moved(uint64_t allocation_id) {
         entry.second.moved = true;
 }
 
+bool SymbolTable::allocation_is_moved(uint64_t allocation_id) const {
+  if (allocation_id == 0) return false;
+  for (const auto& scope : scopes_)
+    for (const auto& entry : scope)
+      if (entry.second.allocation_id == allocation_id && entry.second.moved)
+        return true;
+  return false;
+}
+
 void SymbolTable::rebind_pointer(const std::string& name, uint64_t allocation_id) {
   for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
     auto found = scope->find(name);

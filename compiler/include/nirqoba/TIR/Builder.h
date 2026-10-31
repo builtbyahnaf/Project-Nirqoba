@@ -34,6 +34,7 @@ class TirBuilder {
     std::string callee;
     SourceLocation location;
     std::vector<tir::Value> arguments;
+    Type result_type;
   };
 
   void lower_function(const FunctionDecl& function, const std::string& symbol,

@@ -43,6 +43,7 @@ class SymbolTable {
   // Innermost binding of `name`, or nullptr.
   const Symbol* lookup(const std::string& name) const;
   void mark_allocation_moved(uint64_t allocation_id);
+  bool allocation_is_moved(uint64_t allocation_id) const;
   void rebind_pointer(const std::string& name, uint64_t allocation_id);
 
   std::size_t scope_depth() const { return scopes_.size(); }

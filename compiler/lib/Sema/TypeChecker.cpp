@@ -374,19 +374,17 @@ void TypeChecker::check_block(BlockStmt& block) {
   for (StmtPtr& statement : block.statements()) {
     check_statement(*statement);
   }
-  for (auto call = deferred_calls_.back().rbegin();
-       call != deferred_calls_.back().rend(); ++call) {
-    const std::string& callee = (*call)->callee();
+  for (auto cleanup = deferred_calls_.back().rbegin();
+       cleanup != deferred_calls_.back().rend(); ++cleanup) {
+    const CallExpr* call = cleanup->call;
+    const std::string& callee = call->callee();
     if ((callee == "memory.deallocate" || callee == "memory.secure_release" ||
-         callee == "memory.unmap_file") && !(*call)->arguments().empty()) {
-      const Symbol* pointer = find_root_symbol(*(*call)->arguments()[0], symbols_);
-      if (pointer && pointer->type.is_pointer()) {
-        if (pointer->moved) {
-          diagnostics_.error(diag::kUseAfterFree, (*call)->location(),
+         callee == "memory.unmap_file") && cleanup->allocation_id != 0) {
+      if (symbols_.allocation_is_moved(cleanup->allocation_id)) {
+          diagnostics_.error(diag::kUseAfterFree, call->location(),
                              "deferred cleanup releases an allocation that was already released");
-        } else {
-          symbols_.mark_allocation_moved(pointer->allocation_id);
-        }
+      } else {
+        symbols_.mark_allocation_moved(cleanup->allocation_id);
       }
     }
   }
@@ -449,7 +447,15 @@ void TypeChecker::check_deferred_cleanup(DeferredCleanupStmt& statement) {
   checking_deferred_cleanup_ = true;
   check_expression(expression);
   checking_deferred_cleanup_ = false;
-  deferred_calls_.back().push_back(static_cast<const CallExpr*>(&expression));
+  const auto* call = static_cast<const CallExpr*>(&expression);
+  uint64_t allocation_id = 0;
+  if ((call->callee() == "memory.deallocate" ||
+       call->callee() == "memory.secure_release" ||
+       call->callee() == "memory.unmap_file") && !call->arguments().empty()) {
+    const Symbol* pointer = find_root_symbol(*call->arguments()[0], symbols_);
+    if (pointer && pointer->type.is_pointer()) allocation_id = pointer->allocation_id;
+  }
+  deferred_calls_.back().push_back(DeferredCleanup{call, allocation_id});
 }
 
 void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaration) {
@@ -1447,6 +1453,32 @@ Type TypeChecker::check_call(CallExpr& call) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'memory.available_bytes' takes no arguments");
     return Type::u64_type();
+  }
+  if (call.callee() == "memory.runtime_version") {
+    if (!call.arguments().empty())
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.runtime_version' takes no arguments");
+    return Type::string_type();
+  }
+  if (call.callee() == "memory.cpu_count") {
+    if (!call.arguments().empty())
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.cpu_count' takes no arguments");
+    return Type::i32_type();
+  }
+  if (call.callee() == "memory.allocator_kind") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.allocator_kind' takes one allocator handle");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+    } else {
+      const Type handle = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+      if (handle.is_valid() && !handle.is_integer())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "allocator handle must be an integer");
+    }
+    return Type::i32_type();
   }
   if (call.callee() == "memory.start_ref_count" ||
       call.callee() == "memory.stop_ref_count") {

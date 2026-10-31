@@ -55,7 +55,8 @@ TEST(GcTest, MemoryProfilerIncludesCurrentGcStatistics) {
   void* object = nrq_gc_allocate(48, nullptr);
   ASSERT_NE(object, nullptr);
   const nrq_gc_stats gc = nrq_gc_get_stats();
-  const NrqMemoryProfile profile = nrq_memory_profiler_capture();
+  NrqMemoryProfile profile{};
+  nrq_memory_profiler_capture_into(&profile);
   ASSERT_EQ(profile.gc_allocated_bytes, gc.allocated_bytes);
   ASSERT_EQ(profile.gc_collected_bytes, gc.collected_bytes);
   ASSERT_EQ(profile.gc_collections, gc.collections);
