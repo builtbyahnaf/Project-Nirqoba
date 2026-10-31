@@ -9,6 +9,7 @@ build/logs/*
 build/*.txt
 
 toolchain/*
+!toolchain/versions.lock.json
 
 
 out/
