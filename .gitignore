@@ -5,8 +5,7 @@ project_context/SYNTAX.md
 .freebuff
 .freebuff/*
 
-build/logs/*
-build/*.txt
+build/
 
 toolchain/*
 !toolchain/versions.lock.json
