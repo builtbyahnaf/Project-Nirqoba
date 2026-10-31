@@ -57,6 +57,7 @@ inline constexpr const char* kInternalError = "NRQ5004";
 inline constexpr const char* kLinkFailed = "NRQ5005";
 inline constexpr const char* kProgramFailedToStart = "NRQ5006";
 inline constexpr const char* kInvalidSourceExtension = "NRQ5007";
+inline constexpr const char* kProjectScaffoldFailed = "NRQ5008";
 }  // namespace diag
 
 struct Diagnostic {

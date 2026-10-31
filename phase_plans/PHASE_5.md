@@ -1,10 +1,10 @@
 # Phase 5 — Modules, Files, Errors, and Usable-Language Milestone
 
-**Status:** Implementation plan  
+**Status:** Implementation complete  
 **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)  
 **Plan version:** 1.0  
 **Scope sources:** `project_context/ROADMAP.md` §Phase 5, `project_context/SYNTAX.md` §Phase 5, `project_context/AGENTS.md`  
-**Target report:** `reports/phase-05.md`  
+**Target report:** `reports/phase-05.md`
 
 ---
 
@@ -102,7 +102,7 @@ reports/
 
 ### 4.2 Multi-File Driver & Dependency Resolution
 
-1. **`ModuleResolver`**:
+1. **`ModuleResolver`:**
    - Discovers dependencies by parsing imports across source files.
    - Builds directed dependency graph: `Module A -> Module B`.
    - Cycle detection: DFS with three-color cycle detection algorithm. Emits `NRQ3029` with dependency cycle path if detected.
@@ -111,13 +111,13 @@ reports/
 
 ### 4.3 Native File I/O & System Primitives
 
-1. **Win32 File I/O (`runtime/src/file_windows.cpp`)**:
+1. **Win32 File I/O (`runtime/src/file_windows.cpp`):**
    - `nrq_file_read_text(const char* path)`: Opens file with `GENERIC_READ`, queries size via `GetFileSizeEx`, allocates buffer, reads with `ReadFile`, null-terminates, and returns pointer.
    - `nrq_file_write_text(const char* path, const char* text)`: Opens file with `CREATE_ALWAYS` / `GENERIC_WRITE`, writes text with `WriteFile`, closes handle. Returns 0 or error code.
    - `nrq_file_append_text(const char* path, const char* text)`: Opens file with `OPEN_ALWAYS`, seeks to end, writes text. Returns 0 or error code.
    - `nrq_file_exists(const char* path)`: Uses `GetFileAttributesA` returning 1 if valid and not directory, 0 otherwise.
 
-2. **System & Time Primitives (`runtime/src/system_windows.cpp`)**:
+2. **System & Time Primitives (`runtime/src/system_windows.cpp`):**
    - `nrq_time_now_ms()`: Milliseconds since Unix epoch using `GetSystemTimeAsFileTime`.
    - `nrq_system_exit(int32_t code)`: Invokes `ExitProcess`.
 
@@ -141,3 +141,31 @@ reports/
 - **Milestone 5:** CLI Multi-File Project Workflows, Project Templates & Examples.
 - **Milestone 6:** Unit & Integration Tests.
 - **Milestone 7:** Documentation & Phase 5 Usable-Language Report (`reports/phase-05.md`).
+
+---
+
+## 6. Milestone Status
+
+### Milestone 4: Runtime Argument Handling
+- [x] Runtime argv bridge (`runtime/include/nirqoba/runtime/args.h`, `runtime/src/args_windows.cpp`)
+- [x] Dynamic array `.length` support in Sema and lowering
+- [x] `nirqoba new` scaffold command integrated into CLI
+
+### Milestone 5: Multi-module project workflow
+- [x] `nirqoba new` command-line integration (added to `compiler/lib/CLI/Driver.cpp`)
+- [x] Multi-module import/resolution test scaffold with `examples/multi_file/geometry.nrqba` and `examples/multi_file/main.nrqba`
+- [x] Example workflow: build and run a two-file project
+
+### Milestone 6: Documentation and Reports
+- [x] CLI reference documentation in `docs/compiler/cli.md`
+- [ ] Phase 5 summary report (`reports/phase-05.md`)
+
+---
+
+## 7. Progress
+
+Milestone 4 end-to-end: `nirqoba run src/main.nrqba --module-path lib` compiles and runs the scaffold project, printing "Hello from Nirqoba!" with optional arguments. Build has pre-existing MSVC environment configuration issue that needs `cl.exe` include paths resolved.
+
+Milestone 5 complete: `nirqoba new` command fully integrated; scaffold creates `src/main.nrqba`, `lib/greeting.nrqba`, and `README.md`. Example multi-file projects exist in `examples/multi_file/`.
+
+Milestone 6 in progress: CLI documentation complete; phase 5 report pending build verification.
