@@ -3,6 +3,8 @@
 #pragma once
 
 #include <stdint.h>
+#include "nirqoba/runtime/allocator.h"
+#include "nirqoba/runtime/gc.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -14,22 +16,10 @@ int64_t nrq_time_now_ms(void);
 // Exits the process with the given exit code.
 void nrq_system_exit(int32_t exit_code);
 
-// Garbage collection control.
-void nrq_gc_enable(void);
-void nrq_gc_disable(void);
-void nrq_gc_collect(void);
-
-// Get GC statistics.
-struct nrq_gc_stats {
-  uint64_t allocated_bytes;
-  uint64_t collected_bytes;
-  uint64_t collections;
-};
-struct nrq_gc_stats nrq_gc_get_stats(void);
-
 // Memory allocation (Phase 6.7).
 void* nrq_memory_allocate(size_t bytes, size_t alignment);
 void nrq_memory_deallocate(void* ptr, size_t bytes, size_t alignment);
+void nrq_memory_deallocate_checked(void* ptr);
 
 #ifdef __cplusplus
 }

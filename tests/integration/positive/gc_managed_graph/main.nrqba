@@ -1,0 +1,21 @@
+struct Node {
+    managed<Node> next;
+    int value;
+}
+
+managed<Node> function create_graph() {
+    var first = array.allocate<Node>(1);
+    var second = array.allocate<Node>(1);
+    first[0].value = 42;
+    second[0].value = 42;
+    first[0].next = second;
+    second[0].next = first;
+    return first;
+}
+
+int function main() {
+    var first = create_graph();
+    gc.collect();
+    print(first[0].next[0].value);
+    return 42;
+}

@@ -1,0 +1,9 @@
+int function main() {
+    gc.set_threshold(4096);
+    gc.disable();
+    gc.enable();
+    gc.collect();
+    let stats = gc.get_statistics();
+    print(stats.collections);
+    return 42;
+}

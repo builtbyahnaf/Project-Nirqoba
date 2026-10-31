@@ -23,6 +23,20 @@ Type Type::dynamic_array_type(Type element_type) {
   return t;
 }
 
+Type Type::pointer_type(Type element_type) {
+  Type t(TypeKind::Pointer);
+  t.data_ = std::make_shared<TypeData>();
+  t.data_->element_type = element_type;
+  return t;
+}
+
+Type Type::managed_pointer_type(Type element_type) {
+  Type t(TypeKind::ManagedPointer);
+  t.data_ = std::make_shared<TypeData>();
+  t.data_->element_type = element_type;
+  return t;
+}
+
 Type Type::tuple_type(std::vector<Type> elements) {
   Type t(TypeKind::Tuple);
   t.data_ = std::make_shared<TypeData>();
@@ -79,6 +93,10 @@ std::string Type::to_string() const {
       return element_type().to_string() + "[" + std::to_string(array_length()) + "]";
     case TypeKind::DynamicArray:
       return element_type().to_string() + "[]";
+    case TypeKind::Pointer:
+      return element_type().to_string() + "*";
+    case TypeKind::ManagedPointer:
+      return "managed<" + element_type().to_string() + ">";
     case TypeKind::Tuple: {
       std::string s = "(";
       const auto& elems = tuple_elements();
@@ -117,6 +135,10 @@ std::string Type::mangle() const {
       return "A" + std::to_string(array_length()) + "_" + element_type().mangle();
     case TypeKind::DynamicArray:
       return "DA_" + element_type().mangle();
+    case TypeKind::Pointer:
+      return "P_" + element_type().mangle();
+    case TypeKind::ManagedPointer:
+      return "MP_" + element_type().mangle();
     case TypeKind::Tuple: {
       std::string s = "T" + std::to_string(tuple_elements().size());
       for (const auto& elem : tuple_elements()) {
@@ -145,6 +167,10 @@ bool operator==(const Type& lhs, const Type& rhs) {
       return lhs.array_length() == rhs.array_length() &&
              lhs.element_type() == rhs.element_type();
     case TypeKind::DynamicArray:
+      return lhs.element_type() == rhs.element_type();
+    case TypeKind::Pointer:
+      return lhs.element_type() == rhs.element_type();
+    case TypeKind::ManagedPointer:
       return lhs.element_type() == rhs.element_type();
     case TypeKind::Tuple: {
       const auto& l = lhs.tuple_elements();
