@@ -32,6 +32,29 @@ public int function calculate_area(int width, int height) {
 }
 ```
 
+### Standard library builtins
+
+The Phase 5 builtins are compiler-known: they need no import and lower directly to
+Win32-backed runtime calls in `runtime/`.
+
+| Builtin | Returns | Notes |
+|---|---|---|
+| `file.read_text(string)` | `string` | Whole file; empty string when the file cannot be opened |
+| `file.write_text(string, string)` | `int` | Creates or truncates; `0` on success, Win32 error code otherwise |
+| `file.append_text(string, string)` | `int` | Creates when missing, appends otherwise; `0` on success |
+| `file.exists(string)` | `bool` | True for an existing non-directory entry |
+| `time.now()` | `long` | Milliseconds since the Unix epoch |
+| `system.exit(int)` | `void` | Terminates the process with the given code |
+
+```nirqoba
+int function main() {
+    file.write_text("out.txt", "hello");
+    print(file.read_text("out.txt"));
+    print(file.exists("out.txt"));
+    return 0;
+}
+```
+
 ### Exit Codes
 
 | Code | Meaning |

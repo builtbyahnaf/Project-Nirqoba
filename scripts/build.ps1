@@ -60,17 +60,26 @@ $build = 'cmake --build --preset ' + $preset
 if ($Target) { $build += ' --target ' + $Target }
 
 $batPath = Join-Path $env:TEMP 'nirqoba-build.bat'
-$batLines = @(
-    '@echo off',
-    'call "' + $tc.vcvars64 + '" > "%TEMP%\nirqoba-vcvars.log" 2>&1 || exit /b 1',
-    $configure + ' || exit /b 1',
-    $build + ' || exit /b 1'
-)
-Set-Content -Path $batPath -Value $batLines -Encoding ascii
+# Written as one here-string: building the batch file as an array of
+# string-concatenation expressions lets PowerShell split elements containing
+# quotes and spaces into separate words.
+# The repository path contains spaces, so the batch file changes directory
+# explicitly instead of relying on the caller's working directory.
+$batContent = @"
+@echo off
+call "$($tc.vcvars64)" > "%TEMP%\nirqoba-vcvars.log" 2>&1 || exit /b 1
+cd /d "$RepoRoot" || exit /b 1
+$configure || exit /b 1
+$build || exit /b 1
+"@
+Set-Content -Path $batPath -Value $batContent -Encoding ascii
 
 Write-Host "==> configuring and building ($Configuration, preset $preset)"
 Write-Host "    log: $logPath"
-& cmd.exe /c $batPath 2>&1 | Tee-Object -FilePath $logPath
+# Invoke the batch file directly. Going through `cmd.exe /c "..."` loses the
+# quotes when PowerShell 5.1 forwards the argument, which splits any path
+# containing spaces.
+& $batPath 2>&1 | Tee-Object -FilePath $logPath
 $code = $LASTEXITCODE
 if ($code -ne 0) {
     Write-Host "build failed with exit code $code (see $logPath)" -ForegroundColor Red
