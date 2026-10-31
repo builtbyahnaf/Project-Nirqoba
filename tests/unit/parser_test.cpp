@@ -41,7 +41,7 @@ TEST(ParserTest, RejectPhase2Constructs) {
   DiagnosticEngine diag;
   SourceFile src("phase2.nrqba",
                  "int function main() {\n"
-                 "  if (true) { return 1; }\n"
+                 "  async;\n"
                  "}");
   Lexer lexer(src, diag);
   auto tokens = lexer.tokenize();

@@ -69,6 +69,8 @@ include_directories("${CMAKE_CURRENT_BINARY_DIR}/include")
 # ---------------------------------------------------------------------------
 # Sub-projects
 # ---------------------------------------------------------------------------
+enable_testing()
+
 add_subdirectory(runtime)
 add_subdirectory(compiler)
 add_subdirectory(tests)

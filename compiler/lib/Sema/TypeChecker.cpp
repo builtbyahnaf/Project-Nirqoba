@@ -1230,15 +1230,15 @@ Type TypeChecker::check_call(CallExpr& call) {
                              std::to_string(call.arguments().size()) + " were given");
       return Type::u64_type();
     }
-    const Type arg1_type = check_expression(const_cast<Expr&>(*call.arguments().front()));
-    const Type arg2_type = check_expression(const_cast<Expr&>(*std::next(call.arguments().begin())));
-    if (arg1_type.is_valid() && !arg1_type.is_u64()) {
-      diagnostics_.error(diag::kTypeMismatch, call.arguments().front()->location(),
-                         "'nrq_memory_allocate' first argument must be 'u64' (bytes), not '" + arg1_type.to_string() + "'");
+    const Type arg1_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    const Type arg2_type = check_expression(const_cast<Expr&>(*call.arguments()[1]));
+    if (arg1_type.is_valid() && !arg1_type.is_integer()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'nrq_memory_allocate' first argument must be an integer (bytes), not '" + arg1_type.to_string() + "'");
     }
-    if (arg2_type.is_valid() && !arg2_type.is_u64()) {
-      diagnostics_.error(diag::kTypeMismatch, std::next(call.arguments().begin())->location(),
-                         "'nrq_memory_allocate' second argument must be 'u64' (alignment), not '" + arg2_type.to_string() + "'");
+    if (arg2_type.is_valid() && !arg2_type.is_integer()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
+                         "'nrq_memory_allocate' second argument must be an integer (alignment), not '" + arg2_type.to_string() + "'");
     }
     return Type::u64_type();
   }
@@ -1251,19 +1251,19 @@ Type TypeChecker::check_call(CallExpr& call) {
                              std::to_string(call.arguments().size()) + " were given");
       return Type::void_type();
     }
-    const Type arg1_type = check_expression(const_cast<Expr&>(*call.arguments().front()));
-    const Type arg2_type = check_expression(const_cast<Expr&>(*std::next(call.arguments().begin())));
-    const Type arg3_type = check_expression(const_cast<Expr&>(*std::next(call.arguments().begin(), 2)));
+    const Type arg1_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    const Type arg2_type = check_expression(const_cast<Expr&>(*call.arguments()[1]));
+    const Type arg3_type = check_expression(const_cast<Expr&>(*call.arguments()[2]));
     if (arg1_type.is_valid()) {
       // Pointer type check - accept any non-error type
     }
-    if (arg2_type.is_valid() && !arg2_type.is_u64()) {
-      diagnostics_.error(diag::kTypeMismatch, std::next(call.arguments().begin())->location(),
-                         "'nrq_memory_deallocate' second argument must be 'u64' (bytes), not '" + arg2_type.to_string() + "'");
+    if (arg2_type.is_valid() && !arg2_type.is_integer()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
+                         "'nrq_memory_deallocate' second argument must be an integer (bytes), not '" + arg2_type.to_string() + "'");
     }
-    if (arg3_type.is_valid() && !arg3_type.is_u64()) {
-      diagnostics_.error(diag::kTypeMismatch, std::next(call.arguments().begin(), 2)->location(),
-                         "'nrq_memory_deallocate' third argument must be 'u64' (alignment), not '" + arg3_type.to_string() + "'");
+    if (arg3_type.is_valid() && !arg3_type.is_integer()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[2]->location(),
+                         "'nrq_memory_deallocate' third argument must be an integer (alignment), not '" + arg3_type.to_string() + "'");
     }
     return Type::void_type();
   }
