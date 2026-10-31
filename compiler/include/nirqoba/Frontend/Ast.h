@@ -297,6 +297,7 @@ class Stmt {
     Break,
     Continue,
     Return,
+    DeferredCleanup,
     Expression
   };
 
@@ -490,6 +491,18 @@ class ReturnStmt : public Stmt {
 
  private:
   ExprPtr value_;
+};
+
+// Schedules a call expression to run in reverse order when its lexical block
+// exits, including return, break, and continue exits.
+class DeferredCleanupStmt : public Stmt {
+ public:
+  DeferredCleanupStmt(SourceLocation location, ExprPtr expression)
+      : Stmt(Kind::DeferredCleanup, std::move(location)), expression_(std::move(expression)) {}
+  const Expr& expression() const { return *expression_; }
+
+ private:
+  ExprPtr expression_;
 };
 
 class ExprStmt : public Stmt {

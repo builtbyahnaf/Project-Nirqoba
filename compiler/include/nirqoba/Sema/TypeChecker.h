@@ -58,6 +58,7 @@ class TypeChecker {
   void check_break(BreakStmt& statement);
   void check_continue(ContinueStmt& statement);
   void check_return(ReturnStmt& statement);
+  void check_deferred_cleanup(DeferredCleanupStmt& statement);
 
   Type check_expression(Expr& expr);
   Type check_call(CallExpr& call);
@@ -85,6 +86,8 @@ class TypeChecker {
   int loop_depth_ = 0;
   std::string current_module_;
   uint64_t next_allocation_id_ = 1;
+  bool checking_deferred_cleanup_ = false;
+  std::vector<std::vector<const CallExpr*>> deferred_calls_;
   std::unordered_map<std::string, FunctionSignature> functions_;
   std::unordered_map<std::string, StructInfo> structs_;
 };

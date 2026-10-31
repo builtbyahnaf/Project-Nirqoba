@@ -28,12 +28,19 @@ class TirBuilder {
   struct LoopContext {
     int break_label = -1;
     int continue_label = -1;
+    std::size_t deferred_scope_depth = 0;
+  };
+  struct DeferredCall {
+    std::string callee;
+    SourceLocation location;
+    std::vector<tir::Value> arguments;
   };
 
   void lower_function(const FunctionDecl& function, const std::string& symbol,
                       tir::Module& module);
   void lower_block(const BlockStmt& block, tir::Function& function);
   void lower_statement(const Stmt& statement, tir::Function& function);
+  void emit_deferred_from(std::size_t scope_depth, tir::Function& function);
   tir::Value lower_expression(const Expr& expr, tir::Function& function);
   tir::Value resolve_lvalue_ptr(const Expr& target, tir::Function& function);
 
@@ -49,6 +56,7 @@ class TirBuilder {
   DiagnosticEngine& diagnostics_;
   std::vector<std::unordered_map<std::string, tir::Value>> scopes_;
   std::vector<LoopContext> loop_stack_;
+  std::vector<std::vector<DeferredCall>> deferred_expressions_;
 };
 
 }  // namespace nirq

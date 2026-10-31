@@ -104,6 +104,7 @@ TEST(AllocatorTest, SecureBuffersAreZeroedAndProfilerTracksLifetime) {
   nrq_memory_secure_release(secret);
   const NrqMemoryProfile profile = nrq_memory_profiler_capture();
   ASSERT_EQ(profile.current_bytes, uint64_t{0});
+  ASSERT_EQ(profile.total_bytes, uint64_t{32});
   ASSERT_EQ(profile.peak_bytes, uint64_t{32});
   ASSERT_EQ(profile.allocations, uint64_t{1});
   ASSERT_EQ(profile.deallocations, uint64_t{1});

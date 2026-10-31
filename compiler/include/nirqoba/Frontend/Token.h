@@ -67,6 +67,7 @@ enum class TokenKind {
   KwAsync,
   KwAwait,
   KwFn,
+  KwDefer,
 
   // Delimiters.
   LParen,

@@ -21,9 +21,14 @@ typedef enum NrqAllocatorKind {
 
 typedef struct NrqMemoryProfile {
   uint64_t current_bytes;
+  uint64_t total_bytes;
   uint64_t peak_bytes;
   uint64_t allocations;
   uint64_t deallocations;
+  uint64_t gc_allocated_bytes;
+  uint64_t gc_collected_bytes;
+  uint64_t gc_collections;
+  uint64_t gc_live_objects;
 } NrqMemoryProfile;
 
 // `capacity` is the fixed region size for arena, stack, buddy, free-list, and
@@ -40,9 +45,14 @@ void nrq_memory_profiler_start(void);
 void nrq_memory_profiler_stop(void);
 NrqMemoryProfile nrq_memory_profiler_capture(void);
 uint64_t nrq_memory_profiler_get_current_bytes(void);
+uint64_t nrq_memory_profiler_get_total_bytes(void);
 uint64_t nrq_memory_profiler_get_peak_bytes(void);
 uint64_t nrq_memory_profiler_get_allocations(void);
 uint64_t nrq_memory_profiler_get_deallocations(void);
+uint64_t nrq_memory_profiler_get_gc_allocated_bytes(void);
+uint64_t nrq_memory_profiler_get_gc_collected_bytes(void);
+uint64_t nrq_memory_profiler_get_gc_collections(void);
+uint64_t nrq_memory_profiler_get_gc_live_objects(void);
 void* nrq_memory_secure_allocate(size_t bytes, size_t alignment);
 void nrq_memory_secure_zero(void* pointer, size_t bytes);
 void nrq_memory_secure_release(void* pointer);

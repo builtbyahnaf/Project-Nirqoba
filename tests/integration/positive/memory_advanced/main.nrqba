@@ -8,6 +8,7 @@ int function main() {
     secret[0] = 42 as byte;
     var profile = memory.profiler.capture();
     print(profile.current_bytes);
+    print(profile.total_bytes);
     var available = memory.available_bytes();
     memory.secure_zero(secret, 16);
     memory.secure_release(secret);

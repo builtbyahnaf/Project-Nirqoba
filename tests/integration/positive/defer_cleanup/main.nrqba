@@ -1,0 +1,18 @@
+int function main() {
+    defer print(1);
+    {
+        defer print(2);
+        defer print(3);
+    }
+
+    var iteration = 0;
+    while (iteration < 2) {
+        defer print(4);
+        iteration += 1;
+        if (iteration == 1) {
+            continue;
+        }
+        break;
+    }
+    return 42;
+}

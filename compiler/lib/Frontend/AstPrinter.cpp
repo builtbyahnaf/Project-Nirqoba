@@ -156,6 +156,12 @@ class Printer {
         out_ << "\n";
         return;
       }
+      case Stmt::Kind::DeferredCleanup: {
+        const auto& deferred = static_cast<const DeferredCleanupStmt&>(statement);
+        indent();
+        out_ << "defer " << expression(deferred.expression()) << "\n";
+        return;
+      }
       case Stmt::Kind::Expression: {
         const auto& expression_statement = static_cast<const ExprStmt&>(statement);
         indent();

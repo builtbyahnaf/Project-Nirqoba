@@ -51,6 +51,7 @@ std::string_view token_kind_name(TokenKind kind) {
     case TokenKind::KwAsync: return "async";
     case TokenKind::KwAwait: return "await";
     case TokenKind::KwFn: return "fn";
+    case TokenKind::KwDefer: return "defer";
     case TokenKind::LParen: return "(";
     case TokenKind::RParen: return ")";
     case TokenKind::LBrace: return "{";
@@ -122,6 +123,7 @@ TokenKind keyword_kind(std::string_view text) {
       {"private", TokenKind::KwPrivate},   {"protected", TokenKind::KwProtected},
       {"async", TokenKind::KwAsync},       {"await", TokenKind::KwAwait},
       {"fn", TokenKind::KwFn},
+      {"defer", TokenKind::KwDefer},
   };
   for (const Entry& entry : kKeywords) {
     if (entry.spelling == text) return entry.kind;

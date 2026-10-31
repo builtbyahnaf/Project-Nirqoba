@@ -4,117 +4,54 @@
 
 - **Phase:** 6 — Memory/runtime hardening and Windows installer foundation
 - **Date:** 2026-10-31
-- **Status:** Partial foundation
-- **Objective:** Implement the accepted Phase 6 work for tracing GC, explicit
-  allocation and allocator strategies, compiler/runtime integration, tests,
-  documentation, and preserve the Windows installer foundation.
-- **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
+- **Status:** Partial implementation
+- **Objective:** Implement Phase 6 tracing GC, explicit allocation and allocator strategies, advanced memory APIs, verification, documentation, and Windows packaging.
 
-## 2. Scope
+## 2. Scope and status
 
-Implemented the managed tracing heap and controls, raw typed allocation,
-allocator ownership tracking, eight built-in allocator strategies, compiler
-lowering, integration and unit coverage, and memory documentation. The existing
-Windows installer templates and GUI skeleton remain present.
+Implemented: precise non-moving mark-and-sweep GC; GC controls and statistics; typed explicit allocations; eight built-in allocator strategies; allocator ownership registry; per-allocation allocator selection; arena-backed regions; limited direct-alias use-after-free diagnostics; reference diagnostics, explicit-allocation profiler, Windows file mappings, pin/unpin, secure allocation/zeroization, available-memory estimate; tests/docs; and Windows package staging plus an Inno Setup definition.
 
-Not implemented: ownership and borrowing enforcement; deterministic cleanup
-scopes; custom allocator implementations; per-allocation or scoped strategy
-selection; memory mapping; profiler; reference-count diagnostics; secure memory
-APIs; broad runtime introspection; Linux runtime support; installer build and
-distribution validation.
+Still incomplete: a complete owned/borrowed/shared type and lifetime model; deterministic scope cleanup; custom allocators; container/function/module allocator selection; complete static pointer lifetime checking; GC heap and fragmentation profiler accounting; scoped pin guards and excessive-pin diagnostics; broad runtime introspection; non-Windows runtime support; and an actual installer compilation and install/uninstall validation.
 
-## 3. Architecture and Design
+## 3. Architecture
 
-Managed objects use a distinct precise non-moving mark-and-sweep heap. Generated
-root frames and typed reference offsets identify live managed references.
-Explicit raw allocations use a separate runtime registry that associates each
-pointer with its allocator. Allocator handles are opaque to source programs,
-and selection affects only explicit allocations on the current thread.
+Managed objects use a distinct precise non-moving mark-and-sweep heap. Generated root frames and typed reference offsets identify live managed references. Explicit allocations use a separate registry that associates each allocation with its owning allocator. Allocator handles are opaque; thread-local selection applies to explicit allocations, and an optional per-allocation handle overrides it. Regions are arena allocator handles.
 
-## 4. Implementation Details
+## 4. Safety and implementation limits
 
-The GC supports cycles, default-enabled automatic collection, explicit
-collection while disabled, thresholds, and live/collected statistics. The
-explicit allocator C ABI offers general, pool, arena, stack, slab, buddy,
-free-list, and TLSF implementations. Invalid/double frees are diagnosed;
-stack frees require LIFO order. Allocator reset invalidates its outstanding
-allocations. Full raw-pointer use-after-free protection is not available.
+Invalid and duplicate frees are diagnosed by the runtime. The compiler detects use after supported deallocation operations through direct aliases tracked in a function. It does not catch general raw-pointer dereferences, aliases created by reassignment, or interprocedural escape/free cases. This is a useful diagnostic, not a substitute for full ownership and borrowing enforcement.
 
-## 5. Modified Files
+The GC supports cycles, automatic collection, explicit collection, configurable thresholds, and statistics. Allocator strategies include general, pool, arena, stack, slab, buddy, free-list, and TLSF. Advanced utilities and constraints are recorded in `reports/phase-06.5.md`, `reports/phase-06.7.md`, and `reports/phase-06.9.md`.
 
-Compiler semantic checking and MLIR lowering were extended for managed GC and
-allocator APIs. Runtime GC and allocator implementations live in
-`runtime/src/gc.cpp` and `runtime/src/allocator_windows.cpp`, with public
-interfaces under `runtime/include/nirqoba/runtime/`. CMake includes the runtime
-and allocator unit tests. Integration cases cover GC controls, managed arrays
-and graph cycles, typed memory operations, and allocator selection. Syntax and
-usage are documented in `project_context/SYNTAX.md` and `docs/memory/`.
+## 5. Validation
 
-The existing `windows_installer/` contains installer scripts, build scripts,
-README, and a Win32 GUI skeleton. This task did not execute the GUI or installer
-build scripts.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test.ps1 -Configuration RelWithDebInfo`: build passed; CTest 1/1; integration 19/19.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Configuration Release -Clean`: Release build passed with pinned MSVC 19.51/14.51.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test.ps1 -Configuration Release -SkipBuild`: CTest 1/1; integration 19/19.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File windows_installer/build_scripts/stage_package.ps1 -Configuration Release`: package staging passed.
+- `git diff --check`: passed.
+- Release initially had a stale cache using MSVC 14.44 while including MSVC 14.51 headers. A clean configure resolved that. Release also exposed MLIR 23's deprecated `OpBuilder::create` warning under `/WX`; MSVC warning C4996 is suppressed while other warnings remain errors.
+- `ISCC.exe` is unavailable here, so the Inno Setup script was not compiled and the installer was not installed or uninstalled.
 
-## 6. Language/API Changes
+## 6. Performance and platform
 
-Added/implemented `managed<T>`, `array.allocate<T>(count)`, `memory.allocate<T>`,
-`memory.deallocate`, GC controls/statistics, allocator constructors and
-`memory.get_allocator`, `memory.use_allocator`, `memory.reset_allocator`, and
-`memory.destroy_allocator`. Detailed behavior and limits are documented in
-`project_context/SYNTAX.md` and `docs/memory/`.
+No benchmark or sanitizer run was performed. The runtime implementation remains Windows-specific, and no relative performance claims are made.
 
-## 7. Testing
-
-- **Command:** `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test.ps1 -Configuration RelWithDebInfo`
-- **Environment:** Windows x64, MSVC, LLVM/MLIR 23.1.4.
-- **Result:** Build succeeded; CTest passed (1/1 test executable); all 18
-  integration cases passed after the advanced memory utilities were added.
-- Unit coverage includes reachable cycles, threshold collection, pinning,
-  reference diagnostics, secure zeroization, mapped-file lifecycle, all eight
-  allocator alignment/lifecycle paths, concurrent allocator users, and pool
-  capacity failure.
-- The allocator integration fixture exercises each strategy through compiled
-  Nirqoba source.
-- No installer build, sanitizer run, long stress test, or performance benchmark
-  was executed.
-
-## 8. Performance
-
-No benchmarks were run. No relative allocator or collector performance claims
-are made. The collector currently serializes heap operations with a global
-mutex.
-
-## 9. Known Issues
-
-Raw pointer dereferences after free are not checked. Managed root coordination
-for multithreaded/async execution is not validated. Allocator-selection scope
-is thread-local only; per-allocation overrides and custom allocators are
-missing. Pool/region exhaustion and fragmentation need broader tests. The
-runtime is Windows-only. Phase 6.9 specialized facilities and deterministic
-resource cleanup remain incomplete. Installer packaging has not been built or
-verified.
-
-## 10. Documentation Changes
-
-Updated `project_context/SYNTAX.md`; added `docs/memory/management.md`,
-`docs/memory/allocators.md`, and Phase 6.5/6.7 technical reports.
-
-## 11. Acceptance Criteria
+## 7. Acceptance snapshot
 
 | Requirement | Status |
 |---|---|
-| Precise tracing GC, cycles, controls and statistics | Implemented; current tests pass |
-| Explicit allocation and allocator identity | Implemented; current tests pass |
-| Eight built-in allocator strategies | Implemented; baseline tests pass |
-| Ownership/lifetime safety and use-after-free prevention | Incomplete |
-| Per-allocation/scoped/custom allocator support | Incomplete |
-| Phase 6.9 utilities and deterministic cleanup | Incomplete |
-| Windows installer build and distribution validation | Not run |
-| Windows compiler/unit/integration suite | PASS, 17/17 integration |
+| Precise tracing GC, cycles, controls, statistics | Implemented; current tests pass |
+| Eight built-in allocator strategies | Implemented; basic and unit coverage present |
+| Per-allocation override and arena regions | Implemented |
+| Use-after-free prevention | Partial; direct aliases and same-function operations only |
+| Full ownership/borrowing, deterministic scope cleanup | Incomplete |
+| Custom allocators and all requested selection scopes | Incomplete |
+| Phase 6.9 utilities | Partial; see phase-06.9 report |
+| Release and RelWithDebInfo compiler/unit/integration suite | PASS; 19/19 integration each |
+| Package stage | PASS; toolchain paths remain tied to build host |
+| Installer compilation and installation validation | Not run; ISCC unavailable |
 
-## 12. Final Verdict
+## 8. Verdict
 
-**FAIL** — the GC and explicit allocator foundation builds and passes the
-current test suite, but Phase 6 acceptance remains incomplete in the areas
-listed above. This report supersedes earlier claims in the historical Phase 6
-report that used a no-op collector or described allocator strategies as future
-work.
+**Phase 6 is not complete.** The GC, allocator, compiler integration, advanced utility subset, and package staging build and pass the local suites. The remaining requirements above need implementation before claiming full Phase 6 acceptance.

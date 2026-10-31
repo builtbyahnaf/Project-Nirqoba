@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "nirqoba/runtime/gc.h"
+#include "nirqoba/runtime/allocator.h"
 
 namespace {
 
@@ -46,6 +47,21 @@ TEST(GcTest, PreservesReachableCyclesAndSweepsAfterRootRemoval) {
   auto swept_stats = nrq_gc_get_stats();
   ASSERT_EQ(swept_stats.live_objects, static_cast<uint64_t>(0));
   ASSERT_TRUE(swept_stats.collected_bytes >= sizeof(Node) * 2);
+}
+
+TEST(GcTest, MemoryProfilerIncludesCurrentGcStatistics) {
+  nrq_gc_enable();
+  nrq_gc_collect();
+  void* object = nrq_gc_allocate(48, nullptr);
+  ASSERT_NE(object, nullptr);
+  const nrq_gc_stats gc = nrq_gc_get_stats();
+  const NrqMemoryProfile profile = nrq_memory_profiler_capture();
+  ASSERT_EQ(profile.gc_allocated_bytes, gc.allocated_bytes);
+  ASSERT_EQ(profile.gc_collected_bytes, gc.collected_bytes);
+  ASSERT_EQ(profile.gc_collections, gc.collections);
+  ASSERT_EQ(profile.gc_live_objects, gc.live_objects);
+  ASSERT_EQ(profile.gc_live_objects, uint64_t{1});
+  nrq_gc_collect();
 }
 
 TEST(GcTest, ExplicitCollectionStillRunsWhenAutomaticCollectionIsDisabled) {

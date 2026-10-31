@@ -7,6 +7,7 @@
 #endif
 
 #include "nirqoba/runtime/allocator.h"
+#include "nirqoba/runtime/gc.h"
 #include "nirqoba/runtime/fatal.h"
 #include "nirqoba/runtime/system.h"
 
@@ -685,6 +686,7 @@ static void* allocate_with_allocator(Allocator* allocator, size_t bytes,
   }
   if (memory_profiler_enabled) {
     memory_profile.current_bytes += bytes;
+    memory_profile.total_bytes += bytes;
     memory_profile.peak_bytes = std::max(memory_profile.peak_bytes,
                                          memory_profile.current_bytes);
     ++memory_profile.allocations;
@@ -732,6 +734,7 @@ void nrq_memory_profiler_start(void) {
   memory_profile = {};
   for (const auto& allocation : live_allocations)
     memory_profile.current_bytes += allocation.second.bytes;
+  memory_profile.total_bytes = memory_profile.current_bytes;
   memory_profile.peak_bytes = memory_profile.current_bytes;
   memory_profiler_enabled = true;
 }
@@ -743,11 +746,19 @@ void nrq_memory_profiler_stop(void) {
 
 NrqMemoryProfile nrq_memory_profiler_capture(void) {
   std::lock_guard<std::mutex> lock(allocator_mutex);
-  return memory_profile;
+  NrqMemoryProfile profile = memory_profile;
+  profile.gc_allocated_bytes = nrq_gc_get_allocated_bytes();
+  profile.gc_collected_bytes = nrq_gc_get_collected_bytes();
+  profile.gc_collections = nrq_gc_get_collection_count();
+  profile.gc_live_objects = nrq_gc_get_live_objects();
+  return profile;
 }
 
 uint64_t nrq_memory_profiler_get_current_bytes(void) {
   return nrq_memory_profiler_capture().current_bytes;
+}
+uint64_t nrq_memory_profiler_get_total_bytes(void) {
+  return nrq_memory_profiler_capture().total_bytes;
 }
 uint64_t nrq_memory_profiler_get_peak_bytes(void) {
   return nrq_memory_profiler_capture().peak_bytes;
@@ -757,6 +768,18 @@ uint64_t nrq_memory_profiler_get_allocations(void) {
 }
 uint64_t nrq_memory_profiler_get_deallocations(void) {
   return nrq_memory_profiler_capture().deallocations;
+}
+uint64_t nrq_memory_profiler_get_gc_allocated_bytes(void) {
+  return nrq_memory_profiler_capture().gc_allocated_bytes;
+}
+uint64_t nrq_memory_profiler_get_gc_collected_bytes(void) {
+  return nrq_memory_profiler_capture().gc_collected_bytes;
+}
+uint64_t nrq_memory_profiler_get_gc_collections(void) {
+  return nrq_memory_profiler_capture().gc_collections;
+}
+uint64_t nrq_memory_profiler_get_gc_live_objects(void) {
+  return nrq_memory_profiler_capture().gc_live_objects;
 }
 
 void* nrq_memory_secure_allocate(size_t bytes, size_t alignment) {
