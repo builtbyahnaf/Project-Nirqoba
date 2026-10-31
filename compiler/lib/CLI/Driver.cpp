@@ -1,8 +1,9 @@
 #include "nirqoba/CLI/Driver.h"
 
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string_view>
-#include <filesystem>
 
 #include "nirqoba/Diagnostics/Diagnostic.h"
 #include "nirqoba/Diagnostics/DiagnosticRenderer.h"
@@ -28,6 +29,7 @@ static void print_general_help() {
             << "  build <files...>     Compile Nirqoba source code\n"
             << "  run   <files...>     Compile and run Nirqoba program\n"
             << "  check <files...>     Check source code for syntax and semantic errors\n"
+            << "  new   <dir>          Create a new multi-module project from the template\n"
             << "  version              Print compiler version and target information\n"
             << "  help [command]       Show help for a command\n\n"
             << "Global options:\n"
@@ -56,6 +58,10 @@ static void print_command_help(std::string_view cmd) {
               << "Options:\n"
               << "  --module-path <dir>  Extra directory searched for imported modules\n"
               << "  --emit=<kind>        Emit checked stage (ast or tir)\n";
+  } else if (cmd == "new") {
+    std::cout << "Usage: nirqoba new <dir>\n\n"
+              << "Creates <dir> with src/main.nrqba, lib/greeting.nrqba and a README.\n"
+              << "The directory must be new or empty.\n";
   } else {
     print_general_help();
   }
@@ -68,6 +74,111 @@ static bool parse_emit_kind(std::string_view str, EmitKind& kind) {
   if (str == "llvm") { kind = EmitKind::Llvm; return true; }
   if (str == "obj")  { kind = EmitKind::Obj; return true; }
   return false;
+}
+
+// --- `nirqoba new` project template -----------------------------------------
+
+static constexpr const char* kProjectMainTemplate = R"(// Entry point of the project.
+//
+// Build: nirqoba build src/main.nrqba --module-path lib -o app.exe
+// Run:   nirqoba run src/main.nrqba --module-path lib -- <arguments>
+
+import greeting;
+
+int function main(string[] args) {
+    greeting.greet(args.length);
+    return 0;
+}
+)";
+
+static constexpr const char* kProjectGreetingTemplate = R"(module greeting;
+
+// Called from main with the number of command-line arguments.
+public void function greet(int argument_count) {
+    if (argument_count == 0) {
+        print("Hello from Nirqoba!");
+        return;
+    }
+    print("Hello from Nirqoba, with arguments!");
+}
+)";
+
+static bool write_scaffold_file(const fs::path& path, const std::string& contents,
+                                std::string& error) {
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out) {
+    error = "cannot create '" + path.string() + "'";
+    return false;
+  }
+  out << contents;
+  if (!out) {
+    error = "cannot write '" + path.string() + "'";
+    return false;
+  }
+  return true;
+}
+
+static int create_project(const std::string& directory) {
+  const fs::path root(directory);
+  std::error_code ec;
+
+  if (fs::exists(root, ec) && !fs::is_empty(root, ec)) {
+    DiagnosticEngine diag;
+    diag.error(diag::kProjectScaffoldFailed, SourceLocation{},
+               "directory '" + directory + "' already exists and is not empty");
+    render_diagnostics(diag, nullptr);
+    return 1;
+  }
+
+  fs::create_directories(root / "src", ec);
+  fs::create_directories(root / "lib", ec);
+  if (ec) {
+    DiagnosticEngine diag;
+    diag.error(diag::kProjectScaffoldFailed, SourceLocation{},
+               "cannot create project directories in '" + directory + "': " +
+                   ec.message());
+    render_diagnostics(diag, nullptr);
+    return 1;
+  }
+
+  const std::string name = root.filename().empty() ? std::string("project")
+                                                   : root.filename().string();
+  std::string error;
+  if (!write_scaffold_file(root / "src" / "main.nrqba", kProjectMainTemplate, error) ||
+      !write_scaffold_file(root / "lib" / "greeting.nrqba",
+                           kProjectGreetingTemplate, error)) {
+    DiagnosticEngine diag;
+    diag.error(diag::kProjectScaffoldFailed, SourceLocation{}, error);
+    render_diagnostics(diag, nullptr);
+    return 1;
+  }
+
+  std::string readme = "# " + name + "\n\n"
+      "A Nirqoba project.\n\n"
+      "## Layout\n\n"
+      "- `src/main.nrqba` - entry point; `main` receives the command-line arguments.\n"
+      "- `lib/greeting.nrqba` - a module imported by the entry point.\n\n"
+      "## Build and run\n\n"
+      "```text\n"
+      "nirqoba run src/main.nrqba --module-path lib\n"
+      "nirqoba run src/main.nrqba --module-path lib -- one two\n"
+      "nirqoba build src/main.nrqba --module-path lib -o app.exe\n"
+      "```\n";
+  if (!write_scaffold_file(root / "README.md", readme, error)) {
+    DiagnosticEngine diag;
+    diag.error(diag::kProjectScaffoldFailed, SourceLocation{}, error);
+    render_diagnostics(diag, nullptr);
+    return 1;
+  }
+
+  std::cout << "created project '" << name << "' in " << directory << "\n"
+            << "  src/main.nrqba\n"
+            << "  lib/greeting.nrqba\n"
+            << "  README.md\n\n"
+            << "next:\n"
+            << "  cd " << directory << "\n"
+            << "  nirqoba run src/main.nrqba --module-path lib\n";
+  return 0;
 }
 
 }  // namespace
@@ -100,6 +211,32 @@ bool parse_command_line(int argc, const char* const* argv,
   if (first == "help") {
     options.command = CommandKind::Help;
     if (idx < argc) options.help_topic = argv[idx++];
+    return true;
+  }
+
+  if (first == "new") {
+    options.command = CommandKind::New;
+    while (idx < argc) {
+      std::string arg = argv[idx++];
+      if (arg == "--help" || arg == "-h") {
+        options.command = CommandKind::Help;
+        options.help_topic = "new";
+        return true;
+      }
+      if (arg.rfind("-", 0) == 0) {
+        error_message = "unknown option '" + arg + "' for 'new'";
+        return false;
+      }
+      if (!options.project_dir.empty()) {
+        error_message = "'new' takes exactly one project directory";
+        return false;
+      }
+      options.project_dir = std::move(arg);
+    }
+    if (options.project_dir.empty()) {
+      error_message = "no project directory specified for 'new'";
+      return false;
+    }
     return true;
   }
 
@@ -219,6 +356,10 @@ int run_driver(int argc, const char* const* argv) {
   if (options.command == CommandKind::Version) {
     print_version();
     return 0;
+  }
+
+  if (options.command == CommandKind::New) {
+    return create_project(options.project_dir);
   }
 
   if (options.command == CommandKind::Help) {
