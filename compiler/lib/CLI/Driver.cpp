@@ -11,12 +11,13 @@
 #include "nirqoba/Version.h"
 
 namespace nirq {
+using namespace std;
 namespace {
 
-namespace fs = std::filesystem;
+namespace fs = filesystem;
 
 static void print_version() {
-  std::cout << "nirqoba compiler version " << NIRQOBA_VERSION_STRING
+  cout << "nirqoba compiler version " << NIRQOBA_VERSION_STRING
             << " (Phase " << NIRQOBA_PHASE << ")\n"
             << "LLVM/MLIR: " << NIRQOBA_LLVM_VERSION << "\n"
             << "Target: " << NIRQOBA_DEFAULT_TARGET_TRIPLE << "\n"
@@ -24,7 +25,7 @@ static void print_version() {
 }
 
 static void print_general_help() {
-  std::cout << "Usage: nirqoba <command> <file.nrqba>... [options]\n\n"
+  cout << "Usage: nirqoba <command> <file.nrqba>... [options]\n\n"
             << "Commands:\n"
             << "  build <files...>     Compile Nirqoba source code\n"
             << "  run   <files...>     Compile and run Nirqoba program\n"
@@ -37,9 +38,9 @@ static void print_general_help() {
             << "  --version            Show version information\n";
 }
 
-static void print_command_help(std::string_view cmd) {
+static void print_command_help(string_view cmd) {
   if (cmd == "build") {
-    std::cout << "Usage: nirqoba build <file.nrqba>... [options]\n\n"
+    cout << "Usage: nirqoba build <file.nrqba>... [options]\n\n"
               << "Options:\n"
               << "  -o <path>            Output executable or object file path\n"
               << "  --out-dir <dir>      Directory to place output artifacts\n"
@@ -48,18 +49,18 @@ static void print_command_help(std::string_view cmd) {
               << "                       Kinds: ast, tir, mlir, llvm, obj\n"
               << "  --verbose            Enable verbose output\n";
   } else if (cmd == "run") {
-    std::cout << "Usage: nirqoba run <file.nrqba>... [options] [-- <args>...]\n\n"
+    cout << "Usage: nirqoba run <file.nrqba>... [options] [-- <args>...]\n\n"
               << "Options:\n"
               << "  --out-dir <dir>      Directory for temporary build artifacts\n"
               << "  --module-path <dir>  Extra directory searched for imported modules\n"
               << "  --verbose            Enable verbose output\n";
   } else if (cmd == "check") {
-    std::cout << "Usage: nirqoba check <file.nrqba>... [options]\n\n"
+    cout << "Usage: nirqoba check <file.nrqba>... [options]\n\n"
               << "Options:\n"
               << "  --module-path <dir>  Extra directory searched for imported modules\n"
               << "  --emit=<kind>        Emit checked stage (ast or tir)\n";
   } else if (cmd == "new") {
-    std::cout << "Usage: nirqoba new <dir>\n\n"
+    cout << "Usage: nirqoba new <dir>\n\n"
               << "Creates <dir> with src/main.nrqba, lib/greeting.nrqba and a README.\n"
               << "The directory must be new or empty.\n";
   } else {
@@ -67,7 +68,7 @@ static void print_command_help(std::string_view cmd) {
   }
 }
 
-static bool parse_emit_kind(std::string_view str, EmitKind& kind) {
+static bool parse_emit_kind(string_view str, EmitKind& kind) {
   if (str == "ast")  { kind = EmitKind::Ast; return true; }
   if (str == "tir")  { kind = EmitKind::Tir; return true; }
   if (str == "mlir") { kind = EmitKind::Mlir; return true; }
@@ -79,33 +80,33 @@ static bool parse_emit_kind(std::string_view str, EmitKind& kind) {
 // --- `nirqoba new` project template -----------------------------------------
 
 static constexpr const char* kProjectMainTemplate = R"(// Entry point of the project.
-//
-// Build: nirqoba build src/main.nrqba --module-path lib -o app.exe
-// Run:   nirqoba run src/main.nrqba --module-path lib -- <arguments>
+ //
+ // Build: nirqoba build src/main.nrqba --module-path lib -o app.exe
+ // Run:   nirqoba run src/main.nrqba --module-path lib -- <arguments>
 
-import greeting;
+ import greeting;
 
-int function main(string[] args) {
-    greeting.greet(args.length);
-    return 0;
-}
-)";
+ int function main(string[] args) {
+     greeting.greet(args.length);
+     return 0;
+ }
+ )";
 
 static constexpr const char* kProjectGreetingTemplate = R"(module greeting;
 
-// Called from main with the number of command-line arguments.
-public void function greet(int argument_count) {
-    if (argument_count == 0) {
-        print("Hello from Nirqoba!");
-        return;
-    }
-    print("Hello from Nirqoba, with arguments!");
-}
-)";
+ // Called from main with the number of command-line arguments.
+ public void function greet(int argument_count) {
+     if (argument_count == 0) {
+         print("Hello from Nirqoba!");
+         return;
+     }
+     print("Hello from Nirqoba, with arguments!");
+ }
+ )";
 
-static bool write_scaffold_file(const fs::path& path, const std::string& contents,
-                                std::string& error) {
-  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+static bool write_scaffold_file(const fs::path& path, const string& contents,
+                                string& error) {
+  ofstream out(path, ios::binary | ios::trunc);
   if (!out) {
     error = "cannot create '" + path.string() + "'";
     return false;
@@ -118,9 +119,9 @@ static bool write_scaffold_file(const fs::path& path, const std::string& content
   return true;
 }
 
-static int create_project(const std::string& directory) {
+static int create_project(const string& directory) {
   const fs::path root(directory);
-  std::error_code ec;
+  error_code ec;
 
   if (fs::exists(root, ec) && !fs::is_empty(root, ec)) {
     DiagnosticEngine diag;
@@ -141,9 +142,9 @@ static int create_project(const std::string& directory) {
     return 1;
   }
 
-  const std::string name = root.filename().empty() ? std::string("project")
-                                                   : root.filename().string();
-  std::string error;
+  const string name = root.filename().empty() ? string("project")
+                                              : root.filename().string();
+  string error;
   if (!write_scaffold_file(root / "src" / "main.nrqba", kProjectMainTemplate, error) ||
       !write_scaffold_file(root / "lib" / "greeting.nrqba",
                            kProjectGreetingTemplate, error)) {
@@ -153,7 +154,7 @@ static int create_project(const std::string& directory) {
     return 1;
   }
 
-  std::string readme = "# " + name + "\n\n"
+  string readme = "# " + name + "\n\n"
       "A Nirqoba project.\n\n"
       "## Layout\n\n"
       "- `src/main.nrqba` - entry point; `main` receives the command-line arguments.\n"
@@ -171,7 +172,7 @@ static int create_project(const std::string& directory) {
     return 1;
   }
 
-  std::cout << "created project '" << name << "' in " << directory << "\n"
+  cout << "created project '" << name << "' in " << directory << "\n"
             << "  src/main.nrqba\n"
             << "  lib/greeting.nrqba\n"
             << "  README.md\n\n"
@@ -185,14 +186,14 @@ static int create_project(const std::string& directory) {
 
 bool parse_command_line(int argc, const char* const* argv,
                         CommandLineOptions& options,
-                        std::string& error_message) {
+                        string& error_message) {
   if (argc <= 1) {
     options.command = CommandKind::Help;
     return true;
   }
 
   int idx = 1;
-  std::string first = argv[idx++];
+  string first = argv[idx++];
 
   if (first == "--version" || first == "-v") {
     options.command = CommandKind::Version;
@@ -217,7 +218,7 @@ bool parse_command_line(int argc, const char* const* argv,
   if (first == "new") {
     options.command = CommandKind::New;
     while (idx < argc) {
-      std::string arg = argv[idx++];
+      string arg = argv[idx++];
       if (arg == "--help" || arg == "-h") {
         options.command = CommandKind::Help;
         options.help_topic = "new";
@@ -231,7 +232,7 @@ bool parse_command_line(int argc, const char* const* argv,
         error_message = "'new' takes exactly one project directory";
         return false;
       }
-      options.project_dir = std::move(arg);
+      options.project_dir = move(arg);
     }
     if (options.project_dir.empty()) {
       error_message = "no project directory specified for 'new'";
@@ -254,9 +255,9 @@ bool parse_command_line(int argc, const char* const* argv,
   // Parse options and source path for build/run/check
   bool seen_dash_dash = false;
   while (idx < argc) {
-    std::string arg = argv[idx++];
+    string arg = argv[idx++];
     if (seen_dash_dash) {
-      options.trailing_args.push_back(std::move(arg));
+      options.trailing_args.push_back(move(arg));
       continue;
     }
     if (arg == "--") {
@@ -309,9 +310,9 @@ bool parse_command_line(int argc, const char* const* argv,
       continue;
     }
     if (arg.rfind("--emit=", 0) == 0) {
-      std::string_view kind_str = std::string_view(arg).substr(7);
+      string_view kind_str = string_view(arg).substr(7);
       if (!parse_emit_kind(kind_str, options.emit)) {
-        error_message = "invalid emit kind '" + std::string(kind_str) +
+        error_message = "invalid emit kind '" + string(kind_str) +
                         "'; expected ast, tir, mlir, llvm, or obj";
         return false;
       }
@@ -323,7 +324,7 @@ bool parse_command_line(int argc, const char* const* argv,
       return false;
     }
 
-    options.source_paths.push_back(std::move(arg));
+    options.source_paths.push_back(move(arg));
   }
 
   if (options.source_paths.empty()) {
@@ -345,7 +346,7 @@ bool parse_command_line(int argc, const char* const* argv,
 
 int run_driver(int argc, const char* const* argv) {
   CommandLineOptions options;
-  std::string error_message;
+  string error_message;
   if (!parse_command_line(argc, argv, options, error_message)) {
     DiagnosticEngine diag;
     diag.error(diag::kInvalidCommandLine, SourceLocation{}, error_message);
@@ -374,10 +375,10 @@ int run_driver(int argc, const char* const* argv) {
   // Determine artifact paths. The first source file on the command line names
   // the artifact; imported modules do not produce separate outputs.
   fs::path src_path(options.source_paths.front());
-  std::string stem = src_path.stem().string();
+  string stem = src_path.stem().string();
   fs::path out_directory = fs::path(options.out_dir);
 
-  std::string output_file = options.output_path;
+  string output_file = options.output_path;
   if (output_file.empty()) {
     if (options.emit == EmitKind::Obj) {
       output_file = (out_directory / (stem + ".obj")).string();
@@ -386,7 +387,7 @@ int run_driver(int argc, const char* const* argv) {
     }
   }
 
-  std::string obj_file = (out_directory / (stem + ".obj")).string();
+  string obj_file = (out_directory / (stem + ".obj")).string();
 
   PipelineOptions pipe_opts;
   pipe_opts.source_paths = options.source_paths;
@@ -426,7 +427,7 @@ int run_driver(int argc, const char* const* argv) {
     }
 
     if (!run_res.output.empty()) {
-      std::cout << run_res.output;
+      cout << run_res.output;
     }
     return run_res.exit_code;
   }

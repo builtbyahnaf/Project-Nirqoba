@@ -6,6 +6,7 @@
 #include "nirqoba/Diagnostics/DiagnosticEngine.h"
 
 using namespace nirq;
+using namespace std;
 
 TEST(ParserTest, FirstProgramAccepts) {
   DiagnosticEngine diag;

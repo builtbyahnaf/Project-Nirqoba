@@ -15,15 +15,16 @@
 #include "llvm/Support/TargetSelect.h"
 
 namespace nirq {
+using namespace std;
 
-std::string default_target_triple() {
+string default_target_triple() {
   // Phase 1: always x86_64-pc-windows-msvc on the primary platform.
   // NIRQOBA_DEFAULT_TARGET_TRIPLE is set in cmake/NirqobaLLVMTargets.cmake.
   return NIRQOBA_DEFAULT_TARGET_TRIPLE;
 }
 
 bool emit_object_file(llvm::Module& llvm_module,
-                      const std::string& output_path,
+                      const string& output_path,
                       DiagnosticEngine& diagnostics) {
   // --- One-time LLVM target initialisation.
   // These calls are idempotent (they are guarded internally by llvm::once_flag)

@@ -3,17 +3,18 @@
 #include <utility>
 
 namespace nirq {
+using namespace std;
 
 bool SymbolTable::declare(Symbol symbol) {
   if (scopes_.empty()) scopes_.emplace_back();
   auto& scope = scopes_.back();
-  const std::string name = symbol.name;
-  auto [iterator, inserted] = scope.emplace(name, std::move(symbol));
+  const string name = symbol.name;
+  auto [iterator, inserted] = scope.emplace(name, move(symbol));
   (void)iterator;
   return inserted;
 }
 
-const Symbol* SymbolTable::lookup(const std::string& name) const {
+const Symbol* SymbolTable::lookup(const string& name) const {
   for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
     const auto found = scope->find(name);
     if (found != scope->end()) return &found->second;
@@ -38,7 +39,7 @@ bool SymbolTable::allocation_is_moved(uint64_t allocation_id) const {
   return false;
 }
 
-void SymbolTable::rebind_pointer(const std::string& name, uint64_t allocation_id) {
+void SymbolTable::rebind_pointer(const string& name, uint64_t allocation_id) {
   for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
     auto found = scope->find(name);
     if (found != scope->end()) {

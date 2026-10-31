@@ -9,15 +9,16 @@
 #include "nirqoba/Frontend/Parser.h"
 
 namespace nirq {
+using namespace std;
 
-std::vector<std::unique_ptr<ModuleUnit>> ModuleResolver::resolve(
-    const std::vector<std::filesystem::path>& root_files) {
+vector<unique_ptr<ModuleUnit>> ModuleResolver::resolve(
+    const vector<filesystem::path>& root_files) {
   loaded_modules_.clear();
   dependency_edges_.clear();
 
-  std::vector<std::string> root_module_names;
+  vector<string> root_module_names;
   for (const auto& root_file : root_files) {
-    std::string mod_name;
+    string mod_name;
     if (!load_module(root_file, true, mod_name)) {
       return {};
     }
@@ -25,16 +26,16 @@ std::vector<std::unique_ptr<ModuleUnit>> ModuleResolver::resolve(
   }
 
   // Iteratively resolve imports of all loaded modules.
-  std::vector<std::string> queue = root_module_names;
-  std::size_t head = 0;
+  vector<string> queue = root_module_names;
+  size_t head = 0;
   while (head < queue.size()) {
-    const std::string current_name = queue[head++];
+    const string current_name = queue[head++];
     const auto it = loaded_modules_.find(current_name);
     if (it == loaded_modules_.end() || !it->second->ast) continue;
 
     const auto& imports = it->second->ast->imports();
     for (const auto& imp : imports) {
-      const std::string& target_mod = imp->module_name();
+      const string& target_mod = imp->module_name();
 
       // Check if standard library virtual namespace (e.g. io, file, math, time, system)
       if (target_mod == "io" || target_mod == "file" || target_mod == "math" ||
@@ -45,7 +46,7 @@ std::vector<std::unique_ptr<ModuleUnit>> ModuleResolver::resolve(
       dependency_edges_[current_name].push_back(target_mod);
 
       if (loaded_modules_.find(target_mod) == loaded_modules_.end()) {
-        std::filesystem::path target_file =
+        filesystem::path target_file =
             find_module_file(target_mod, it->second->file_path);
         if (target_file.empty()) {
           diagnostics_.error(diag::kModuleNotFound, imp->location(),
@@ -53,7 +54,7 @@ std::vector<std::unique_ptr<ModuleUnit>> ModuleResolver::resolve(
           return {};
         }
 
-        std::string loaded_name;
+        string loaded_name;
         if (!load_module(target_file, false, loaded_name)) {
           return {};
         }
@@ -63,13 +64,13 @@ std::vector<std::unique_ptr<ModuleUnit>> ModuleResolver::resolve(
   }
 
   // Detect cycles and perform topological sort using DFS.
-  std::unordered_map<std::string, NodeState> states;
+  unordered_map<string, NodeState> states;
   for (const auto& kv : loaded_modules_) {
     states[kv.first] = NodeState::Unvisited;
   }
 
-  std::vector<std::string> current_path;
-  std::vector<std::string> sorted_names;
+  vector<string> current_path;
+  vector<string> sorted_names;
 
   for (const auto& root : root_module_names) {
     if (states[root] == NodeState::Unvisited) {
@@ -89,41 +90,41 @@ std::vector<std::unique_ptr<ModuleUnit>> ModuleResolver::resolve(
   }
 
   // Assemble result in sorted order.
-  std::vector<std::unique_ptr<ModuleUnit>> result;
+  vector<unique_ptr<ModuleUnit>> result;
   result.reserve(sorted_names.size());
   for (const auto& name : sorted_names) {
     auto found = loaded_modules_.find(name);
     if (found != loaded_modules_.end() && found->second) {
-      result.push_back(std::move(found->second));
+      result.push_back(move(found->second));
     }
   }
 
   return result;
 }
 
-bool ModuleResolver::load_module(const std::filesystem::path& file_path, bool is_root,
-                                 std::string& out_module_name) {
-  std::ifstream file(file_path);
+bool ModuleResolver::load_module(const filesystem::path& file_path, bool is_root,
+                                 string& out_module_name) {
+  ifstream file(file_path);
   if (!file.is_open()) {
     diagnostics_.error(diag::kMissingSourceFile, SourceLocation{},
                        "could not open source file '" + file_path.string() + "'");
     return false;
   }
 
-  std::ostringstream ss;
+  ostringstream ss;
   ss << file.rdbuf();
-  std::string source_text = ss.str();
+  string source_text = ss.str();
 
-  auto src = std::make_unique<SourceFile>(file_path.string(), std::move(source_text));
+  auto src = make_unique<SourceFile>(file_path.string(), move(source_text));
   Lexer lexer(*src, diagnostics_);
   auto tokens = lexer.tokenize();
   if (diagnostics_.has_errors()) return false;
 
-  Parser parser(std::move(tokens), diagnostics_);
+  Parser parser(move(tokens), diagnostics_);
   auto ast = parser.parse_program();
   if (!ast || diagnostics_.has_errors()) return false;
 
-  std::string mod_name;
+  string mod_name;
   if (ast->module_decl()) {
     mod_name = ast->module_decl()->name();
   } else {
@@ -137,33 +138,33 @@ bool ModuleResolver::load_module(const std::filesystem::path& file_path, bool is
     return false;
   }
 
-  auto unit = std::make_unique<ModuleUnit>();
+  auto unit = make_unique<ModuleUnit>();
   unit->name = mod_name;
   unit->file_path = file_path;
-  unit->source_file = std::move(src);
-  unit->ast = std::move(ast);
+  unit->source_file = move(src);
+  unit->ast = move(ast);
   unit->is_root = is_root;
 
   out_module_name = mod_name;
-  loaded_modules_[mod_name] = std::move(unit);
+  loaded_modules_[mod_name] = move(unit);
   return true;
 }
 
-std::filesystem::path ModuleResolver::find_module_file(
-    const std::string& module_name, const std::filesystem::path& referencing_file) {
+filesystem::path ModuleResolver::find_module_file(
+    const string& module_name, const filesystem::path& referencing_file) {
   // First, check directory of referencing file.
   if (!referencing_file.empty()) {
-    std::filesystem::path candidate =
+    filesystem::path candidate =
         referencing_file.parent_path() / (module_name + ".nrqba");
-    if (std::filesystem::exists(candidate)) {
+    if (filesystem::exists(candidate)) {
       return candidate;
     }
   }
 
   // Then check each configured search path.
   for (const auto& sp : search_paths_) {
-    std::filesystem::path candidate = sp / (module_name + ".nrqba");
-    if (std::filesystem::exists(candidate)) {
+    filesystem::path candidate = sp / (module_name + ".nrqba");
+    if (filesystem::exists(candidate)) {
       return candidate;
     }
   }
@@ -171,10 +172,10 @@ std::filesystem::path ModuleResolver::find_module_file(
   return {};
 }
 
-bool ModuleResolver::dfs_sort(const std::string& module_name,
-                              std::unordered_map<std::string, NodeState>& states,
-                              std::vector<std::string>& current_path,
-                              std::vector<std::string>& sorted_names) {
+bool ModuleResolver::dfs_sort(const string& module_name,
+                              unordered_map<string, NodeState>& states,
+                              vector<string>& current_path,
+                              vector<string>& sorted_names) {
   states[module_name] = NodeState::Visiting;
   current_path.push_back(module_name);
 
@@ -185,7 +186,7 @@ bool ModuleResolver::dfs_sort(const std::string& module_name,
 
       if (states[dep] == NodeState::Visiting) {
         // Cycle detected!
-        std::string cycle_str;
+        string cycle_str;
         bool in_cycle = false;
         for (const auto& p : current_path) {
           if (p == dep) in_cycle = true;

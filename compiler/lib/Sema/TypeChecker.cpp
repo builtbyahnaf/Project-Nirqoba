@@ -7,6 +7,7 @@
 #include "nirqoba/Driver/ModuleResolver.h"
 
 namespace nirq {
+using namespace std;
 namespace {
 
 constexpr const char* kPrintBuiltin = "print";
@@ -55,7 +56,7 @@ bool TypeChecker::check(Program& program) {
   // Pass 0: Register struct declarations.
   for (const auto& decl : program.structs()) {
     // Validate unique field names.
-    std::unordered_set<std::string> seen_fields;
+    unordered_set<string> seen_fields;
     for (const Parameter& field : decl->fields()) {
       if (!seen_fields.insert(field.name).second) {
         diagnostics_.error(diag::kDuplicateName, field.location,
@@ -69,7 +70,7 @@ bool TypeChecker::check(Program& program) {
     info.location = decl->location();
     info.module_name = current_module_;
     info.visibility = decl->visibility();
-    if (!structs_.emplace(decl->name(), std::move(info)).second) {
+    if (!structs_.emplace(decl->name(), move(info)).second) {
       diagnostics_.error(diag::kDuplicateName, decl->location(),
                          "struct '" + decl->name() + "' is already defined");
     }
@@ -77,7 +78,7 @@ bool TypeChecker::check(Program& program) {
 
   // Pass 1: Collect function signatures for forward references & mutual recursion.
   for (const auto& function : program.functions()) {
-    std::vector<Type> param_types;
+    vector<Type> param_types;
     param_types.reserve(function->parameters().size());
     for (const Parameter& param : function->parameters()) {
       param_types.push_back(param.type);
@@ -86,14 +87,14 @@ bool TypeChecker::check(Program& program) {
     FunctionSignature sig{
         function->name(),
         function->return_type(),
-        std::move(param_types),
+        move(param_types),
         function->location(),
         current_module_,
         function->visibility(),
         function->name()  // single-module compilation links symbols by name
     };
 
-    if (!functions_.emplace(function->name(), std::move(sig)).second) {
+    if (!functions_.emplace(function->name(), move(sig)).second) {
       diagnostics_.error(diag::kDuplicateFunction, function->location(),
                          "function '" + function->name() + "' is already defined");
     }
@@ -142,7 +143,7 @@ bool TypeChecker::check(Program& program) {
   return !diagnostics_.has_errors();
 }
 
-bool TypeChecker::check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& modules) {
+bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
   functions_.clear();
   structs_.clear();
   current_module_.clear();
@@ -193,41 +194,41 @@ bool TypeChecker::check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& 
   for (const auto& unit : modules) {
     if (!unit || !unit->ast) continue;
     for (const auto& function : unit->ast->functions()) {
-      std::vector<Type> param_types;
+      vector<Type> param_types;
       param_types.reserve(function->parameters().size());
       for (const Parameter& param : function->parameters()) {
-        param_types.push_back(param.type);
-      }
+param_types.push_back(param.type);
+    }
 
-      const bool is_entry = (unit.get() == entry_unit);
-      const std::string qualified = unit->name + "." + function->name();
+    const bool is_entry = (unit.get() == entry_unit);
+    const string qualified = unit->name + "." + function->name();
 
-      FunctionSignature sig{
-          function->name(),
-          function->return_type(),
-          std::move(param_types),
-          function->location(),
-          unit->name,
-          function->visibility(),
-          is_entry ? function->name() : qualified
-      };
+    FunctionSignature sig{
+        function->name(),
+        function->return_type(),
+        move(param_types),
+        function->location(),
+        unit->name,
+        function->visibility(),
+        is_entry ? function->name() : qualified
+    };
 
-      // Every module is reachable by its qualified name, including the entry
-      // module, so `import app; app.helper()` keeps working.
-      if (!functions_.emplace(qualified, sig).second) {
-        diagnostics_.error(diag::kDuplicateFunction, function->location(),
-                           "function '" + function->name() +
-                               "' is already defined in module '" + unit->name + "'");
-      }
-      if (is_entry) {
-        functions_.emplace(function->name(), sig);
-      }
+    // Every module is reachable by its qualified name, including the entry
+    // module, so `import app; app.helper()` keeps working.
+    if (!functions_.emplace(qualified, sig).second) {
+      diagnostics_.error(diag::kDuplicateFunction, function->location(),
+                         "function '" + function->name() +
+                             "' is already defined in module '" + unit->name + "'");
+    }
+    if (is_entry) {
+      functions_.emplace(function->name(), sig);
+    }
 
-      if (function->name() == "main" && is_entry && main_function == nullptr) {
-        main_function = function.get();
-      }
+    if (function->name() == "main" && is_entry && main_function == nullptr) {
+      main_function = function.get();
     }
   }
+}
 
   // Pass 2: apply imports. A selective import binds one item into the importing
   // module's namespace; an aliased import binds every item of the target under
@@ -235,10 +236,10 @@ bool TypeChecker::check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& 
   for (const auto& unit : modules) {
     if (!unit || !unit->ast) continue;
     for (const auto& imp : unit->ast->imports()) {
-      const std::string module = imp->module_name();
+      const string module = imp->module_name();
 
       if (imp->is_selective()) {
-        const std::string qualified = module + "." + imp->item_name();
+        const string qualified = module + "." + imp->item_name();
         auto fn = functions_.find(qualified);
         if (fn != functions_.end()) {
           if (fn->second.visibility == Visibility::Private) {
@@ -277,7 +278,7 @@ bool TypeChecker::check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& 
 
       if (imp->is_aliased()) {
         // Snapshot first: the loop below inserts into the same map.
-        std::vector<FunctionSignature> module_functions;
+        vector<FunctionSignature> module_functions;
         for (const auto& kv : functions_) {
           if (kv.second.module_name == module && kv.second.visibility == Visibility::Public) {
             module_functions.push_back(kv.second);
@@ -287,7 +288,7 @@ bool TypeChecker::check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& 
           functions_.emplace(imp->alias() + "." + sig.name, sig);
         }
 
-        std::vector<StructInfo> module_structs;
+        vector<StructInfo> module_structs;
         for (const auto& kv : structs_) {
           if (kv.second.module_name == module && kv.second.visibility == Visibility::Public) {
             module_structs.push_back(kv.second);
@@ -295,10 +296,10 @@ bool TypeChecker::check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& 
         }
         for (const StructInfo& info : module_structs) {
           structs_.emplace(imp->alias() + "." + info.name, info);
-        }
-      }
+}
     }
   }
+}
 
   // Entry point validation.
   if (main_count == 0) {
@@ -349,7 +350,7 @@ void TypeChecker::check_function(FunctionDecl& function) {
     Symbol symbol{parameter.name, parameter.type, BindingKind::Let,
                   parameter.location};
     if (parameter.type.is_pointer()) symbol.allocation_id = next_allocation_id_++;
-    if (!symbols_.declare(std::move(symbol))) {
+    if (!symbols_.declare(move(symbol))) {
       diagnostics_.error(diag::kDuplicateName, parameter.location,
                          "parameter '" + parameter.name + "' is already declared");
     }
@@ -377,7 +378,7 @@ void TypeChecker::check_block(BlockStmt& block) {
   for (auto cleanup = deferred_calls_.back().rbegin();
        cleanup != deferred_calls_.back().rend(); ++cleanup) {
     const CallExpr* call = cleanup->call;
-    const std::string& callee = call->callee();
+    const string& callee = call->callee();
     if ((callee == "memory.deallocate" || callee == "memory.secure_release" ||
          callee == "memory.unmap_file") && cleanup->allocation_id != 0) {
       if (symbols_.allocation_is_moved(cleanup->allocation_id)) {
@@ -484,7 +485,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
     }
     if (symbol.allocation_id == 0) symbol.allocation_id = next_allocation_id_++;
   }
-  if (!symbols_.declare(std::move(symbol))) {
+  if (!symbols_.declare(move(symbol))) {
     diagnostics_.error(diag::kDuplicateName, declaration.location(),
                        "'" + declaration.name() + "' is already declared in this scope");
   }
@@ -492,11 +493,11 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
 
 void TypeChecker::check_destructuring(DestructuringStmt& statement) {
   const Type value_type = check_expression(const_cast<Expr&>(statement.value()));
-  const std::vector<std::string>& names = statement.names();
+  const vector<string>& names = statement.names();
 
   if (!value_type.is_valid()) {
     // Still declare all names as Error to avoid cascading diagnostics.
-    for (const std::string& name : names) {
+    for (const string& name : names) {
       symbols_.declare(Symbol{name, Type::error(), statement.binding(), statement.location()});
     }
     return;
@@ -504,20 +505,20 @@ void TypeChecker::check_destructuring(DestructuringStmt& statement) {
 
   // Tuple destructuring: let (a, b) = tup;
   if (value_type.is_tuple()) {
-    const std::vector<Type>& elements = value_type.tuple_elements();
+    const vector<Type>& elements = value_type.tuple_elements();
     if (names.size() != elements.size()) {
       diagnostics_.error(diag::kDestructuringMismatch, statement.location(),
-                         "tuple destructuring expects " + std::to_string(elements.size()) +
-                             " variable(s), but " + std::to_string(names.size()) +
+                         "tuple destructuring expects " + to_string(elements.size()) +
+                             " variable(s), but " + to_string(names.size()) +
                              " were given");
       // Declare with element types up to available count.
-      for (std::size_t i = 0; i < names.size(); ++i) {
+      for (size_t i = 0; i < names.size(); ++i) {
         Type t = i < elements.size() ? elements[i] : Type::error();
         symbols_.declare(Symbol{names[i], t, statement.binding(), statement.location()});
       }
       return;
     }
-    for (std::size_t i = 0; i < names.size(); ++i) {
+    for (size_t i = 0; i < names.size(); ++i) {
       if (!symbols_.declare(Symbol{names[i], elements[i], statement.binding(),
                                    statement.location()})) {
         diagnostics_.error(diag::kDuplicateName, statement.location(),
@@ -529,15 +530,15 @@ void TypeChecker::check_destructuring(DestructuringStmt& statement) {
 
   // Array destructuring: let [a, b] = arr;
   if (value_type.is_array()) {
-    const std::size_t arr_len = value_type.array_length();
+    const size_t arr_len = value_type.array_length();
     if (names.size() != arr_len) {
       diagnostics_.error(diag::kDestructuringMismatch, statement.location(),
-                         "array destructuring expects " + std::to_string(arr_len) +
-                             " variable(s), but " + std::to_string(names.size()) +
+                         "array destructuring expects " + to_string(arr_len) +
+                             " variable(s), but " + to_string(names.size()) +
                              " were given");
     }
     const Type elem_type = value_type.element_type();
-    for (std::size_t i = 0; i < names.size(); ++i) {
+    for (size_t i = 0; i < names.size(); ++i) {
       if (!symbols_.declare(Symbol{names[i], elem_type, statement.binding(),
                                    statement.location()})) {
         diagnostics_.error(diag::kDuplicateName, statement.location(),
@@ -550,7 +551,7 @@ void TypeChecker::check_destructuring(DestructuringStmt& statement) {
   diagnostics_.error(diag::kTypeMismatch, statement.value().location(),
                      "cannot destructure a value of type '" + value_type.to_string() +
                          "'; only tuples and fixed arrays support destructuring");
-  for (const std::string& name : names) {
+  for (const string& name : names) {
     symbols_.declare(Symbol{name, Type::error(), statement.binding(), statement.location()});
   }
 }
@@ -584,7 +585,7 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
   if (symbol != nullptr && !symbol->is_mutable()) {
     diagnostics_.error(diag::kImmutableAssignment, assignment.target().location(),
                        "'" + symbol->name + "' was declared as " +
-                           std::string(binding_kind_spelling(symbol->binding)) +
+                           string(binding_kind_spelling(symbol->binding)) +
                            " and cannot be mutated; declare it with 'var' to mutate it");
     return;
   }
@@ -620,7 +621,7 @@ void TypeChecker::check_compound_assignment(CompoundAssignmentStmt& assignment) 
   if (symbol != nullptr && !symbol->is_mutable()) {
     diagnostics_.error(diag::kImmutableAssignment, assignment.target().location(),
                        "'" + symbol->name + "' was declared as " +
-                           std::string(binding_kind_spelling(symbol->binding)) +
+                           string(binding_kind_spelling(symbol->binding)) +
                            " and cannot be mutated; declare it with 'var' to mutate it");
     return;
   }
@@ -643,7 +644,7 @@ void TypeChecker::check_compound_assignment(CompoundAssignmentStmt& assignment) 
     case BinaryOp::ShiftRight:
       if (!symbol->type.is_integer()) {
         diagnostics_.error(diag::kTypeMismatch, assignment.location(),
-                           "operator '" + std::string(binary_op_spelling(assignment.op())) +
+                           "operator '" + string(binary_op_spelling(assignment.op())) +
                                "=' requires integer operands, found '" + symbol->type.to_string() + "'");
       }
       break;
@@ -654,7 +655,7 @@ void TypeChecker::check_compound_assignment(CompoundAssignmentStmt& assignment) 
     case BinaryOp::Exponentiate:
       if (!symbol->type.is_numeric()) {
         diagnostics_.error(diag::kTypeMismatch, assignment.location(),
-                           "operator '" + std::string(binary_op_spelling(assignment.op())) +
+                           "operator '" + string(binary_op_spelling(assignment.op())) +
                                "=' requires numeric operands, found '" + symbol->type.to_string() + "'");
       }
       break;
@@ -829,7 +830,7 @@ Type TypeChecker::check_expression(Expr& expr) {
         case UnaryOp::Plus:
           if (!operand_type.is_numeric()) {
             diagnostics_.error(diag::kTypeMismatch, unary.location(),
-                               "operator '" + std::string(unary_op_spelling(unary.op())) +
+                               "operator '" + string(unary_op_spelling(unary.op())) +
                                    "' requires a numeric operand, not '" +
                                    operand_type.to_string() + "'");
             type = Type::error();
@@ -866,7 +867,7 @@ Type TypeChecker::check_expression(Expr& expr) {
       const Type rhs_type = check_expression(const_cast<Expr&>(binary.rhs()));
       if (!lhs_type.is_valid() || !rhs_type.is_valid()) break;
 
-      const std::string spelling(binary_op_spelling(binary.op()));
+      const string spelling(binary_op_spelling(binary.op()));
 
       if (binary.op() == BinaryOp::Divide || binary.op() == BinaryOp::Remainder) {
         if (binary.rhs().kind() == Expr::Kind::IntegerLiteral) {
@@ -981,9 +982,9 @@ Type TypeChecker::check_expression(Expr& expr) {
   return type;
 }
 
-const StructInfo* TypeChecker::find_struct(const std::string& name) const {
+const StructInfo* TypeChecker::find_struct(const string& name) const {
   // Qualified names are looked up verbatim.
-  if (name.find('.') != std::string::npos) {
+  if (name.find('.') != string::npos) {
     auto it = structs_.find(name);
     return it != structs_.end() ? &it->second : nullptr;
   }
@@ -998,10 +999,10 @@ const StructInfo* TypeChecker::find_struct(const std::string& name) const {
   return it != structs_.end() ? &it->second : nullptr;
 }
 
-const FunctionSignature* TypeChecker::find_function(const std::string& name) const {
+const FunctionSignature* TypeChecker::find_function(const string& name) const {
   auto it = functions_.find(name);
   if (it != functions_.end()) return &it->second;
-  if (name.find('.') == std::string::npos && !current_module_.empty()) {
+  if (name.find('.') == string::npos && !current_module_.empty()) {
     auto local = functions_.find(current_module_ + "." + name);
     if (local != functions_.end()) return &local->second;
   }
@@ -1009,7 +1010,7 @@ const FunctionSignature* TypeChecker::find_function(const std::string& name) con
 }
 
 Type TypeChecker::check_array_literal(ArrayLiteralExpr& expr) {
-  const std::vector<ExprPtr>& elements = expr.elements();
+  const vector<ExprPtr>& elements = expr.elements();
   if (elements.empty()) {
     // Empty array literal: type is inferred from context; return error for now.
     diagnostics_.error(diag::kTypeMismatch, expr.location(),
@@ -1019,11 +1020,11 @@ Type TypeChecker::check_array_literal(ArrayLiteralExpr& expr) {
 
   Type elem_type = check_expression(const_cast<Expr&>(*elements[0]));
   bool ok = elem_type.is_valid();
-  for (std::size_t i = 1; i < elements.size(); ++i) {
+  for (size_t i = 1; i < elements.size(); ++i) {
     Type t = check_expression(const_cast<Expr&>(*elements[i]));
     if (ok && t.is_valid() && t != elem_type) {
       diagnostics_.error(diag::kTypeMismatch, elements[i]->location(),
-                         "array literal element " + std::to_string(i) +
+                         "array literal element " + to_string(i) +
                              " has type '" + t.to_string() +
                              "', expected '" + elem_type.to_string() + "'");
       ok = false;
@@ -1035,7 +1036,7 @@ Type TypeChecker::check_array_literal(ArrayLiteralExpr& expr) {
 }
 
 Type TypeChecker::check_tuple_literal(TupleLiteralExpr& expr) {
-  std::vector<Type> element_types;
+  vector<Type> element_types;
   element_types.reserve(expr.elements().size());
   bool ok = true;
   for (const ExprPtr& elem : expr.elements()) {
@@ -1044,7 +1045,7 @@ Type TypeChecker::check_tuple_literal(TupleLiteralExpr& expr) {
     if (!t.is_valid()) ok = false;
   }
   if (!ok) return Type::error();
-  return Type::tuple_type(std::move(element_types));
+  return Type::tuple_type(move(element_types));
 }
 
 Type TypeChecker::check_index_expr(IndexExpr& expr) {
@@ -1065,21 +1066,21 @@ Type TypeChecker::check_index_expr(IndexExpr& expr) {
     if (base_type.is_array() && expr.index().kind() == Expr::Kind::IntegerLiteral) {
       const auto& lit = static_cast<const IntegerLiteralExpr&>(expr.index());
       const long long idx = lit.value();
-      if (idx < 0 || static_cast<std::size_t>(idx) >= base_type.array_length()) {
+      if (idx < 0 || static_cast<size_t>(idx) >= base_type.array_length()) {
         diagnostics_.error(diag::kIndexOutOfBounds, expr.index().location(),
-                           "index " + std::to_string(idx) + " is out of bounds for array of " +
-                               "length " + std::to_string(base_type.array_length()));
+                           "index " + to_string(idx) + " is out of bounds for array of " +
+                               "length " + to_string(base_type.array_length()));
         return Type::error();
       }
     }
     Type element_type = base_type.element_type();
     if (element_type.is_struct() && element_type.struct_fields().empty()) {
       if (const StructInfo* info = find_struct(element_type.struct_name())) {
-        std::vector<std::pair<std::string, Type>> fields;
+        vector<pair<string, Type>> fields;
         fields.reserve(info->fields.size());
         for (const Parameter& field : info->fields)
           fields.emplace_back(field.name, field.type);
-        element_type = Type::struct_type(element_type.struct_name(), std::move(fields));
+        element_type = Type::struct_type(element_type.struct_name(), move(fields));
       }
     }
     return element_type;
@@ -1108,15 +1109,15 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
       return Type::error();
     }
     const int idx = expr.tuple_index();
-    const std::vector<Type>& elems = base_type.tuple_elements();
-    if (idx < 0 || static_cast<std::size_t>(idx) >= elems.size()) {
+    const vector<Type>& elems = base_type.tuple_elements();
+    if (idx < 0 || static_cast<size_t>(idx) >= elems.size()) {
       diagnostics_.error(diag::kIndexOutOfBounds, expr.location(),
-                         "tuple index " + std::to_string(idx) +
-                             " is out of range for a " + std::to_string(elems.size()) +
+                         "tuple index " + to_string(idx) +
+                             " is out of range for a " + to_string(elems.size()) +
                              "-element tuple");
       return Type::error();
     }
-    return elems[static_cast<std::size_t>(idx)];
+    return elems[static_cast<size_t>(idx)];
   }
 
   // Struct field access: obj.field
@@ -1131,7 +1132,7 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
                              expr.member() + "'");
       return Type::error();
     }
-    const std::string& sname = base_type.struct_name();
+    const string& sname = base_type.struct_name();
     const StructInfo* info = find_struct(sname);
     if (info == nullptr) {
       diagnostics_.error(diag::kUndefinedName, expr.location(),
@@ -1178,18 +1179,18 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
     return Type::error();
   }
 
-  const std::vector<Parameter>& fields = info->fields;
+  const vector<Parameter>& fields = info->fields;
 
   if (expr.is_positional()) {
     if (expr.positional_inits().size() != fields.size()) {
       diagnostics_.error(diag::kDestructuringMismatch, expr.location(),
                          "struct '" + expr.struct_name() + "' has " +
-                             std::to_string(fields.size()) + " field(s) but " +
-                             std::to_string(expr.positional_inits().size()) +
+                             to_string(fields.size()) + " field(s) but " +
+                             to_string(expr.positional_inits().size()) +
                              " value(s) were given");
     }
-    const std::size_t count = std::min(expr.positional_inits().size(), fields.size());
-    for (std::size_t i = 0; i < count; ++i) {
+    const size_t count = min(expr.positional_inits().size(), fields.size());
+    for (size_t i = 0; i < count; ++i) {
       const Type init_type = check_expression(const_cast<Expr&>(*expr.positional_inits()[i]));
       if (init_type.is_valid() && init_type != fields[i].type) {
         diagnostics_.error(diag::kTypeMismatch, expr.positional_inits()[i]->location(),
@@ -1199,12 +1200,12 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
                                init_type.to_string() + "'");
       }
     }
-    for (std::size_t i = count; i < expr.positional_inits().size(); ++i)
+    for (size_t i = count; i < expr.positional_inits().size(); ++i)
       check_expression(const_cast<Expr&>(*expr.positional_inits()[i]));
   } else {
     // Named-field init: validate each provided field name and type.
     for (const auto& kv : expr.field_inits()) {
-      const std::string& field_name = kv.first;
+      const string& field_name = kv.first;
       const Type init_type = check_expression(const_cast<Expr&>(*kv.second));
       // Find the field in the struct definition.
       const Parameter* field_def = nullptr;
@@ -1224,16 +1225,16 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
     }
   }
 
-  std::vector<std::pair<std::string, Type>> resolved_fields;
+  vector<pair<string, Type>> resolved_fields;
   resolved_fields.reserve(fields.size());
   for (const Parameter& field : fields)
     resolved_fields.emplace_back(field.name, field.type);
-  return Type::struct_type(expr.struct_name(), std::move(resolved_fields));
+  return Type::struct_type(expr.struct_name(), move(resolved_fields));
 }
 
 Type TypeChecker::check_call(CallExpr& call) {
-  std::unordered_set<std::string> active_structs;
-  std::function<Type(Type)> resolve_generic_type = [&](Type type) -> Type {
+  unordered_set<string> active_structs;
+  function<Type(Type)> resolve_generic_type = [&](Type type) -> Type {
     if (type.is_array())
       return Type::array_type(resolve_generic_type(type.element_type()), type.array_length());
     if (type.is_dynamic_array())
@@ -1251,12 +1252,12 @@ Type TypeChecker::check_call(CallExpr& call) {
       return Type::error();
     }
     active_structs.insert(type.struct_name());
-    std::vector<std::pair<std::string, Type>> fields;
+    vector<pair<string, Type>> fields;
     fields.reserve(info->fields.size());
     for (const Parameter& field : info->fields)
       fields.emplace_back(field.name, resolve_generic_type(field.type));
     active_structs.erase(type.struct_name());
-    return Type::struct_type(type.struct_name(), std::move(fields));
+    return Type::struct_type(type.struct_name(), move(fields));
   };
 
   // Builtin 'print'
@@ -1264,7 +1265,7 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (call.arguments().size() != 1) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'print' takes exactly one argument, but " +
-                             std::to_string(call.arguments().size()) + " were given");
+                             to_string(call.arguments().size()) + " were given");
       for (const ExprPtr& argument : call.arguments()) {
         check_expression(const_cast<Expr&>(*argument));
       }
@@ -1288,7 +1289,7 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (call.arguments().size() > 1) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'input' takes at most one argument, but " +
-                             std::to_string(call.arguments().size()) + " were given");
+                             to_string(call.arguments().size()) + " were given");
     }
     if (call.arguments().size() == 1) {
       const Type prompt_type = check_expression(const_cast<Expr&>(*call.arguments().front()));
@@ -1305,7 +1306,7 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (call.arguments().size() != 1) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'length' takes exactly one argument, but " +
-                             std::to_string(call.arguments().size()) + " were given");
+                             to_string(call.arguments().size()) + " were given");
       return Type::int_type();
     }
     const Type arg_type = check_expression(const_cast<Expr&>(*call.arguments().front()));
@@ -1321,7 +1322,7 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (call.arguments().size() != 0) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'nrq_gc_init' takes no arguments, but " +
-                             std::to_string(call.arguments().size()) + " were given");
+                             to_string(call.arguments().size()) + " were given");
       return Type::void_type();
     }
     return Type::void_type();
@@ -1332,7 +1333,7 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (call.arguments().size() != 0) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'nrq_gc_shutdown' takes no arguments, but " +
-                             std::to_string(call.arguments().size()) + " were given");
+                             to_string(call.arguments().size()) + " were given");
       return Type::void_type();
     }
     return Type::void_type();
@@ -1343,7 +1344,7 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (call.arguments().size() != 0) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'nrq_gc_collect' takes no arguments, but " +
-                             std::to_string(call.arguments().size()) + " were given");
+                             to_string(call.arguments().size()) + " were given");
       return Type::void_type();
     }
     return Type::void_type();
@@ -1356,7 +1357,7 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (!call.arguments().empty()) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'" + call.callee() + "' takes no arguments, but " +
-                             std::to_string(call.arguments().size()) + " were given");
+                             to_string(call.arguments().size()) + " were given");
     }
     for (const ExprPtr& argument : call.arguments())
       check_expression(const_cast<Expr&>(*argument));
@@ -1576,7 +1577,7 @@ Type TypeChecker::check_call(CallExpr& call) {
 
   // Explicit allocator handles are represented as opaque u64 values in the
   // source language; the runtime validates each handle before using it.
-  const std::unordered_map<std::string, bool> allocator_constructors = {
+  const unordered_map<string, bool> allocator_constructors = {
       {"memory.general_allocator", false}, {"memory.pool_allocator", true},
       {"memory.arena_allocator", true}, {"memory.region", true},
       {"memory.stack_allocator", true},
@@ -1682,7 +1683,7 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (call.arguments().size() != 2) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'nrq_memory_allocate' takes exactly two arguments (bytes, alignment), but " +
-                             std::to_string(call.arguments().size()) + " were given");
+                             to_string(call.arguments().size()) + " were given");
       return Type::u64_type();
     }
     const Type arg1_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
@@ -1703,7 +1704,7 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (call.arguments().size() != 3) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'nrq_memory_deallocate' takes exactly three arguments (ptr, bytes, alignment), but " +
-                             std::to_string(call.arguments().size()) + " were given");
+                             to_string(call.arguments().size()) + " were given");
       return Type::void_type();
     }
     const Type arg1_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
@@ -1724,14 +1725,14 @@ Type TypeChecker::check_call(CallExpr& call) {
   }
 
   // Math builtins: sqrt, sin, cos, abs, floor, ceil (and math.<name>)
-  std::string fn_name = call.callee();
+  string fn_name = call.callee();
   if (fn_name.rfind("math.", 0) == 0) fn_name = fn_name.substr(5);
   if (fn_name == "sqrt" || fn_name == "sin" || fn_name == "cos" ||
       fn_name == "abs" || fn_name == "floor" || fn_name == "ceil") {
     if (call.arguments().size() != 1) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "math function '" + call.callee() + "' takes exactly one argument, but " +
-                             std::to_string(call.arguments().size()) + " were given");
+                             to_string(call.arguments().size()) + " were given");
       return Type::f64_type();
     }
     const Type arg_type = check_expression(const_cast<Expr&>(*call.arguments().front()));
@@ -1748,7 +1749,7 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (call.arguments().size() != 1) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'file.read_text' expects 1 argument (path: string), but " +
-                             std::to_string(call.arguments().size()) + " were given");
+                             to_string(call.arguments().size()) + " were given");
       return Type::string_type();
     }
     const Type path_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
@@ -1763,7 +1764,7 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (call.arguments().size() != 2) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'" + call.callee() + "' expects 2 arguments (path: string, content: string), but " +
-                             std::to_string(call.arguments().size()) + " were given");
+                             to_string(call.arguments().size()) + " were given");
       return Type::int_type();
     }
     const Type path_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
@@ -1783,7 +1784,7 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (call.arguments().size() != 1) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'file.exists' expects 1 argument (path: string), but " +
-                             std::to_string(call.arguments().size()) + " were given");
+                             to_string(call.arguments().size()) + " were given");
       return Type::bool_type();
     }
     const Type path_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
@@ -1807,7 +1808,7 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (call.arguments().size() != 1) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'system.exit' expects 1 argument (code: int), but " +
-                             std::to_string(call.arguments().size()) + " were given");
+                             to_string(call.arguments().size()) + " were given");
       return Type::void_type();
     }
     const Type code_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
@@ -1842,24 +1843,24 @@ Type TypeChecker::check_call(CallExpr& call) {
   if (call.arguments().size() != sig.parameter_types.size()) {
     diagnostics_.error(diag::kPrintArity, call.location(),
                        "function '" + call.callee() + "' expects " +
-                           std::to_string(sig.parameter_types.size()) +
+                           to_string(sig.parameter_types.size()) +
                            " argument" + (sig.parameter_types.size() == 1 ? "" : "s") +
-                           ", but " + std::to_string(call.arguments().size()) +
+                           ", but " + to_string(call.arguments().size()) +
                            " were given");
   }
 
-  const std::size_t count = std::min(call.arguments().size(), sig.parameter_types.size());
-  for (std::size_t i = 0; i < count; ++i) {
+  const size_t count = min(call.arguments().size(), sig.parameter_types.size());
+  for (size_t i = 0; i < count; ++i) {
     const Type arg_type = check_expression(const_cast<Expr&>(*call.arguments()[i]));
     if (arg_type.is_valid() && arg_type != sig.parameter_types[i]) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
-                         "argument " + std::to_string(i + 1) + " of '" + call.callee() +
+                         "argument " + to_string(i + 1) + " of '" + call.callee() +
                              "' must be of type '" + sig.parameter_types[i].to_string() +
                              "', not '" + arg_type.to_string() + "'");
     }
   }
 
-  for (std::size_t i = count; i < call.arguments().size(); ++i) {
+  for (size_t i = count; i < call.arguments().size(); ++i) {
     check_expression(const_cast<Expr&>(*call.arguments()[i]));
   }
 
@@ -1871,7 +1872,7 @@ void TypeChecker::require_type(const Expr& expr, Type expected, const char* cont
   if (!actual.is_valid() || !expected.is_valid()) return;
   if (actual != expected) {
     diagnostics_.error(diag::kTypeMismatch, expr.location(),
-                       std::string(context) + " requires '" + expected.to_string() +
+                       string(context) + " requires '" + expected.to_string() +
                            "', not '" + actual.to_string() + "'");
   }
 }

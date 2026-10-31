@@ -30,6 +30,8 @@
 #include <utility>
 #include <vector>
 
+using namespace std;
+
 namespace {
 
 constexpr size_t kDefaultRegionBytes = 1024 * 1024;

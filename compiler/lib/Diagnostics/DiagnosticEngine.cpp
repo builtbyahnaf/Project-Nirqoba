@@ -1,8 +1,9 @@
 #include "nirqoba/Diagnostics/Diagnostic.h"
 
 namespace nirq {
+using namespace std;
 
-std::string_view severity_name(Severity severity) {
+string_view severity_name(Severity severity) {
   switch (severity) {
     case Severity::Note:
       return "note";

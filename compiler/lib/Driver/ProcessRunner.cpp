@@ -9,25 +9,26 @@
 #include <string>
 
 namespace nirq {
+using namespace std;
 namespace {
 
 #ifdef _WIN32
-// Converts a UTF-8 string to UTF-16 std::wstring for Win32 API calls.
-static std::wstring to_wstring(const std::string& str) {
+// Converts a UTF-8 string to UTF-16 wstring for Win32 API calls.
+static wstring to_wstring(const string& str) {
   if (str.empty()) return {};
   int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.data(), static_cast<int>(str.size()), nullptr, 0);
   if (size_needed <= 0) return {};
-  std::wstring result(size_needed, 0);
+  wstring result(size_needed, 0);
   MultiByteToWideChar(CP_UTF8, 0, str.data(), static_cast<int>(str.size()), &result[0], size_needed);
   return result;
 }
 
 // Converts a UTF-16 string back to UTF-8.
-static std::string to_string(const wchar_t* wstr, size_t length) {
+static string to_string(const wchar_t* wstr, size_t length) {
   if (length == 0 || !wstr) return {};
   int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr, static_cast<int>(length), nullptr, 0, nullptr, nullptr);
   if (size_needed <= 0) return {};
-  std::string result(size_needed, 0);
+  string result(size_needed, 0);
   WideCharToMultiByte(CP_UTF8, 0, wstr, static_cast<int>(length), &result[0], size_needed, nullptr, nullptr);
   return result;
 }
@@ -36,7 +37,7 @@ static std::string to_string(const wchar_t* wstr, size_t length) {
 // - Arguments with whitespace or quotes must be enclosed in quotes.
 // - Backslashes immediately preceding a double quote must be doubled.
 // - Trailing backslashes before the closing quote must also be doubled.
-static std::wstring quote_argument(const std::wstring& arg) {
+static wstring quote_argument(const wstring& arg) {
   if (arg.empty()) {
     return L"\"\"";
   }
@@ -53,7 +54,7 @@ static std::wstring quote_argument(const std::wstring& arg) {
     return arg;
   }
 
-  std::wstring result = L"\"";
+  wstring result = L"\"";
   size_t num_backslashes = 0;
 
   for (wchar_t c : arg) {
@@ -80,8 +81,8 @@ static std::wstring quote_argument(const std::wstring& arg) {
 
 }  // namespace
 
-ProcessResult run_process(const std::string& executable,
-                          const std::vector<std::string>& arguments) {
+ProcessResult run_process(const string& executable,
+                          const vector<string>& arguments) {
   ProcessResult result;
 #ifdef _WIN32
   // Create pipes for stdout/stderr redirection.
@@ -102,7 +103,7 @@ ProcessResult run_process(const std::string& executable,
   SetHandleInformation(hChildRead, HANDLE_FLAG_INHERIT, 0);
 
   // Build the complete command line string.
-  std::wstring cmdline = quote_argument(to_wstring(executable));
+  wstring cmdline = quote_argument(to_wstring(executable));
   for (const auto& arg : arguments) {
     cmdline += L" " + quote_argument(to_wstring(arg));
   }
@@ -118,10 +119,10 @@ ProcessResult run_process(const std::string& executable,
   PROCESS_INFORMATION pi;
   ZeroMemory(&pi, sizeof(pi));
 
-  std::vector<wchar_t> cmdline_buf(cmdline.begin(), cmdline.end());
+  vector<wchar_t> cmdline_buf(cmdline.begin(), cmdline.end());
   cmdline_buf.push_back(L'\0');
 
-  std::wstring exe_w = to_wstring(executable);
+  wstring exe_w = to_wstring(executable);
 
   BOOL success = CreateProcessW(
       exe_w.c_str(),
@@ -143,7 +144,7 @@ ProcessResult run_process(const std::string& executable,
     result.launched = false;
     result.exit_code = -1;
     DWORD err = GetLastError();
-    result.output = "CreateProcessW failed with error " + std::to_string(err);
+    result.output = "CreateProcessW failed with error " + to_string(err);
     return result;
   }
 

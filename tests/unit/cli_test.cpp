@@ -4,6 +4,7 @@
 #include "nirqoba/CLI/Driver.h"
 
 using namespace nirq;
+using namespace std;
 
 TEST(CliTest, ParseVersionAndHelp) {
   {

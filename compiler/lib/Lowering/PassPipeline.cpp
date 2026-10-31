@@ -14,7 +14,9 @@
 
 // The NrqToLLVM pass is declared here; its definition is in NrqToLLVMPass.cpp.
 namespace nirq {
-std::unique_ptr<mlir::Pass> createNrqToLLVMPass();
+using namespace std;
+
+unique_ptr<mlir::Pass> createNrqToLLVMPass();
 }
 
 namespace nirq {

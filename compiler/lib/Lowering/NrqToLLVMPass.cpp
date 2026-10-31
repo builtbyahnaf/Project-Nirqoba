@@ -14,6 +14,7 @@
 #include "nirqoba/Lowering/NrqOps.h"
 
 namespace nirq {
+using namespace std;
 namespace {
 
 static mlir::LLVM::LLVMFuncOp ensure_runtime_decl(

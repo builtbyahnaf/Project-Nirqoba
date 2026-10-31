@@ -1,16 +1,17 @@
 #include "nirqoba/Common/Type.h"
 
 namespace nirq {
+using namespace std;
 
 namespace {
-static const std::vector<Type> kEmptyTypes;
-static const std::string kEmptyString;
-static const std::vector<std::pair<std::string, Type>> kEmptyFields;
+static const vector<Type> kEmptyTypes;
+static const string kEmptyString;
+static const vector<pair<string, Type>> kEmptyFields;
 }  // namespace
 
-Type Type::array_type(Type element_type, std::size_t length) {
+Type Type::array_type(Type element_type, size_t length) {
   Type t(TypeKind::Array);
-  t.data_ = std::make_shared<TypeData>();
+  t.data_ = make_shared<TypeData>();
   t.data_->element_type = element_type;
   t.data_->length = length;
   return t;
@@ -18,37 +19,37 @@ Type Type::array_type(Type element_type, std::size_t length) {
 
 Type Type::dynamic_array_type(Type element_type) {
   Type t(TypeKind::DynamicArray);
-  t.data_ = std::make_shared<TypeData>();
+  t.data_ = make_shared<TypeData>();
   t.data_->element_type = element_type;
   return t;
 }
 
 Type Type::pointer_type(Type element_type) {
   Type t(TypeKind::Pointer);
-  t.data_ = std::make_shared<TypeData>();
+  t.data_ = make_shared<TypeData>();
   t.data_->element_type = element_type;
   return t;
 }
 
 Type Type::managed_pointer_type(Type element_type) {
   Type t(TypeKind::ManagedPointer);
-  t.data_ = std::make_shared<TypeData>();
+  t.data_ = make_shared<TypeData>();
   t.data_->element_type = element_type;
   return t;
 }
 
-Type Type::tuple_type(std::vector<Type> elements) {
+Type Type::tuple_type(vector<Type> elements) {
   Type t(TypeKind::Tuple);
-  t.data_ = std::make_shared<TypeData>();
-  t.data_->tuple_elements = std::move(elements);
+  t.data_ = make_shared<TypeData>();
+  t.data_->tuple_elements = move(elements);
   return t;
 }
 
-Type Type::struct_type(std::string name, std::vector<std::pair<std::string, Type>> fields) {
+Type Type::struct_type(string name, vector<pair<string, Type>> fields) {
   Type t(TypeKind::Struct);
-  t.data_ = std::make_shared<TypeData>();
-  t.data_->struct_name = std::move(name);
-  t.data_->struct_fields = std::move(fields);
+  t.data_ = make_shared<TypeData>();
+  t.data_->struct_name = move(name);
+  t.data_->struct_fields = move(fields);
   return t;
 }
 
@@ -56,23 +57,23 @@ Type Type::element_type() const {
   return data_ ? data_->element_type : Type::error();
 }
 
-std::size_t Type::array_length() const {
+size_t Type::array_length() const {
   return data_ ? data_->length : 0;
 }
 
-const std::vector<Type>& Type::tuple_elements() const {
+const vector<Type>& Type::tuple_elements() const {
   return data_ ? data_->tuple_elements : kEmptyTypes;
 }
 
-const std::string& Type::struct_name() const {
+const string& Type::struct_name() const {
   return data_ ? data_->struct_name : kEmptyString;
 }
 
-const std::vector<std::pair<std::string, Type>>& Type::struct_fields() const {
+const vector<pair<string, Type>>& Type::struct_fields() const {
   return data_ ? data_->struct_fields : kEmptyFields;
 }
 
-std::string Type::to_string() const {
+string Type::to_string() const {
   switch (kind_) {
     case TypeKind::Void: return "void";
     case TypeKind::Bool: return "bool";
@@ -90,7 +91,7 @@ std::string Type::to_string() const {
     case TypeKind::Char: return "char";
     case TypeKind::String: return "string";
     case TypeKind::Array:
-      return element_type().to_string() + "[" + std::to_string(array_length()) + "]";
+      return element_type().to_string() + "[" + to_string(array_length()) + "]";
     case TypeKind::DynamicArray:
       return element_type().to_string() + "[]";
     case TypeKind::Pointer:
@@ -98,9 +99,9 @@ std::string Type::to_string() const {
     case TypeKind::ManagedPointer:
       return "managed<" + element_type().to_string() + ">";
     case TypeKind::Tuple: {
-      std::string s = "(";
+      string s = "(";
       const auto& elems = tuple_elements();
-      for (std::size_t i = 0; i < elems.size(); ++i) {
+      for (size_t i = 0; i < elems.size(); ++i) {
         if (i > 0) s += ", ";
         s += elems[i].to_string();
       }
@@ -114,7 +115,7 @@ std::string Type::to_string() const {
   return "<error>";
 }
 
-std::string Type::mangle() const {
+string Type::mangle() const {
   switch (kind_) {
     case TypeKind::Void: return "void";
     case TypeKind::Bool: return "i1";
@@ -132,7 +133,7 @@ std::string Type::mangle() const {
     case TypeKind::F64: return "f64";
     case TypeKind::String: return "ptr";
     case TypeKind::Array:
-      return "A" + std::to_string(array_length()) + "_" + element_type().mangle();
+      return "A" + to_string(array_length()) + "_" + element_type().mangle();
     case TypeKind::DynamicArray:
       return "DA_" + element_type().mangle();
     case TypeKind::Pointer:
@@ -140,14 +141,14 @@ std::string Type::mangle() const {
     case TypeKind::ManagedPointer:
       return "MP_" + element_type().mangle();
     case TypeKind::Tuple: {
-      std::string s = "T" + std::to_string(tuple_elements().size());
+      string s = "T" + to_string(tuple_elements().size());
       for (const auto& elem : tuple_elements()) {
         s += "_" + elem.mangle();
       }
       return s;
     }
     case TypeKind::Struct:
-      return "S" + std::to_string(struct_name().size()) + struct_name();
+      return "S" + to_string(struct_name().size()) + struct_name();
     case TypeKind::Error: return "error";
   }
   return "error";
@@ -176,7 +177,7 @@ bool operator==(const Type& lhs, const Type& rhs) {
       const auto& l = lhs.tuple_elements();
       const auto& r = rhs.tuple_elements();
       if (l.size() != r.size()) return false;
-      for (std::size_t i = 0; i < l.size(); ++i) {
+      for (size_t i = 0; i < l.size(); ++i) {
         if (l[i] != r[i]) return false;
       }
       return true;
@@ -188,7 +189,7 @@ bool operator==(const Type& lhs, const Type& rhs) {
   }
 }
 
-Type parse_type_name(std::string_view spelling) {
+Type parse_type_name(string_view spelling) {
   if (spelling == "void") return Type::void_type();
   if (spelling == "bool") return Type::bool_type();
   if (spelling == "int") return Type::int_type();

@@ -14,6 +14,8 @@
 #include <string>
 #include <unordered_map>
 
+using namespace std;
+
 namespace {
 struct Mapping {
   HANDLE file = INVALID_HANDLE_VALUE;
