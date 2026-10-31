@@ -1,0 +1,24 @@
+{
+	"interface-objects" : {},
+	"modules" : {},
+	"references" : 
+	{
+		"std" : 
+		{
+			"lookup-method" : "by-name",
+			"path" : "runtime\\CMakeFiles\\@cmake_cxx_std@synth_0.dir\\std.ifc"
+		},
+		"std.compat" : 
+		{
+			"lookup-method" : "by-name",
+			"path" : "runtime\\CMakeFiles\\@cmake_cxx_std@synth_0.dir\\std.compat.ifc"
+		}
+	},
+	"usages" : 
+	{
+		"std.compat" : 
+		[
+			"std"
+		]
+	}
+}

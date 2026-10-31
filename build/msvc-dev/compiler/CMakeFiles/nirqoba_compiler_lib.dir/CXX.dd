@@ -1,0 +1,49 @@
+ninja_dyndep_version = 1.0
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Common\Type.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Diagnostics\DiagnosticEngine.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Diagnostics\DiagnosticRenderer.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Frontend\SourceFile.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Frontend\Token.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Frontend\Lexer.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Frontend\AstPrinter.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Frontend\Parser.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Sema\SymbolTable.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Sema\TypeChecker.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\TIR\IR.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\TIR\Builder.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\TIR\Printing.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\TIR\Verifier.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Lowering\NrqDialect.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Lowering\NrqToLLVMPass.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Lowering\PassPipeline.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Lowering\TirToMlir.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Backend\ObjectEmitter.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Driver\LinkerEnvironment.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Driver\ProcessRunner.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Driver\CompilationPipeline.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\Driver\ModuleResolver.cpp.obj: dyndep
+
+build compiler\CMakeFiles\nirqoba_compiler_lib.dir\lib\CLI\Driver.cpp.obj: dyndep
+

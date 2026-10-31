@@ -1,0 +1,160 @@
+{
+	"bmi-installation" : null,
+	"compiler-frontend-variant" : "MSVC",
+	"compiler-id" : "MSVC",
+	"compiler-simulate-id" : "",
+	"config" : "RelWithDebInfo",
+	"cxx-interface-objects" : 
+	{
+		"module-objects" : 
+		{
+			"std" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev/runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/C_/Program_Files/Microsoft_Visual_Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/modules/std.ixx.obj",
+			"std.compat" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev/runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir/C_/Program_Files/Microsoft_Visual_Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/modules/std.compat.ixx.obj"
+		},
+		"rsp-file" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/CMakeFiles/nirqoba_compiler_lib.dir/CXXInterfaceObjects.rsp"
+	},
+	"cxx-modules" : {},
+	"database-info" : null,
+	"dir-cur-bld" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler",
+	"dir-cur-src" : "D:/Actual Project Files/Project Nirqoba/compiler",
+	"dir-top-bld" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev",
+	"dir-top-src" : "D:/Actual Project Files/Project Nirqoba",
+	"exports" : [],
+	"forward-modules-from-target-dirs" : [],
+	"include-dirs" : 
+	[
+		"include",
+		"D:\\Actual Project Files\\Project Nirqoba\\compiler\\include",
+		"compiler\\include",
+		"D:\\Actual Project Files\\Project Nirqoba\\toolchain\\llvm-23.1.4\\include"
+	],
+	"language" : "CXX",
+	"linked-target-dirs" : 
+	[
+		"D:/Actual Project Files/Project Nirqoba/build/msvc-dev/runtime/CMakeFiles/@cmake_cxx_std@synth_0.dir"
+	],
+	"module-dir" : "D:/Actual Project Files/Project Nirqoba/build/msvc-dev/compiler/CMakeFiles/nirqoba_compiler_lib.dir",
+	"sources" : 
+	{
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Backend/ObjectEmitter.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Backend/ObjectEmitter.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/CLI/Driver.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/CLI/Driver.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Common/Type.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Common/Type.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Diagnostics/DiagnosticEngine.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Diagnostics/DiagnosticEngine.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Diagnostics/DiagnosticRenderer.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Diagnostics/DiagnosticRenderer.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/CompilationPipeline.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Driver/CompilationPipeline.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/LinkerEnvironment.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Driver/LinkerEnvironment.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/ModuleResolver.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Driver/ModuleResolver.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Driver/ProcessRunner.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Driver/ProcessRunner.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/AstPrinter.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Frontend/AstPrinter.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/Lexer.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Frontend/Lexer.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/Parser.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Frontend/Parser.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/SourceFile.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Frontend/SourceFile.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Frontend/Token.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Frontend/Token.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/NrqDialect.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Lowering/NrqDialect.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/NrqToLLVMPass.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Lowering/NrqToLLVMPass.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/PassPipeline.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Lowering/PassPipeline.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Lowering/TirToMlir.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Lowering/TirToMlir.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Sema/SymbolTable.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Sema/SymbolTable.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/Sema/TypeChecker.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/Sema/TypeChecker.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Builder.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/TIR/Builder.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/IR.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/TIR/IR.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Printing.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/TIR/Printing.cpp"
+		},
+		"compiler/CMakeFiles/nirqoba_compiler_lib.dir/lib/TIR/Verifier.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "D:/Actual Project Files/Project Nirqoba/compiler/lib/TIR/Verifier.cpp"
+		}
+	}
+}

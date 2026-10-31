@@ -5,12 +5,17 @@ project_context/SYNTAX.md
 .freebuff
 .freebuff/*
 
-build/
-toolchain/
+build/logs/*
+build/*.txt
+
+toolchain/*
+
+
 out/
-*.obj
-*.exe
+
+
 __pycache__/
 .vscode
 .vscode/*
+windows_installer/*
 windows_installer/

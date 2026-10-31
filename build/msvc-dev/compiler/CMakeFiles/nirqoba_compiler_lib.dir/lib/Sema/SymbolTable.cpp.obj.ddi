@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "compiler\\CMakeFiles\\nirqoba_compiler_lib.dir\\lib\\Sema\\SymbolTable.cpp.obj",
+            "outputs": [
+                "D:\\Actual Project Files\\Project Nirqoba\\build\\msvc-dev\\vc140.pdb",
+                "compiler\\CMakeFiles\\nirqoba_compiler_lib.dir\\lib\\Sema\\SymbolTable.cpp.obj.ddi"
+            ],
+            "requires": []
+        }
+    ]
+}
