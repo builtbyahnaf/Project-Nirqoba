@@ -189,19 +189,13 @@ if ($SkipToolchain) {
     & tar.exe -xf $tempTar -C $downloads
     if ($LASTEXITCODE -ne 0) { Stop-WithError "tar extraction failed with exit code $LASTEXITCODE." }
     
-    $extractedName = $lock.llvm.asset -replace '\.tar\.zst$', ''
-    $extracted = Join-Path $downloads $extractedName
-    if (-not (Test-Path $extracted)) { 
-        # Try without the .zst in name
-        $extractedName = $lock.llvm.asset -replace '\.tar\.zst$', '' -replace '_noassert$', ''
-        $extracted = Join-Path $downloads $extractedName
-    }
-    if (-not (Test-Path $extracted)) { 
-        # Fallback: pick the first extracted directory
-        $dirs = @(Get-ChildItem $downloads -Directory)
-        if ($dirs.Count -gt 0) { $extracted = $dirs[0].FullName }
-    }
-    if (-not (Test-Path $extracted)) { Stop-WithError "Extracted directory '$extracted' was not found." }
+    # Find the directory containing MLIRConfig.cmake
+    $mlirConfigPath = Get-ChildItem $downloads -Recurse -Filter "MLIRConfig.cmake" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $mlirConfigPath) { Stop-WithError "MLIRConfig.cmake not found in extracted archive." }
+    $extracted = Split-Path (Split-Path $mlirConfigPath.FullName -Parent) -Parent
+    Write-Ok "Found MLIR SDK at $extracted"
+    
+    if (Test-Path $llvmRoot) { Remove-Item $llvmRoot -Recurse -Force }
     Move-Item $extracted $llvmRoot
     Remove-Item $tempTar -Force -ErrorAction SilentlyContinue
     Write-Ok "extracted to $llvmRoot"
