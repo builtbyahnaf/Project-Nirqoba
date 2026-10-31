@@ -16,6 +16,13 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(NirqobaOptions)
 include(NirqobaLLVMTargets)
 
+# <windows.h> defines min()/max() as macros, which breaks any translation unit
+# that also includes LLVM headers (std::min/std::max become syntax errors).
+# Windows is the only supported host, so this applies to the whole build.
+if(MSVC)
+  add_compile_definitions(NOMINMAX)
+endif()
+
 # ---------------------------------------------------------------------------
 # LLVM / MLIR SDK
 # ---------------------------------------------------------------------------

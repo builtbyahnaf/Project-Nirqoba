@@ -57,7 +57,7 @@ if ($null -eq $python) { $python = Get-Command python -ErrorAction SilentlyConti
 if ($null -eq $python) {
     Stop-WithError "Python $($lock.python.minimum)+ not found. Install it with: winget install Python.Python.3.12"
 }
-$pythonVersion = (Get-CommandVersion $python.Source @('-c', 'import sys; print(str(sys.version_info[0]) + ''.'' + str(sys.version_info[1]))'))
+$pythonVersion = (Get-CommandVersion $python.Source @('-c', 'import sys; print(str(sys.version_info[0]) + "." + str(sys.version_info[1]))'))
 Write-Ok "python $pythonVersion"
 
 # --- Prerequisite: CMake ------------------------------------------------------
@@ -176,12 +176,32 @@ if ($SkipToolchain) {
 
     Write-Step 'Extracting the SDK (this takes a few minutes)'
     if (Test-Path $llvmRoot) { Remove-Item $llvmRoot -Recurse -Force }
-    & tar.exe -xJf $archive -C $downloads
+    
+    # Extract zstd-compressed tarball
+    $tempTar = $archive -replace '\.zst$', '.tar'
+    Write-Step "Decompressing zstd archive"
+    & zstd.exe -d --memory=1024MB -o $tempTar $archive
+    if ($LASTEXITCODE -ne 0) { Stop-WithError "zstd decompression failed with exit code $LASTEXITCODE." }
+    
+    Write-Step "Extracting tar archive"
+    & tar.exe -xf $tempTar -C $downloads
     if ($LASTEXITCODE -ne 0) { Stop-WithError "tar extraction failed with exit code $LASTEXITCODE." }
-    $extractedName = $lock.llvm.asset -replace '\.tar\.xz$', ''
+    
+    $extractedName = $lock.llvm.asset -replace '\.tar\.zst$', ''
     $extracted = Join-Path $downloads $extractedName
+    if (-not (Test-Path $extracted)) { 
+        # Try without the .zst in name
+        $extractedName = $lock.llvm.asset -replace '\.tar\.zst$', '' -replace '_noassert$', ''
+        $extracted = Join-Path $downloads $extractedName
+    }
+    if (-not (Test-Path $extracted)) { 
+        # List what was extracted
+        $dirs = Get-ChildItem $downloads -Directory | Where-Object { $_.Name -ne 'llvm-mlir_llvmorg-23.1.4_x86_64-pc-windows-msvc_noassert' }
+        if ($dirs.Count -eq 1) { $extracted = $dirs[0].FullName }
+    }
     if (-not (Test-Path $extracted)) { Stop-WithError "Extracted directory '$extracted' was not found." }
     Move-Item $extracted $llvmRoot
+    Remove-Item $tempTar -Force -ErrorAction SilentlyContinue
     Write-Ok "extracted to $llvmRoot"
 }
 
