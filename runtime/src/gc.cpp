@@ -14,6 +14,8 @@
 #include <unordered_map>
 #include <vector>
 
+using namespace std;
+
 namespace {
 
 struct ObjectHeader {

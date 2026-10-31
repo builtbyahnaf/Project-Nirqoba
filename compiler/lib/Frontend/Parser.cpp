@@ -3,6 +3,7 @@
 #include <utility>
 
 namespace nirq {
+using namespace std;
 namespace {
 
 constexpr const char* kUnknownType = "NRQ2003";
@@ -33,7 +34,7 @@ bool is_type_keyword(TokenKind kind) {
 
 }  // namespace
 
-std::string_view phase_for_keyword(TokenKind kind) {
+string_view phase_for_keyword(TokenKind kind) {
   switch (kind) {
     case TokenKind::KwFn:
       return "Phase 3 (use 'function', not 'fn')";
@@ -51,11 +52,11 @@ std::string_view phase_for_keyword(TokenKind kind) {
   }
 }
 
-Parser::Parser(std::vector<Token> tokens, DiagnosticEngine& diagnostics)
-    : tokens_(std::move(tokens)), diagnostics_(diagnostics) {}
+Parser::Parser(vector<Token> tokens, DiagnosticEngine& diagnostics)
+    : tokens_(move(tokens)), diagnostics_(diagnostics) {}
 
-const Token& Parser::peek(std::size_t lookahead) const {
-  const std::size_t index = position_ + lookahead;
+const Token& Parser::peek(size_t lookahead) const {
+  const size_t index = position_ + lookahead;
   if (index >= tokens_.size()) return tokens_.back();
   return tokens_[index];
 }
@@ -78,22 +79,22 @@ Token Parser::advance() {
   return token;
 }
 
-const Token& Parser::expect(TokenKind kind, std::string_view context) {
+const Token& Parser::expect(TokenKind kind, string_view context) {
   if (check(kind)) return tokens_[position_++];
   error_at(peek(), diag::kExpectedToken,
-           "expected '" + std::string(token_kind_name(kind)) + "' " + std::string(context) +
+           "expected '" + string(token_kind_name(kind)) + "' " + string(context) +
                ", found " + describe_token(peek()));
   return peek();
 }
 
-void Parser::error_at(const Token& token, std::string_view code, std::string message) {
-  diagnostics_.error(std::string(code), token.location, std::move(message));
+void Parser::error_at(const Token& token, string_view code, string message) {
+  diagnostics_.error(string(code), token.location, move(message));
 }
 
-void Parser::report_phase_gap(const Token& token, std::string_view feature,
-                             std::string_view phase) {
+void Parser::report_phase_gap(const Token& token, string_view feature,
+                             string_view phase) {
   diagnostics_.error(diag::kNotImplementedInPhase1, token.location,
-                     "'" + std::string(feature) + "' is specified for " + std::string(phase) +
+                     "'" + string(feature) + "' is specified for " + string(phase) +
                          " and is not available in Phase 4");
 }
 
@@ -125,8 +126,8 @@ void Parser::synchronize() {
   }
 }
 
-std::unique_ptr<Program> Parser::parse_program() {
-  auto program = std::make_unique<Program>();
+unique_ptr<Program> Parser::parse_program() {
+  auto program = make_unique<Program>();
   // `module` must open the file and every `import` must precede the first
   // declaration; both rules keep a module's dependency list readable at a
   // glance instead of scattering it through the file.
@@ -143,7 +144,7 @@ std::unique_ptr<Program> Parser::parse_program() {
           diagnostics_.error(diag::kUnexpectedToken, mod->location(),
                              "the 'module' declaration must be the first item in a source file");
         } else {
-          program->set_module(std::move(mod));
+          program->set_module(move(mod));
         }
       }
       continue;
@@ -155,7 +156,7 @@ std::unique_ptr<Program> Parser::parse_program() {
           diagnostics_.error(diag::kUnexpectedToken, imp->location(),
                              "import statements must appear before any declaration");
         }
-        program->imports().push_back(std::move(imp));
+        program->imports().push_back(move(imp));
       }
       seen_import = true;
       continue;
@@ -169,8 +170,8 @@ std::unique_ptr<Program> Parser::parse_program() {
 
     if (check(TokenKind::KwStruct)) {
       seen_declaration = true;
-      std::unique_ptr<StructDecl> s = parse_struct(vis);
-      if (s) program->structs().push_back(std::move(s));
+      unique_ptr<StructDecl> s = parse_struct(vis);
+      if (s) program->structs().push_back(move(s));
       continue;
     }
     if (check(TokenKind::KwFunction)) {
@@ -186,10 +187,10 @@ std::unique_ptr<Program> Parser::parse_program() {
          (peek(1).kind == TokenKind::KwFunction ||
           (peek().text == "managed" && peek(1).kind == TokenKind::Less)))) {
       seen_declaration = true;
-      const std::size_t before = position_;
-      std::unique_ptr<FunctionDecl> function = parse_function(vis);
+      const size_t before = position_;
+      unique_ptr<FunctionDecl> function = parse_function(vis);
       if (function) {
-        program->functions().push_back(std::move(function));
+        program->functions().push_back(move(function));
       } else if (position_ == before) {
         advance();
       }
@@ -204,7 +205,7 @@ std::unique_ptr<Program> Parser::parse_program() {
   return program;
 }
 
-std::unique_ptr<ModuleDecl> Parser::parse_module() {
+unique_ptr<ModuleDecl> Parser::parse_module() {
   const Token kw = advance();  // 'module'
   if (!check(TokenKind::Identifier)) {
     error_at(peek(), diag::kExpectedToken, "expected module name after 'module'");
@@ -213,10 +214,10 @@ std::unique_ptr<ModuleDecl> Parser::parse_module() {
   }
   const Token name_tok = advance();
   expect(TokenKind::Semicolon, "after module declaration");
-  return std::make_unique<ModuleDecl>(name_tok.text, kw.location);
+  return make_unique<ModuleDecl>(name_tok.text, kw.location);
 }
 
-std::unique_ptr<ImportDecl> Parser::parse_import() {
+unique_ptr<ImportDecl> Parser::parse_import() {
   const Token kw = advance();  // 'import'
   if (!check(TokenKind::Identifier)) {
     error_at(peek(), diag::kExpectedToken, "expected module name after 'import'");
@@ -224,8 +225,8 @@ std::unique_ptr<ImportDecl> Parser::parse_import() {
     return nullptr;
   }
   const Token mod_tok = advance();
-  std::string item_name;
-  std::string alias;
+  string item_name;
+  string alias;
 
   if (match(TokenKind::Dot)) {
     if (!check(TokenKind::Identifier)) {
@@ -246,10 +247,10 @@ std::unique_ptr<ImportDecl> Parser::parse_import() {
   }
 
   expect(TokenKind::Semicolon, "after import statement");
-  return std::make_unique<ImportDecl>(mod_tok.text, std::move(item_name), std::move(alias), kw.location);
+  return make_unique<ImportDecl>(mod_tok.text, move(item_name), move(alias), kw.location);
 }
 
-std::unique_ptr<StructDecl> Parser::parse_struct(Visibility visibility) {
+unique_ptr<StructDecl> Parser::parse_struct(Visibility visibility) {
   const Token struct_tok = advance();  // 'struct'
   if (!check(TokenKind::Identifier)) {
     error_at(peek(), diag::kExpectedToken, "expected struct name after 'struct'");
@@ -259,7 +260,7 @@ std::unique_ptr<StructDecl> Parser::parse_struct(Visibility visibility) {
   const Token name_tok = advance();
   expect(TokenKind::LBrace, "to open struct body");
 
-  std::vector<Parameter> fields;
+  vector<Parameter> fields;
   while (!check(TokenKind::RBrace) && !check(TokenKind::EndOfFile)) {
     Type field_type = parse_type_annotation();
     if (!check(TokenKind::Identifier)) {
@@ -272,10 +273,10 @@ std::unique_ptr<StructDecl> Parser::parse_struct(Visibility visibility) {
     fields.push_back(Parameter{field_name.text, field_type, field_name.location});
   }
   expect(TokenKind::RBrace, "to close struct body");
-  return std::make_unique<StructDecl>(name_tok.text, std::move(fields), struct_tok.location, visibility);
+  return make_unique<StructDecl>(name_tok.text, move(fields), struct_tok.location, visibility);
 }
 
-std::unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
+unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
   const Token& type_token = peek();
   const Type return_type = parse_type_annotation();
   expect(TokenKind::KwFunction, "after the return type");
@@ -287,7 +288,7 @@ std::unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
   }
   const Token name_token = advance();
 
-  std::vector<Parameter> parameters;
+  vector<Parameter> parameters;
   if (expect(TokenKind::LParen, "after the function name").kind == TokenKind::LParen) {
     if (!check(TokenKind::RParen)) {
       do {
@@ -316,11 +317,11 @@ std::unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
   }
   auto body = parse_block();
   if (!body) return nullptr;
-  return std::make_unique<FunctionDecl>(return_type, name_token.text, std::move(parameters),
-                                        std::move(body),
-                                        type_token.location.is_valid() ? type_token.location
-                                                                       : name_token.location,
-                                        visibility);
+return make_unique<FunctionDecl>(return_type, name_token.text, move(parameters),
+                                         move(body),
+                                         type_token.location.is_valid() ? type_token.location
+                                                                        : name_token.location,
+                                         visibility);
 }
 
 Type Parser::parse_type_annotation() {
@@ -340,7 +341,7 @@ Type Parser::parse_type_annotation() {
     // A struct declared in another module is named `module.Type` (Phase 5).
     // The qualified spelling is kept verbatim in the type so semantic analysis
     // and the TIR keep one name for the type across modules.
-    std::string name = token.text;
+    string name = token.text;
     while (check(TokenKind::Dot)) {
       advance();
       if (!check(TokenKind::Identifier)) {
@@ -352,14 +353,14 @@ Type Parser::parse_type_annotation() {
     }
     base_type = Type::struct_type(name);
   } else if (match(TokenKind::LParen)) {
-    std::vector<Type> tuple_elements;
+    vector<Type> tuple_elements;
     if (!check(TokenKind::RParen)) {
       do {
         tuple_elements.push_back(parse_type_annotation());
       } while (match(TokenKind::Comma));
     }
     expect(TokenKind::RParen, "to close tuple type");
-    base_type = Type::tuple_type(std::move(tuple_elements));
+    base_type = Type::tuple_type(move(tuple_elements));
   } else {
     error_at(peek(), kUnknownType, "expected a type, found " + describe_token(peek()));
     advance();
@@ -371,7 +372,7 @@ Type Parser::parse_type_annotation() {
     if (check(TokenKind::IntegerLiteral)) {
       const Token len_tok = advance();
       expect(TokenKind::RBracket, "to close array type");
-      base_type = Type::array_type(base_type, static_cast<std::size_t>(len_tok.integer_value));
+      base_type = Type::array_type(base_type, static_cast<size_t>(len_tok.integer_value));
     } else {
       expect(TokenKind::RBracket, "to close dynamic array type");
       base_type = Type::dynamic_array_type(base_type);
@@ -384,14 +385,14 @@ Type Parser::parse_type_annotation() {
   return base_type;
 }
 
-std::unique_ptr<BlockStmt> Parser::parse_block() {
+unique_ptr<BlockStmt> Parser::parse_block() {
   const Token open = advance();
-  auto block = std::make_unique<BlockStmt>(open.location);
+  auto block = make_unique<BlockStmt>(open.location);
   while (!check(TokenKind::RBrace) && !check(TokenKind::EndOfFile)) {
-    const std::size_t before = position_;
+    const size_t before = position_;
     StmtPtr statement = parse_statement();
     if (statement) {
-      block->statements().push_back(std::move(statement));
+      block->statements().push_back(move(statement));
     } else if (position_ == before) {
       advance();
     }
@@ -430,15 +431,15 @@ StmtPtr Parser::parse_statement() {
     const Token keyword = advance();
     ExprPtr expression = parse_expression();
     expect(TokenKind::Semicolon, "after the deferred cleanup call");
-    return std::make_unique<DeferredCleanupStmt>(keyword.location,
-                                                 std::move(expression));
+return make_unique<DeferredCleanupStmt>(keyword.location,
+                                                 move(expression));
   }
   if (check(TokenKind::KwReturn)) {
     const Token keyword = advance();
     ExprPtr value;
     if (!check(TokenKind::Semicolon)) value = parse_expression();
     expect(TokenKind::Semicolon, "after the return statement");
-    return std::make_unique<ReturnStmt>(keyword.location, std::move(value));
+    return make_unique<ReturnStmt>(keyword.location, move(value));
   }
   if (is_reserved_future_keyword(token.kind)) {
     report_phase_gap(token, token_kind_name(token.kind), phase_for_keyword(token.kind));
@@ -459,7 +460,7 @@ StmtPtr Parser::parse_destructuring() {
   const bool is_paren = match(TokenKind::LParen);
   if (!is_paren) expect(TokenKind::LBracket, "for destructuring");
 
-  std::vector<std::string> names;
+  vector<string> names;
   do {
     if (is_paren && check(TokenKind::RParen)) break;
     if (!is_paren && check(TokenKind::RBracket)) break;
@@ -477,7 +478,7 @@ StmtPtr Parser::parse_destructuring() {
   expect(TokenKind::Equal, "before destructuring initializer");
   ExprPtr value = parse_expression();
   expect(TokenKind::Semicolon, "after destructuring statement");
-  return std::make_unique<DestructuringStmt>(kw.location, binding, std::move(names), std::move(value));
+  return make_unique<DestructuringStmt>(kw.location, binding, move(names), move(value));
 }
 
 StmtPtr Parser::parse_variable_declaration() {
@@ -510,9 +511,9 @@ StmtPtr Parser::parse_variable_declaration() {
   advance();  // '='
   ExprPtr initializer = parse_expression();
   expect(TokenKind::Semicolon, "after the variable initializer");
-  return std::make_unique<VariableDeclarationStmt>(keyword.location, binding, name.text,
-                                                   has_annotation, annotation,
-                                                   std::move(initializer));
+return make_unique<VariableDeclarationStmt>(keyword.location, binding, name.text,
+                                                     has_annotation, annotation,
+                                                     move(initializer));
 }
 
 StmtPtr Parser::parse_assignment_or_expression() {
@@ -523,7 +524,7 @@ StmtPtr Parser::parse_assignment_or_expression() {
   if (match(TokenKind::Equal)) {
     ExprPtr value = parse_expression();
     expect(TokenKind::Semicolon, "after the assignment");
-    return std::make_unique<AssignmentStmt>(start.location, std::move(expr), std::move(value));
+    return make_unique<AssignmentStmt>(start.location, move(expr), move(value));
   }
 
   BinaryOp comp_op;
@@ -545,11 +546,11 @@ StmtPtr Parser::parse_assignment_or_expression() {
     advance();  // compound op
     ExprPtr value = parse_expression();
     expect(TokenKind::Semicolon, "after the compound assignment");
-    return std::make_unique<CompoundAssignmentStmt>(start.location, comp_op, std::move(expr), std::move(value));
+    return make_unique<CompoundAssignmentStmt>(start.location, comp_op, move(expr), move(value));
   }
 
   expect(TokenKind::Semicolon, "after the expression");
-  return std::make_unique<ExprStmt>(start.location, std::move(expr));
+  return make_unique<ExprStmt>(start.location, move(expr));
 }
 
 StmtPtr Parser::parse_if() {
@@ -574,8 +575,8 @@ StmtPtr Parser::parse_if() {
       synchronize();
     }
   }
-  return std::make_unique<IfStmt>(if_tok.location, std::move(condition),
-                                  std::move(then_branch), std::move(else_branch));
+return make_unique<IfStmt>(if_tok.location, move(condition),
+                                   move(then_branch), move(else_branch));
 }
 
 StmtPtr Parser::parse_while() {
@@ -589,7 +590,7 @@ StmtPtr Parser::parse_while() {
     return nullptr;
   }
   auto body = parse_block();
-  return std::make_unique<WhileStmt>(while_tok.location, std::move(condition), std::move(body));
+  return make_unique<WhileStmt>(while_tok.location, move(condition), move(body));
 }
 
 StmtPtr Parser::parse_for() {
@@ -618,7 +619,7 @@ StmtPtr Parser::parse_for() {
     if (expr) {
       if (match(TokenKind::Equal)) {
         ExprPtr value = parse_expression();
-        step = std::make_unique<AssignmentStmt>(start.location, std::move(expr), std::move(value));
+        step = make_unique<AssignmentStmt>(start.location, move(expr), move(value));
       } else {
         BinaryOp comp_op;
         bool is_compound = false;
@@ -638,9 +639,9 @@ StmtPtr Parser::parse_for() {
         if (is_compound) {
           advance();  // compound op
           ExprPtr value = parse_expression();
-          step = std::make_unique<CompoundAssignmentStmt>(start.location, comp_op, std::move(expr), std::move(value));
+          step = make_unique<CompoundAssignmentStmt>(start.location, comp_op, move(expr), move(value));
         } else {
-          step = std::make_unique<ExprStmt>(start.location, std::move(expr));
+          step = make_unique<ExprStmt>(start.location, move(expr));
         }
       }
     }
@@ -653,24 +654,24 @@ StmtPtr Parser::parse_for() {
     return nullptr;
   }
   auto body = parse_block();
-  return std::make_unique<ForStmt>(for_tok.location, std::move(initializer),
-                                  std::move(condition), std::move(step), std::move(body));
+return make_unique<ForStmt>(for_tok.location, move(initializer),
+                                   move(condition), move(step), move(body));
 }
 
 StmtPtr Parser::parse_break() {
   const Token tok = advance();
   expect(TokenKind::Semicolon, "after 'break'");
-  return std::make_unique<BreakStmt>(tok.location);
+  return make_unique<BreakStmt>(tok.location);
 }
 
 StmtPtr Parser::parse_continue() {
   const Token tok = advance();
   expect(TokenKind::Semicolon, "after 'continue'");
-  return std::make_unique<ContinueStmt>(tok.location);
+  return make_unique<ContinueStmt>(tok.location);
 }
 
-std::vector<ExprPtr> Parser::parse_argument_list() {
-  std::vector<ExprPtr> arguments;
+vector<ExprPtr> Parser::parse_argument_list() {
+  vector<ExprPtr> arguments;
   if (check(TokenKind::RParen)) return arguments;
   do {
     if (check(TokenKind::RParen)) break;
@@ -686,8 +687,8 @@ ExprPtr Parser::parse_logical_or() {
   while (check(TokenKind::PipePipe)) {
     const Token op_tok = advance();
     ExprPtr rhs = parse_logical_and();
-    lhs = std::make_unique<BinaryExpr>(op_tok.location, BinaryOp::LogicalOr, std::move(lhs),
-                                       std::move(rhs));
+    lhs = make_unique<BinaryExpr>(op_tok.location, BinaryOp::LogicalOr, move(lhs),
+                                       move(rhs));
   }
   return lhs;
 }
@@ -697,8 +698,8 @@ ExprPtr Parser::parse_logical_and() {
   while (check(TokenKind::AmpAmp)) {
     const Token op_tok = advance();
     ExprPtr rhs = parse_bitwise_or();
-    lhs = std::make_unique<BinaryExpr>(op_tok.location, BinaryOp::LogicalAnd, std::move(lhs),
-                                       std::move(rhs));
+    lhs = make_unique<BinaryExpr>(op_tok.location, BinaryOp::LogicalAnd, move(lhs),
+                                       move(rhs));
   }
   return lhs;
 }
@@ -708,8 +709,8 @@ ExprPtr Parser::parse_bitwise_or() {
   while (check(TokenKind::Pipe)) {
     const Token op_tok = advance();
     ExprPtr rhs = parse_bitwise_xor();
-    lhs = std::make_unique<BinaryExpr>(op_tok.location, BinaryOp::BitwiseOr, std::move(lhs),
-                                       std::move(rhs));
+    lhs = make_unique<BinaryExpr>(op_tok.location, BinaryOp::BitwiseOr, move(lhs),
+                                       move(rhs));
   }
   return lhs;
 }
@@ -719,8 +720,8 @@ ExprPtr Parser::parse_bitwise_xor() {
   while (check(TokenKind::Caret)) {
     const Token op_tok = advance();
     ExprPtr rhs = parse_bitwise_and();
-    lhs = std::make_unique<BinaryExpr>(op_tok.location, BinaryOp::BitwiseXor, std::move(lhs),
-                                       std::move(rhs));
+    lhs = make_unique<BinaryExpr>(op_tok.location, BinaryOp::BitwiseXor, move(lhs),
+                                       move(rhs));
   }
   return lhs;
 }
@@ -730,8 +731,8 @@ ExprPtr Parser::parse_bitwise_and() {
   while (check(TokenKind::Amp)) {
     const Token op_tok = advance();
     ExprPtr rhs = parse_equality();
-    lhs = std::make_unique<BinaryExpr>(op_tok.location, BinaryOp::BitwiseAnd, std::move(lhs),
-                                       std::move(rhs));
+    lhs = make_unique<BinaryExpr>(op_tok.location, BinaryOp::BitwiseAnd, move(lhs),
+                                       move(rhs));
   }
   return lhs;
 }
@@ -742,7 +743,7 @@ ExprPtr Parser::parse_equality() {
     const Token op_tok = advance();
     const BinaryOp op = op_tok.kind == TokenKind::EqualEqual ? BinaryOp::Equal : BinaryOp::NotEqual;
     ExprPtr rhs = parse_relational();
-    lhs = std::make_unique<BinaryExpr>(op_tok.location, op, std::move(lhs), std::move(rhs));
+    lhs = make_unique<BinaryExpr>(op_tok.location, op, move(lhs), move(rhs));
   }
   return lhs;
 }
@@ -761,7 +762,7 @@ ExprPtr Parser::parse_relational() {
       default: break;
     }
     ExprPtr rhs = parse_shift();
-    lhs = std::make_unique<BinaryExpr>(op_tok.location, op, std::move(lhs), std::move(rhs));
+    lhs = make_unique<BinaryExpr>(op_tok.location, op, move(lhs), move(rhs));
   }
   return lhs;
 }
@@ -773,7 +774,7 @@ ExprPtr Parser::parse_shift() {
     const BinaryOp op =
         op_tok.kind == TokenKind::LessLess ? BinaryOp::ShiftLeft : BinaryOp::ShiftRight;
     ExprPtr rhs = parse_additive();
-    lhs = std::make_unique<BinaryExpr>(op_tok.location, op, std::move(lhs), std::move(rhs));
+    lhs = make_unique<BinaryExpr>(op_tok.location, op, move(lhs), move(rhs));
   }
   return lhs;
 }
@@ -784,7 +785,7 @@ ExprPtr Parser::parse_additive() {
     const Token op_tok = advance();
     const BinaryOp op = op_tok.kind == TokenKind::Plus ? BinaryOp::Add : BinaryOp::Subtract;
     ExprPtr rhs = parse_multiplicative();
-    lhs = std::make_unique<BinaryExpr>(op_tok.location, op, std::move(lhs), std::move(rhs));
+    lhs = make_unique<BinaryExpr>(op_tok.location, op, move(lhs), move(rhs));
   }
   return lhs;
 }
@@ -797,7 +798,7 @@ ExprPtr Parser::parse_multiplicative() {
                         : op_tok.kind == TokenKind::Slash ? BinaryOp::Divide
                                                           : BinaryOp::Remainder;
     ExprPtr rhs = parse_cast();
-    lhs = std::make_unique<BinaryExpr>(op_tok.location, op, std::move(lhs), std::move(rhs));
+    lhs = make_unique<BinaryExpr>(op_tok.location, op, move(lhs), move(rhs));
   }
   return lhs;
 }
@@ -807,7 +808,7 @@ ExprPtr Parser::parse_cast() {
   while (check(TokenKind::KwAs)) {
     const Token as_tok = advance();
     const Type target = parse_type_annotation();
-    lhs = std::make_unique<CastExpr>(as_tok.location, std::move(lhs), target);
+    lhs = make_unique<CastExpr>(as_tok.location, move(lhs), target);
   }
   return lhs;
 }
@@ -815,19 +816,19 @@ ExprPtr Parser::parse_cast() {
 ExprPtr Parser::parse_unary() {
   if (check(TokenKind::Minus)) {
     const Token op_tok = advance();
-    return std::make_unique<UnaryExpr>(op_tok.location, UnaryOp::Negate, parse_unary());
+    return make_unique<UnaryExpr>(op_tok.location, UnaryOp::Negate, parse_unary());
   }
   if (check(TokenKind::Plus)) {
     const Token op_tok = advance();
-    return std::make_unique<UnaryExpr>(op_tok.location, UnaryOp::Plus, parse_unary());
+    return make_unique<UnaryExpr>(op_tok.location, UnaryOp::Plus, parse_unary());
   }
   if (check(TokenKind::Bang)) {
     const Token op_tok = advance();
-    return std::make_unique<UnaryExpr>(op_tok.location, UnaryOp::LogicalNot, parse_unary());
+    return make_unique<UnaryExpr>(op_tok.location, UnaryOp::LogicalNot, parse_unary());
   }
   if (check(TokenKind::Tilde)) {
     const Token op_tok = advance();
-    return std::make_unique<UnaryExpr>(op_tok.location, UnaryOp::BitwiseNot, parse_unary());
+    return make_unique<UnaryExpr>(op_tok.location, UnaryOp::BitwiseNot, parse_unary());
   }
   return parse_exponentiation();
 }
@@ -837,8 +838,8 @@ ExprPtr Parser::parse_exponentiation() {
   if (check(TokenKind::StarStar)) {
     const Token op_tok = advance();
     ExprPtr rhs = parse_unary();
-    lhs = std::make_unique<BinaryExpr>(op_tok.location, BinaryOp::Exponentiate, std::move(lhs),
-                                       std::move(rhs));
+    lhs = make_unique<BinaryExpr>(op_tok.location, BinaryOp::Exponentiate, move(lhs),
+                                       move(rhs));
   }
   return lhs;
 }
@@ -849,17 +850,17 @@ ExprPtr Parser::parse_postfix() {
     if (match(TokenKind::LBracket)) {
       ExprPtr index = parse_expression();
       expect(TokenKind::RBracket, "to close array index");
-      expr = std::make_unique<IndexExpr>(expr->location(), std::move(expr), std::move(index));
+      expr = make_unique<IndexExpr>(expr->location(), move(expr), move(index));
     } else if (match(TokenKind::Dot)) {
       const Token mem_tok = peek();
       if (check(TokenKind::IntegerLiteral)) {
         advance();
-        expr = std::make_unique<MemberAccessExpr>(
-            expr->location(), std::move(expr), "", static_cast<int>(mem_tok.integer_value));
+        expr = make_unique<MemberAccessExpr>(
+            expr->location(), move(expr), "", static_cast<int>(mem_tok.integer_value));
       } else if (check(TokenKind::Identifier)) {
         advance();
-        expr = std::make_unique<MemberAccessExpr>(
-            expr->location(), std::move(expr), mem_tok.text, -1);
+        expr = make_unique<MemberAccessExpr>(
+            expr->location(), move(expr), mem_tok.text, -1);
       } else {
         error_at(mem_tok, diag::kExpectedToken, "expected member name or tuple index after '.'");
         break;
@@ -873,7 +874,7 @@ ExprPtr Parser::parse_postfix() {
 
 ExprPtr Parser::parse_array_literal() {
   const Token open = advance();  // '['
-  std::vector<ExprPtr> elements;
+  vector<ExprPtr> elements;
   if (!check(TokenKind::RBracket)) {
     do {
       if (check(TokenKind::RBracket)) break;
@@ -881,18 +882,18 @@ ExprPtr Parser::parse_array_literal() {
     } while (match(TokenKind::Comma));
   }
   expect(TokenKind::RBracket, "to close array literal");
-  return std::make_unique<ArrayLiteralExpr>(open.location, std::move(elements));
+  return make_unique<ArrayLiteralExpr>(open.location, move(elements));
 }
 
-ExprPtr Parser::parse_struct_init(std::string struct_name, SourceLocation location) {
+ExprPtr Parser::parse_struct_init(string struct_name, SourceLocation location) {
   expect(TokenKind::LBrace, "to open struct initializer");
   if (match(TokenKind::RBrace)) {
-    return std::make_unique<StructInitExpr>(location, std::move(struct_name),
-                                           std::vector<ExprPtr>{});
+    return make_unique<StructInitExpr>(location, move(struct_name),
+                                            vector<ExprPtr>{});
   }
 
   if (check(TokenKind::Identifier) && peek(1).kind == TokenKind::Colon) {
-    std::vector<std::pair<std::string, ExprPtr>> field_inits;
+    vector<pair<string, ExprPtr>> field_inits;
     do {
       if (check(TokenKind::RBrace)) break;
       if (!check(TokenKind::Identifier)) {
@@ -902,20 +903,20 @@ ExprPtr Parser::parse_struct_init(std::string struct_name, SourceLocation locati
       Token field_tok = advance();
       expect(TokenKind::Colon, "after field name");
       ExprPtr init_expr = parse_expression();
-      field_inits.push_back({field_tok.text, std::move(init_expr)});
+      field_inits.push_back({field_tok.text, move(init_expr)});
     } while (match(TokenKind::Comma));
     expect(TokenKind::RBrace, "to close struct initializer");
-    return std::make_unique<StructInitExpr>(location, std::move(struct_name),
-                                           std::move(field_inits));
+    return make_unique<StructInitExpr>(location, move(struct_name),
+                                           move(field_inits));
   } else {
-    std::vector<ExprPtr> positional_inits;
+    vector<ExprPtr> positional_inits;
     do {
       if (check(TokenKind::RBrace)) break;
       positional_inits.push_back(parse_expression());
     } while (match(TokenKind::Comma));
     expect(TokenKind::RBrace, "to close struct initializer");
-    return std::make_unique<StructInitExpr>(location, std::move(struct_name),
-                                           std::move(positional_inits));
+    return make_unique<StructInitExpr>(location, move(struct_name),
+                                           move(positional_inits));
   }
 }
 
@@ -924,31 +925,31 @@ ExprPtr Parser::parse_primary() {
   switch (token.kind) {
     case TokenKind::IntegerLiteral:
       advance();
-      return std::make_unique<IntegerLiteralExpr>(token.location, token.integer_value,
-                                                 token.suffix);
+      return make_unique<IntegerLiteralExpr>(token.location, token.integer_value,
+                                                  token.suffix);
     case TokenKind::FloatLiteral:
       advance();
-      return std::make_unique<FloatLiteralExpr>(token.location, token.float_value, token.suffix);
+      return make_unique<FloatLiteralExpr>(token.location, token.float_value, token.suffix);
     case TokenKind::CharLiteral:
       advance();
-      return std::make_unique<CharLiteralExpr>(token.location, token.char_value);
+      return make_unique<CharLiteralExpr>(token.location, token.char_value);
     case TokenKind::StringLiteral:
       advance();
-      return std::make_unique<StringLiteralExpr>(token.location, token.string_value);
+      return make_unique<StringLiteralExpr>(token.location, token.string_value);
     case TokenKind::KwTrue:
       advance();
-      return std::make_unique<BoolLiteralExpr>(token.location, true);
+      return make_unique<BoolLiteralExpr>(token.location, true);
     case TokenKind::KwFalse:
       advance();
-      return std::make_unique<BoolLiteralExpr>(token.location, false);
+      return make_unique<BoolLiteralExpr>(token.location, false);
     case TokenKind::LBracket:
       return parse_array_literal();
     case TokenKind::KwPrint: {
       advance();
       expect(TokenKind::LParen, "after 'print'");
-      std::vector<ExprPtr> arguments = parse_argument_list();
+      vector<ExprPtr> arguments = parse_argument_list();
       expect(TokenKind::RParen, "to close the 'print' call");
-      return std::make_unique<CallExpr>(token.location, "print", std::move(arguments));
+      return make_unique<CallExpr>(token.location, "print", move(arguments));
     }
     case TokenKind::Identifier: {
       advance();
@@ -959,15 +960,15 @@ ExprPtr Parser::parse_primary() {
           peek(2).kind == TokenKind::Less) {
         advance();  // '.'
         const Token operation = advance();
-        advance();  // '<'
+advance();  // '<'
         Type allocated_type = parse_type_annotation();
         expect(TokenKind::Greater, "after the allocated element type");
         expect(TokenKind::LParen, "after the typed memory allocation operation");
-        std::vector<ExprPtr> arguments = parse_argument_list();
+        vector<ExprPtr> arguments = parse_argument_list();
         expect(TokenKind::RParen, "to close memory.allocate<T>");
-        return std::make_unique<CallExpr>(token.location,
-                                          token.text + "." + operation.text,
-                                          std::move(arguments), allocated_type);
+        return make_unique<CallExpr>(token.location,
+                                           token.text + "." + operation.text,
+                                           move(arguments), allocated_type);
       }
       // A dotted callable such as memory.profiler.capture() is distinguished
       // from member access by the final parenthesis. Preserve the complete
@@ -980,16 +981,16 @@ ExprPtr Parser::parse_primary() {
         lookahead += 2;
       }
       if (qualified_parts != 0 && peek(lookahead).kind == TokenKind::LParen) {
-        std::string qualified_name = token.text;
+        string qualified_name = token.text;
         for (size_t part = 0; part < qualified_parts; ++part) {
           advance();  // '.'
           qualified_name += "." + advance().text;
         }
         advance();  // '('
-        std::vector<ExprPtr> arguments = parse_argument_list();
+        vector<ExprPtr> arguments = parse_argument_list();
         expect(TokenKind::RParen, "to close the qualified call");
-        return std::make_unique<CallExpr>(token.location, std::move(qualified_name),
-                                          std::move(arguments));
+        return make_unique<CallExpr>(token.location, move(qualified_name),
+                                           move(arguments));
       }
       // `module.name` is a member access, except when it is immediately called:
       // then it is a call to a function in another module (Phase 5).
@@ -998,31 +999,31 @@ ExprPtr Parser::parse_primary() {
         advance();  // '.'
         const Token member = advance();
         advance();  // '('
-        std::vector<ExprPtr> arguments = parse_argument_list();
+        vector<ExprPtr> arguments = parse_argument_list();
         expect(TokenKind::RParen, "to close the call");
-        return std::make_unique<CallExpr>(token.location, token.text + "." + member.text,
-                                          std::move(arguments));
+        return make_unique<CallExpr>(token.location, token.text + "." + member.text,
+                                           move(arguments));
       }
       if (check(TokenKind::LBrace)) {
         return parse_struct_init(token.text, token.location);
       }
       if (match(TokenKind::LParen)) {
-        std::vector<ExprPtr> arguments = parse_argument_list();
+        vector<ExprPtr> arguments = parse_argument_list();
         expect(TokenKind::RParen, "to close the call");
-        return std::make_unique<CallExpr>(token.location, token.text, std::move(arguments));
+        return make_unique<CallExpr>(token.location, token.text, move(arguments));
       }
-      return std::make_unique<NameExpr>(token.location, token.text);
+      return make_unique<NameExpr>(token.location, token.text);
     }
     case TokenKind::LParen: {
       advance();
       if (check(TokenKind::RParen)) {
         advance();
-        return std::make_unique<TupleLiteralExpr>(token.location, std::vector<ExprPtr>{});
+        return make_unique<TupleLiteralExpr>(token.location, vector<ExprPtr>{});
       }
       ExprPtr first = parse_expression();
       if (match(TokenKind::Comma)) {
-        std::vector<ExprPtr> tuple_elements;
-        tuple_elements.push_back(std::move(first));
+        vector<ExprPtr> tuple_elements;
+        tuple_elements.push_back(move(first));
         if (!check(TokenKind::RParen)) {
           do {
             if (check(TokenKind::RParen)) break;
@@ -1030,7 +1031,7 @@ ExprPtr Parser::parse_primary() {
           } while (match(TokenKind::Comma));
         }
         expect(TokenKind::RParen, "to close tuple expression");
-        return std::make_unique<TupleLiteralExpr>(token.location, std::move(tuple_elements));
+        return make_unique<TupleLiteralExpr>(token.location, move(tuple_elements));
       }
       expect(TokenKind::RParen, "to close the parenthesized expression");
       return first;
@@ -1048,12 +1049,12 @@ ExprPtr Parser::parse_primary() {
       advance();
       break;
   }
-  auto placeholder = std::make_unique<IntegerLiteralExpr>(token.location, 0);
+  auto placeholder = make_unique<IntegerLiteralExpr>(token.location, 0);
   placeholder->set_type(Type::error());
   return placeholder;
 }
 
-std::string_view unary_op_spelling(UnaryOp op) {
+string_view unary_op_spelling(UnaryOp op) {
   switch (op) {
     case UnaryOp::Negate: return "-";
     case UnaryOp::Plus: return "+";
@@ -1063,7 +1064,7 @@ std::string_view unary_op_spelling(UnaryOp op) {
   return "?";
 }
 
-std::string_view binary_op_spelling(BinaryOp op) {
+string_view binary_op_spelling(BinaryOp op) {
   switch (op) {
     case BinaryOp::Add: return "+";
     case BinaryOp::Subtract: return "-";
@@ -1088,7 +1089,7 @@ std::string_view binary_op_spelling(BinaryOp op) {
   return "?";
 }
 
-std::string_view binding_kind_spelling(BindingKind kind) {
+string_view binding_kind_spelling(BindingKind kind) {
   switch (kind) {
     case BindingKind::Let: return "let";
     case BindingKind::Var: return "var";

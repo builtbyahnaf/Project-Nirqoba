@@ -1,8 +1,9 @@
 #include "nirqoba/Frontend/Token.h"
 
 namespace nirq {
+using namespace std;
 
-std::string_view token_kind_name(TokenKind kind) {
+string_view token_kind_name(TokenKind kind) {
   switch (kind) {
     case TokenKind::EndOfFile: return "end of file";
     case TokenKind::Invalid: return "invalid token";
@@ -99,8 +100,8 @@ std::string_view token_kind_name(TokenKind kind) {
   return "unknown token";
 }
 
-TokenKind keyword_kind(std::string_view text) {
-  struct Entry { std::string_view spelling; TokenKind kind; };
+TokenKind keyword_kind(string_view text) {
+  struct Entry { string_view spelling; TokenKind kind; };
   static constexpr Entry kKeywords[] = {
       {"function", TokenKind::KwFunction}, {"let", TokenKind::KwLet},
       {"var", TokenKind::KwVar},           {"const", TokenKind::KwConst},
@@ -154,13 +155,13 @@ bool is_reserved_future_keyword(TokenKind kind) {
   }
 }
 
-std::string describe_token(const Token& token) {
+string describe_token(const Token& token) {
   if (token.kind == TokenKind::IntegerLiteral) return "integer literal '" + token.text + "'";
   if (token.kind == TokenKind::FloatLiteral) return "float literal '" + token.text + "'";
   if (token.kind == TokenKind::CharLiteral) return "character literal '" + token.text + "'";
   if (token.kind == TokenKind::StringLiteral) return "string literal";
   if (token.kind == TokenKind::Identifier) return "identifier '" + token.text + "'";
-  return "'" + std::string(token_kind_name(token.kind)) + "'";
+  return "'" + string(token_kind_name(token.kind)) + "'";
 }
 
 }  // namespace nirq

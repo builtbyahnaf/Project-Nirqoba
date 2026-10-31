@@ -1,6 +1,8 @@
 #include "test_harness.h"
 #include <iostream>
 
+using namespace std;
+
 int main() {
   const auto& tests = nirq::test::TestRegistry::instance().tests();
   int passed = 0;

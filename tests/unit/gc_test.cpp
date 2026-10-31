@@ -8,6 +8,8 @@
 #include "nirqoba/runtime/gc.h"
 #include "nirqoba/runtime/allocator.h"
 
+using namespace std;
+
 namespace {
 
 struct Node {

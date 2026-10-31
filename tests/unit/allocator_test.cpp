@@ -12,6 +12,8 @@
 
 #include "nirqoba/runtime/allocator.h"
 
+using namespace std;
+
 namespace {
 
 struct CustomAllocatorState {

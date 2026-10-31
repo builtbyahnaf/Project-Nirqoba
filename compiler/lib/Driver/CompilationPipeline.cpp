@@ -36,31 +36,32 @@
 #include "nirqoba/TIR/Verifier.h"
 
 namespace nirq {
+using namespace std;
 namespace {
 
-namespace fs = std::filesystem;
+namespace fs = filesystem;
 
-bool file_exists(const std::string& path) {
-  std::ifstream f(path);
+bool file_exists(const string& path) {
+  ifstream f(path);
   return f.good();
 }
 
-std::string get_executable_dir() {
+string get_executable_dir() {
 #ifdef _WIN32
   wchar_t buf[4096] = {};
   if (GetModuleFileNameW(nullptr, buf, 4096) != 0) {
-    std::string path;
+    string path;
     for (int i = 0; buf[i]; ++i) path.push_back(static_cast<char>(buf[i]));
     auto sep = path.find_last_of("/\\");
-    if (sep != std::string::npos) return path.substr(0, sep);
+    if (sep != string::npos) return path.substr(0, sep);
   }
 #endif
   return ".";
 }
 
-std::string locate_runtime_lib() {
-  const std::string exe_dir = get_executable_dir();
-  const std::vector<std::string> candidates = {
+string locate_runtime_lib() {
+  const string exe_dir = get_executable_dir();
+  const vector<string> candidates = {
     exe_dir + "\\nrqoba_runtime.lib",
     exe_dir + "\\..\\lib\\nrqoba_runtime.lib",
     exe_dir + "\\..\\runtime\\nrqoba_runtime.lib",
@@ -78,7 +79,7 @@ std::string locate_runtime_lib() {
   return {};
 }
 
-bool ends_with(std::string_view str, std::string_view suffix) {
+bool ends_with(string_view str, string_view suffix) {
   return str.size() >= suffix.size() &&
          str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
@@ -96,7 +97,7 @@ bool defines_main(const ModuleUnit& unit) {
 // Renders every diagnostic with the source file it belongs to and returns the
 // exit code the driver should report for a compilation failure.
 int fail_with(const DiagnosticEngine& diagnostics,
-              const std::vector<const SourceFile*>& sources) {
+              const vector<const SourceFile*>& sources) {
   render_diagnostics(diagnostics, sources);
   return 1;
 }
@@ -105,7 +106,7 @@ int fail_with(const DiagnosticEngine& diagnostics,
 
 int run_pipeline(const PipelineOptions& options,
                  DiagnosticEngine& diagnostics) {
-  const std::vector<const SourceFile*> no_sources;
+  const vector<const SourceFile*> no_sources;
 
   if (options.source_paths.empty()) {
     diagnostics.error(diag::kMissingSourceFile, SourceLocation{},
@@ -117,7 +118,7 @@ int run_pipeline(const PipelineOptions& options,
   // Step 1: validate the extension and readability of every root file before
   // resolution starts, so a typo is reported as an input error (exit 3) rather
   // than as a mystery about a module that "cannot be found".
-  for (const std::string& path : options.source_paths) {
+  for (const string& path : options.source_paths) {
     if (!ends_with(path, ".nrqba")) {
       diagnostics.error(diag::kInvalidSourceExtension, SourceLocation{},
                         "source file '" + path +
@@ -125,7 +126,7 @@ int run_pipeline(const PipelineOptions& options,
       render_diagnostics(diagnostics, no_sources);
       return 1;
     }
-    std::ifstream probe(path);
+    ifstream probe(path);
     if (!probe.good()) {
       diagnostics.error(diag::kMissingSourceFile, SourceLocation{},
                         "cannot open source file '" + path + "'");
@@ -137,22 +138,22 @@ int run_pipeline(const PipelineOptions& options,
   // Step 2: build the module graph. The resolver parses every reachable file,
   // reports cycles and missing modules, and returns the modules in dependency
   // order so a consumer is always checked after the module it imports.
-  std::vector<fs::path> root_paths;
+  vector<fs::path> root_paths;
   root_paths.reserve(options.source_paths.size());
-  for (const std::string& path : options.source_paths) {
+  for (const string& path : options.source_paths) {
     root_paths.emplace_back(path);
   }
 
-  std::vector<fs::path> search_paths;
+  vector<fs::path> search_paths;
   search_paths.reserve(options.module_search_paths.size());
-  for (const std::string& path : options.module_search_paths) {
+  for (const string& path : options.module_search_paths) {
     search_paths.emplace_back(path);
   }
 
-  ModuleResolver resolver(diagnostics, std::move(search_paths));
-  std::vector<std::unique_ptr<ModuleUnit>> units = resolver.resolve(root_paths);
+  ModuleResolver resolver(diagnostics, move(search_paths));
+  vector<unique_ptr<ModuleUnit>> units = resolver.resolve(root_paths);
 
-  std::vector<const SourceFile*> sources;
+  vector<const SourceFile*> sources;
   sources.reserve(units.size());
   for (const auto& unit : units) {
     if (unit && unit->source_file) sources.push_back(unit->source_file.get());
@@ -164,8 +165,8 @@ int run_pipeline(const PipelineOptions& options,
 
   if (options.emit == EmitKind::Ast) {
     for (const auto& unit : units) {
-      std::cout << "// module " << unit->name << " (" << unit->file_path.string() << ")\n";
-      std::cout << print_program(*unit->ast);
+      cout << "// module " << unit->name << " (" << unit->file_path.string() << ")\n";
+      cout << print_program(*unit->ast);
     }
     return 0;
   }
@@ -179,7 +180,7 @@ int run_pipeline(const PipelineOptions& options,
   // Step 4: lower each module into one TIR module. Non-root modules qualify
   // their symbols so two modules may define the same private helper name.
   TirBuilder tir_builder(diagnostics);
-  auto tir_module = std::make_unique<tir::Module>();
+  auto tir_module = make_unique<tir::Module>();
   const ModuleUnit* entry_unit = nullptr;
   for (const auto& unit : units) {
     if (defines_main(*unit)) {
@@ -188,7 +189,7 @@ int run_pipeline(const PipelineOptions& options,
     }
   }
   for (const auto& unit : units) {
-    tir_builder.lower_module(unit.get() == entry_unit ? std::string() : unit->name,
+    tir_builder.lower_module(unit.get() == entry_unit ? string() : unit->name,
                              *unit->ast, *tir_module);
   }
   if (!verify_tir_module(*tir_module, diagnostics) || diagnostics.has_errors()) {
@@ -196,7 +197,7 @@ int run_pipeline(const PipelineOptions& options,
   }
 
   if (options.emit == EmitKind::Tir) {
-    std::cout << print_tir(*tir_module);
+    cout << print_tir(*tir_module);
     return 0;
   }
 
@@ -240,7 +241,7 @@ int run_pipeline(const PipelineOptions& options,
 
   // Step 7: MLIR to LLVM IR.
   llvm::LLVMContext llvm_context;
-  std::unique_ptr<llvm::Module> llvm_module =
+  unique_ptr<llvm::Module> llvm_module =
       mlir::translateModuleToLLVMIR(*mlir_module, llvm_context);
   if (!llvm_module) {
     diagnostics.error(diag::kInternalError, SourceLocation{},
@@ -262,7 +263,7 @@ int run_pipeline(const PipelineOptions& options,
     return diagnostics.has_errors() ? 1 : 0;
   }
 
-  std::string obj_file = options.obj_path;
+  string obj_file = options.obj_path;
   if (obj_file.empty()) {
     obj_file = options.output_path + ".obj";
   }
@@ -278,14 +279,14 @@ int run_pipeline(const PipelineOptions& options,
     return 4;  // Exit code 4: environment/toolchain error
   }
 
-  std::string runtime_lib = locate_runtime_lib();
+  string runtime_lib = locate_runtime_lib();
   if (runtime_lib.empty()) {
     diagnostics.error(diag::kLinkFailed, SourceLocation{},
                       "cannot find nrqoba_runtime.lib; please build the runtime target first");
     return fail_with(diagnostics, sources);
   }
 
-  std::vector<std::string> link_args = {
+  vector<string> link_args = {
     "/NOLOGO",
     "/SUBSYSTEM:CONSOLE",
     "/OUT:" + options.output_path,
@@ -305,7 +306,7 @@ int run_pipeline(const PipelineOptions& options,
   if (!link_res.launched || link_res.exit_code != 0) {
     diagnostics.error(diag::kLinkFailed, SourceLocation{},
                       "linking failed with exit code " +
-                          std::to_string(link_res.exit_code) + ":\n" + link_res.output);
+                          to_string(link_res.exit_code) + ":\n" + link_res.output);
     return fail_with(diagnostics, sources);
   }
 

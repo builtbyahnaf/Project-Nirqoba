@@ -18,21 +18,22 @@
 // all toolchain.json contains.
 
 namespace nirq {
+using namespace std;
 namespace {
 
 // Extracts the value of a JSON string field named `key` from `json_text`.
 // Returns an empty string if the field is missing or the value is not a string.
-static std::string extract_json_string(const std::string& json_text,
-                                       const std::string& key) {
-  const std::string search = "\"" + key + "\"";
-  std::size_t pos = json_text.find(search);
-  if (pos == std::string::npos) return {};
+static string extract_json_string(const string& json_text,
+                                  const string& key) {
+  const string search = "\"" + key + "\"";
+  size_t pos = json_text.find(search);
+  if (pos == string::npos) return {};
   pos += search.size();
   // Skip whitespace and ':'
   while (pos < json_text.size() && (json_text[pos] == ' ' || json_text[pos] == ':' || json_text[pos] == '\t' || json_text[pos] == '\n' || json_text[pos] == '\r')) ++pos;
   if (pos >= json_text.size() || json_text[pos] != '"') return {};
   ++pos;  // skip opening quote
-  std::string result;
+  string result;
   while (pos < json_text.size() && json_text[pos] != '"') {
     if (json_text[pos] == '\\' && pos + 1 < json_text.size()) {
       ++pos;
@@ -48,10 +49,10 @@ static std::string extract_json_string(const std::string& json_text,
   return result;
 }
 
-static std::string read_file(const std::string& path) {
-  std::ifstream file(path);
+static string read_file(const string& path) {
+  ifstream file(path);
   if (!file.is_open()) return {};
-  std::ostringstream buf;
+  ostringstream buf;
   buf << file.rdbuf();
   return buf.str();
 }
@@ -59,21 +60,21 @@ static std::string read_file(const std::string& path) {
 // Best-effort: walk up from the executable's directory to find the repo root
 // (the directory containing toolchain/versions.lock.json). Returns empty if
 // not found.
-static std::string find_repo_root() {
+static string find_repo_root() {
   // On Windows we use GetModuleFileNameW for the executable path.
 #ifdef _WIN32
   wchar_t buf[4096] = {};
   if (GetModuleFileNameW(nullptr, buf, 4096) == 0) return {};
   // Convert to narrow string (ASCII/UTF-8 paths on our build machine).
-  std::string path;
+  string path;
   for (int i = 0; buf[i]; ++i) path.push_back(static_cast<char>(buf[i]));
   // Walk up to find the directory containing toolchain/
   while (!path.empty()) {
     const auto sep = path.find_last_of("/\\");
-    if (sep == std::string::npos) break;
+    if (sep == string::npos) break;
     path = path.substr(0, sep);
-    const std::string candidate = path + "\\toolchain\\versions.lock.json";
-    std::ifstream probe(candidate);
+    const string candidate = path + "\\toolchain\\versions.lock.json";
+    ifstream probe(candidate);
     if (probe.is_open()) return path;
   }
 #endif
@@ -82,14 +83,14 @@ static std::string find_repo_root() {
 
 }  // namespace
 
-LinkerEnvironment load_linker_environment(const std::string& toolchain_json_path,
+LinkerEnvironment load_linker_environment(const string& toolchain_json_path,
                                           DiagnosticEngine& diagnostics) {
   LinkerEnvironment env;
 
   // Determine the toolchain.json path.
-  std::string json_path = toolchain_json_path;
+  string json_path = toolchain_json_path;
   if (json_path.empty()) {
-    const std::string root = find_repo_root();
+    const string root = find_repo_root();
     if (root.empty()) {
       diagnostics.error(diag::kToolchainUnavailable, SourceLocation{},
                         "toolchain/toolchain.json not found; run scripts/bootstrap.ps1");
@@ -98,7 +99,7 @@ LinkerEnvironment load_linker_environment(const std::string& toolchain_json_path
     json_path = root + "\\toolchain\\toolchain.json";
   }
 
-  const std::string json_text = read_file(json_path);
+  const string json_text = read_file(json_path);
   if (json_text.empty()) {
     diagnostics.error(diag::kToolchainUnavailable, SourceLocation{},
                       "toolchain configuration not found at '" + json_path +
@@ -107,7 +108,7 @@ LinkerEnvironment load_linker_environment(const std::string& toolchain_json_path
   }
 
   // Prefer lld-link; fall back to MSVC link.exe.
-  std::string linker = extract_json_string(json_text, "linker");
+  string linker = extract_json_string(json_text, "linker");
   if (linker.empty()) {
     linker = extract_json_string(json_text, "linkerFallback");
   }
@@ -120,7 +121,7 @@ LinkerEnvironment load_linker_environment(const std::string& toolchain_json_path
 
   // Library directories: MSVC, UCRT, and UM (Windows SDK).
   for (const char* key : {"msvcLib", "sdkUcrtLib", "sdkUmLib"}) {
-    const std::string dir = extract_json_string(json_text, key);
+    const string dir = extract_json_string(json_text, key);
     if (!dir.empty()) env.lib_dirs.push_back(dir);
   }
 

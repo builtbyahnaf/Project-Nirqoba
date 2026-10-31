@@ -3,6 +3,7 @@
 #include <string>
 
 namespace nirq {
+using namespace std;
 namespace {
 
 constexpr const char* kStructure = "NRQ4003";
@@ -41,7 +42,7 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
         if (value.is_valid() && !value_in_range(*function, value)) {
           diagnostics.error(kStructure, op.location,
                             "internal: operation references undefined value %" +
-                                std::to_string(value.id));
+                                to_string(value.id));
           ok = false;
         }
       }
@@ -49,7 +50,7 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
         if (arg.is_valid() && !value_in_range(*function, arg)) {
           diagnostics.error(kStructure, op.location,
                             "internal: call operation references undefined argument value %" +
-                                std::to_string(arg.id));
+                                to_string(arg.id));
           ok = false;
         }
       }

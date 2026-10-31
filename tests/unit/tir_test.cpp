@@ -10,6 +10,7 @@
 #include "nirqoba/TIR/Verifier.h"
 
 using namespace nirq;
+using namespace std;
 
 TEST(TirTest, BuildAndVerifySimpleProgram) {
   DiagnosticEngine diag;

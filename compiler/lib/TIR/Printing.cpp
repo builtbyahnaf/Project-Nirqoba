@@ -3,10 +3,11 @@
 #include <sstream>
 
 namespace nirq {
+using namespace std;
 namespace {
 
-std::string escape(const std::string& value) {
-  std::string escaped;
+string escape(const string& value) {
+  string escaped;
   for (const char c : value) {
     switch (c) {
       case '\n': escaped += "\\n"; break;
@@ -20,18 +21,18 @@ std::string escape(const std::string& value) {
   return escaped;
 }
 
-std::string value_name(tir::Value value) {
-  return value.is_valid() ? "%" + std::to_string(value.id) : "<none>";
+string value_name(tir::Value value) {
+  return value.is_valid() ? "%" + to_string(value.id) : "<none>";
 }
 
 }  // namespace
 
-std::string print_tir(const tir::Module& module) {
-  std::ostringstream out;
+string print_tir(const tir::Module& module) {
+  ostringstream out;
   out << "tir.module\n";
   for (const auto& function : module.functions()) {
     out << "  func @" << function->name() << "(";
-    for (std::size_t i = 0; i < function->parameters().size(); ++i) {
+    for (size_t i = 0; i < function->parameters().size(); ++i) {
       if (i > 0) out << ", ";
       out << "%" << function->parameters()[i].value.id << " : "
           << function->parameters()[i].type.mangle();
@@ -81,7 +82,7 @@ std::string print_tir(const tir::Module& module) {
           break;
         case tir::OpKind::Call:
           out << " @" << op.callee << "(";
-          for (std::size_t i = 0; i < op.arguments.size(); ++i) {
+          for (size_t i = 0; i < op.arguments.size(); ++i) {
             if (i > 0) out << ", ";
             out << value_name(op.arguments[i]);
           }
@@ -114,7 +115,7 @@ std::string print_tir(const tir::Module& module) {
           break;
         case tir::OpKind::AggregatePack:
           out << " (";
-          for (std::size_t i = 0; i < op.aggregate_elements.size(); ++i) {
+          for (size_t i = 0; i < op.aggregate_elements.size(); ++i) {
             if (i > 0) out << ", ";
             out << value_name(op.aggregate_elements[i]);
           }

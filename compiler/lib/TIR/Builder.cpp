@@ -3,6 +3,7 @@
 #include <utility>
 
 namespace nirq {
+using namespace std;
 namespace {
 
 constexpr const char* kUnresolvedSymbol = "NRQ4001";
@@ -57,18 +58,18 @@ tir::CastKind determine_cast_kind(Type src, Type dst) {
 
 }  // namespace
 
-std::unique_ptr<tir::Module> TirBuilder::lower(const Program& program) {
-  auto module = std::make_unique<tir::Module>();
+unique_ptr<tir::Module> TirBuilder::lower(const Program& program) {
+  auto module = make_unique<tir::Module>();
   lower_module("", program, *module);
   return module;
 }
 
-void TirBuilder::lower_module(const std::string& symbol_prefix, const Program& program,
+void TirBuilder::lower_module(const string& symbol_prefix, const Program& program,
                               tir::Module& module) {
   for (const auto& function : program.functions()) {
     // The entry point is emitted as `main` and must not be prefixed, otherwise
     // the MSVC CRT would not find it.
-    const std::string symbol =
+    const string symbol =
         symbol_prefix.empty() || function->name() == "main"
             ? function->name()
             : symbol_prefix + "." + function->name();
@@ -76,10 +77,10 @@ void TirBuilder::lower_module(const std::string& symbol_prefix, const Program& p
   }
 }
 
-void TirBuilder::lower_function(const FunctionDecl& function, const std::string& symbol,
+void TirBuilder::lower_function(const FunctionDecl& function, const string& symbol,
                                 tir::Module& module) {
-  auto body = std::make_unique<tir::Function>(symbol, function.return_type());
-  tir::Function* function_ir = module.add_function(std::move(body));
+  auto body = make_unique<tir::Function>(symbol, function.return_type());
+  tir::Function* function_ir = module.add_function(move(body));
 
   scopes_.clear();
   loop_stack_.clear();
@@ -96,7 +97,7 @@ void TirBuilder::lower_function(const FunctionDecl& function, const std::string&
     alloca.location = parameter.location;
     alloca.result = slot;
     alloca.slot_name = parameter.name;
-    function_ir->add_operation(std::move(alloca));
+    function_ir->add_operation(move(alloca));
 
     tir::Op store;
     store.kind = tir::OpKind::Store;
@@ -104,7 +105,7 @@ void TirBuilder::lower_function(const FunctionDecl& function, const std::string&
     store.lhs = slot;
     store.operand = param_val;
     store.result = slot;
-    function_ir->add_operation(std::move(store));
+    function_ir->add_operation(move(store));
 
     scopes_.back().emplace(parameter.name, slot);
   }
@@ -121,7 +122,7 @@ void TirBuilder::lower_function(const FunctionDecl& function, const std::string&
     terminator.kind = function.return_type().is_void() ? tir::OpKind::Return
                                                        : tir::OpKind::Unreachable;
     terminator.location = function.location();
-    function_ir->add_operation(std::move(terminator));
+    function_ir->add_operation(move(terminator));
   }
 }
 
@@ -152,8 +153,8 @@ void TirBuilder::lower_block(const BlockStmt& block, tir::Function& function) {
   pop_scope();
 }
 
-void TirBuilder::emit_deferred_from(std::size_t scope_depth, tir::Function& function) {
-  for (std::size_t depth = deferred_expressions_.size(); depth > scope_depth; --depth) {
+void TirBuilder::emit_deferred_from(size_t scope_depth, tir::Function& function) {
+  for (size_t depth = deferred_expressions_.size(); depth > scope_depth; --depth) {
     const auto& expressions = deferred_expressions_[depth - 1];
     for (auto deferred = expressions.rbegin(); deferred != expressions.rend(); ++deferred) {
       if (deferred->callee == "print" && deferred->arguments.size() == 1) {
@@ -161,7 +162,7 @@ void TirBuilder::emit_deferred_from(std::size_t scope_depth, tir::Function& func
         print.kind = tir::OpKind::Print;
         print.location = deferred->location;
         print.operand = deferred->arguments.front();
-        function.add_operation(std::move(print));
+        function.add_operation(move(print));
         continue;
       }
       tir::Op call;
@@ -171,7 +172,7 @@ void TirBuilder::emit_deferred_from(std::size_t scope_depth, tir::Function& func
       call.arguments = deferred->arguments;
       if (deferred->result_type.is_valid() && !deferred->result_type.is_void())
         call.result = function.allocate_value(deferred->result_type);
-      function.add_operation(std::move(call));
+      function.add_operation(move(call));
     }
   }
 }

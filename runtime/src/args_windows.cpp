@@ -16,7 +16,7 @@
 #include <windows.h>
 #include <cstring>
 
-static const char kEmptyString[] = "";
+using namespace std;
 
 extern "C" {
 

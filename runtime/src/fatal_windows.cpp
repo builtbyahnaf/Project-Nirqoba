@@ -21,6 +21,8 @@
 #include <windows.h>
 #include <cstring>
 
+using namespace std;
+
 extern "C" {
 
 [[noreturn]] void nrq_runtime_fatal(const char* message) {

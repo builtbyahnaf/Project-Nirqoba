@@ -7,6 +7,7 @@
 #include "nirqoba/Sema/TypeChecker.h"
 
 using namespace nirq;
+using namespace std;
 
 static std::unique_ptr<Program> parse_string(const std::string& code, DiagnosticEngine& diag) {
   SourceFile src("test.nrqba", code);

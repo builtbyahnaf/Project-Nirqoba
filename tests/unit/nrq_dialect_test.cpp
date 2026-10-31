@@ -11,6 +11,7 @@
 #include "nirqoba/Lowering/RegisterDialects.h"
 
 using namespace nirq;
+using namespace std;
 
 TEST(NrqDialectTest, RegisterAndCreateOp) {
   mlir::DialectRegistry registry;

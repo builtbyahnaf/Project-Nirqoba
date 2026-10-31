@@ -7,14 +7,16 @@
 #include <string>
 
 namespace nirq {
+using namespace std;
+
 namespace {
 
 bool is_identifier_start(char c) {
-  return std::isalpha(static_cast<unsigned char>(c)) != 0 || c == '_';
+  return isalpha(static_cast<unsigned char>(c)) != 0 || c == '_';
 }
 
 bool is_identifier_continue(char c) {
-  return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+  return isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
 }
 
 bool is_digit(char c) { return c >= '0' && c <= '9'; }
@@ -27,13 +29,13 @@ bool is_binary_digit(char c) { return c == '0' || c == '1'; }
 
 }  // namespace
 
-std::vector<Token> Lexer::tokenize() {
-  std::vector<Token> tokens;
+vector<Token> Lexer::tokenize() {
+  vector<Token> tokens;
   while (true) {
     skip_trivia();
     Token token = scan_token();
     const bool at_end = token.kind == TokenKind::EndOfFile;
-    tokens.push_back(std::move(token));
+    tokens.push_back(move(token));
     if (at_end) break;
   }
   if (tokens.size() == 1) {
@@ -55,7 +57,7 @@ void Lexer::skip_trivia() {
       continue;
     }
     if (c == '/' && peek(1) == '*') {
-      const std::size_t start = offset_;
+const size_t start = offset_;
       offset_ += 2;
       bool closed = false;
       while (!at_end()) {
@@ -82,10 +84,10 @@ bool Lexer::match(char expected) {
   return true;
 }
 
-Token Lexer::make_token(TokenKind kind, std::size_t start_offset) {
+Token Lexer::make_token(TokenKind kind, size_t start_offset) {
   Token token;
   token.kind = kind;
-  token.text = std::string(source_text_.substr(start_offset, offset_ - start_offset));
+  token.text = string(source_text_.substr(start_offset, offset_ - start_offset));
   token.location = source_.location(start_offset, offset_ - start_offset);
   return token;
 }
@@ -98,7 +100,7 @@ Token Lexer::scan_token() {
     return token;
   }
 
-  const std::size_t start = offset_;
+  const size_t start = offset_;
   const char c = source_text_[offset_++];
 
   if (is_digit(c)) {
@@ -192,14 +194,14 @@ Token Lexer::scan_token() {
 
   Token token;
   token.kind = TokenKind::Invalid;
-  token.text = std::string(1, c);
+  token.text = string(1, c);
   token.location = source_.location(start, 1);
   diagnostics_.error(diag::kUnexpectedCharacter, token.location,
-                     "unexpected character '" + std::string(1, c) + "' in source file");
+                     "unexpected character '" + string(1, c) + "' in source file");
   return token;
 }
 
-void Lexer::scan_number(Token& token, std::size_t start_offset) {
+void Lexer::scan_number(Token& token, size_t start_offset) {
   bool is_hex = false;
   bool is_binary = false;
   bool is_float = false;
@@ -232,9 +234,9 @@ void Lexer::scan_number(Token& token, std::size_t start_offset) {
   }
 
   // Type suffixes: i8, i16, i32, i64, u8, u16, u32, u64, f32, f64
-  std::size_t suffix_start = offset_;
+  size_t suffix_start = offset_;
   if (!at_end() && (peek() == 'i' || peek() == 'u' || peek() == 'f')) {
-    const std::size_t rem = source_text_.size() - offset_;
+    const size_t rem = source_text_.size() - offset_;
     if (rem >= 3 && (source_text_.substr(offset_, 3) == "i64" ||
                      source_text_.substr(offset_, 3) == "i32" ||
                      source_text_.substr(offset_, 3) == "i16" ||
@@ -250,20 +252,20 @@ void Lexer::scan_number(Token& token, std::size_t start_offset) {
     }
   }
 
-  const std::string_view full_text = source_text_.substr(start_offset, offset_ - start_offset);
-  std::string_view num_part = full_text.substr(0, suffix_start - start_offset);
-  std::string suffix(full_text.substr(suffix_start - start_offset));
+  const string_view full_text = source_text_.substr(start_offset, offset_ - start_offset);
+  string_view num_part = full_text.substr(0, suffix_start - start_offset);
+  string suffix(full_text.substr(suffix_start - start_offset));
 
   if (suffix == "f32" || suffix == "f64") {
     is_float = true;
   }
 
-  token.text = std::string(full_text);
-  token.suffix = std::move(suffix);
+  token.text = string(full_text);
+  token.suffix = move(suffix);
   token.location = source_.location(start_offset, full_text.size());
 
   // Clean underscores for parsing
-  std::string clean_digits;
+  string clean_digits;
   for (char ch : num_part) {
     if (ch != '_') clean_digits.push_back(ch);
   }
@@ -271,7 +273,7 @@ void Lexer::scan_number(Token& token, std::size_t start_offset) {
   if (is_float) {
     token.kind = TokenKind::FloatLiteral;
     try {
-      token.float_value = std::stod(clean_digits);
+      token.float_value = stod(clean_digits);
     } catch (...) {
       diagnostics_.error("NRQ1010", token.location, "invalid floating-point literal '" + token.text + "'");
       token.float_value = 0.0;
@@ -281,7 +283,7 @@ void Lexer::scan_number(Token& token, std::size_t start_offset) {
 
   token.kind = TokenKind::IntegerLiteral;
   int base = 10;
-  std::string_view parse_digits = clean_digits;
+  string_view parse_digits = clean_digits;
   if (is_hex) {
     base = 16;
     parse_digits = parse_digits.substr(2);
@@ -291,8 +293,8 @@ void Lexer::scan_number(Token& token, std::size_t start_offset) {
   }
 
   unsigned long long raw_val = 0;
-  auto [ptr, ec] = std::from_chars(parse_digits.data(), parse_digits.data() + parse_digits.size(), raw_val, base);
-  if (ec != std::errc()) {
+  auto [ptr, ec] = from_chars(parse_digits.data(), parse_digits.data() + parse_digits.size(), raw_val, base);
+  if (ec != errc()) {
     diagnostics_.error("NRQ1009", token.location,
                        "integer literal '" + token.text + "' is too large for 64-bit integer");
     token.integer_value = 0;
@@ -301,7 +303,7 @@ void Lexer::scan_number(Token& token, std::size_t start_offset) {
   token.integer_value = static_cast<long long>(raw_val);
 }
 
-void Lexer::scan_char(Token& token, std::size_t start_offset) {
+void Lexer::scan_char(Token& token, size_t start_offset) {
   ++offset_;  // consume opening single quote
   if (at_end() || peek() == '\n') {
     diagnostics_.error("NRQ1011", source_.location(start_offset, offset_ - start_offset),
@@ -325,7 +327,7 @@ void Lexer::scan_char(Token& token, std::size_t start_offset) {
       case '0': val = '\0'; break;
       default:
         diagnostics_.error(diag::kUnknownEscape, source_.location(start_offset, 2),
-                           std::string("unknown escape sequence in character literal '\\") + escaped + "'");
+                           string("unknown escape sequence in character literal '\\") + escaped + "'");
         val = static_cast<uint32_t>(escaped);
         break;
     }
@@ -342,22 +344,22 @@ void Lexer::scan_char(Token& token, std::size_t start_offset) {
   }
 
   token.kind = TokenKind::CharLiteral;
-  token.text = std::string(source_text_.substr(start_offset, offset_ - start_offset));
+  token.text = string(source_text_.substr(start_offset, offset_ - start_offset));
   token.char_value = val;
   token.location = source_.location(start_offset, offset_ - start_offset);
 }
 
-void Lexer::scan_identifier(Token& token, std::size_t start_offset) {
+void Lexer::scan_identifier(Token& token, size_t start_offset) {
   while (!at_end() && is_identifier_continue(peek())) ++offset_;
-  const std::string_view spelling = source_text_.substr(start_offset, offset_ - start_offset);
+  const string_view spelling = source_text_.substr(start_offset, offset_ - start_offset);
   token.kind = keyword_kind(spelling);
-  token.text = std::string(spelling);
+  token.text = string(spelling);
   token.location = source_.location(start_offset, spelling.size());
 }
 
-void Lexer::scan_string(Token& token, std::size_t start_offset) {
+void Lexer::scan_string(Token& token, size_t start_offset) {
   ++offset_;
-  std::string value;
+  string value;
   bool terminated = false;
   while (!at_end()) {
     const char c = peek();
@@ -375,7 +377,7 @@ void Lexer::scan_string(Token& token, std::size_t start_offset) {
       continue;
     }
 
-    const std::size_t escape_offset = offset_;
+    const size_t escape_offset = offset_;
     ++offset_;
     if (at_end()) break;
     const char escaped = peek();
@@ -389,7 +391,7 @@ void Lexer::scan_string(Token& token, std::size_t start_offset) {
       case '0': value.push_back('\0'); break;
       default:
         diagnostics_.error(diag::kUnknownEscape, source_.location(escape_offset, 2),
-                           std::string("unknown escape sequence '\\") + escaped +
+                           string("unknown escape sequence '\\") + escaped +
                                "'; supported escapes are \\n, \\t, \\r, \\\\, \\\" and \\0");
         value.push_back(escaped);
         break;
@@ -401,8 +403,8 @@ void Lexer::scan_string(Token& token, std::size_t start_offset) {
                        "unterminated string literal");
   }
   token.kind = TokenKind::StringLiteral;
-  token.text = std::string(source_text_.substr(start_offset, offset_ - start_offset));
-  token.string_value = std::move(value);
+  token.text = string(source_text_.substr(start_offset, offset_ - start_offset));
+  token.string_value = move(value);
   token.location = source_.location(start_offset, offset_ - start_offset);
 }
 

@@ -4,6 +4,8 @@
 
 #include <cmath>
 
+using namespace std;
+
 extern "C" {
 
 int64_t nrq_pow_i64(int64_t base, int64_t exp) {

@@ -18,6 +18,7 @@
 #include "nirqoba/Lowering/NrqOps.h"
 
 namespace nirq {
+using namespace std;
 namespace {
 
 static mlir::Type tir_type_to_mlir(const Type& type, mlir::MLIRContext* ctx,
