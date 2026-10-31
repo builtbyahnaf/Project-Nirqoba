@@ -1189,6 +1189,85 @@ Type TypeChecker::check_call(CallExpr& call) {
     return Type::int_type();
   }
 
+  // Builtin 'nrq_gc_init'
+  if (call.callee() == "nrq_gc_init") {
+    if (call.arguments().size() != 0) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'nrq_gc_init' takes no arguments, but " +
+                             std::to_string(call.arguments().size()) + " were given");
+      return Type::void_type();
+    }
+    return Type::void_type();
+  }
+
+  // Builtin 'nrq_gc_shutdown'
+  if (call.callee() == "nrq_gc_shutdown") {
+    if (call.arguments().size() != 0) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'nrq_gc_shutdown' takes no arguments, but " +
+                             std::to_string(call.arguments().size()) + " were given");
+      return Type::void_type();
+    }
+    return Type::void_type();
+  }
+
+  // Builtin 'nrq_gc_collect'
+  if (call.callee() == "nrq_gc_collect") {
+    if (call.arguments().size() != 0) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'nrq_gc_collect' takes no arguments, but " +
+                             std::to_string(call.arguments().size()) + " were given");
+      return Type::void_type();
+    }
+    return Type::void_type();
+  }
+
+  // Builtin 'nrq_memory_allocate'
+  if (call.callee() == "nrq_memory_allocate") {
+    if (call.arguments().size() != 2) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'nrq_memory_allocate' takes exactly two arguments (bytes, alignment), but " +
+                             std::to_string(call.arguments().size()) + " were given");
+      return Type::u64_type();
+    }
+    const Type arg1_type = check_expression(const_cast<Expr&>(*call.arguments().front()));
+    const Type arg2_type = check_expression(const_cast<Expr&>(*std::next(call.arguments().begin())));
+    if (arg1_type.is_valid() && !arg1_type.is_u64()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments().front()->location(),
+                         "'nrq_memory_allocate' first argument must be 'u64' (bytes), not '" + arg1_type.to_string() + "'");
+    }
+    if (arg2_type.is_valid() && !arg2_type.is_u64()) {
+      diagnostics_.error(diag::kTypeMismatch, std::next(call.arguments().begin())->location(),
+                         "'nrq_memory_allocate' second argument must be 'u64' (alignment), not '" + arg2_type.to_string() + "'");
+    }
+    return Type::u64_type();
+  }
+
+  // Builtin 'nrq_memory_deallocate'
+  if (call.callee() == "nrq_memory_deallocate") {
+    if (call.arguments().size() != 3) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'nrq_memory_deallocate' takes exactly three arguments (ptr, bytes, alignment), but " +
+                             std::to_string(call.arguments().size()) + " were given");
+      return Type::void_type();
+    }
+    const Type arg1_type = check_expression(const_cast<Expr&>(*call.arguments().front()));
+    const Type arg2_type = check_expression(const_cast<Expr&>(*std::next(call.arguments().begin())));
+    const Type arg3_type = check_expression(const_cast<Expr&>(*std::next(call.arguments().begin(), 2)));
+    if (arg1_type.is_valid()) {
+      // Pointer type check - accept any non-error type
+    }
+    if (arg2_type.is_valid() && !arg2_type.is_u64()) {
+      diagnostics_.error(diag::kTypeMismatch, std::next(call.arguments().begin())->location(),
+                         "'nrq_memory_deallocate' second argument must be 'u64' (bytes), not '" + arg2_type.to_string() + "'");
+    }
+    if (arg3_type.is_valid() && !arg3_type.is_u64()) {
+      diagnostics_.error(diag::kTypeMismatch, std::next(call.arguments().begin(), 2)->location(),
+                         "'nrq_memory_deallocate' third argument must be 'u64' (alignment), not '" + arg3_type.to_string() + "'");
+    }
+    return Type::void_type();
+  }
+
   // Math builtins: sqrt, sin, cos, abs, floor, ceil (and math.<name>)
   std::string fn_name = call.callee();
   if (fn_name.rfind("math.", 0) == 0) fn_name = fn_name.substr(5);

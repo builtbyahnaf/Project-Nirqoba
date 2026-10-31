@@ -13,3 +13,4 @@ out/
 __pycache__/
 .vscode
 .vscode/*
+windows_installer/

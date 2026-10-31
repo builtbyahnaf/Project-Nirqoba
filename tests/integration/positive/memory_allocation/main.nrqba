@@ -1,0 +1,5 @@
+int function main() {
+    auto p = nrq_memory_allocate(16, 8);
+    nrq_memory_deallocate(p, 16, 8);
+    return 42;
+}
