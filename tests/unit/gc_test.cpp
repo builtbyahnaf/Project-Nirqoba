@@ -126,6 +126,14 @@ TEST(GcTest, RootFramesUnregisterOnlyTheirOwnNestedRoots) {
   nrq_gc_root_frame_end(outer_frame);
   nrq_gc_collect();
   ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+
+  // Frame markers must identify frames even when no root has been registered
+  // between nested begin calls.
+  const uint64_t empty_outer = nrq_gc_root_frame_begin();
+  const uint64_t empty_inner = nrq_gc_root_frame_begin();
+  ASSERT_NE(empty_outer, empty_inner);
+  nrq_gc_root_frame_end(empty_inner);
+  nrq_gc_root_frame_end(empty_outer);
 }
 
 TEST(GcTest, BumpRegionsAlignMixedObjectSizesAndReclaimEmptyPages) {

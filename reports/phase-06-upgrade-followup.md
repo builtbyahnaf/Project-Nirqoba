@@ -63,6 +63,11 @@ was run for this follow-up. Root unregistration must match a registration on
 the current thread, and generated root frames are checked for valid LIFO
 closure.
 
+Root frames now use unique runtime tokens paired with their saved root depth.
+This prevents nested empty frames or stale markers from aliasing the same root
+count. Unit coverage checks nested frames created at identical depths, and the
+full suite passed: CTest 1/1 and integration 84/84. No GC benchmark was run.
+
 Owned arrays whose element types contain GC-managed references register their
 contiguous backing store as a repeated-layout GC root region. Array cleanup
 unregisters that region before releasing the buffer. A unit test verifies the
