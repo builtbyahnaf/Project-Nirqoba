@@ -175,4 +175,17 @@ int32_t nrq_file_write_handle(void* opaque, const char* text) {
     return 0;
 }
 
+int64_t nrq_file_read_handle(void* opaque, void* destination, size_t capacity) {
+    if (!opaque || (!destination && capacity != 0)) return -ERROR_INVALID_PARAMETER;
+    if (capacity == 0) return 0;
+    auto* resource = static_cast<FileResource*>(opaque);
+    std::lock_guard<std::mutex> lock(file_resource_mutex);
+    if (file_resources.find(resource) == file_resources.end()) return -ERROR_INVALID_HANDLE;
+    const DWORD request = static_cast<DWORD>(std::min<size_t>(capacity, MAXDWORD));
+    DWORD count = 0;
+    if (!ReadFile(resource->handle, destination, request, &count, nullptr))
+        return -static_cast<int64_t>(GetLastError());
+    return static_cast<int64_t>(count);
+}
+
 }  // extern "C"

@@ -27,6 +27,8 @@ int32_t nrq_file_exists(const char* path);
 void* nrq_file_open_handle(const char* path, int32_t writable);
 int32_t nrq_file_close_handle(void* resource);
 int32_t nrq_file_write_handle(void* resource, const char* text);
+// Reads at most capacity bytes. Returns bytes read, or a negative Win32 error.
+int64_t nrq_file_read_handle(void* resource, void* destination, size_t capacity);
 
 #ifdef __cplusplus
 }

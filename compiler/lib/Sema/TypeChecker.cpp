@@ -2003,6 +2003,23 @@ Type TypeChecker::check_call(CallExpr& call) {
     }
     return Type::i32_type();
   }
+  if (call.callee() == "file.read") {
+    if (call.arguments().size() != 3)
+      diagnostics_.error(diag::kPrintArity, call.location(), "'file.read' expects a resource, destination pointer, and capacity");
+    if (!call.arguments().empty()) {
+      const Type handle = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+      if (handle.is_valid() && !handle.is_pointer()) diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(), "file.read requires a file resource handle");
+    }
+    if (call.arguments().size() > 1) {
+      const Type destination = check_expression(const_cast<Expr&>(*call.arguments()[1]));
+      if (destination.is_valid() && !destination.is_pointer()) diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(), "file.read destination must be a pointer");
+    }
+    if (call.arguments().size() > 2) {
+      const Type capacity = check_expression(const_cast<Expr&>(*call.arguments()[2]));
+      if (capacity.is_valid() && !capacity.is_integer()) diagnostics_.error(diag::kTypeMismatch, call.arguments()[2]->location(), "file.read capacity must be an integer");
+    }
+    return Type::i64_type();
+  }
 
   // Time & System builtins: time.now, system.exit
   if (call.callee() == "time.now") {

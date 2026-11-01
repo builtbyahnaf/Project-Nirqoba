@@ -1243,6 +1243,10 @@ class FunctionTranslator {
           runtime_sym = "nrq_file_write_handle";
           runtime_ret_ty = builder_.getI32Type();
           runtime_arg_tys = {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)};
+        } else if (callee == "file.read") {
+          runtime_sym = "nrq_file_read_handle";
+          runtime_ret_ty = builder_.getI64Type();
+          runtime_arg_tys = {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_), builder_.getI64Type()};
         } else if (callee == "file.read_text") {
           runtime_sym = "nrq_file_read_text";
           runtime_ret_ty = llvm_ptr_type(ctx_);
