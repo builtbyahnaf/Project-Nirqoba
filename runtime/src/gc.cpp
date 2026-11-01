@@ -247,6 +247,11 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
                                 size_t reference_count) {
   if (!slot || object_size == 0 || reference_count == 0 || !reference_offsets)
     nrq_runtime_fatal("GC root registration received an invalid root descriptor");
+  for (size_t index = 0; index < reference_count; ++index) {
+    const size_t offset = reference_offsets[index];
+    if (offset > object_size || sizeof(void*) > object_size - offset)
+      nrq_runtime_fatal("GC root registration contains an out-of-range pointer offset");
+  }
   std::lock_guard<std::mutex> lock(gc_mutex);
   auto found = roots.find(slot);
   bool inserted = false;
@@ -285,7 +290,11 @@ void nrq_gc_root_unregister(void** slot) {
   if (!slot) return;
   std::lock_guard<std::mutex> lock(gc_mutex);
   auto found = roots.find(slot);
-  if (found != roots.end() && --found->second.references == 0) roots.erase(found);
+  if (found != roots.end()) {
+    if (found->second.references == 0)
+      nrq_runtime_fatal("GC root unregistration count underflow");
+    if (--found->second.references == 0) roots.erase(found);
+  }
   for (auto item = thread_roots.rbegin(); item != thread_roots.rend(); ++item) {
     if (*item == slot) {
       thread_roots.erase(std::next(item).base());
@@ -319,7 +328,11 @@ void nrq_gc_root_frame_end(uint64_t marker) {
     void* slot = thread_roots.back();
     thread_roots.pop_back();
     auto found = roots.find(slot);
-    if (found != roots.end() && --found->second.references == 0) roots.erase(found);
+    if (found != roots.end()) {
+      if (found->second.references == 0)
+        nrq_runtime_fatal("GC root frame count underflow");
+      if (--found->second.references == 0) roots.erase(found);
+    }
   }
 }
 
@@ -432,6 +445,10 @@ int64_t nrq_gc_get_ref_count(void* object) {
         std::memcpy(&reference, bytes + offset, sizeof(reference));
         count_reference(reference, &counts);
       }
+    }
+    for (const auto& pinned : pinned_objects) {
+      uint64_t& count = counts[pinned.first];
+      count = saturated_add(count, static_cast<uint64_t>(pinned.second));
     }
     auto found = counts.find(object);
     return found == counts.end() ? 0 : static_cast<int64_t>(found->second);

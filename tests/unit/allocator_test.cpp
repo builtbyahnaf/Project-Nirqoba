@@ -143,6 +143,14 @@ TEST(AllocatorTest, TlsfReusesAndCoalescesMixedSizeBlocks) {
   ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
 }
 
+TEST(AllocatorTest, ContiguousArrayAllocationHonorsExplicitAlignment) {
+  void* values = nrq_memory_allocate_array(32, sizeof(uint64_t), 64);
+  ASSERT_NE(values, nullptr);
+  ASSERT_EQ(reinterpret_cast<uintptr_t>(values) % uintptr_t{64}, uintptr_t{0});
+  nrq_memory_deallocate_checked(values);
+  ASSERT_EQ(nrq_memory_allocate_array(SIZE_MAX, 2, 64), nullptr);
+}
+
 TEST(AllocatorTest, ConcurrentUsersKeepAllocatorAliveUntilThreadExit) {
   void* allocator = nrq_allocator_create(NRQ_ALLOCATOR_GENERAL, 0);
   ASSERT_NE(allocator, nullptr);

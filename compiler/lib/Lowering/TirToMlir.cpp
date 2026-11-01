@@ -43,6 +43,10 @@ static mlir::Type tir_type_to_mlir(const Type& type, mlir::MLIRContext* ctx,
     return mlir::LLVM::LLVMStructType::getLiteral(
         ctx, {mlir::LLVM::LLVMPointerType::get(ctx), builder.getI64Type()});
   }
+  if (type.is_array_view()) {
+    return mlir::LLVM::LLVMStructType::getLiteral(
+        ctx, {mlir::LLVM::LLVMPointerType::get(ctx), builder.getI64Type()});
+  }
   // A dynamic array is a pointer to a runtime-owned descriptor; the runtime
   // owns the element storage, so the compiler only ever handles the handle.
   if (type.is_dynamic_array()) return mlir::LLVM::LLVMPointerType::get(ctx);
@@ -87,7 +91,7 @@ static mlir::Type llvm_ptr_type(mlir::MLIRContext* ctx) {
 
 static uint64_t type_alignment(const Type& type) {
   if (type.is_pointer() || type.is_managed_pointer() || type.is_string() ||
-      type.is_dynamic_array() || type.is_owned_array()) return 8;
+      type.is_dynamic_array() || type.is_owned_array() || type.is_array_view()) return 8;
   if (type.is_array()) return type_alignment(type.element_type());
   if (type.is_struct()) {
     uint64_t alignment = 1;
@@ -104,7 +108,7 @@ static uint64_t type_alignment(const Type& type) {
 static uint64_t type_size(const Type& type) {
   if (type.is_pointer() || type.is_managed_pointer() || type.is_string() ||
       type.is_dynamic_array()) return 8;
-  if (type.is_owned_array()) return 16;
+  if (type.is_owned_array() || type.is_array_view()) return 16;
   if (type.is_array()) return type.array_length() * type_size(type.element_type());
   if (type.is_struct() || type.is_tuple()) {
     uint64_t size = 0;
@@ -766,12 +770,15 @@ class FunctionTranslator {
           if (arg_val) args.push_back(arg_val);
         }
 
-        if (op.callee == "memory.owned_array" && op.result.is_valid() &&
+        if ((op.callee == "memory.owned_array" ||
+             op.callee == "memory.owned_array_aligned") && op.result.is_valid() &&
             op.result.type.is_owned_array()) {
           const uint64_t element_size = type_size(op.result.type.element_type());
           const uint64_t element_alignment =
               type_alignment(op.result.type.element_type());
-          if (element_size == 0 || args.empty()) {
+          const bool custom_alignment = op.callee == "memory.owned_array_aligned";
+          if (element_size == 0 || args.empty() ||
+              (custom_alignment && args.size() < 2)) {
             diag_.error("NRQ4005", op.location,
                         "internal: invalid element type or missing count for memory.owned_array<T>");
             return false;
@@ -791,6 +798,21 @@ class FunctionTranslator {
               loc, i64, builder_.getI64IntegerAttr(element_size)).getResult();
           mlir::Value alignment = builder_.create<mlir::LLVM::ConstantOp>(
               loc, i64, builder_.getI64IntegerAttr(element_alignment)).getResult();
+          if (custom_alignment) {
+            mlir::Value requested = args[1];
+            if (requested.getType() != i64) {
+              const unsigned bits = requested.getType().getIntOrFloatBitWidth();
+              requested = bits < 64
+                  ? builder_.create<mlir::LLVM::ZExtOp>(loc, i64, requested).getResult()
+                  : builder_.create<mlir::LLVM::TruncOp>(loc, i64, requested).getResult();
+            }
+            mlir::Value minimum = builder_.create<mlir::LLVM::ConstantOp>(
+                loc, i64, builder_.getI64IntegerAttr(element_alignment)).getResult();
+            mlir::Value below_natural = builder_.create<mlir::LLVM::ICmpOp>(
+                loc, mlir::LLVM::ICmpPredicate::ult, requested, minimum).getResult();
+            alignment = builder_.create<mlir::LLVM::SelectOp>(
+                loc, below_natural, minimum, requested).getResult();
+          }
           mlir::Value data = builder_.create<mlir::LLVM::CallOp>(
               loc, allocate, mlir::ValueRange{count, element_bytes, alignment}).getResult();
           mlir::Value null_pointer = builder_.create<mlir::LLVM::ZeroOp>(
@@ -810,6 +832,43 @@ class FunctionTranslator {
           descriptor = builder_.create<mlir::LLVM::InsertValueOp>(
               loc, descriptor, actual_length,
               builder_.getDenseI64ArrayAttr({1})).getResult();
+          set(op.result, descriptor);
+          return true;
+        }
+
+        if (op.callee == "memory.array_view" && op.result.is_valid() &&
+            op.result.type.is_array_view() && args.size() == 3) {
+          const mlir::Type i64 = builder_.getI64Type();
+          auto as_i64 = [&](mlir::Value value) {
+            if (value.getType() == i64) return value;
+            const unsigned bits = value.getType().getIntOrFloatBitWidth();
+            return bits < 64
+                ? builder_.create<mlir::LLVM::ZExtOp>(loc, i64, value).getResult()
+                : builder_.create<mlir::LLVM::TruncOp>(loc, i64, value).getResult();
+          };
+          mlir::Value source_data = builder_.create<mlir::LLVM::ExtractValueOp>(
+              loc, args[0], builder_.getDenseI64ArrayAttr({0})).getResult();
+          mlir::Value source_length = builder_.create<mlir::LLVM::ExtractValueOp>(
+              loc, args[0], builder_.getDenseI64ArrayAttr({1})).getResult();
+          mlir::Value start = as_i64(args[1]);
+          mlir::Value count = as_i64(args[2]);
+          auto range_check = ensure_runtime_fn(
+              module_, builder_, "nrq_memory_array_range_check",
+              mlir::LLVM::LLVMVoidType::get(ctx_), {i64, i64, i64});
+          builder_.create<mlir::LLVM::CallOp>(
+              loc, range_check, mlir::ValueRange{start, count, source_length});
+          mlir::Type element_type = tir_type_to_mlir(
+              op.result.type.element_type(), ctx_, builder_);
+          mlir::Value data = builder_.create<mlir::LLVM::GEPOp>(
+              loc, llvm_ptr_type(ctx_), element_type, source_data,
+              mlir::ValueRange{start}).getResult();
+          mlir::Type descriptor_type = tir_type_to_mlir(op.result.type, ctx_, builder_);
+          mlir::Value descriptor = builder_.create<mlir::LLVM::UndefOp>(
+              loc, descriptor_type).getResult();
+          descriptor = builder_.create<mlir::LLVM::InsertValueOp>(
+              loc, descriptor, data, builder_.getDenseI64ArrayAttr({0})).getResult();
+          descriptor = builder_.create<mlir::LLVM::InsertValueOp>(
+              loc, descriptor, count, builder_.getDenseI64ArrayAttr({1})).getResult();
           set(op.result, descriptor);
           return true;
         }
@@ -1685,7 +1744,8 @@ class FunctionTranslator {
           runtime_sym = "nrq_strlen";
         } else if (op.operand.type.is_dynamic_array()) {
           runtime_sym = "nrq_args_length";
-        } else if (op.operand.type.is_owned_array()) {
+        } else if (op.operand.type.is_owned_array() ||
+                   op.operand.type.is_array_view()) {
           mlir::Value length = builder_.create<mlir::LLVM::ExtractValueOp>(
               loc, value, builder_.getDenseI64ArrayAttr({1})).getResult();
           set(op.result, adapt_runtime_result(length, op.result.type, loc));
@@ -1710,14 +1770,23 @@ class FunctionTranslator {
         mlir::Value index = get(op.operand);
         if (!array || !index) return true;
 
-        if (op.lhs.type.is_owned_array()) {
+        if (op.lhs.type.is_owned_array() || op.lhs.type.is_array_view()) {
+          const mlir::Type i64 = builder_.getI64Type();
+          if (index.getType() != i64) {
+            const unsigned bits = index.getType().getIntOrFloatBitWidth();
+            index = bits < 64
+                ? (op.operand.type.is_signed_integer()
+                       ? builder_.create<mlir::LLVM::SExtOp>(loc, i64, index).getResult()
+                       : builder_.create<mlir::LLVM::ZExtOp>(loc, i64, index).getResult())
+                : builder_.create<mlir::LLVM::TruncOp>(loc, i64, index).getResult();
+          }
           mlir::Value data = builder_.create<mlir::LLVM::ExtractValueOp>(
               loc, array, builder_.getDenseI64ArrayAttr({0})).getResult();
           mlir::Value length = builder_.create<mlir::LLVM::ExtractValueOp>(
               loc, array, builder_.getDenseI64ArrayAttr({1})).getResult();
           auto bounds = ensure_runtime_fn(
               module_, builder_, "nrq_memory_array_bounds_check",
-              mlir::LLVM::LLVMVoidType::get(ctx_), {builder_.getI64Type(), builder_.getI64Type()});
+              mlir::LLVM::LLVMVoidType::get(ctx_), {i64, i64});
           builder_.create<mlir::LLVM::CallOp>(loc, bounds,
               mlir::ValueRange{index, length});
           mlir::Type element_type = tir_type_to_mlir(op.result.type, ctx_, builder_);

@@ -1,0 +1,18 @@
+int function sum(array_view<int> values) {
+    return values[0] + values[1];
+}
+
+int function main() {
+    var values = memory.owned_array<int>(4);
+    values[0] = 5;
+    values[1] = 17;
+    values[2] = 29;
+    values[3] = 41;
+    let view = memory.array_view<int>(values, 1, 2);
+    let nested = memory.array_view<int>(view, 1, 1);
+    let alias = nested;
+    if (view.length != 2 || alias.length != 1) {
+        return 1;
+    }
+    return sum(view) + alias[0];
+}

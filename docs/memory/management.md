@@ -131,3 +131,19 @@ compiler destroys an owned mutex at lexical exit. Unlock it first, directly or
 with `defer mutex.unlock(handle)`. Destroying a locked mutex is a runtime error;
 mutex handles are not safe to share by copying and require `borrow` when passed
 temporarily to a helper.
+
+## Owned arrays and borrowed views
+
+`memory.owned_array<T>(count)` creates one contiguous, uniquely owned buffer.
+The owner exposes `.length` and checked indexing and is released automatically
+at scope exit. Returning the array or passing it to an `owned_array<T>`
+parameter transfers the allocation.
+
+`memory.array_view<T>(source, start, length)` creates a read-only, non-owning
+view into an owned array or another view. The runtime checks the requested range
+without overflowing. Views expose `.length`, checked indexing, and can be passed
+to `array_view<T>` parameters. Views cannot be returned or written through.
+While a view binding is live, the compiler rejects moving, releasing, or
+mutating its owner. End the view's lexical scope before performing those
+operations. This is conservative lexical lifetime checking; the language does
+not yet infer arbitrary reference lifetimes or track views stored in aggregates.

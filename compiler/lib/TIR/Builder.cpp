@@ -97,6 +97,8 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
         : parameter.borrowed
         ? (parameter.mutable_borrow ? ValueOwnership::MutableBorrowed
                                     : ValueOwnership::Borrowed)
+        : parameter.type.is_array_view()
+        ? ValueOwnership::Borrowed
         : ((parameter.type.is_pointer() || parameter.type.is_owned_array())
                                        ? ValueOwnership::Owned
                                        : ValueOwnership::Trivial);
@@ -1012,7 +1014,8 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
 
       // A dynamic array owns its storage, so its elements are fetched through
       // the runtime instead of a stack GEP.
-      if (base_type.is_dynamic_array() || base_type.is_owned_array()) {
+      if (base_type.is_dynamic_array() || base_type.is_owned_array() ||
+          base_type.is_array_view()) {
         const tir::Value array = lower_expression(base_expr, function);
         const tir::Value index_val = lower_expression(idx_expr.index(), function);
 
@@ -1093,7 +1096,7 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       // field of an aggregate.
       if (mem.member() == "length" &&
           (base_val.type.is_string() || base_val.type.is_dynamic_array() ||
-           base_val.type.is_owned_array())) {
+           base_val.type.is_owned_array() || base_val.type.is_array_view())) {
         tir::Value result = function.allocate_value(result_type);
         tir::Op length;
         length.kind = tir::OpKind::Length;

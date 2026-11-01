@@ -1087,6 +1087,11 @@ void nrq_memory_array_bounds_check(uint64_t index, uint64_t length) {
     nrq_runtime_fatal("owned array index is outside the array bounds");
 }
 
+void nrq_memory_array_range_check(uint64_t start, uint64_t count, uint64_t length) {
+  if (start > length || count > length - start)
+    nrq_runtime_fatal("array view range is outside the source bounds");
+}
+
 void* nrq_memory_shared_allocate(size_t bytes, size_t alignment) {
   void* pointer = nrq_memory_allocate(bytes, alignment);
   if (!pointer) return nullptr;

@@ -31,6 +31,13 @@ Type Type::owned_array_type(Type element_type) {
   return t;
 }
 
+Type Type::array_view_type(Type element_type) {
+  Type t(TypeKind::ArrayView);
+  t.data_ = make_shared<TypeData>();
+  t.data_->element_type = element_type;
+  return t;
+}
+
 Type Type::pointer_type(Type element_type) {
   Type t(TypeKind::Pointer);
   t.data_ = make_shared<TypeData>();
@@ -103,6 +110,8 @@ string Type::to_string() const {
       return element_type().to_string() + "[]";
     case TypeKind::OwnedArray:
       return "owned_array<" + element_type().to_string() + ">";
+    case TypeKind::ArrayView:
+      return "array_view<" + element_type().to_string() + ">";
     case TypeKind::Pointer:
       return element_type().to_string() + "*";
     case TypeKind::ManagedPointer:
@@ -147,6 +156,8 @@ string Type::mangle() const {
       return "DA_" + element_type().mangle();
     case TypeKind::OwnedArray:
       return "OA_" + element_type().mangle();
+    case TypeKind::ArrayView:
+      return "AV_" + element_type().mangle();
     case TypeKind::Pointer:
       return "P_" + element_type().mangle();
     case TypeKind::ManagedPointer:
@@ -180,6 +191,7 @@ bool operator==(const Type& lhs, const Type& rhs) {
              lhs.element_type() == rhs.element_type();
     case TypeKind::DynamicArray:
     case TypeKind::OwnedArray:
+    case TypeKind::ArrayView:
       return lhs.element_type() == rhs.element_type();
     case TypeKind::Pointer:
       return lhs.element_type() == rhs.element_type();
