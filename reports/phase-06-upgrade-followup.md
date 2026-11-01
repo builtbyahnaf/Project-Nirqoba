@@ -97,6 +97,12 @@ that a live arena allocation remains readable after a rejected reset and that
 reset succeeds once the owner is released. The full suite passed again: CTest
 1/1 and integration 85/85. No GC benchmark was run.
 
+Reallocation now reuses its existing ownership-registry node when updating the
+address, so a successful allocator resize cannot lose tracking due to a second
+registry-node allocation. A failing custom allocator regression verifies that
+the original pointer and owner record remain usable. Full validation passed:
+CTest 1/1 and integration 85/85. No GC benchmark was run.
+
 The tuple-layout regression now passes a struct containing nested managed
 references into a function that collects before reading it, covering the
 aggregate parameter root-copy path. RelWithDebInfo validation passed: CTest

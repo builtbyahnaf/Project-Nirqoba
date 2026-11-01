@@ -1296,12 +1296,27 @@ void* nrq_memory_reallocate(void* pointer, size_t bytes) {
     live_allocations.erase(found);
     return nullptr;
   }
-  void* replacement = allocator->reallocate_serialized(pointer, old_bytes, bytes, alignment);
-  if (!replacement) return nullptr;  // The original allocation is untouched.
-  // The registry entry is keyed by the old address; `reallocate` may hand back
-  // the same address when a strategy resized in place.
-  live_allocations.erase(pointer);
-  live_allocations.emplace(replacement, AllocationOwner{allocator, bytes, alignment});
+  // Keep the already-allocated registry node attached to the owner through
+  // resize. Reallocating the node after the allocator has moved the block could
+  // itself fail and leave the new pointer untracked.
+  auto allocation_node = live_allocations.extract(found);
+  void* replacement = nullptr;
+  try {
+    replacement = allocator->reallocate_serialized(pointer, old_bytes, bytes,
+                                                     alignment);
+  } catch (...) {
+    live_allocations.insert(std::move(allocation_node));
+    return nullptr;
+  }
+  if (!replacement) {
+    live_allocations.insert(std::move(allocation_node));
+    return nullptr;  // The original allocation is untouched.
+  }
+  allocation_node.key() = replacement;
+  allocation_node.mapped() = AllocationOwner{allocator, bytes, alignment};
+  auto inserted = live_allocations.insert(std::move(allocation_node));
+  if (!inserted.inserted)
+    nrq_runtime_fatal("allocator reallocation returned an already-live address");
   if (memory_profiler_enabled) {
     memory_profile.current_bytes = memory_profile.current_bytes - old_bytes + bytes;
     memory_profile.peak_bytes = std::max(memory_profile.peak_bytes,
