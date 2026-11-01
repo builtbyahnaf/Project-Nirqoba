@@ -103,6 +103,13 @@ registry-node allocation. A failing custom allocator regression verifies that
 the original pointer and owner record remain usable. Full validation passed:
 CTest 1/1 and integration 85/85. No GC benchmark was run.
 
+Generic deallocation releases the global registry lock while the per-allocator
+deallocator runs, with a busy owner record preventing double release, resize,
+or reset races and a condition variable guarding address reuse. A blocking
+callback regression confirms unrelated allocator operations remain available.
+Full validation passed: CTest 1/1 and integration 85/85. No GC benchmark was
+run.
+
 The tuple-layout regression now passes a struct containing nested managed
 references into a function that collects before reading it, covering the
 aggregate parameter root-copy path. RelWithDebInfo validation passed: CTest
@@ -172,11 +179,15 @@ completes. Different allocator instances can perform allocation work in
 parallel; calls through the same allocator remain serialized.
 
 The live-allocation registry, shared reference counts, selection state, and
-profiler snapshot still use global synchronization. Deallocation and
-reallocation still hold that lock while invoking allocator operations. This is
-a correctness-preserving first reduction of allocator lock scope, not a claim
-that contention has been eliminated. The existing allocator benchmark matrix
-remains the measurement path; no GC benchmark was run.
+profiler snapshot still use global synchronization. Generic checked deallocation
+now marks the owner record and pins the allocator, invokes the allocator outside
+the registry lock, then removes the record under the lock. Same-allocator
+operations remain serialized, and address reuse waits for the old owner record
+to be removed. Reallocation, secure release, and final shared release still
+invoke allocator operations while holding the registry lock. A blocking custom
+deallocator test verifies unrelated allocator creation proceeds during a
+callback. The existing allocator benchmark matrix remains the measurement path;
+no GC benchmark was run.
 
 Follow-up correctness fixes keep null-pointer reallocation outside the registry
 lock and pin the selected allocator until its allocation has been recorded,

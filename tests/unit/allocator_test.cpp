@@ -35,6 +35,13 @@ struct BlockingAllocatorState {
   bool release = false;
 };
 
+struct BlockingDeallocateState {
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool entered = false;
+  bool release = false;
+};
+
 void* blocking_allocate(void* context, size_t bytes, size_t alignment) {
   auto* state = static_cast<BlockingAllocatorState*>(context);
   {
@@ -47,6 +54,21 @@ void* blocking_allocate(void* context, size_t bytes, size_t alignment) {
 }
 
 void blocking_deallocate(void*, void* pointer, size_t, size_t) {
+  _aligned_free(pointer);
+}
+
+void* blocking_deallocate_allocate(void*, size_t bytes, size_t alignment) {
+  return _aligned_malloc(bytes, std::max(alignment, sizeof(void*)));
+}
+
+void blocking_deallocate_wait(void* context, void* pointer, size_t, size_t) {
+  auto* state = static_cast<BlockingDeallocateState*>(context);
+  {
+    std::unique_lock<std::mutex> lock(state->mutex);
+    state->entered = true;
+    state->condition.notify_all();
+    state->condition.wait(lock, [&] { return state->release; });
+  }
   _aligned_free(pointer);
 }
 
@@ -151,6 +173,31 @@ TEST(AllocatorTest, InFlightExplicitAllocationPreventsAllocatorDestruction) {
   ASSERT_NE(pointer, nullptr);
   nrq_memory_deallocate_checked(pointer);
   ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
+}
+
+TEST(AllocatorTest, DeallocationDoesNotHoldTheGlobalAllocatorRegistryLock) {
+  BlockingDeallocateState state;
+  const NrqCustomAllocatorVTable callbacks{
+      &state, blocking_deallocate_allocate, blocking_deallocate_wait, nullptr};
+  void* allocator = nrq_allocator_create_custom(&callbacks);
+  ASSERT_NE(allocator, nullptr);
+  void* pointer = nrq_memory_allocate_from(allocator, 128, 64);
+  ASSERT_NE(pointer, nullptr);
+  std::thread worker([&] { nrq_memory_deallocate_checked(pointer); });
+  {
+    std::unique_lock<std::mutex> lock(state.mutex);
+    state.condition.wait(lock, [&] { return state.entered; });
+  }
+  void* unrelated = nrq_allocator_create(NRQ_ALLOCATOR_GENERAL, 0);
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.release = true;
+  }
+  state.condition.notify_all();
+  worker.join();
+  ASSERT_NE(unrelated, nullptr);
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
+  ASSERT_EQ(nrq_allocator_destroy(unrelated), int32_t{1});
 }
 
 TEST(AllocatorTest, InFlightAllocationPreventsAllocatorReset) {
