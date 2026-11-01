@@ -456,6 +456,10 @@ void TypeChecker::check_block(BlockStmt& block) {
       if (symbols_.allocation_is_moved(cleanup->allocation_id)) {
           diagnostics_.error(diag::kUseAfterFree, call->location(),
                              "deferred cleanup releases an allocation that was already released");
+      } else if (callee == "array.owned_release" &&
+                 symbols_.has_live_borrow(cleanup->allocation_id)) {
+        diagnostics_.error(diag::kTypeMismatch, call->location(),
+                           "deferred array release would invalidate a live array view");
       } else {
         symbols_.mark_allocation_moved(cleanup->allocation_id);
       }
@@ -526,7 +530,8 @@ void TypeChecker::check_deferred_cleanup(DeferredCleanupStmt& statement) {
        call->callee() == "memory.secure_release" ||
        call->callee() == "memory.unmap_file") && !call->arguments().empty()) {
     const Symbol* pointer = find_root_symbol(*call->arguments()[0], symbols_);
-    if (pointer && pointer->type.is_pointer()) allocation_id = pointer->allocation_id;
+    if (pointer && (pointer->type.is_pointer() || pointer->type.is_owned_array()))
+      allocation_id = pointer->allocation_id;
   }
   deferred_calls_.back().push_back(DeferredCleanup{call, allocation_id});
 }
