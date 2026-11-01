@@ -9,6 +9,11 @@ void function deallocate_file_resource() {
     memory.deallocate(resource);
 }
 
+void function secure_release_mutex() {
+    let handle = mutex.create();
+    memory.secure_release(handle);
+}
+
 void function unmap_plain_allocation() {
     let bytes = memory.allocate<byte>(8);
     memory.unmap_file(bytes);
@@ -17,4 +22,14 @@ void function unmap_plain_allocation() {
 void function unpin_plain_allocation() {
     let bytes = memory.allocate<byte>(8);
     memory.unpin(bytes);
+}
+
+void function lock_plain_allocation() {
+    let bytes = memory.allocate<byte>(8);
+    mutex.lock(bytes);
+}
+
+void function query_plain_allocation_mapping_size() {
+    let bytes = memory.allocate<byte>(8);
+    memory.mapping_size(bytes);
 }
