@@ -7,10 +7,10 @@ int function main() {
 
     // Both figures are operating-system estimates; they must be reported, not
     // fabricated, so they are checked for a plausible positive value.
-    if (memory.total_bytes() > 0) {
+    if (memory.total_bytes() > 0u64) {
         print(1);
     }
-    if (memory.used_bytes() > 0) {
+    if (memory.used_bytes() > 0u64) {
         print(1);
     }
 
