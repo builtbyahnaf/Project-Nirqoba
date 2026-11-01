@@ -1,0 +1,7 @@
+void function conflict(borrow byte* first, borrow mut byte* second) { }
+int function main() {
+    var buffer = memory.allocate<byte>(8);
+    conflict(buffer, buffer);
+    memory.deallocate(buffer);
+    return 0;
+}

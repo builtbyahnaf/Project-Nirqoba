@@ -1,0 +1,4 @@
+void function release(borrow byte* input) {
+    memory.deallocate(input);
+}
+int function main() { return 0; }

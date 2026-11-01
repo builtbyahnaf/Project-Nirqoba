@@ -1,0 +1,8 @@
+void function release(byte* buffer) {
+    memory.deallocate(buffer);
+}
+int function main() {
+    let buffer = memory.allocate<byte>(16);
+    release(buffer);
+    return 0;
+}

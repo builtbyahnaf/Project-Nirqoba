@@ -568,6 +568,8 @@ struct Parameter {
   std::string name;
   Type type;
   SourceLocation location;
+  bool borrowed = false;
+  bool mutable_borrow = false;
 };
 
 class StructDecl {

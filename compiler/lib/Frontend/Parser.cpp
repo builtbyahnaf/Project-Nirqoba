@@ -294,6 +294,16 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
       do {
         if (check(TokenKind::RParen)) break;
         const Token& parameter_type_token = peek();
+        bool borrowed = false;
+        bool mutable_borrow = false;
+        if (check(TokenKind::Identifier) && peek().text == "borrow") {
+          advance();
+          borrowed = true;
+          if (check(TokenKind::Identifier) && peek().text == "mut") {
+            advance();
+            mutable_borrow = true;
+          }
+        }
         const Type parameter_type = parse_type_annotation();
         if (!check(TokenKind::Identifier)) {
           error_at(peek(), diag::kExpectedToken,
@@ -303,7 +313,8 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
         }
         const Token parameter_name = advance();
         parameters.push_back(
-            Parameter{parameter_name.text, parameter_type, parameter_type_token.location});
+            Parameter{parameter_name.text, parameter_type, parameter_type_token.location,
+                      borrowed, mutable_borrow});
       } while (match(TokenKind::Comma));
     }
     expect(TokenKind::RParen, "after the parameter list");
