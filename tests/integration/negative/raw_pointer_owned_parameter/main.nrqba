@@ -1,0 +1,9 @@
+void function consume(byte* pointer) {
+    memory.deallocate(pointer);
+}
+
+int function main() {
+    byte* raw = null;
+    consume(raw);
+    return 0;
+}

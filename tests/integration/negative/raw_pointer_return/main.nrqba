@@ -1,0 +1,8 @@
+byte* function return_raw() {
+    byte* raw = null;
+    return raw;
+}
+
+int function main() {
+    return 0;
+}

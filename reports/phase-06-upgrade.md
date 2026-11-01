@@ -68,3 +68,9 @@ Added shared pointer return contracts using `shared T* function name(...)`. The 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 53/53. Coverage includes shared factory return and consumption, invalid unique return of a shared value, and MLIR return ownership metadata.
 
 Limitations: shared aggregates and compiler-inserted automatic release remain unimplemented.
+
+## 26. Reject raw pointer ownership escalation — 2026-11-01
+
+The ownership checker now rejects raw or untracked pointers passed to unique-owner parameters and returned as owned pointers. Borrowed arguments require an explicit borrow parameter; raw/borrowed pointers cannot escape through an owning return contract. This closes a path where the callee could free storage while the caller retained an untracked alias.
+
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 55/55, including new negative cases for raw pointer transfer and return.
