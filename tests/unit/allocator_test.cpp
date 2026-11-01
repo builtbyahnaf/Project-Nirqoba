@@ -226,6 +226,31 @@ TEST(AllocatorTest, DeallocationDoesNotHoldTheGlobalAllocatorRegistryLock) {
   ASSERT_EQ(nrq_allocator_destroy(unrelated), int32_t{1});
 }
 
+TEST(AllocatorTest, SecureReleaseDoesNotHoldTheGlobalAllocatorRegistryLock) {
+  BlockingDeallocateState state;
+  const NrqCustomAllocatorVTable callbacks{
+      &state, blocking_deallocate_allocate, blocking_deallocate_wait, nullptr};
+  void* allocator = nrq_allocator_create_custom(&callbacks);
+  ASSERT_NE(allocator, nullptr);
+  void* pointer = nrq_memory_allocate_from(allocator, 128, 64);
+  ASSERT_NE(pointer, nullptr);
+  std::thread worker([&] { nrq_memory_secure_release(pointer); });
+  {
+    std::unique_lock<std::mutex> lock(state.mutex);
+    state.condition.wait(lock, [&] { return state.entered; });
+  }
+  void* unrelated = nrq_allocator_create(NRQ_ALLOCATOR_GENERAL, 0);
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.release = true;
+  }
+  state.condition.notify_all();
+  worker.join();
+  ASSERT_NE(unrelated, nullptr);
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
+  ASSERT_EQ(nrq_allocator_destroy(unrelated), int32_t{1});
+}
+
 TEST(AllocatorTest, ReallocationDoesNotHoldTheGlobalAllocatorRegistryLock) {
   BlockingReallocateState state;
   const NrqCustomAllocatorVTable callbacks{
@@ -329,6 +354,38 @@ TEST(AllocatorTest, ConcurrentSharedRetainsAndReleasesKeepFinalOwnerAlive) {
   ASSERT_EQ(nrq_memory_shared_count(pointer), uint64_t{1});
   ASSERT_EQ(nrq_memory_shared_release(pointer), int32_t{1});
   ASSERT_EQ(nrq_memory_shared_count(pointer), uint64_t{0});
+}
+
+TEST(AllocatorTest, FinalSharedReleaseDoesNotHoldTheGlobalRegistryLock) {
+  BlockingDeallocateState state;
+  const NrqCustomAllocatorVTable callbacks{
+      &state, blocking_deallocate_allocate, blocking_deallocate_wait, nullptr};
+  void* allocator = nrq_allocator_create_custom(&callbacks);
+  ASSERT_NE(allocator, nullptr);
+  void* previous = nrq_memory_set_default_allocator(allocator);
+  void* pointer = nrq_memory_shared_allocate(128, 64);
+  ASSERT_NE(pointer, nullptr);
+  ASSERT_EQ(nrq_memory_set_default_allocator(previous), allocator);
+  std::atomic<int32_t> released = 0;
+  std::thread worker([&] { released = nrq_memory_shared_release(pointer); });
+  {
+    std::unique_lock<std::mutex> lock(state.mutex);
+    state.condition.wait(lock, [&] { return state.entered; });
+  }
+  ASSERT_EQ(nrq_memory_shared_count(pointer), uint64_t{0});
+  ASSERT_EQ(nrq_memory_shared_retain(pointer), nullptr);
+  ASSERT_EQ(nrq_memory_shared_release(pointer), int32_t{0});
+  void* unrelated = nrq_allocator_create(NRQ_ALLOCATOR_GENERAL, 0);
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.release = true;
+  }
+  state.condition.notify_all();
+  worker.join();
+  ASSERT_NE(unrelated, nullptr);
+  ASSERT_EQ(released.load(), int32_t{1});
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
+  ASSERT_EQ(nrq_allocator_destroy(unrelated), int32_t{1});
 }
 
 TEST(AllocatorTest, PoolRejectsRequestsLargerThanItsCapacity) {
