@@ -2830,6 +2830,29 @@ Type TypeChecker::check_call(CallExpr& call) {
                              "' must be of type '" + sig.parameter_types[i].to_string() +
                              "', not '" + arg_type.to_string() + "'");
     }
+    if (sig.parameter_types[i].is_array_view()) {
+      const Expr& argument = *call.arguments()[i];
+      const Symbol* source = nullptr;
+      if (argument.kind() == Expr::Kind::Call) {
+        const auto& view_call = static_cast<const CallExpr&>(argument);
+        if (view_call.callee() == "memory.array_view" &&
+            !view_call.arguments().empty())
+          source = find_root_symbol(*view_call.arguments()[0], symbols_);
+      } else {
+        source = find_root_symbol(argument, symbols_);
+      }
+      if (!source || source->allocation_id == 0 || source->moved) {
+        diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                           "array view arguments must refer to a live tracked owner");
+      } else {
+        auto found = active_borrows.find(source->allocation_id);
+        if (found != active_borrows.end() && found->second)
+          diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                             "conflicting borrows of the same allocation in one call");
+        active_borrows[source->allocation_id] = false;
+      }
+      continue;
+    }
     if (sig.parameter_types[i].is_owned_array() ||
         contains_owned_array(sig.parameter_types[i])) {
       const Symbol* source = call.arguments()[i]->kind() == Expr::Kind::Name
@@ -2838,6 +2861,9 @@ Type TypeChecker::check_call(CallExpr& call) {
       if (source && source->borrowed) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                            "borrowed values cannot be transferred as owned resources");
+      } else if (source && active_borrows.find(source->allocation_id) != active_borrows.end()) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                           "cannot transfer an owner while another argument borrows it");
       } else if (!(source && source->owns_allocation && !source->moved) &&
                  call.arguments()[i]->ownership() != ValueOwnership::Owned) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
