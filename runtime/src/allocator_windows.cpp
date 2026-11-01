@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <list>
 #include <map>
@@ -36,6 +37,9 @@ namespace {
 
 constexpr size_t kDefaultRegionBytes = 1024 * 1024;
 constexpr size_t kMinimumBlockBytes = 16;
+// Alignment used when `memory.reallocate` is asked to grow a null pointer, i.e.
+// when the call is really a fresh allocation with no prior alignment to reuse.
+constexpr size_t kDefaultAlignmentBytes = 16;
 
 size_t align_up(size_t value, size_t alignment) {
   return (value + alignment - 1) & ~(alignment - 1);
@@ -99,6 +103,34 @@ class Allocator {
   virtual bool can_destroy() const { return true; }
   virtual NrqAllocatorKind kind() const { return NRQ_ALLOCATOR_GENERAL; }
   size_t capacity() const { return capacity_; }
+
+  // Reports how many bytes the allocator can still serve and the largest single
+  // request it can satisfy. Strategies that cannot enumerate their free space
+  // (the general-purpose and custom allocators) inherit these zeros, which the
+  // profiler reports as "not measurable" rather than as "no free space".
+  virtual void free_statistics(size_t& free_bytes,
+                              size_t& largest_free_block) const {
+    free_bytes = 0;
+    largest_free_block = 0;
+  }
+
+  // Resizes `pointer` from `old_bytes` to `bytes`, keeping the allocator
+  // identity and the alignment recorded when the block was created.
+  //
+  // The default implementation allocates a replacement, copies the surviving
+  // bytes and then releases the original, so a null result means the original
+  // allocation is still live and still owned by the caller. Strategies with
+  // stricter lifetime rules override this: a stack allocator must resize in
+  // place, and an arena can extend its bump pointer when the block is the most
+  // recent one.
+  virtual void* reallocate(void* pointer, size_t old_bytes, size_t bytes,
+                          size_t alignment) {
+    void* replacement = allocate(bytes, alignment);
+    if (!replacement) return nullptr;
+    std::memcpy(replacement, pointer, std::min(old_bytes, bytes));
+    deallocate(pointer);
+    return replacement;
+  }
 
  protected:
   size_t capacity_;
@@ -227,6 +259,19 @@ class FixedPoolAllocator final : public Allocator {
     return slab_ ? NRQ_ALLOCATOR_SLAB : NRQ_ALLOCATOR_POOL;
   }
 
+  void free_statistics(size_t& free_bytes,
+                       size_t& largest_free_block) const override {
+    free_bytes = 0;
+    largest_free_block = 0;
+    for (const auto& pair : buckets_) {
+      const PoolBucket& bucket = pair.second;
+      if (bucket.free_slots.empty()) continue;
+      // Each free slot can serve one request no larger than the slot stride.
+      free_bytes += bucket.free_slots.size() * bucket.stride;
+      largest_free_block = std::max(largest_free_block, bucket.stride);
+    }
+  }
+
  private:
   bool add_chunk(PoolBucket& bucket) {
     const size_t old_free_count = bucket.free_slots.size();
@@ -319,6 +364,39 @@ class ArenaAllocator : public Allocator {
   }
   NrqAllocatorKind kind() const override { return NRQ_ALLOCATOR_ARENA; }
 
+  void free_statistics(size_t& free_bytes,
+                       size_t& largest_free_block) const override {
+    free_bytes = 0;
+    largest_free_block = 0;
+    for (const ArenaChunk& chunk : chunks_) {
+      if (chunk.used > chunk.size) continue;
+      const size_t available = chunk.size - chunk.used;
+      free_bytes += available;
+      largest_free_block = std::max(largest_free_block, available);
+    }
+  }
+
+  // Growing the most recent allocation only moves the bump pointer; the start
+  // address is unchanged, so the alignment recorded at allocation time still
+  // holds. Anything else is copied into a fresh block, and the old bytes stay
+  // inside the region — the documented arena behavior.
+  void* reallocate(void* pointer, size_t old_bytes, size_t bytes,
+                   size_t alignment) override {
+    if (!chunks_.empty()) {
+      ArenaChunk& chunk = chunks_.back();
+      const uintptr_t address = reinterpret_cast<uintptr_t>(pointer);
+      if (chunk.base <= address && address <= chunk.base + chunk.used &&
+          address + old_bytes == chunk.base + chunk.used) {
+        const size_t offset = static_cast<size_t>(address - chunk.base);
+        if (offset <= chunk.size && bytes <= chunk.size - offset) {
+          chunk.used = offset + bytes;
+          return pointer;
+        }
+      }
+    }
+    return Allocator::reallocate(pointer, old_bytes, bytes, alignment);
+  }
+
  protected:
   bool fits(const ArenaChunk& chunk, size_t bytes, size_t alignment) const {
     if (chunk.used > chunk.size ||
@@ -396,6 +474,26 @@ class StackAllocator final : public ArenaAllocator {
   bool can_deallocate(void* pointer) const override {
     return !stack_.empty() && stack_.back().pointer == pointer;
   }
+
+  // Stack allocations form a strict LIFO chain, so only the most recent block
+  // can be resized: anything else would either move a block below a live one or
+  // leave a hole the strategy cannot describe. Returning null keeps the
+  // original allocation valid, which the caller must honor.
+  void* reallocate(void* pointer, size_t old_bytes, size_t bytes,
+                   size_t alignment) override {
+    (void)alignment;  // In-place growth keeps the original start address.
+    if (stack_.empty() || stack_.back().pointer != pointer) return nullptr;
+    const size_t chunk_index = stack_.back().chunk;
+    if (chunk_index + 1 != chunks_.size()) return nullptr;
+    ArenaChunk& chunk = chunks_[chunk_index];
+    const uintptr_t address = reinterpret_cast<uintptr_t>(pointer);
+    if (chunk.base > address) return nullptr;
+    const size_t offset = static_cast<size_t>(address - chunk.base);
+    if (offset > chunk.size || bytes > chunk.size - offset) return nullptr;
+    (void)old_bytes;
+    chunk.used = offset + bytes;
+    return pointer;
+  }
   bool reset() override {
     stack_.clear();
     return ArenaAllocator::reset();
@@ -461,6 +559,18 @@ class BuddyAllocator final : public Allocator {
     return base_ != nullptr;
   }
   NrqAllocatorKind kind() const override { return NRQ_ALLOCATOR_BUDDY; }
+
+  void free_statistics(size_t& free_bytes,
+                       size_t& largest_free_block) const override {
+    free_bytes = 0;
+    largest_free_block = 0;
+    for (int order = minimum_order_; order <= maximum_order_; ++order) {
+      const size_t count = free_[static_cast<size_t>(order)].size();
+      if (count == 0) continue;
+      free_bytes += count * block_size(order);
+      largest_free_block = std::max(largest_free_block, block_size(order));
+    }
+  }
 
  private:
   int order_for(size_t bytes) const {
@@ -561,6 +671,17 @@ class FreeListAllocator : public Allocator {
   }
   NrqAllocatorKind kind() const override { return NRQ_ALLOCATOR_FREE_LIST; }
 
+  void free_statistics(size_t& free_bytes,
+                       size_t& largest_free_block) const override {
+    free_bytes = 0;
+    largest_free_block = 0;
+    for (const FreeBlock& block : blocks_) {
+      if (!block.free) continue;
+      free_bytes += block.size;
+      largest_free_block = std::max(largest_free_block, block.size);
+    }
+  }
+
  protected:
   struct BlockList : std::list<FreeBlock> {};
   void* base_ = nullptr;
@@ -643,6 +764,17 @@ class TlsfAllocator final : public Allocator {
   }
   NrqAllocatorKind kind() const override { return NRQ_ALLOCATOR_TLSF; }
 
+  void free_statistics(size_t& free_bytes,
+                       size_t& largest_free_block) const override {
+    free_bytes = 0;
+    largest_free_block = 0;
+    for (const FreeBlock& block : blocks_) {
+      if (!block.free) continue;
+      free_bytes += block.size;
+      largest_free_block = std::max(largest_free_block, block.size);
+    }
+  }
+
  private:
   static constexpr size_t kSecondLevels = 8;
   static constexpr size_t kFirstLevels = 64;
@@ -717,11 +849,20 @@ class TlsfAllocator final : public Allocator {
 std::mutex allocator_mutex;
 std::unordered_map<void*, std::unique_ptr<Allocator>> allocator_handles;
 std::unordered_map<Allocator*, size_t> selected_counts;
-struct AllocationOwner { Allocator* allocator; size_t bytes; };
+struct AllocationOwner { Allocator* allocator; size_t bytes; size_t alignment; };
 std::unordered_map<void*, AllocationOwner> live_allocations;
 NrqMemoryProfile memory_profile{};
 bool memory_profiler_enabled = false;
+// The generated code loads the whole report as an aggregate, so every field must
+// stay a 64-bit integer and the order in `allocator.h` must match the field list
+// the type checker publishes for `memory.profiler.capture()`.
+static_assert(sizeof(NrqMemoryProfile) == 28 * sizeof(uint64_t),
+              "NrqMemoryProfile must be 28 consecutive 64-bit fields");
 GeneralAllocator default_allocator;
+// Process-wide default for explicit allocations. It is applied when the calling
+// thread has not selected an allocator, so a library can install a policy
+// without touching every call site.
+Allocator* policy_default_allocator = nullptr;
 struct ThreadSelection {
   Allocator* allocator = nullptr;
   ~ThreadSelection() {
@@ -735,7 +876,43 @@ struct ThreadSelection {
 thread_local ThreadSelection thread_selection;
 
 Allocator* active_allocator() {
-  return thread_selection.allocator ? thread_selection.allocator : &default_allocator;
+  if (thread_selection.allocator) return thread_selection.allocator;
+  return policy_default_allocator ? policy_default_allocator : &default_allocator;
+}
+
+// Resolves an opaque handle to its allocator. Handle zero names the configured
+// default, which is what `memory.allocate<T>(bytes, 0)` selects.
+Allocator* resolve_allocator(uint64_t handle) {
+  if (handle == 0)
+    return policy_default_allocator ? policy_default_allocator : &default_allocator;
+  auto found = allocator_handles.find(
+      reinterpret_cast<void*>(static_cast<uintptr_t>(handle)));
+  return found == allocator_handles.end() ? nullptr : found->second.get();
+}
+
+// Records the profiler counters shared by every successful allocation request.
+// The size histogram bins are fixed so the report layout stays stable.
+void record_allocation_profile(size_t bytes) {
+  if (!memory_profiler_enabled) return;
+  memory_profile.current_bytes += bytes;
+  memory_profile.total_bytes += bytes;
+  memory_profile.peak_bytes = std::max(memory_profile.peak_bytes,
+                                       memory_profile.current_bytes);
+  ++memory_profile.allocations;
+  if (bytes <= 64) ++memory_profile.allocations_le_64;
+  else if (bytes <= 256) ++memory_profile.allocations_le_256;
+  else if (bytes <= 1024) ++memory_profile.allocations_le_1024;
+  else if (bytes <= 4096) ++memory_profile.allocations_le_4096;
+  else if (bytes <= 65536) ++memory_profile.allocations_le_65536;
+  else ++memory_profile.allocations_gt_65536;
+  memory_profile.largest_allocation =
+      std::max(memory_profile.largest_allocation, static_cast<uint64_t>(bytes));
+}
+
+void record_deallocation_profile(size_t bytes) {
+  if (!memory_profiler_enabled) return;
+  memory_profile.current_bytes -= bytes;
+  ++memory_profile.deallocations;
 }
 
 std::unique_ptr<Allocator> make_allocator(NrqAllocatorKind kind, size_t capacity) {
@@ -794,13 +971,16 @@ int32_t nrq_allocator_destroy(void* handle) {
   if (!handle) return 0;
   std::lock_guard<std::mutex> lock(allocator_mutex);
   auto found = allocator_handles.find(handle);
-  auto selected = found == allocator_handles.end()
-      ? selected_counts.end() : selected_counts.find(found->second.get());
-  if (found == allocator_handles.end() ||
-      (selected != selected_counts.end() && selected->second != 0))
-    return 0;
+  if (found == allocator_handles.end()) return 0;
+  Allocator* allocator = found->second.get();
+  // An allocator that is still selected, still owns live allocations, or serves
+  // as the process-wide default cannot be destroyed without invalidating
+  // pointers the program may still reach.
+  if (policy_default_allocator == allocator) return 0;
+  auto selected = selected_counts.find(allocator);
+  if (selected != selected_counts.end() && selected->second != 0) return 0;
   for (const auto& allocation : live_allocations)
-    if (allocation.second.allocator == found->second.get()) return 0;
+    if (allocation.second.allocator == allocator) return 0;
   allocator_handles.erase(found);
   return 1;
 }
@@ -813,10 +993,7 @@ int32_t nrq_allocator_reset(void* handle) {
   if (!allocator->reset()) return 0;
   for (auto it = live_allocations.begin(); it != live_allocations.end();) {
     if (it->second.allocator == allocator) {
-      if (memory_profiler_enabled) {
-        memory_profile.current_bytes -= it->second.bytes;
-        ++memory_profile.deallocations;
-      }
+      record_deallocation_profile(it->second.bytes);
       it = live_allocations.erase(it);
     } else ++it;
   }
@@ -824,11 +1001,27 @@ int32_t nrq_allocator_reset(void* handle) {
 }
 
 int32_t nrq_memory_allocator_kind(uint64_t allocator_handle) {
-  if (allocator_handle == 0) return NRQ_ALLOCATOR_GENERAL;
-  void* handle = reinterpret_cast<void*>(static_cast<uintptr_t>(allocator_handle));
   std::lock_guard<std::mutex> lock(allocator_mutex);
+  if (allocator_handle == 0)
+    return policy_default_allocator ? policy_default_allocator->kind()
+                                    : NRQ_ALLOCATOR_GENERAL;
+  void* handle = reinterpret_cast<void*>(static_cast<uintptr_t>(allocator_handle));
   auto found = allocator_handles.find(handle);
   return found == allocator_handles.end() ? -1 : found->second->kind();
+}
+
+void* nrq_memory_set_default_allocator(void* handle) {
+  std::lock_guard<std::mutex> lock(allocator_mutex);
+  if (handle && allocator_handles.find(handle) == allocator_handles.end())
+    return nullptr;
+  Allocator* previous = policy_default_allocator;
+  policy_default_allocator = handle ? allocator_handles[handle].get() : nullptr;
+  return previous;
+}
+
+void* nrq_memory_get_default_allocator(void) {
+  std::lock_guard<std::mutex> lock(allocator_mutex);
+  return policy_default_allocator;
 }
 
 void* nrq_memory_get_allocator(void) {
@@ -866,18 +1059,12 @@ static void* allocate_with_allocator(Allocator* allocator, size_t bytes,
   }
   if (!pointer) return nullptr;
   try {
-    live_allocations.emplace(pointer, AllocationOwner{allocator, bytes});
+    live_allocations.emplace(pointer, AllocationOwner{allocator, bytes, alignment});
   } catch (...) {
     allocator->deallocate(pointer);
     return nullptr;
   }
-  if (memory_profiler_enabled) {
-    memory_profile.current_bytes += bytes;
-    memory_profile.total_bytes += bytes;
-    memory_profile.peak_bytes = std::max(memory_profile.peak_bytes,
-                                         memory_profile.current_bytes);
-    ++memory_profile.allocations;
-  }
+  record_allocation_profile(bytes);
   return pointer;
 }
 
@@ -888,7 +1075,11 @@ void* nrq_memory_allocate(size_t bytes, size_t alignment) {
 
 void* nrq_memory_allocate_from(void* handle, size_t bytes, size_t alignment) {
   std::lock_guard<std::mutex> lock(allocator_mutex);
-  if (!handle) return allocate_with_allocator(&default_allocator, bytes, alignment);
+  if (!handle) {
+    Allocator* target = policy_default_allocator ? policy_default_allocator
+                                                 : &default_allocator;
+    return allocate_with_allocator(target, bytes, alignment);
+  }
   auto found = allocator_handles.find(handle);
   if (found == allocator_handles.end()) return nullptr;
   return allocate_with_allocator(found->second.get(), bytes, alignment);
@@ -903,10 +1094,7 @@ void nrq_memory_deallocate_checked(void* pointer) {
   if (!found->second.allocator->can_deallocate(pointer))
     nrq_runtime_fatal("stack allocator allocations must be deallocated in LIFO order");
   found->second.allocator->deallocate(pointer);
-  if (memory_profiler_enabled) {
-    memory_profile.current_bytes -= found->second.bytes;
-    ++memory_profile.deallocations;
-  }
+  record_deallocation_profile(found->second.bytes);
   live_allocations.erase(found);
 }
 
@@ -914,6 +1102,78 @@ void nrq_memory_deallocate(void* pointer, size_t bytes, size_t alignment) {
   (void)bytes;
   (void)alignment;
   nrq_memory_deallocate_checked(pointer);
+}
+
+void* nrq_memory_reallocate(void* pointer, size_t bytes) {
+  std::lock_guard<std::mutex> lock(allocator_mutex);
+  if (!pointer) {
+    if (bytes == 0) return nullptr;
+    return allocate_with_allocator(active_allocator(), bytes, kDefaultAlignmentBytes);
+  }
+  auto found = live_allocations.find(pointer);
+  if (found == live_allocations.end())
+    nrq_runtime_fatal(
+        "memory.reallocate received an invalid or already freed pointer");
+  Allocator* allocator = found->second.allocator;
+  const size_t old_bytes = found->second.bytes;
+  const size_t alignment = found->second.alignment;
+  if (bytes == 0) {
+    // Zero bytes releases the block, matching the C realloc convention; the
+    // caller cannot distinguish this from failure, which is why the language
+    // documentation states that a zero-byte reallocation frees the block.
+    if (!allocator->can_deallocate(pointer))
+      nrq_runtime_fatal(
+          "stack allocator allocations must be deallocated in LIFO order");
+    allocator->deallocate(pointer);
+    record_deallocation_profile(old_bytes);
+    live_allocations.erase(found);
+    return nullptr;
+  }
+  void* replacement = allocator->reallocate(pointer, old_bytes, bytes, alignment);
+  if (!replacement) return nullptr;  // The original allocation is untouched.
+  // The registry entry is keyed by the old address; `reallocate` may hand back
+  // the same address when a strategy resized in place.
+  live_allocations.erase(pointer);
+  live_allocations.emplace(replacement, AllocationOwner{allocator, bytes, alignment});
+  if (memory_profiler_enabled) {
+    memory_profile.current_bytes = memory_profile.current_bytes - old_bytes + bytes;
+    memory_profile.peak_bytes = std::max(memory_profile.peak_bytes,
+                                         memory_profile.current_bytes);
+    // Only growth requests additional bytes; a shrink is not an allocation.
+    if (bytes > old_bytes) {
+      memory_profile.total_bytes += bytes - old_bytes;
+      ++memory_profile.allocations;
+      if (bytes <= 64) ++memory_profile.allocations_le_64;
+      else if (bytes <= 256) ++memory_profile.allocations_le_256;
+      else if (bytes <= 1024) ++memory_profile.allocations_le_1024;
+      else if (bytes <= 4096) ++memory_profile.allocations_le_4096;
+      else if (bytes <= 65536) ++memory_profile.allocations_le_65536;
+      else ++memory_profile.allocations_gt_65536;
+      memory_profile.largest_allocation = std::max(
+          memory_profile.largest_allocation, static_cast<uint64_t>(bytes));
+    }
+  }
+  return replacement;
+}
+
+uint64_t nrq_memory_allocator_free_bytes(uint64_t allocator_handle) {
+  std::lock_guard<std::mutex> lock(allocator_mutex);
+  Allocator* allocator = resolve_allocator(allocator_handle);
+  if (!allocator) return 0;
+  size_t free_bytes = 0;
+  size_t largest_free_block = 0;
+  allocator->free_statistics(free_bytes, largest_free_block);
+  return free_bytes;
+}
+
+uint64_t nrq_memory_allocator_fragmentation_bytes(uint64_t allocator_handle) {
+  std::lock_guard<std::mutex> lock(allocator_mutex);
+  Allocator* allocator = resolve_allocator(allocator_handle);
+  if (!allocator) return 0;
+  size_t free_bytes = 0;
+  size_t largest_free_block = 0;
+  allocator->free_statistics(free_bytes, largest_free_block);
+  return free_bytes > largest_free_block ? free_bytes - largest_free_block : 0;
 }
 
 void nrq_memory_profiler_start(void) {
@@ -937,6 +1197,43 @@ NrqMemoryProfile nrq_memory_profiler_capture(void) {
   profile.gc_collected_bytes = nrq_gc_get_collected_bytes();
   profile.gc_collections = nrq_gc_get_collection_count();
   profile.gc_live_objects = nrq_gc_get_live_objects();
+
+  // Occupancy is sampled rather than accumulated: allocators extend and reset
+  // their regions behind the profiler's back, so a running counter would drift.
+  size_t free_bytes = 0;
+  size_t largest_free_block = 0;
+  auto sample = [&](const Allocator* allocator) {
+    size_t allocator_free = 0;
+    size_t allocator_largest = 0;
+    allocator->free_statistics(allocator_free, allocator_largest);
+    free_bytes += allocator_free;
+    largest_free_block = std::max(largest_free_block, allocator_largest);
+  };
+  sample(&default_allocator);
+  for (const auto& handle : allocator_handles) sample(handle.second.get());
+  profile.free_bytes = free_bytes;
+  profile.largest_free_block = largest_free_block;
+  profile.fragmentation_bytes = free_bytes > largest_free_block
+      ? free_bytes - largest_free_block
+      : 0;
+
+  // Live bytes per allocator kind, so a report can attribute memory to the
+  // strategy that owns it. This is sampled from the registry and therefore
+  // describes the current state, not an accumulated total.
+  for (const auto& allocation : live_allocations) {
+    const uint64_t bytes = allocation.second.bytes;
+    switch (allocation.second.allocator->kind()) {
+      case NRQ_ALLOCATOR_GENERAL: profile.general_bytes += bytes; break;
+      case NRQ_ALLOCATOR_POOL: profile.pool_bytes += bytes; break;
+      case NRQ_ALLOCATOR_ARENA: profile.arena_bytes += bytes; break;
+      case NRQ_ALLOCATOR_STACK: profile.stack_bytes += bytes; break;
+      case NRQ_ALLOCATOR_SLAB: profile.slab_bytes += bytes; break;
+      case NRQ_ALLOCATOR_BUDDY: profile.buddy_bytes += bytes; break;
+      case NRQ_ALLOCATOR_FREE_LIST: profile.free_list_bytes += bytes; break;
+      case NRQ_ALLOCATOR_TLSF: profile.tlsf_bytes += bytes; break;
+      case NRQ_ALLOCATOR_CUSTOM: profile.custom_bytes += bytes; break;
+    }
+  }
   return profile;
 }
 
@@ -992,10 +1289,7 @@ void nrq_memory_secure_release(void* pointer) {
   if (!found->second.allocator->can_deallocate(pointer))
     nrq_runtime_fatal("stack allocator allocations must be deallocated in LIFO order");
   found->second.allocator->deallocate(pointer);
-  if (memory_profiler_enabled) {
-    memory_profile.current_bytes -= found->second.bytes;
-    ++memory_profile.deallocations;
-  }
+  record_deallocation_profile(found->second.bytes);
   live_allocations.erase(found);
 }
 

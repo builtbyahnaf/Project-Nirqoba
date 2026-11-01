@@ -1031,10 +1031,15 @@ class FunctionTranslator {
         if (op.callee == "memory.get_allocator" ||
             op.callee == "memory.use_allocator" ||
             op.callee == "memory.reset_allocator" ||
-            op.callee == "memory.destroy_allocator") {
-          if (op.callee == "memory.get_allocator") {
-            auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_get_allocator",
-                                       llvm_ptr_type(ctx_), {});
+            op.callee == "memory.destroy_allocator" ||
+            op.callee == "memory.get_default_allocator" ||
+            op.callee == "memory.set_default_allocator") {
+          if (op.callee == "memory.get_allocator" ||
+              op.callee == "memory.get_default_allocator") {
+            auto fn = ensure_runtime_fn(module_, builder_,
+                op.callee == "memory.get_allocator" ? "nrq_memory_get_allocator"
+                                                     : "nrq_memory_get_default_allocator",
+                llvm_ptr_type(ctx_), {});
             auto result = builder_.create<mlir::LLVM::CallOp>(loc, fn, mlir::ValueRange{}).getResult();
             set(op.result, builder_.create<mlir::LLVM::PtrToIntOp>(loc, builder_.getI64Type(), result).getResult());
           } else {
@@ -1047,8 +1052,12 @@ class FunctionTranslator {
                   : builder_.create<mlir::LLVM::TruncOp>(loc, builder_.getI64Type(), handle).getResult();
             }
             auto pointer = builder_.create<mlir::LLVM::IntToPtrOp>(loc, llvm_ptr_type(ctx_), handle).getResult();
-            if (op.callee == "memory.use_allocator") {
-              auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_use_allocator", llvm_ptr_type(ctx_), {llvm_ptr_type(ctx_)});
+            if (op.callee == "memory.use_allocator" ||
+                op.callee == "memory.set_default_allocator") {
+              auto fn = ensure_runtime_fn(module_, builder_,
+                  op.callee == "memory.use_allocator" ? "nrq_memory_use_allocator"
+                                                       : "nrq_memory_set_default_allocator",
+                  llvm_ptr_type(ctx_), {llvm_ptr_type(ctx_)});
               auto result = builder_.create<mlir::LLVM::CallOp>(loc, fn, mlir::ValueRange{pointer}).getResult();
               set(op.result, builder_.create<mlir::LLVM::PtrToIntOp>(loc, builder_.getI64Type(), result).getResult());
             } else {
@@ -1059,6 +1068,31 @@ class FunctionTranslator {
               set(op.result, result);
             }
           }
+          return true;
+        }
+        if (op.callee == "memory.reallocate" && op.result.is_valid() &&
+            op.result.type.is_pointer()) {
+          if (args.size() != 2) {
+            diag_.error("NRQ4005", op.location,
+                        "internal: memory.reallocate<T> needs a pointer and a byte count");
+            return false;
+          }
+          mlir::Value pointer = args[0];
+          if (!mlir::isa<mlir::LLVM::LLVMPointerType>(pointer.getType()))
+            pointer = builder_.create<mlir::LLVM::IntToPtrOp>(
+                loc, llvm_ptr_type(ctx_), pointer).getResult();
+          mlir::Value bytes = args[1];
+          if (bytes.getType() != builder_.getI64Type()) {
+            const unsigned bits = bytes.getType().getIntOrFloatBitWidth();
+            bytes = bits < 64
+                ? builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), bytes).getResult()
+                : builder_.create<mlir::LLVM::TruncOp>(loc, builder_.getI64Type(), bytes).getResult();
+          }
+          auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_reallocate",
+              llvm_ptr_type(ctx_), {llvm_ptr_type(ctx_), builder_.getI64Type()});
+          mlir::Value result = builder_.create<mlir::LLVM::CallOp>(
+              loc, fn, mlir::ValueRange{pointer, bytes}).getResult();
+          set(op.result, result);
           return true;
         }
         if (op.callee == "memory.deallocate") {
@@ -1169,6 +1203,28 @@ class FunctionTranslator {
         } else if (callee == "time.now") {
           runtime_sym = "nrq_time_now_ms";
           runtime_ret_ty = builder_.getI64Type();
+          runtime_arg_tys = {};
+        } else if (callee == "memory.used_bytes") {
+          runtime_sym = "nrq_system_used_bytes";
+          runtime_ret_ty = builder_.getI64Type();
+          runtime_arg_tys = {};
+        } else if (callee == "memory.total_bytes") {
+          runtime_sym = "nrq_system_total_bytes";
+          runtime_ret_ty = builder_.getI64Type();
+          runtime_arg_tys = {};
+        } else if (callee == "memory.pin_count") {
+          runtime_sym = "nrq_gc_pin_count";
+          runtime_ret_ty = builder_.getI64Type();
+          runtime_arg_tys = {};
+        } else if (callee == "memory.pin_violations") {
+          runtime_sym = "nrq_gc_pin_violations";
+          runtime_ret_ty = builder_.getI64Type();
+          runtime_arg_tys = {};
+        } else if (callee == "gc.is_enabled") {
+          // The runtime reports a 32-bit flag, while the language type is bool;
+          // adapt_runtime_result performs the narrowing.
+          runtime_sym = "nrq_gc_is_enabled";
+          runtime_ret_ty = builder_.getI32Type();
           runtime_arg_tys = {};
         } else if (callee == "system.exit") {
           runtime_sym = "nrq_system_exit";

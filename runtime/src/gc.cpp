@@ -39,6 +39,14 @@ struct RootInfo {
 };
 std::unordered_map<void*, RootInfo> roots;
 std::unordered_map<void*, size_t> pinned_objects;
+// Pinning is a diagnostic facility rather than a concurrency primitive: a
+// reasonable program pins an object while a native call borrows it and unpins it
+// immediately afterwards. Repeating the same pin far more often than that means
+// the program is leaking pins (they are never released by the collector), so the
+// runtime rejects further pins for that object and counts the rejection instead
+// of failing the process.
+constexpr size_t kMaxPinsPerObject = 16;
+uint64_t pin_violations = 0;
 bool reference_diagnostics_enabled = false;
 thread_local std::vector<void*> thread_roots;
 bool automatic_collection_enabled = true;
@@ -335,12 +343,32 @@ void* nrq_gc_pin(void* object) {
   if (!object) return nullptr;
   std::lock_guard<std::mutex> lock(gc_mutex);
   if (object_index.find(object) == object_index.end()) return nullptr;
+  auto existing = pinned_objects.find(object);
+  if (existing != pinned_objects.end() && existing->second >= kMaxPinsPerObject) {
+    ++pin_violations;
+    return nullptr;
+  }
   try {
     ++pinned_objects[object];
     return object;
   } catch (...) {
     return nullptr;
   }
+}
+
+uint64_t nrq_gc_pin_count(void) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  return static_cast<uint64_t>(pinned_objects.size());
+}
+
+uint64_t nrq_gc_pin_violations(void) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  return pin_violations;
+}
+
+int32_t nrq_gc_is_enabled(void) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  return automatic_collection_enabled ? 1 : 0;
 }
 
 void nrq_gc_unpin(void* object) {

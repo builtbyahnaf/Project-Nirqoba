@@ -9,6 +9,9 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+// K32GetProcessMemoryInfo is exported by kernel32 on supported Windows
+// versions, so process working-set reporting needs no extra import library.
+#include <psapi.h>
 
 
 extern "C" {
@@ -36,6 +39,20 @@ int32_t nrq_system_cpu_count(void) {
     SYSTEM_INFO system_info{};
     GetSystemInfo(&system_info);
     return static_cast<int32_t>(system_info.dwNumberOfProcessors);
+}
+
+uint64_t nrq_system_total_bytes(void) {
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof(status);
+    if (!GlobalMemoryStatusEx(&status)) return 0;
+    return static_cast<uint64_t>(status.ullTotalPhys);
+}
+
+uint64_t nrq_system_used_bytes(void) {
+    PROCESS_MEMORY_COUNTERS counters{};
+    if (!K32GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)))
+        return 0;
+    return static_cast<uint64_t>(counters.WorkingSetSize);
 }
 
 void nrq_system_exit(int32_t exit_code) {
