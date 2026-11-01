@@ -62,6 +62,32 @@ static bool contains_nested_owned_array(const Type& type) {
   return contains_nested_owned_array(type, active_structs);
 }
 
+static bool contains_array_view(const Type& type,
+                                unordered_set<string>& active_structs) {
+  if (type.is_array_view()) return true;
+  if (type.is_owned_array()) return contains_array_view(type.element_type(), active_structs);
+  if (type.is_array()) return contains_array_view(type.element_type(), active_structs);
+  if (type.is_tuple()) {
+    for (const Type& element : type.tuple_elements())
+      if (contains_array_view(element, active_structs)) return true;
+  }
+  if (type.is_struct() && !type.struct_fields().empty() &&
+      active_structs.insert(type.struct_name()).second) {
+    for (const auto& field : type.struct_fields())
+      if (contains_array_view(field.second, active_structs)) {
+        active_structs.erase(type.struct_name());
+        return true;
+      }
+    active_structs.erase(type.struct_name());
+  }
+  return false;
+}
+
+static bool contains_array_view(const Type& type) {
+  unordered_set<string> active_structs;
+  return contains_array_view(type, active_structs);
+}
+
 static string cleanup_for_type(const Type& type) {
   if (type.is_owned_array()) return "array.owned_release";
   return contains_owned_array(type) ? "aggregate.owned_drop" : string{};
@@ -172,6 +198,9 @@ bool TypeChecker::check(Program& program) {
       if (contains_nested_owned_array(field_type))
         diagnostics_.error(diag::kTypeMismatch, field.location,
                            "owned arrays cannot contain elements that own nested allocations yet");
+      if (contains_array_view(field_type))
+        diagnostics_.error(diag::kTypeMismatch, field.location,
+                           "borrowed array views cannot be stored in aggregates");
     }
   }
 
@@ -181,12 +210,18 @@ bool TypeChecker::check(Program& program) {
     if (contains_nested_owned_array(function->return_type()))
       diagnostics_.error(diag::kTypeMismatch, function->location(),
                          "owned arrays cannot contain elements that own nested allocations yet");
+    if (contains_array_view(function->return_type()))
+      diagnostics_.error(diag::kTypeMismatch, function->location(),
+                         "borrowed array views cannot escape through a return value");
     vector<Type> param_types;
     param_types.reserve(function->parameters().size());
     for (const Parameter& param : function->parameters()) {
       if (contains_nested_owned_array(param.type))
         diagnostics_.error(diag::kTypeMismatch, param.location,
                            "owned arrays cannot contain elements that own nested allocations yet");
+      if (contains_array_view(param.type) && !param.type.is_array_view())
+        diagnostics_.error(diag::kTypeMismatch, param.location,
+                           "borrowed array views cannot be nested in aggregate parameters");
       param_types.push_back(param.type);
     }
 
@@ -754,6 +789,13 @@ void TypeChecker::check_destructuring(DestructuringStmt& statement) {
     }
     return;
   }
+  if (contains_array_view(value_type)) {
+    diagnostics_.error(diag::kTypeMismatch, statement.value().location(),
+                       "borrowed array views cannot escape their tracked binding through destructuring");
+    for (const string& name : names)
+      symbols_.declare(Symbol{name, Type::error(), statement.binding(), statement.location()});
+    return;
+  }
 
   // Tuple destructuring: let (a, b) = tup;
   if (value_type.is_tuple()) {
@@ -840,6 +882,13 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       has_untracked_pointer_ownership(target_type, assignment.value().ownership())) {
     diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
                        "owned, shared, and borrowed pointers cannot be stored in aggregate fields");
+    return;
+  }
+  if ((assignment.target().kind() == Expr::Kind::MemberAccess ||
+       assignment.target().kind() == Expr::Kind::Index) &&
+      contains_array_view(target_type)) {
+    diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
+                       "borrowed array views cannot be stored in aggregate or allocated memory");
     return;
   }
 
@@ -1121,7 +1170,7 @@ void TypeChecker::check_return(ReturnStmt& statement) {
                        "function returns '" + current_return_type_.to_string() +
                            "' but this 'return' yields '" + value_type.to_string() + "'");
   }
-  if (value_type.is_array_view()) {
+  if (contains_array_view(value_type)) {
     diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                        "borrowed array views cannot escape through a return value");
   }
@@ -1551,6 +1600,11 @@ Type TypeChecker::check_array_literal(ArrayLiteralExpr& expr) {
   }
 
   if (!ok) return Type::error();
+  if (contains_array_view(elem_type)) {
+    diagnostics_.error(diag::kTypeMismatch, expr.location(),
+                       "borrowed array views cannot be embedded in arrays");
+    return Type::error();
+  }
   if (contains_owned_array(elem_type)) {
     for (const ExprPtr& element : elements) {
       Expr& value = const_cast<Expr&>(*element);
@@ -1581,6 +1635,9 @@ Type TypeChecker::check_tuple_literal(TupleLiteralExpr& expr) {
     Type t = check_expression(const_cast<Expr&>(*elem));
     element_types.push_back(t);
     if (!t.is_valid()) ok = false;
+    if (contains_array_view(t))
+      diagnostics_.error(diag::kTypeMismatch, elem->location(),
+                         "borrowed array views cannot be embedded in tuples");
     if (has_untracked_pointer_ownership(t, elem->ownership()))
       diagnostics_.error(diag::kTypeMismatch, elem->location(),
                          "owned, shared, and borrowed pointers cannot be embedded in tuples");
@@ -1849,6 +1906,11 @@ Type TypeChecker::check_call(CallExpr& call) {
     const Type start_type = check_expression(const_cast<Expr&>(*call.arguments()[1]));
     const Type length_type = check_expression(const_cast<Expr&>(*call.arguments()[2]));
     const Type element_type = resolve_aggregate_type(call.generic_argument());
+    if (contains_array_view(element_type)) {
+      diagnostics_.error(diag::kTypeMismatch, call.location(),
+                         "borrowed array views cannot be stored in owned arrays");
+      return Type::error();
+    }
     if (!source_type.is_owned_array() && !source_type.is_array_view()) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "array views require an owned array or an existing array view");
@@ -2560,7 +2622,11 @@ Type TypeChecker::check_call(CallExpr& call) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "'array.allocate<T>' requires an integer element count");
     }
-    return Type::managed_pointer_type(resolve_generic_type(call.generic_argument()));
+    const Type element_type = resolve_generic_type(call.generic_argument());
+    if (contains_array_view(element_type))
+      diagnostics_.error(diag::kTypeMismatch, call.location(),
+                         "borrowed array views cannot be stored in GC-managed arrays");
+    return Type::managed_pointer_type(element_type);
   }
 
   if (call.callee() == "memory.deallocate") {
