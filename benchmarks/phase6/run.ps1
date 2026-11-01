@@ -3,12 +3,12 @@ param([int]$Iterations=1000000,[int]$Warmups=5,[int]$Runs=30,[string]$Output='be
 $ErrorActionPreference='Stop'
 if($Iterations -lt 1 -or $Warmups -lt 0 -or $Runs -lt 1){throw 'Iterations/runs must be positive and warmups nonnegative.'}
 $root=$PSScriptRoot
-$cppExe=Join-Path $root 'allocation-cpp.exe';$rsExe=Join-Path $root 'allocation-rust.exe'
 $cl=Get-Command cl.exe -ErrorAction SilentlyContinue
 if(-not $cl){throw 'cl.exe is required; run from a configured Visual Studio x64 developer shell.'}
 $rustc=Get-Command rustc.exe -ErrorAction SilentlyContinue
 if(-not $rustc){throw 'rustc.exe is required to run the C++/Rust comparison; no partial comparison will be reported.'}
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('nrq-bench-'+[guid]::NewGuid().ToString('N'));New-Item -ItemType Directory -Path $temp|Out-Null
+$cppExe=Join-Path $temp 'allocation-cpp.exe';$rsExe=Join-Path $temp 'allocation-rust.exe'
 try {
   Push-Location $temp
   try {
@@ -23,8 +23,12 @@ try {
     for($i=0;$i -lt $Runs;$i++){
       $timer=[Diagnostics.Stopwatch]::StartNew();$line=& $Exe $Iterations $Mode;$timer.Stop()
       if($LASTEXITCODE -ne 0){throw "$Language/$Mode failed on run $i"}
-      $text=$line -join ''; $times += [uint64]([regex]::Match($text,'ns=(\d+)').Groups[1].Value)
-      $checksums += [uint64]([regex]::Match($text,'checksum=(\d+)').Groups[1].Value)
+      $text=$line -join ''
+      $timeMatch=[regex]::Match($text,'ns=(\d+)')
+      $checksumMatch=[regex]::Match($text,'checksum=(\d+)')
+      if(-not $timeMatch.Success -or -not $checksumMatch.Success){throw "$Language/$Mode returned an invalid result: $text"}
+      $times += [uint64]$timeMatch.Groups[1].Value
+      $checksums += [uint64]$checksumMatch.Groups[1].Value
     }
     if(@($checksums|Select-Object -Unique).Count -ne 1){throw "$Language/$Mode produced unstable checksums"}
     $sorted=@($times|Sort-Object)
