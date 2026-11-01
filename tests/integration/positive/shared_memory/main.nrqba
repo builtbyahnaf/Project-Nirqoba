@@ -1,5 +1,5 @@
 int function main() {
-    let first = memory.shared_allocate<byte>(8);
+    let first = make_shared();
     print(memory.shared_count(first));
     let second = memory.shared_retain(first);
     print(memory.shared_count(first));
@@ -11,4 +11,8 @@ int function main() {
 void function consume(shared byte* reference) {
     print(memory.shared_count(reference));
     memory.shared_release(reference);
+}
+
+shared byte* function make_shared() {
+    return memory.shared_allocate<byte>(8);
 }

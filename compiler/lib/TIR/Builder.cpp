@@ -80,6 +80,7 @@ void TirBuilder::lower_module(const string& symbol_prefix, const Program& progra
 void TirBuilder::lower_function(const FunctionDecl& function, const string& symbol,
                                 tir::Module& module) {
   auto body = make_unique<tir::Function>(symbol, function.return_type());
+  if (function.returns_shared()) body->set_return_ownership(ValueOwnership::Shared);
   tir::Function* function_ir = module.add_function(move(body));
 
   scopes_.clear();

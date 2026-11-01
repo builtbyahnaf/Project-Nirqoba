@@ -119,3 +119,9 @@ by ownership transfer. Calls consume the caller's named handle. Shared handles
 cannot be passed to a normal `T*` owning parameter; use `borrow T* name` when a
 callee only needs a temporary non-owning view. Shared return types and shared
 aggregate fields are not supported yet.
+
+A function that returns a shared reference declares the ownership domain before
+the pointer type, for example `shared byte* function create()`. Returning a
+shared value transfers one reference to the caller. The compiler records the
+return domain on the MLIR function and rejects returning it through a unique
+pointer return type.

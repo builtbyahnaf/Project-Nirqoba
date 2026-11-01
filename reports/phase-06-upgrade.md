@@ -60,3 +60,11 @@ Added the `shared T* name` parameter qualifier. A shared reference can be transf
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 52/52. Coverage includes a reference transferred to a shared parameter and a negative shared-to-unique call.
 
 Limitations: shared function return types are not expressible yet; shared references also cannot be stored in aggregates. These remain part of ownership modeling.
+
+## 25. Shared ownership at function returns — 2026-11-01
+
+Added shared pointer return contracts using `shared T* function name(...)`. The checker verifies that return expressions match the declared domain and transfers the shared token to the caller. Function signatures carry the shared return contract into TIR and MLIR as `nirqoba.return_ownership = "shared"`; callers recover shared state when binding the result.
+
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 53/53. Coverage includes shared factory return and consumption, invalid unique return of a shared value, and MLIR return ownership metadata.
+
+Limitations: shared aggregates and compiler-inserted automatic release remain unimplemented.

@@ -1,0 +1,8 @@
+byte* function wrong_domain() {
+    let reference = memory.shared_allocate<byte>(8);
+    return reference;
+}
+
+int function main() {
+    return 0;
+}
