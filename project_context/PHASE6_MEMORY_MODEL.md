@@ -22,7 +22,7 @@ The compiler/runtime distinguish allocations from the GC heap and the explicit a
 - Files, mutexes, secure buffers, mappings, and owned arrays receive deterministic cleanup. Automatic cleanup applies on supported lexical control-flow exits.
 - `owned_array<T>` provides contiguous, checked storage, `.length`, allocator selection, optional stronger alignment, and ownership transfer. Read-only `array_view<T>` supports checked nested ranges, view parameters, and lexical owner-lifetime protection.
 - Shared allocation uses explicit retain/release tokens. GC uses precise roots, pins, per-object trace metadata, aligned bump regions, and an open-addressed object index. It remains stop-the-world under a global mutex; root-slot writes synchronize with collection through the runtime API.
-- Ownership remains conservative. Aggregate fields that own resources, partial moves, closure capture, arbitrary returned references, general escape analysis, and path-sensitive state merging are not implemented. Views cannot be returned or stored in aggregates.
+- Resource-bearing structs, tuples, and fixed arrays transfer as whole values and recursively drop nested owned arrays. Individual resource field extraction/replacement, shared references in aggregates, closure capture, arbitrary returned references, general escape analysis, and path-sensitive state merging are not implemented. Views cannot be returned or stored in aggregates.
 - GC TLABs, safepoints, generational/incremental collection, and concurrent mutator writes are not implemented. The implementation does not claim concurrent-GC safety for uninstrumented writes.
 - Allocator operations now use per-instance synchronization and allocation work is performed outside the global registry lock. Ownership registry updates, deallocation, reallocation, shared counts, selection, and profiler snapshots still use global synchronization.
 - CPU/GPU tensor abstractions and device-owned buffers do not exist. The runtime is currently Windows x64 only.
@@ -30,11 +30,11 @@ The compiler/runtime distinguish allocations from the GC heap and the explicit a
 ## Acceptance mapping
 
 - **A — Design:** this record defines memory domains, transfer, borrows, cleanup order, GC/owned boundaries, and implementation limits.
-- **B — Ownership analysis:** partial; supported pointer and array moves, pointer borrowing, shared contracts, use-after-move checks, and view lifetime checks are enforced. Aggregate ownership and general escape/lifetime analysis remain open.
+- **B — Ownership analysis:** partial; supported pointer and array moves, whole-value ownership transfer for resource-bearing aggregates, pointer borrowing, shared contracts, use-after-move checks, and view lifetime checks are enforced. Field-level moves and general escape/lifetime analysis remain open.
 - **C — Deterministic cleanup:** partial; tracked owners/resources are dropped on normal lexical exits and `defer` runs LIFO. Error/exception unwinding has no language model.
 - **D — Explicit allocators:** partial; all built-in strategies remain, allocator identity checks remain, and lock scope is narrowed. Comparative general-purpose allocator evaluation and controlled contention measurements remain.
 - **E — GC:** partial; contiguous regions, precise root validation, array root regions, and the compact object index are implemented. TLABs, safepoints, generational/incremental collection, and concurrent mutation are open.
-- **F — Arrays:** partial; contiguous owned arrays, explicit alignment requests, and read-only borrowed views are implemented. Tensors, GPU buffers, mutable views, and aggregate lifetimes remain open.
+- **F — Arrays:** partial; contiguous owned arrays, explicit alignment requests, read-only borrowed views, and recursive cleanup for arrays embedded in whole-value aggregates are implemented. Tensors, GPU buffers, mutable views, and field-level aggregate lifetimes remain open.
 - **G — Benchmarks:** the C++/Rust runner includes scalar, array, small/large/mixed allocation, graph, and multithread workloads with checksums, warmups, repeated percentiles, and environment metadata. Comparative execution has not been possible in the current environment because the active shell lacks `cl.exe` and `rustc.exe`. GC benchmarking is intentionally deferred.
 
 ## IR preservation
