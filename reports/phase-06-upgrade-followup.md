@@ -123,3 +123,11 @@ reallocation still hold that lock while invoking allocator operations. This is
 a correctness-preserving first reduction of allocator lock scope, not a claim
 that contention has been eliminated. The existing allocator benchmark matrix
 remains the measurement path; no GC benchmark was run.
+
+Follow-up correctness fixes keep null-pointer reallocation outside the registry
+lock and pin the selected allocator until its allocation has been recorded,
+avoiding a reentrant-lock deadlock. Allocator reset now rejects an in-flight
+allocation callback so region storage cannot be cleared before its returned
+pointer is registered. Regressions cover null-pointer reallocation and a
+blocking custom allocator racing reset. Full validation passed: CTest 1/1 and
+integration 83/83. No GC benchmark was run.
