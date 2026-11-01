@@ -1,5 +1,11 @@
 # Phase 6 memory benchmark protocol
 
-The benchmarks in this directory are standalone baselines. Run native implementations with the same compiler family/version, target CPU, optimization level, input sizes, and warmup/repetition counts. Record complete output and system details in `reports/phase-06-upgrade-benchmarks.md`. Do not compare debug builds or infer language-wide performance from one workload.
+`run.ps1` builds optimized native baselines and records repeated samples with compiler and machine metadata. It deliberately separates native baseline data from Nirqoba results because Nirqoba does not yet provide owned contiguous containers or equivalent concurrency APIs. Do not interpret this as a language comparison until equivalent workloads are available.
 
-`allocation.cpp` and `allocation.rs` implement the same allocate-touch-free workload. Use 5 warmups and 30 measured runs; report median and p95. Extend with graph traversal and multithreaded cases before making broad claims. Nirqoba currently has no owned container syntax, so this baseline does not yet compare equivalent Nirqoba programs.
+Examples:
+
+```powershell
+.\run.ps1 -Iterations 1000000 -Warmups 5 -Runs 30
+```
+
+The allocation kernels use identical 64-byte logical payloads, touch the first and last 64-bit words, and consume a checksum. Compile with MSVC `/O2 /std:c++20` and Rust `rustc -C opt-level=3`; use the same target CPU setting when available. The script reports median, p95, and p99 wall-clock duration. Keep output and environment details with the phase report.
