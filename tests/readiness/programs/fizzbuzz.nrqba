@@ -1,0 +1,15 @@
+// FizzBuzz: loops, conditionals, integer remainder, print.
+int function main() {
+    for (var n = 1; n <= 20; n += 1) {
+        if (n % 15 == 0) {
+            print("FizzBuzz");
+        } else if (n % 3 == 0) {
+            print("Fizz");
+        } else if (n % 5 == 0) {
+            print("Buzz");
+        } else {
+            print(n);
+        }
+    }
+    return 0;
+}

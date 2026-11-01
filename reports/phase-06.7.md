@@ -1,10 +1,11 @@
-# Phase 6.7 Report â€” Explicit Allocation and Allocator Strategies
+# Phase 6.7 Report — Explicit Allocation and Allocator Strategies
 
 ## 1. Phase Overview
 
-- **Phase:** 6.7 â€” Dynamic Memory Allocation and Selectable Allocator Strategies
+- **Phase:** 6.7 — Dynamic Memory Allocation and Selectable Allocator Strategies
 - **Implementation date:** 2026-10-31
-- **Status:** Partial implementation
+- **Status:** Implemented allocator system; items blocked on later phases remain (§13)
+- **Plan:** [`phase_plans/PHASE_6.7.md`](../phase_plans/PHASE_6.7.md)
 - **Objective:** Support explicit memory allocation independently of the GC.
 - **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
 
@@ -109,7 +110,7 @@ Updated `project_context/SYNTAX.md`; added `docs/memory/allocators.md` and
 
 ## 12. Final Verdict
 
-**FAIL** â€” the implemented allocator paths build and pass the current
+**FAIL** — the implemented allocator paths build and pass the current
 integration suite, but safety and acceptance requirements remain incomplete.
 ## 13. Completion pass — 2026-11-01
 

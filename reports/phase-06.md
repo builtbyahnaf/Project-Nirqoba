@@ -4,7 +4,8 @@
 
 - **Phase:** 6 — Memory/runtime hardening and Windows installer foundation
 - **Date:** 2026-10-31
-- **Status:** Partial implementation
+- **Status:** Implemented — regression gate green in both presets (see §7)
+- **Plan:** [`phase_plans/PHASE_6.md`](../phase_plans/PHASE_6.md)
 - **Objective:** Implement Phase 6 tracing GC, explicit allocation and allocator strategies, advanced memory APIs, verification, documentation, and Windows packaging.
 
 ## 2. Scope and status

@@ -338,6 +338,13 @@ class VariableDeclarationStmt : public Stmt {
   const std::string& name() const { return name_; }
   bool has_annotation() const { return has_annotation_; }
   Type annotation() const { return annotation_; }
+  // Semantic analysis replaces the parsed annotation with the resolved type
+  // (a struct annotation carries its field layout once the catalog is built),
+  // so lowering sees a sized aggregate instead of an opaque struct name.
+  void set_annotation(Type annotation) {
+    annotation_ = annotation;
+    has_annotation_ = true;
+  }
   const Expr& initializer() const { return *initializer_; }
 
  private:
@@ -593,8 +600,12 @@ class FunctionDecl {
         location_(std::move(location)), visibility_(visibility) {}
 
   Type return_type() const { return return_type_; }
+  void set_return_type(Type type) { return_type_ = type; }
   const std::string& name() const { return name_; }
   const std::vector<Parameter>& parameters() const { return parameters_; }
+  // Mutable access for the resolved parameter types (see
+  // VariableDeclarationStmt::set_annotation).
+  std::vector<Parameter>& parameters() { return parameters_; }
   const BlockStmt& body() const { return *body_; }
   const SourceLocation& location() const { return location_; }
   Visibility visibility() const { return visibility_; }
