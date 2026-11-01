@@ -20,9 +20,17 @@ using namespace std;
 
 namespace {
 
+struct GcPage {
+  unsigned char* storage = nullptr;
+  size_t capacity = 0;
+  size_t used = 0;
+  size_t live_objects = 0;
+};
+
 struct alignas(std::max_align_t) ObjectHeader {
   ObjectHeader* next = nullptr;
   ObjectHeader* mark_next = nullptr;
+  GcPage* page = nullptr;
   void* object = nullptr;
   size_t size = 0;
   size_t element_size = 0;
@@ -151,12 +159,13 @@ class ObjectIndex {
 void destroy_object_storage(ObjectHeader* header) {
   if (!header) return;
   header->~ObjectHeader();
-  ::operator delete(header);
 }
 
 std::mutex gc_mutex;
 ObjectHeader* objects = nullptr;
 ObjectIndex object_index;
+std::vector<std::unique_ptr<GcPage>> gc_pages;
+constexpr size_t kGcPageBytes = 64 * 1024;
 struct RootInfo {
   size_t references = 0;
   size_t object_size = 0;
@@ -276,10 +285,21 @@ void collect_locked() {
       statistics.collected_bytes = saturated_add(
           statistics.collected_bytes, static_cast<uint64_t>(header->size));
       if (statistics.live_objects != 0) --statistics.live_objects;
+      if (!header->page || header->page->live_objects == 0)
+        nrq_runtime_fatal("GC page live-object count underflow");
+      --header->page->live_objects;
       destroy_object_storage(header);
     } else {
       header->marked = false;
       link = &header->next;
+    }
+  }
+  for (auto page = gc_pages.begin(); page != gc_pages.end();) {
+    if ((*page)->live_objects == 0) {
+      ::operator delete((*page)->storage);
+      page = gc_pages.erase(page);
+    } else {
+      ++page;
     }
   }
   statistics.allocated_bytes = 0;
@@ -296,12 +316,38 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     return nullptr;
   if (automatic_collection_enabled && bytes_since_collection >= collection_threshold)
     collect_locked();
-
-  if (bytes > SIZE_MAX - sizeof(ObjectHeader)) return nullptr;
-  void* storage = ::operator new(sizeof(ObjectHeader) + bytes, std::nothrow);
-  if (!storage) return nullptr;
-  auto* header = new (storage) ObjectHeader();
-  void* object = static_cast<unsigned char*>(storage) + sizeof(ObjectHeader);
+  constexpr size_t alignment = alignof(std::max_align_t);
+  const size_t raw_span = sizeof(ObjectHeader) + bytes;
+  if (raw_span > SIZE_MAX - (alignment - 1)) return nullptr;
+  const size_t span = (raw_span + alignment - 1) & ~(alignment - 1);
+  GcPage* page = nullptr;
+  for (auto candidate = gc_pages.rbegin(); candidate != gc_pages.rend(); ++candidate) {
+    if ((*candidate)->used <= (*candidate)->capacity &&
+        span <= (*candidate)->capacity - (*candidate)->used) {
+      page = candidate->get();
+      break;
+    }
+  }
+  if (!page) {
+    const size_t capacity = std::max(kGcPageBytes, span);
+    void* storage = ::operator new(capacity, std::nothrow);
+    if (!storage) return nullptr;
+    try {
+      auto new_page = std::make_unique<GcPage>();
+      new_page->storage = static_cast<unsigned char*>(storage);
+      new_page->capacity = capacity;
+      page = new_page.get();
+      gc_pages.push_back(std::move(new_page));
+    } catch (...) {
+      ::operator delete(storage);
+      return nullptr;
+    }
+  }
+  void* header_storage = page->storage + page->used;
+  page->used += span;
+  auto* header = new (header_storage) ObjectHeader();
+  header->page = page;
+  void* object = static_cast<unsigned char*>(header_storage) + sizeof(ObjectHeader);
   std::memset(object, 0, bytes);
   try {
     if (reference_count != 0) {
@@ -332,6 +378,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     return nullptr;
   }
   objects = header;
+  ++page->live_objects;
   statistics.allocated_bytes = saturated_add(
       statistics.allocated_bytes, static_cast<uint64_t>(bytes));
   statistics.live_objects = saturated_add(statistics.live_objects, 1);

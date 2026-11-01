@@ -93,6 +93,24 @@ TEST(GcTest, RejectsAllocationSizeOverflowWithoutChangingHeapStatistics) {
   ASSERT_EQ(after.collections, before.collections);
 }
 
+TEST(GcTest, BumpRegionsAlignMixedObjectSizesAndReclaimEmptyPages) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+  constexpr size_t kObjectCount = 384;
+  for (size_t index = 0; index < kObjectCount; ++index) {
+    const size_t size = (index % 7 == 0) ? 4097 : 1 + (index * 13) % 257;
+    void* object = nrq_gc_allocate(size, nullptr);
+    ASSERT_NE(object, nullptr);
+    ASSERT_EQ(reinterpret_cast<uintptr_t>(object) % alignof(std::max_align_t),
+              uintptr_t{0});
+  }
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + kObjectCount);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+  nrq_gc_enable();
+}
+
 TEST(GcTest, AllocationThresholdTriggersAutomaticCollection) {
   nrq_gc_enable();
   nrq_gc_set_threshold(1);

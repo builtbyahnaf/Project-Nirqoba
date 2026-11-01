@@ -30,10 +30,14 @@ reclamation; the unit suite no longer prints timing measurements.
 
 The collector still serializes allocation, root mutation, pinning, and collection
 with one mutex. It is not concurrent with mutator pointer writes unless those
-writes use the root-store API. TLABs, bump regions, safepoints, generational or
-incremental collection, and concurrent mutation remain unimplemented. They are
-not safe to add as allocator-only fast paths without first defining and testing
-a mutator safepoint protocol. A threaded correctness test races root-store
+writes use the root-store API. TLABs, safepoints, generational or incremental
+collection, and concurrent mutation remain unimplemented. Small managed objects
+now use aligned 64-KiB bump regions under the collector lock; large objects get
+dedicated regions. Sweeping destroys per-object trace metadata and returns a
+region only after its live-object count reaches zero. These regions reduce
+backing allocator calls but do not reduce global-lock synchronization. TLABs
+and concurrent collection need a mutator safepoint protocol before they can be
+added safely. A threaded correctness test races root-store
 mutation against explicit collection and checks reachability and reclamation;
 this does not establish safety for raw uninstrumented writes. No GC benchmark
 was run for this follow-up.
