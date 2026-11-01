@@ -25,10 +25,10 @@ raw pointer fields with owned, shared, or borrowed ownership are rejected until
 field ownership can be declared.
 
 Validation on Windows x64, MSVC, and LLVM/MLIR 23.1.4: RelWithDebInfo build,
-CTest 1/1, and integration 81/81 passed after aggregate, branch/loop, and
+CTest 1/1, and integration 83/83 passed after aggregate, branch/loop, and
 call-borrow changes. Added coverage exercises nested aggregate return/parameter
 cleanup, both branches transferring an owner, possibly-moved branch rejection,
-loop back-edge rejection, duplicate and conflicting call arguments, borrowed
+loop back-edge and condition rejection, cleanup on a return path, duplicate and conflicting call arguments, borrowed
 view/pointer field restrictions, nested owned-array type rejection, and GC
 tracing through an aligned tuple nested in an owned array.
 
