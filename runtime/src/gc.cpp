@@ -185,6 +185,7 @@ constexpr size_t kMaxPinsPerObject = 16;
 uint64_t pin_violations = 0;
 bool reference_diagnostics_enabled = false;
 thread_local std::vector<void*> thread_roots;
+thread_local std::vector<uint64_t> thread_root_frames;
 // Collection is an explicit opt-in policy. Programs using the GC domain may
 // call gc.enable() to request automatic triggers; explicit gc.collect() always
 // works regardless of this state.
@@ -533,14 +534,22 @@ void nrq_gc_root_copy(void* destination, const void* source, size_t bytes) {
 }
 
 uint64_t nrq_gc_root_frame_begin(void) {
-  return static_cast<uint64_t>(thread_roots.size());
+  const uint64_t marker = static_cast<uint64_t>(thread_roots.size());
+  try {
+    thread_root_frames.push_back(marker);
+  } catch (...) {
+    nrq_runtime_fatal("GC root frame registration failed to allocate thread metadata");
+  }
+  return marker;
 }
 
 void nrq_gc_root_frame_end(uint64_t marker) {
   std::lock_guard<std::mutex> lock(gc_mutex);
-  const size_t target = marker > thread_roots.size()
-      ? 0
-      : static_cast<size_t>(marker);
+  if (thread_root_frames.empty() || thread_root_frames.back() != marker ||
+      marker > thread_roots.size())
+    nrq_runtime_fatal("GC root frames must end in LIFO order with a valid marker");
+  thread_root_frames.pop_back();
+  const size_t target = static_cast<size_t>(marker);
   while (thread_roots.size() > target) {
     void* slot = thread_roots.back();
     thread_roots.pop_back();
