@@ -955,7 +955,8 @@ ExprPtr Parser::parse_primary() {
       advance();
       if ((token.text == "memory" || token.text == "array") && check(TokenKind::Dot) &&
           peek(1).kind == TokenKind::Identifier &&
-          (peek(1).text == "allocate" || peek(1).text == "secure_allocate" ||
+          (peek(1).text == "allocate" || peek(1).text == "reallocate" ||
+           peek(1).text == "secure_allocate" ||
            peek(1).text == "mapped_read" || peek(1).text == "mapped_write") &&
           peek(2).kind == TokenKind::Less) {
         advance();  // '.'
@@ -965,7 +966,7 @@ ExprPtr Parser::parse_primary() {
         expect(TokenKind::Greater, "after the allocated element type");
         expect(TokenKind::LParen, "after the typed memory allocation operation");
         vector<ExprPtr> arguments = parse_argument_list();
-        expect(TokenKind::RParen, "to close memory.allocate<T>");
+        expect(TokenKind::RParen, "to close the typed memory allocation operation");
         return make_unique<CallExpr>(token.location,
                                      token.text + "." + operation.text,
                                      move(arguments), allocated_type);

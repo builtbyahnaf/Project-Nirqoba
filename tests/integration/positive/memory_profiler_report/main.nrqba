@@ -14,7 +14,7 @@ int function main() {
     print(profile.largest_free_block);
     print(profile.fragmentation_bytes);
     print(profile.free_list_bytes);
-    print(profile.allocations_le_4096);
+    print(profile.allocations_le_1024);
     print(profile.largest_allocation);
 
     memory.deallocate(second);

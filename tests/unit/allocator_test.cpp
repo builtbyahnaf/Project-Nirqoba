@@ -369,28 +369,37 @@ TEST(AllocatorTest, ProfilerReportsSizeHistogramAndAllocatorAttribution) {
   nrq_allocator_destroy(pool);
   nrq_allocator_destroy(arena);
 }
-
 TEST(AllocatorTest, BenchmarksSmallLargeAndMixedWorkloads) {
   // Timings are recorded for CI visibility; this is not a claim that one
-  // strategy is faster than another on arbitrary workloads.
+  // strategy is faster than another on arbitrary workloads. Each worker keeps a
+  // bounded window of live blocks so region-backed strategies never run out of
+  // space, and the measured work stays comparable across strategies.
   constexpr int kSmallAllocations = 20000;
   constexpr int kMixedAllocations = 4000;
+  constexpr size_t kLiveWindow = 128;
   const NrqAllocatorKind kinds[] = {NRQ_ALLOCATOR_GENERAL, NRQ_ALLOCATOR_POOL,
                                     NRQ_ALLOCATOR_TLSF};
   for (NrqAllocatorKind kind : kinds) {
-    void* allocator = nrq_allocator_create(kind, 1024 * 1024);
+    // A pool's capacity is its largest request class, not a region size, so it
+    // is sized to the largest block this benchmark asks for.
+    const size_t capacity = kind == NRQ_ALLOCATOR_POOL ? 4096 : 1024 * 1024;
+    void* allocator = nrq_allocator_create(kind, capacity);
     ASSERT_NE(allocator, nullptr);
     std::vector<void*> blocks;
-    blocks.reserve(kSmallAllocations);
+    blocks.reserve(kLiveWindow);
 
     const auto small_start = std::chrono::steady_clock::now();
     for (int index = 0; index < kSmallAllocations; ++index) {
       void* block = nrq_memory_allocate_from(allocator, 48, 8);
       ASSERT_NE(block, nullptr);
       blocks.push_back(block);
+      if (blocks.size() == kLiveWindow) {
+        for (void* live : blocks) nrq_memory_deallocate_checked(live);
+        blocks.clear();
+      }
     }
     const auto small_end = std::chrono::steady_clock::now();
-    for (void* block : blocks) nrq_memory_deallocate_checked(block);
+    for (void* live : blocks) nrq_memory_deallocate_checked(live);
     blocks.clear();
 
     const auto mixed_start = std::chrono::steady_clock::now();
@@ -399,9 +408,14 @@ TEST(AllocatorTest, BenchmarksSmallLargeAndMixedWorkloads) {
       void* block = nrq_memory_allocate_from(allocator, bytes, 8);
       ASSERT_NE(block, nullptr);
       blocks.push_back(block);
+      if (blocks.size() == kLiveWindow) {
+        for (void* live : blocks) nrq_memory_deallocate_checked(live);
+        blocks.clear();
+      }
     }
     const auto mixed_end = std::chrono::steady_clock::now();
-    for (void* block : blocks) nrq_memory_deallocate_checked(block);
+    for (void* live : blocks) nrq_memory_deallocate_checked(live);
+    blocks.clear();
 
     const auto small_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         small_end - small_start).count();
