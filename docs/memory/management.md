@@ -93,3 +93,5 @@ syntax. GC does not provide timely finalization.
 memory.cpu_features() returns a bit mask of CPU features the Windows operating system reports usable by this process: bit 0 is SSE2, bit 1 is AVX, and bit 2 is AVX2. A set bit means the runtime reports support; callers should still use an appropriate target-specific code path and retain a fallback. This API reports only the currently implemented feature set.
 
 ile.open(path, writable) creates an opaque Windows file resource or returns null. Use defer file.close(resource) immediately after opening; ile.write(resource, text) returns a Windows error code (zero on success). The compiler rejects use through a binding after ile.close. The current wrapper supports text writes and does not implement exception unwinding.
+
+memory.thread_count() returns a Windows process-thread snapshot count. Because threads can start or exit during enumeration, treat it as an estimate rather than a synchronization guarantee.

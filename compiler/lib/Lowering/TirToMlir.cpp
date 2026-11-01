@@ -940,6 +940,13 @@ class FunctionTranslator {
               loc, fn, mlir::ValueRange{}).getResult());
           return true;
         }
+        if (op.callee == "memory.thread_count") {
+          auto fn = ensure_runtime_fn(module_, builder_, "nrq_system_thread_count",
+                                      builder_.getI32Type(), {});
+          set(op.result, builder_.create<mlir::LLVM::CallOp>(
+              loc, fn, mlir::ValueRange{}).getResult());
+          return true;
+        }
         if (op.callee == "memory.allocator_kind") {
           mlir::Value handle;
           if (args.empty()) {

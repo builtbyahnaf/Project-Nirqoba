@@ -30,5 +30,8 @@ int function main() {
         memory.unpin(pinned);
     }
     print(memory.pin_count());
+    if (memory.thread_count() > 0u32) {
+        print("threads");
+    }
     return 42;
 }
