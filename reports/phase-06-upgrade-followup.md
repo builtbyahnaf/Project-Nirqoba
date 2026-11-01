@@ -16,10 +16,19 @@ checked nested slicing and function parameters. Views cannot escape through
 returns or be written through. Their lexical borrow blocks owner moves, release,
 and mutation while the view binding is live.
 
+Ownership state is checked across both `if` branches and conservatively merged;
+loop back-edges reject owners left moved. Calls track temporary and named view
+borrows against owner transfers and reject duplicate transfers of the same token.
+Views cannot be nested into aggregates, returned through aggregate types, or
+stored in aggregate/allocated memory. Resource-bearing aggregates move whole;
+raw pointer fields with owned, shared, or borrowed ownership are rejected until
+field ownership can be declared.
+
 Validation on Windows x64, MSVC, and LLVM/MLIR 23.1.4: RelWithDebInfo build,
 CTest 1/1, and integration 70/70 passed before aggregate-ownership changes.
-The aggregate-ownership changes have since passed a RelWithDebInfo build; the
-full tests have not been rerun for that latest slice. Existing cases cover array
+The aggregate, branch/loop, and call-borrow ownership changes have since passed
+RelWithDebInfo builds; the full tests have not been rerun for those latest
+slices. Existing cases cover array
 allocation/drop/transfer, bounds and range checks, view passing and nesting,
 and invalid owner operations while borrowed.
 
