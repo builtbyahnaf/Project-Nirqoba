@@ -2910,6 +2910,10 @@ Type TypeChecker::check_call(CallExpr& call) {
       if (!source || source->allocation_id == 0 || source->moved) {
         diagnostics_.error(diag::kTypeMismatch, argument.location(),
                            "array view arguments must refer to a live tracked owner");
+      } else if (std::find(ownership_transfers.begin(), ownership_transfers.end(),
+                           source->allocation_id) != ownership_transfers.end()) {
+        diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                           "cannot borrow an owner in a call that also transfers it");
       } else {
         auto found = active_borrows.find(source->allocation_id);
         if (found != active_borrows.end() && found->second)
@@ -2980,6 +2984,12 @@ Type TypeChecker::check_call(CallExpr& call) {
       }
       const bool mutable_borrow = i < sig.parameter_mutable_borrow.size() &&
                                   sig.parameter_mutable_borrow[i];
+      if (std::find(ownership_transfers.begin(), ownership_transfers.end(),
+                    source->allocation_id) != ownership_transfers.end()) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                           "cannot borrow an owner in a call that also transfers it");
+        continue;
+      }
       if (mutable_borrow && !source->is_mutable()) {
         diagnostics_.error(diag::kImmutableAssignment, call.arguments()[i]->location(),
                            "mutable borrowing requires a mutable binding");
@@ -2993,6 +3003,10 @@ Type TypeChecker::check_call(CallExpr& call) {
     } else if (source && source->borrowed) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "a borrowed pointer cannot be transferred to an owning parameter");
+    } else if (!expects_shared &&
+               source && active_borrows.find(source->allocation_id) != active_borrows.end()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                         "cannot transfer an owner while another argument borrows it");
     } else if (!expects_shared &&
                !(source && source->owns_allocation && !source->moved) &&
                call.arguments()[i]->ownership() != ValueOwnership::Owned) {
