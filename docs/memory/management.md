@@ -87,3 +87,5 @@ cleanup remain unimplemented: the roadmap requires their syntax to be settled in
 the language specification first, and this document currently defines no such
 syntax. GC does not provide timely finalization.
 
+
+memory.cpu_features() returns a bit mask of CPU features the Windows operating system reports usable by this process: bit 0 is SSE2, bit 1 is AVX, and bit 2 is AVX2. A set bit means the runtime reports support; callers should still use an appropriate target-specific code path and retain a fallback. This API reports only the currently implemented feature set.

@@ -13,6 +13,9 @@ extern "C" {
 // Returns milliseconds since Unix epoch (January 1, 1970).
 int64_t nrq_time_now_ms(void);
 int32_t nrq_system_cpu_count(void);
+// Returns detected CPU feature flags. Bits: 0=SSE2, 1=AVX, 2=AVX2.
+// A set bit means the operating system reports the feature usable by this process.
+uint64_t nrq_system_cpu_features(void);
 
 // Installed physical memory in bytes, as reported by the operating system.
 uint64_t nrq_system_total_bytes(void);

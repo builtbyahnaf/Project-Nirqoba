@@ -1,0 +1,10 @@
+int function main() {
+    let features = memory.cpu_features();
+    if ((features & 1u64) != 0u64) {
+        print("sse2");
+    } else {
+        print("unknown");
+    }
+    return 0;
+}
+
