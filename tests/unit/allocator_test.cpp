@@ -384,6 +384,24 @@ TEST(AllocatorTest, ReallocatePreservesContentsAndAllocatorIdentity) {
   ASSERT_EQ(nrq_allocator_destroy(region), int32_t{1});
 }
 
+TEST(AllocatorTest, FailedReallocatePreservesTheOriginalOwnerRecord) {
+  CustomAllocatorState state;
+  const NrqCustomAllocatorVTable callbacks{
+      &state, custom_allocate, custom_deallocate, nullptr};
+  void* allocator = nrq_allocator_create_custom(&callbacks);
+  ASSERT_NE(allocator, nullptr);
+  auto* pointer = static_cast<unsigned char*>(
+      nrq_memory_allocate_from(allocator, 16, 16));
+  ASSERT_NE(pointer, nullptr);
+  pointer[0] = 91;
+  state.fail_allocation = true;
+  ASSERT_EQ(nrq_memory_reallocate(pointer, 64), nullptr);
+  ASSERT_EQ(static_cast<int>(pointer[0]), 91);
+  state.fail_allocation = false;
+  nrq_memory_deallocate_checked(pointer);
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
+}
+
 TEST(AllocatorTest, ReallocateAllocatesWhenPointerIsNull) {
   auto* value = static_cast<unsigned char*>(nrq_memory_reallocate(nullptr, 32));
   ASSERT_NE(value, nullptr);
