@@ -1205,19 +1205,29 @@ void* nrq_memory_shared_retain(void* pointer) {
   return pointer;
 }
 
+// The allocator registry mutex must be held by the caller. In particular, the
+// last shared release removes its count and frees the allocation in one critical
+// section so no unique deallocator or allocator reset can claim it in between.
+static void deallocate_allocation_locked(void* pointer) {
+  auto found = live_allocations.find(pointer);
+  if (found == live_allocations.end())
+    nrq_runtime_fatal("memory.deallocate received an invalid or already freed pointer");
+  if (!found->second.allocator->can_deallocate_serialized(pointer))
+    nrq_runtime_fatal("stack allocator allocations must be deallocated in LIFO order");
+  found->second.allocator->deallocate_serialized(pointer);
+  record_deallocation_profile(found->second.bytes);
+  live_allocations.erase(found);
+}
+
 int32_t nrq_memory_shared_release(void* pointer) {
   if (!pointer) return 0;
-  bool release_allocation = false;
-  {
-    std::lock_guard<std::mutex> lock(allocator_mutex);
-    auto found = shared_reference_counts.find(pointer);
-    if (found == shared_reference_counts.end()) return 0;
-    if (--found->second == 0) {
-      shared_reference_counts.erase(found);
-      release_allocation = true;
-    }
+  std::lock_guard<std::mutex> lock(allocator_mutex);
+  auto found = shared_reference_counts.find(pointer);
+  if (found == shared_reference_counts.end()) return 0;
+  if (--found->second == 0) {
+    shared_reference_counts.erase(found);
+    deallocate_allocation_locked(pointer);
   }
-  if (release_allocation) nrq_memory_deallocate_checked(pointer);
   return 1;
 }
 
@@ -1249,14 +1259,7 @@ void nrq_memory_deallocate_checked(void* pointer) {
   std::lock_guard<std::mutex> lock(allocator_mutex);
   if (shared_reference_counts.find(pointer) != shared_reference_counts.end())
     nrq_runtime_fatal("shared allocations must be released with memory.shared_release");
-  auto found = live_allocations.find(pointer);
-  if (found == live_allocations.end())
-    nrq_runtime_fatal("memory.deallocate received an invalid or already freed pointer");
-  if (!found->second.allocator->can_deallocate_serialized(pointer))
-    nrq_runtime_fatal("stack allocator allocations must be deallocated in LIFO order");
-  found->second.allocator->deallocate_serialized(pointer);
-  record_deallocation_profile(found->second.bytes);
-  live_allocations.erase(found);
+  deallocate_allocation_locked(pointer);
 }
 
 void nrq_memory_deallocate(void* pointer, size_t bytes, size_t alignment) {

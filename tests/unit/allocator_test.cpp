@@ -181,6 +181,35 @@ TEST(AllocatorTest, InFlightAllocationPreventsAllocatorReset) {
   ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
 }
 
+TEST(AllocatorTest, ConcurrentSharedRetainsAndReleasesKeepFinalOwnerAlive) {
+  void* pointer = nrq_memory_shared_allocate(64, 16);
+  ASSERT_NE(pointer, nullptr);
+  constexpr size_t kWorkers = 8;
+  std::atomic<size_t> ready = 0;
+  std::atomic<size_t> failures = 0;
+  std::atomic<bool> release_now = false;
+  std::vector<std::thread> workers;
+  for (size_t index = 0; index < kWorkers; ++index) {
+    workers.emplace_back([&] {
+      const bool retained = nrq_memory_shared_retain(pointer) != nullptr;
+      if (!retained) ++failures;
+      ++ready;
+      if (!retained) return;
+      while (!release_now.load()) std::this_thread::yield();
+      if (nrq_memory_shared_release(pointer) != 1) ++failures;
+    });
+  }
+  while (ready.load() != kWorkers) std::this_thread::yield();
+  const uint64_t count_while_retained = nrq_memory_shared_count(pointer);
+  release_now = true;
+  for (std::thread& worker : workers) worker.join();
+  ASSERT_EQ(count_while_retained, static_cast<uint64_t>(kWorkers + 1));
+  ASSERT_EQ(failures.load(), size_t{0});
+  ASSERT_EQ(nrq_memory_shared_count(pointer), uint64_t{1});
+  ASSERT_EQ(nrq_memory_shared_release(pointer), int32_t{1});
+  ASSERT_EQ(nrq_memory_shared_count(pointer), uint64_t{0});
+}
+
 TEST(AllocatorTest, PoolRejectsRequestsLargerThanItsCapacity) {
   void* allocator = nrq_allocator_create(NRQ_ALLOCATOR_POOL, 32);
   ASSERT_NE(allocator, nullptr);

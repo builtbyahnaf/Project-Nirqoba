@@ -236,15 +236,11 @@ class FunctionTranslator {
       if (offsets.empty()) continue;
       mlir::Type value_type = tir_type_to_mlir(tir_fn.parameters()[i].type, ctx_, builder_);
       if (!value_type) continue;
-      mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
-          mlir::UnknownLoc::get(ctx_), builder_.getI64Type(),
-          builder_.getI64IntegerAttr(1)).getResult();
-      mlir::Value slot = builder_.create<mlir::LLVM::AllocaOp>(
-          mlir::UnknownLoc::get(ctx_), llvm_ptr_type(ctx_), value_type, one).getResult();
-      builder_.create<mlir::LLVM::StoreOp>(mlir::UnknownLoc::get(ctx_),
-                                           entry_block_->getArgument(i), slot);
+      mlir::Value slot = alloca_at_entry(value_type,
+                                         mlir::UnknownLoc::get(ctx_));
       register_gc_root(slot, tir_fn.parameters()[i].type,
-                       mlir::UnknownLoc::get(ctx_));
+                       mlir::UnknownLoc::get(ctx_),
+                       entry_block_->getArgument(i));
     }
   }
 
@@ -290,23 +286,45 @@ class FunctionTranslator {
   // be registered once, not once per loop iteration. Registrations are queued
   // and emitted into the entry block after the body is translated.
   void register_gc_root(mlir::Value slot, const Type& value_type,
-                        mlir::Location loc) {
+                        mlir::Location loc,
+                        mlir::Value initial_value = {}) {
     std::vector<uint64_t> offsets;
     collect_managed_reference_offsets(value_type, 0, offsets);
     if (offsets.empty()) return;
-    pending_gc_roots_.push_back(PendingGcRoot{slot, value_type, loc});
+    pending_gc_roots_.push_back(
+        PendingGcRoot{slot, value_type, loc, initial_value});
   }
 
   void flush_gc_root_registrations() {
     if (pending_gc_roots_.empty() || entry_block_ == nullptr) return;
     mlir::OpBuilder::InsertionGuard guard(builder_);
-    if (mlir::Operation* terminator = entry_block_->getTerminator()) {
-      builder_.setInsertionPoint(terminator);
-    } else {
-      builder_.setInsertionPointToEnd(entry_block_);
-    }
+    mlir::Operation* frame_begin = gc_root_frame_marker_.getDefiningOp();
+    if (!frame_begin) return;
+    builder_.setInsertionPointAfter(frame_begin);
     for (const PendingGcRoot& root : pending_gc_roots_) {
+      mlir::Type value_type = tir_type_to_mlir(root.type, ctx_, builder_);
+      if (!value_type) continue;
+      mlir::Value zero = builder_.create<mlir::LLVM::ZeroOp>(
+          root.loc, value_type).getResult();
+      builder_.create<mlir::LLVM::StoreOp>(root.loc, zero, root.slot);
       emit_gc_root_registration(root.slot, root.type, root.loc);
+      if (root.initial_value) {
+        mlir::Value initial_slot = alloca_at_entry(value_type, root.loc);
+        if (!initial_slot) continue;
+        builder_.create<mlir::LLVM::StoreOp>(root.loc, root.initial_value,
+                                             initial_slot);
+        auto copy_fn = ensure_runtime_fn(
+            module_, builder_, "nrq_gc_root_copy",
+            mlir::LLVM::LLVMVoidType::get(ctx_),
+            {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_), builder_.getI64Type()});
+        mlir::Value byte_count = builder_.create<mlir::LLVM::ConstantOp>(
+            root.loc, builder_.getI64Type(),
+            builder_.getI64IntegerAttr(static_cast<int64_t>(type_size(root.type))))
+                                     .getResult();
+        builder_.create<mlir::LLVM::CallOp>(
+            root.loc, copy_fn,
+            mlir::ValueRange{root.slot, initial_slot, byte_count});
+      }
     }
     pending_gc_roots_.clear();
   }
@@ -1942,6 +1960,7 @@ class FunctionTranslator {
     mlir::Value slot;
     Type type;
     mlir::Location loc;
+    mlir::Value initial_value;
   };
   std::vector<PendingGcRoot> pending_gc_roots_;
   std::vector<mlir::Value> values_;
