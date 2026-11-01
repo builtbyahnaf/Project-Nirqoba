@@ -7,14 +7,19 @@ Date: 2026-11-01
 The explicit ownership path now supports unique pointer and owned-array moves,
 owned and shared parameter/return contracts, checked borrowed pointer parameters,
 read-only array views, and compiler-inserted deterministic cleanup for tracked
-owners and supported resources. `owned_array<T>` stores a contiguous element
+owners and supported resources. Resource-bearing structs, tuples, and fixed
+arrays transfer as whole values and recursively drop nested owned arrays.
+Partial field extraction, replacement, and destructuring are diagnosed so a
+nested allocation cannot acquire two independent cleanup paths. `owned_array<T>` stores a contiguous element
 buffer and length. `array_view<T>` is a non-owning descriptor that supports
 checked nested slicing and function parameters. Views cannot escape through
 returns or be written through. Their lexical borrow blocks owner moves, release,
 and mutation while the view binding is live.
 
 Validation on Windows x64, MSVC, and LLVM/MLIR 23.1.4: RelWithDebInfo build,
-CTest 1/1, and integration 65/65 passed. Integration cases cover array
+CTest 1/1, and integration 70/70 passed before aggregate-ownership changes.
+The aggregate-ownership changes have since passed a RelWithDebInfo build; the
+full tests have not been rerun for that latest slice. Existing cases cover array
 allocation/drop/transfer, bounds and range checks, view passing and nesting,
 and invalid owner operations while borrowed.
 
@@ -40,7 +45,9 @@ and concurrent collection need a mutator safepoint protocol before they can be
 added safely. A threaded correctness test races root-store
 mutation against explicit collection and checks reachability and reclamation;
 this does not establish safety for raw uninstrumented writes. No GC benchmark
-was run for this follow-up.
+was run for this follow-up. Root unregistration must match a registration on
+the current thread, and generated root frames are checked for valid LIFO
+closure.
 
 Owned arrays whose element types contain GC-managed references register their
 contiguous backing store as a repeated-layout GC root region. Array cleanup
@@ -67,7 +74,7 @@ because those runtime subsystems do not yet exist.
 
 ## Remaining roadmap work
 
-- Ownership is lexical and conservative. Aggregate/partial moves, closure
+- Ownership is lexical and conservative. Partial aggregate moves, closure
   capture, general returned references, and arbitrary interprocedural lifetime
   inference are not supported. Views are deliberately not storable in
   aggregates.
