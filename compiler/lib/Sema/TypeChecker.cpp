@@ -14,6 +14,14 @@ constexpr const char* kPrintBuiltin = "print";
 
 static bool statement_can_fall_through(const Stmt& stmt);
 
+static bool expression_creates_owned_pointer(const Expr& expr) {
+  if (expr.kind() != Expr::Kind::Call) return false;
+  const std::string& callee = static_cast<const CallExpr&>(expr).callee();
+  return callee == "file.open" || callee == "memory.allocate" ||
+         callee == "memory.secure_allocate" || callee == "memory.reallocate" ||
+         callee == "memory.map_file";
+}
+
 static bool block_falls_through(const BlockStmt& block) {
   if (block.statements().empty()) return true;
   for (const StmtPtr& statement : block.statements()) {
@@ -488,16 +496,14 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
                 declaration.location()};
   const Symbol* transferred_owner = nullptr;
   if (binding_type.is_pointer()) {
-    if (declaration.initializer().kind() == Expr::Kind::Call &&
-        static_cast<const CallExpr&>(declaration.initializer()).callee() == "file.open")
-      symbol.owned_resource = true;
+    symbol.owns_allocation = expression_creates_owned_pointer(declaration.initializer());
     if (declaration.initializer().kind() == Expr::Kind::Name) {
       const auto& source_name = static_cast<const NameExpr&>(declaration.initializer());
       const Symbol* source = symbols_.lookup(source_name.name());
       if (source && source->type.is_pointer()) {
         symbol.allocation_id = source->allocation_id;
-        if (source->owned_resource && !source->moved) {
-          symbol.owned_resource = true;
+        if (source->owns_allocation && !source->moved) {
+          symbol.owns_allocation = true;
           transferred_owner = source;
         }
       }

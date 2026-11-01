@@ -13,3 +13,9 @@ The governing decision is ownership-based memory as the language default, with o
 Compiler ownership analysis, lifetime checking, ownership preservation through TIR/MLIR, thread-local allocator fast paths, GC TLAB/safepoints, contiguous tensor/view storage, and comparative benchmark results remain incomplete. No C++/Rust competitiveness claim is made.
 
 Status: **FAIL / incomplete**. This report does not claim phase acceptance.
+
+## 17. Move tracking for explicit allocations — 2026-11-01
+
+Extended unique ownership tracking from file resources to `memory.allocate`, `memory.secure_allocate`, `memory.reallocate`, and `memory.map_file` results. Binding an owned allocation to another name transfers the allocation identity and invalidates prior aliases. GC-managed arrays and pins are intentionally excluded because they have distinct lifetime rules. Deferred cleanup now recognizes an allocation as already consumed only when a still-tracked alias exists and all aliases are invalid, avoiding false positives for an allocation whose original name was rebound.
+
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 37/37, including explicit allocation transfer and use-after-move rejection. The analysis remains lexical and pointer-based; aggregate fields, closure capture, interprocedural ownership contracts, and borrowing are not yet implemented.
