@@ -19,6 +19,16 @@ int main(int argc, char** argv) {
   const auto begin = Clock::now();
   if (mode == "alloc") {
     for (std::size_t i=0;i<n;++i) { auto* p=new std::uint64_t[8]; p[0]=i; p[7]=i^0x5a5a; checksum+=p[0]+p[7]; delete[] p; }
+  } else if (mode == "alloc_small" || mode == "alloc_large" || mode == "alloc_mixed") {
+    for (std::size_t i=0;i<n;++i) {
+      const bool large = mode == "alloc_large" || (mode == "alloc_mixed" && (i & 1));
+      const std::size_t words = large ? 512 : 2;
+      auto* p = new std::uint64_t[words]{};
+      p[0] = i;
+      p[words - 1] = i ^ 0x5a5a;
+      checksum += p[0] + p[words - 1];
+      delete[] p;
+    }
   } else if (mode == "scalar") {
     std::uint64_t x=1; for(std::size_t i=0;i<n;++i) x=(x*1664525u+1013904223u)^(i+0x9e37u); checksum=x;
   } else if (mode == "array") {

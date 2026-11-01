@@ -30,7 +30,7 @@ try {
     $sorted=@($times|Sort-Object)
     [pscustomobject]@{language=$Language;mode=$Mode;samples_ns=$times;p50_ns=$sorted[[int][math]::Floor(($Runs-1)*.50)];p95_ns=$sorted[[int][math]::Ceiling(($Runs-1)*.95)];p99_ns=$sorted[[int][math]::Ceiling(($Runs-1)*.99)];checksum=$checksums[0]}
   }
-  $results=@(); foreach($mode in @('scalar','array','alloc','graph','threads')){$results+=Invoke-Samples 'cpp' $mode $cppExe;$results+=Invoke-Samples 'rust' $mode $rsExe}
+  $results=@(); foreach($mode in @('scalar','array','alloc_small','alloc_large','alloc_mixed','alloc','graph','threads')){$results+=Invoke-Samples 'cpp' $mode $cppExe;$results+=Invoke-Samples 'rust' $mode $rsExe}
   for($i=0;$i -lt $results.Count;$i+=2){if($results[$i].checksum -ne $results[$i+1].checksum){throw "C++/Rust checksum mismatch for $($results[$i].mode)"}}
   $cpu=(Get-CimInstance Win32_Processor|Select-Object -First 1 -ExpandProperty Name)
   $payload=[pscustomobject]@{timestamp=(Get-Date).ToString('o');os=[Environment]::OSVersion.VersionString;cpu=$cpu;logical_processors=[Environment]::ProcessorCount;iterations=$Iterations;warmups=$Warmups;runs=$Runs;cxx_compiler=((& $cl.Source /Bv 2>&1|Select-Object -First 2)-join ' ');rustc_version=(& $rustc.Source --version);cxx_flags='/O2 /std:c++20';rust_flags='-C opt-level=3';results=$results}

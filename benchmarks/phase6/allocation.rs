@@ -7,6 +7,17 @@ fn main() {
     let start=Instant::now(); let checksum:u64;
     match mode {
       "alloc" => { let mut sum=0u64; for i in 0..n { let mut p=Box::new([0u64;8]);p[0]=i as u64;p[7]=(i as u64)^0x5a5a;sum=sum.wrapping_add(p[0]+p[7]);black_box(p); } checksum=sum; },
+      "alloc_small" | "alloc_large" | "alloc_mixed" => {
+        let mut sum=0u64;
+        for i in 0..n {
+          let large=mode=="alloc_large" || (mode=="alloc_mixed" && i&1==1);
+          let words=if large {512} else {2};
+          let mut p=vec![0u64;words].into_boxed_slice();
+          p[0]=i as u64;p[words-1]=(i as u64)^0x5a5a;
+          sum=sum.wrapping_add(p[0]+p[words-1]);black_box(p);
+        }
+        checksum=sum;
+      },
       "scalar" => { let mut x=1u64;for i in 0..n{x=x.wrapping_mul(1664525).wrapping_add(1013904223)^((i as u64)+0x9e37);}checksum=x; },
       "array" => { let a:Vec<u64>=(0..n).map(|i|i as u64*3+1).collect();checksum=a.iter().copied().sum();black_box(a); },
       "graph" => { let count=n.min(500_000);let mut nodes:Vec<Box<Node>>=(0..count).map(|i|Box::new(Node{value:i as u64,next:0})).collect();for i in 0..count{nodes[i].next=(i+1)%count;}let mut at=0usize;let mut sum=0u64;for _ in 0..count.saturating_mul(4){sum=sum.wrapping_add(nodes[at].value);at=nodes[at].next;}checksum=sum; },
