@@ -70,10 +70,13 @@ full suite passed: CTest 1/1 and integration 84/84. No GC benchmark was run.
 
 Semantic cleanup checks now preserve allocator/resource domains: files cannot
 be closed through a generic allocation destructor, generic allocations cannot
-be unmapped as files, and unpin accepts only GC-managed pointers. File reads and
-writes require a file owner or a borrowed handle. Regression coverage includes
-cross-domain close, deallocate, unmap, and unpin calls. RelWithDebInfo
-validation passed: CTest 1/1 and integration 85/85. No GC benchmark was run.
+be unmapped as files, and unpin accepts only GC-managed pointers. Secure release
+accepts explicit allocations or secure buffers; file reads/writes and mutex
+operations require their matching owner or a borrowed handle; mapping size
+requires a mapped file. Regression coverage includes cross-domain close,
+deallocate, secure release, unmap, mutex, mapping-size, and unpin calls.
+RelWithDebInfo validation passed: CTest 1/1 and integration 85/85. No GC
+benchmark was run.
 
 Owned arrays whose element types contain GC-managed references register their
 contiguous backing store as a repeated-layout GC root region. Array cleanup

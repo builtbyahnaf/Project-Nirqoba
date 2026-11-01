@@ -2099,6 +2099,11 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (type.is_valid() && !type.is_pointer())
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "mutex operation requires a mutex handle");
+    else if (call.callee() != "mutex.destroy" &&
+             !has_cleanup_domain(*call.arguments()[0], symbols_,
+                                 "mutex.destroy", true))
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "mutex operation requires a mutex resource or borrowed mutex handle");
     if (call.callee() == "mutex.destroy") {
       if (!mutex || mutex->cleanup_callee != "mutex.destroy") {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
@@ -2483,11 +2488,11 @@ Type TypeChecker::check_call(CallExpr& call) {
                                    "memory.unmap_file"))
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                            "memory.unmap_file requires a mapped file resource");
-      else if (call.callee() == "memory.secure_release" && pointer_symbol &&
-               pointer_symbol->owns_allocation &&
-               pointer_symbol->cleanup_callee != "" &&
-               pointer_symbol->cleanup_callee != "memory.secure_release" &&
-               pointer_symbol->cleanup_callee != "memory.deallocate")
+      else if (call.callee() == "memory.secure_release" &&
+               !has_cleanup_domain(*call.arguments()[0], symbols_,
+                                   "memory.secure_release") &&
+               !has_cleanup_domain(*call.arguments()[0], symbols_,
+                                   "memory.deallocate"))
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                            "secure release cannot destroy a different resource type");
       else if (pointer_symbol && pointer_symbol->type.is_pointer()) {
@@ -2520,8 +2525,12 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (call.arguments().size() != 1)
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'memory.mapping_size' takes one mapped pointer");
-    for (const ExprPtr& argument : call.arguments())
+    for (const ExprPtr& argument : call.arguments()) {
       check_expression(const_cast<Expr&>(*argument));
+      if (!has_cleanup_domain(*argument, symbols_, "memory.unmap_file", true))
+        diagnostics_.error(diag::kTypeMismatch, argument->location(),
+                           "memory.mapping_size requires a mapping or borrowed mapping handle");
+    }
     return Type::u64_type();
   }
   if (call.callee() == "memory.pin") {
@@ -2752,8 +2761,7 @@ Type TypeChecker::check_call(CallExpr& call) {
     } else if (pointer_symbol && pointer_symbol->borrowed) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "borrowed pointers cannot be deallocated");
-    } else if (pointer_symbol && pointer_symbol->owns_allocation &&
-               !has_cleanup_domain(*call.arguments()[0], symbols_,
+    } else if (!has_cleanup_domain(*call.arguments()[0], symbols_,
                                    "memory.deallocate")) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "owned resource requires its specialized cleanup function");
