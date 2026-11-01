@@ -1,0 +1,6 @@
+int function main() {
+    var values = memory.owned_array<int>(1);
+    defer array.owned_release(values);
+    let view = memory.array_view<int>(values, 0, 1);
+    return view[0];
+}
