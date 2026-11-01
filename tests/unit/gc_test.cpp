@@ -93,6 +93,41 @@ TEST(GcTest, RejectsAllocationSizeOverflowWithoutChangingHeapStatistics) {
   ASSERT_EQ(after.collections, before.collections);
 }
 
+TEST(GcTest, RejectsInvalidTypedLayoutsWithoutPublishingAnObject) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const nrq_gc_stats before = nrq_gc_get_stats();
+  const size_t invalid_offset = sizeof(void*);
+  ASSERT_EQ(nrq_gc_allocate_array_typed(1, sizeof(void*), &invalid_offset, 1),
+            nullptr);
+  const nrq_gc_stats after = nrq_gc_get_stats();
+  ASSERT_EQ(after.allocated_bytes, before.allocated_bytes);
+  ASSERT_EQ(after.live_objects, before.live_objects);
+}
+
+TEST(GcTest, RootFramesUnregisterOnlyTheirOwnNestedRoots) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+  auto* outer = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  auto* inner = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(outer, nullptr);
+  ASSERT_NE(inner, nullptr);
+
+  const uint64_t outer_frame = nrq_gc_root_frame_begin();
+  nrq_gc_root_register(reinterpret_cast<void**>(&outer));
+  const uint64_t inner_frame = nrq_gc_root_frame_begin();
+  nrq_gc_root_register(reinterpret_cast<void**>(&inner));
+
+  nrq_gc_root_frame_end(inner_frame);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 1);
+
+  nrq_gc_root_frame_end(outer_frame);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+}
+
 TEST(GcTest, BumpRegionsAlignMixedObjectSizesAndReclaimEmptyPages) {
   nrq_gc_disable();
   nrq_gc_collect();
