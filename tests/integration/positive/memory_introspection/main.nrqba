@@ -1,0 +1,34 @@
+int function main() {
+    print(gc.is_enabled());
+    gc.disable();
+    print(gc.is_enabled());
+    gc.enable();
+    print(gc.is_enabled());
+
+    // Both figures are operating-system estimates; they must be reported, not
+    // fabricated, so they are checked for a plausible positive value.
+    if (memory.total_bytes() > 0) {
+        print(1);
+    }
+    if (memory.used_bytes() > 0) {
+        print(1);
+    }
+
+    var object = array.allocate<int>(4);
+    print(memory.pin_count());
+    var pinned = memory.pin(object);
+    print(memory.pin_count());
+
+    // Pin far more often than unpin: the runtime must reject the attempts that
+    // exceed the documented per-object limit and count them.
+    for (var index = 0; index < 32; index = index + 1) {
+        var extra = memory.pin(object);
+    }
+    print(memory.pin_violations());
+
+    for (var index = 0; index < 16; index = index + 1) {
+        memory.unpin(pinned);
+    }
+    print(memory.pin_count());
+    return 42;
+}

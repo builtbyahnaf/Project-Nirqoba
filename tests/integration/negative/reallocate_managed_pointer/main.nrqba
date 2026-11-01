@@ -1,0 +1,7 @@
+int function main() {
+    // `array.allocate` returns a collector-managed pointer, which the explicit
+    // allocator runtime never owns; resizing it must be a type error.
+    var object = array.allocate<int>(4);
+    var resized = memory.reallocate<int>(object, 64);
+    return 0;
+}

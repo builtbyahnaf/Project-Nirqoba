@@ -97,3 +97,35 @@ Updated `project_context/SYNTAX.md`; added `docs/memory/management.md`.
 **FAIL** — core tracing behavior builds and passes the current suite, but Phase
 6.5 acceptance includes resource lifecycle, thread/async cases and broader
 validation that are not implemented.
+
+## 13. Completion pass — 2026-11-01
+
+Added since the first pass:
+
+- `gc.is_enabled()` reports whether automatic collection is active, so a
+  program can observe the effect of `gc.disable()` without collecting.
+- Bounded pin diagnostics: `memory.pin_count()` reports distinct pinned
+  objects, and a repeated pin of one object beyond 16 is rejected (returns a
+  null pointer) and counted by `memory.pin_violations()`. A forgotten `unpin`
+  is therefore observable instead of keeping the object reachable forever.
+- Benchmarks required by the phase are now executed by the suite:
+  `GcTest.BenchmarksAllocationAndCollectionOverhead` measures 20,000
+  allocations and one sweep and prints microseconds and nanoseconds per object.
+  Timings are recorded for regression visibility; no relative performance claim
+  is made.
+- `GcTest.AutomaticCollectionStateIsObservable` and
+  `GcTest.PinDiagnosticsReportCountAndRejectExcessivePins` cover the new
+  behaviour; the existing concurrent-allocation test continues to cover
+  serialized multithreaded allocation.
+
+Still blocked or not implemented:
+
+- Owned, borrowed, and shared memory modes. The roadmap requires their syntax to
+  be established in the language specification before implementation, and
+  `project_context/SYNTAX.md` defines none yet. Inventing that syntax here would
+  violate the AGENTS.md rule against unapproved design decisions.
+- Precise stack/register roots for coroutines and asynchronous execution, which
+  depend on Phases 10–11.
+- Concurrent, incremental, and generational collection remain architectural
+  provisions only; the collector is a stop-the-world non-moving mark-and-sweep
+  under a single mutex.

@@ -1,0 +1,17 @@
+int function main() {
+    var pool = memory.pool_allocator(64);
+    var previous = memory.set_default_allocator(pool);
+    // Handle zero names the configured default, so its kind follows the policy.
+    print(memory.allocator_kind(0));
+
+    var item = memory.allocate<byte>(8);
+    item[0] = 5 as byte;
+    print(item[0] as int);
+
+    memory.set_default_allocator(previous);
+    print(memory.allocator_kind(0));
+
+    memory.deallocate(item);
+    memory.destroy_allocator(pool);
+    return 42;
+}
