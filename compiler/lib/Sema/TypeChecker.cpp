@@ -12,6 +12,36 @@ namespace {
 
 constexpr const char* kPrintBuiltin = "print";
 
+static bool contains_owned_array(const Type& type,
+                                 unordered_set<string>& active_structs) {
+  if (type.is_owned_array()) return true;
+  if (type.is_array() || type.is_tuple()) {
+    if (type.is_array()) return contains_owned_array(type.element_type(), active_structs);
+    for (const Type& element : type.tuple_elements())
+      if (contains_owned_array(element, active_structs)) return true;
+  }
+  if (type.is_struct() && !type.struct_fields().empty() &&
+      active_structs.insert(type.struct_name()).second) {
+    for (const auto& field : type.struct_fields())
+      if (contains_owned_array(field.second, active_structs)) {
+        active_structs.erase(type.struct_name());
+        return true;
+      }
+    active_structs.erase(type.struct_name());
+  }
+  return false;
+}
+
+static bool contains_owned_array(const Type& type) {
+  unordered_set<string> active_structs;
+  return contains_owned_array(type, active_structs);
+}
+
+static string cleanup_for_type(const Type& type) {
+  if (type.is_owned_array()) return "array.owned_release";
+  return contains_owned_array(type) ? "aggregate.owned_drop" : string{};
+}
+
 static bool statement_can_fall_through(const Stmt& stmt);
 
 static bool expression_creates_owned_pointer(const Expr& expr) {
@@ -414,7 +444,7 @@ void TypeChecker::check_function(FunctionDecl& function) {
                       ? BindingKind::Let : BindingKind::Var,
                   parameter.location};
     if (parameter.type.is_pointer() || parameter.type.is_owned_array() ||
-        parameter.type.is_array_view()) {
+        contains_owned_array(parameter.type) || parameter.type.is_array_view()) {
       symbol.allocation_id = next_allocation_id_++;
       symbol.borrowed = parameter.borrowed || parameter.type.is_array_view();
       symbol.mutable_borrow = parameter.mutable_borrow;
@@ -556,18 +586,33 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
 
   Symbol symbol{declaration.name(), binding_type, declaration.binding(),
                 declaration.location()};
+  if ((binding_type.is_owned_array() || contains_owned_array(binding_type)) &&
+      declaration.initializer().kind() == Expr::Kind::MemberAccess) {
+    diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
+                       "owned fields cannot be moved out of an aggregate individually");
+  }
   const Symbol* transferred_owner = nullptr;
-  if (binding_type.is_pointer() || binding_type.is_owned_array()) {
+  if (binding_type.is_pointer() || binding_type.is_owned_array() ||
+      contains_owned_array(binding_type)) {
     symbol.owns_allocation = expression_creates_owned_pointer(declaration.initializer());
+    if (contains_owned_array(binding_type) &&
+        declaration.initializer().ownership() == ValueOwnership::Owned) {
+      symbol.owns_allocation = true;
+      symbol.cleanup_callee = cleanup_for_type(binding_type);
+    }
     if (declaration.initializer().kind() == Expr::Kind::Call) {
       const auto& call = static_cast<const CallExpr&>(declaration.initializer());
       symbol.shared_allocation = call.callee() == "memory.shared_allocate" ||
                                  call.callee() == "memory.shared_retain";
       if (const FunctionSignature* signature = find_function(call.callee())) {
         symbol.shared_allocation = symbol.shared_allocation || signature->returns_shared;
-        if (signature->return_type.is_pointer() || signature->return_type.is_owned_array())
+        if (signature->return_type.is_pointer() || signature->return_type.is_owned_array() ||
+            contains_owned_array(signature->return_type)) {
           symbol.cleanup_callee = cleanup_for_owner_producer(
               call.callee(), signature->returns_shared);
+          if (symbol.cleanup_callee.empty())
+            symbol.cleanup_callee = cleanup_for_type(signature->return_type);
+        }
       }
       if (symbol.cleanup_callee.empty())
         symbol.cleanup_callee = cleanup_for_owner_producer(call.callee());
@@ -576,17 +621,18 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
       const auto& call = static_cast<const CallExpr&>(declaration.initializer());
       const FunctionSignature* signature = find_function(call.callee());
       symbol.owns_allocation = signature &&
-          (signature->return_type.is_pointer() || signature->return_type.is_owned_array());
+          (signature->return_type.is_pointer() || signature->return_type.is_owned_array() ||
+           contains_owned_array(signature->return_type));
       if (symbol.owns_allocation && symbol.cleanup_callee.empty() &&
           !signature->returns_shared)
-        symbol.cleanup_callee = signature->return_type.is_owned_array()
-                                    ? "array.owned_release"
-                                    : "memory.deallocate";
+        symbol.cleanup_callee = cleanup_for_type(signature->return_type);
+        if (symbol.cleanup_callee.empty()) symbol.cleanup_callee = "memory.deallocate";
     }
     if (declaration.initializer().kind() == Expr::Kind::Name) {
       const auto& source_name = static_cast<const NameExpr&>(declaration.initializer());
       const Symbol* source = symbols_.lookup(source_name.name());
-      if (source && (source->type.is_pointer() || source->type.is_owned_array())) {
+      if (source && (source->type.is_pointer() || source->type.is_owned_array() ||
+                     contains_owned_array(source->type))) {
         symbol.allocation_id = source->allocation_id;
         if (source->borrowed) {
           symbol.borrowed = true;
@@ -723,6 +769,13 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
              ? symbols_.lookup(assignment.name())->type : Type::error())
       : check_expression(const_cast<Expr&>(assignment.target()));
 
+  if (assignment.target().kind() == Expr::Kind::MemberAccess &&
+      (target_type.is_owned_array() || contains_owned_array(target_type))) {
+    diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
+                       "owned fields cannot be replaced individually; move the whole aggregate");
+    return;
+  }
+
   const Symbol* symbol = find_root_symbol(assignment.target(), symbols_);
   if (assignment.target().kind() == Expr::Kind::Index &&
       static_cast<const IndexExpr&>(assignment.target()).base().type().is_array_view()) {
@@ -759,13 +812,16 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                            "' to target of type '" + target_type.to_string() + "'");
   }
   if (assignment.is_simple_name() && symbol && symbol->is_mutable() &&
-      (target_type.is_pointer() || target_type.is_owned_array())) {
+      (target_type.is_pointer() || target_type.is_owned_array() ||
+       contains_owned_array(target_type))) {
     uint64_t allocation_id = 0;
     const Symbol* source = nullptr;
     if (assignment.value().kind() == Expr::Kind::Name) {
       const auto& source_name = static_cast<const NameExpr&>(assignment.value());
       source = symbols_.lookup(source_name.name());
-      if (source && !source->moved && source->type.is_pointer())
+      if (source && !source->moved &&
+          (source->type.is_pointer() || source->type.is_owned_array() ||
+           contains_owned_array(source->type)))
         allocation_id = source->allocation_id;
     }
     if (symbol->owns_allocation && !symbol->moved &&
@@ -785,7 +841,8 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       const FunctionSignature* signature = find_function(call.callee());
       owns_allocation = expression_creates_owned_pointer(assignment.value()) ||
                         (signature && (signature->return_type.is_pointer() ||
-                                       signature->return_type.is_owned_array()));
+                                       signature->return_type.is_owned_array() ||
+                                       contains_owned_array(signature->return_type)));
       shared_allocation = call.callee() == "memory.shared_allocate" ||
                           call.callee() == "memory.shared_retain" ||
                           (signature && signature->returns_shared);
@@ -793,9 +850,14 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
         cleanup_callee = cleanup_for_owner_producer(
             call.callee(), signature && signature->returns_shared);
       if (owns_allocation && cleanup_callee.empty())
-        cleanup_callee = signature && signature->return_type.is_owned_array()
-                             ? "array.owned_release"
-                             : "memory.deallocate";
+        cleanup_callee = signature
+                             ? cleanup_for_type(signature->return_type)
+                             : std::string{};
+      if (owns_allocation && cleanup_callee.empty())
+        cleanup_callee = contains_owned_array(target_type)
+                             ? "aggregate.owned_drop"
+                             : target_type.is_owned_array() ? "array.owned_release"
+                                                            : "memory.deallocate";
     } else if (source && source->owns_allocation && !source->moved) {
       if (symbols_.has_live_borrow(source->allocation_id)) {
         diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
@@ -971,13 +1033,15 @@ void TypeChecker::check_return(ReturnStmt& statement) {
   } else if (!current_return_shared_ && value_is_shared) {
     diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                        "shared references require a shared return type");
-  } else if ((current_return_type_.is_pointer() || current_return_type_.is_owned_array()) &&
+  } else if ((current_return_type_.is_pointer() || current_return_type_.is_owned_array() ||
+              contains_owned_array(current_return_type_)) &&
              !current_return_shared_ &&
              statement.value()->ownership() != ValueOwnership::Owned) {
     diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                        "owned pointer return requires an owned pointer; borrowed or raw pointers cannot escape");
   }
-  if ((current_return_type_.is_pointer() || current_return_type_.is_owned_array()) &&
+  if ((current_return_type_.is_pointer() || current_return_type_.is_owned_array() ||
+       contains_owned_array(current_return_type_)) &&
       statement.value()->kind() == Expr::Kind::Name) {
     const Symbol* source = find_root_symbol(*statement.value(), symbols_);
     if (source && source->borrowed) {
@@ -1092,6 +1156,10 @@ Type TypeChecker::check_expression(Expr& expr) {
         expr.set_ownership(ValueOwnership::GcManaged);
       } else if (type.is_owned_array()) {
         expr.set_ownership(ValueOwnership::Owned);
+      } else if (contains_owned_array(type)) {
+        if (expr.kind() == Expr::Kind::Call || expr.kind() == Expr::Kind::StructInit ||
+            expr.kind() == Expr::Kind::TupleLiteral || expr.kind() == Expr::Kind::Name)
+          expr.set_ownership(ValueOwnership::Owned);
       } else if (type.is_array_view()) {
         expr.set_ownership(ValueOwnership::Borrowed);
       }
@@ -1257,6 +1325,10 @@ Type TypeChecker::check_expression(Expr& expr) {
       type = check_struct_init(static_cast<StructInitExpr&>(expr));
       break;
   }
+  if (contains_owned_array(type) &&
+      (expr.kind() == Expr::Kind::StructInit || expr.kind() == Expr::Kind::TupleLiteral ||
+       expr.kind() == Expr::Kind::Call || expr.kind() == Expr::Kind::Name))
+    expr.set_ownership(ValueOwnership::Owned);
   expr.set_type(type);
   return type;
 }
@@ -1535,6 +1607,23 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
                                fields[i].type.to_string() + "', but was given '" +
                                init_type.to_string() + "'");
       }
+      if (contains_owned_array(fields[i].type)) {
+        Expr& value = const_cast<Expr&>(*expr.positional_inits()[i]);
+        const Symbol* source = value.kind() == Expr::Kind::Name
+                                   ? find_root_symbol(value, symbols_) : nullptr;
+        if (source && source->owns_allocation && !source->moved) {
+          if (symbols_.has_live_borrow(source->allocation_id))
+            diagnostics_.error(diag::kTypeMismatch, value.location(),
+                               "cannot move an owner while an array view is live");
+          else {
+            value.set_transfers_ownership();
+            symbols_.mark_allocation_moved(source->allocation_id);
+          }
+        } else if (value.ownership() != ValueOwnership::Owned) {
+          diagnostics_.error(diag::kTypeMismatch, value.location(),
+                             "resource-bearing struct fields require an owned value");
+        }
+      }
     }
     for (size_t i = count; i < expr.positional_inits().size(); ++i)
       check_expression(const_cast<Expr&>(*expr.positional_inits()[i]));
@@ -1557,6 +1646,23 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
                            "field '" + field_name + "' of struct '" + expr.struct_name() +
                                "' has type '" + field_def->type.to_string() +
                                "', but was given '" + init_type.to_string() + "'");
+      }
+      if (field_def && contains_owned_array(field_def->type)) {
+        Expr& value = const_cast<Expr&>(*kv.second);
+        const Symbol* source = value.kind() == Expr::Kind::Name
+                                   ? find_root_symbol(value, symbols_) : nullptr;
+        if (source && source->owns_allocation && !source->moved) {
+          if (symbols_.has_live_borrow(source->allocation_id))
+            diagnostics_.error(diag::kTypeMismatch, value.location(),
+                               "cannot move an owner while an array view is live");
+          else {
+            value.set_transfers_ownership();
+            symbols_.mark_allocation_moved(source->allocation_id);
+          }
+        } else if (value.ownership() != ValueOwnership::Owned) {
+          diagnostics_.error(diag::kTypeMismatch, value.location(),
+                             "resource-bearing struct fields require an owned value");
+        }
       }
     }
   }
@@ -2556,15 +2662,16 @@ Type TypeChecker::check_call(CallExpr& call) {
                              "' must be of type '" + sig.parameter_types[i].to_string() +
                              "', not '" + arg_type.to_string() + "'");
     }
-    if (sig.parameter_types[i].is_owned_array()) {
+    if (sig.parameter_types[i].is_owned_array() ||
+        contains_owned_array(sig.parameter_types[i])) {
       const Symbol* source = find_root_symbol(*call.arguments()[i], symbols_);
       if (source && source->borrowed) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
-                           "borrowed values cannot be transferred as owned arrays");
+                           "borrowed values cannot be transferred as owned resources");
       } else if (!(source && source->owns_allocation && !source->moved) &&
                  call.arguments()[i]->ownership() != ValueOwnership::Owned) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
-                           "owned array parameter requires an owned array value");
+                           "owning parameter requires an owned resource value");
       } else if (source && source->owns_allocation && !source->moved) {
         if (symbols_.has_live_borrow(source->allocation_id)) {
           diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
