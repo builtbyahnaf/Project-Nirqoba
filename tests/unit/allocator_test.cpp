@@ -181,6 +181,20 @@ TEST(AllocatorTest, InFlightAllocationPreventsAllocatorReset) {
   ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
 }
 
+TEST(AllocatorTest, ResetPreservesLiveAllocationOwners) {
+  void* allocator = nrq_allocator_create(NRQ_ALLOCATOR_ARENA, 4096);
+  ASSERT_NE(allocator, nullptr);
+  auto* pointer = static_cast<unsigned char*>(
+      nrq_memory_allocate_from(allocator, 32, 16));
+  ASSERT_NE(pointer, nullptr);
+  pointer[0] = 73;
+  ASSERT_EQ(nrq_allocator_reset(allocator), int32_t{0});
+  ASSERT_EQ(static_cast<int>(pointer[0]), 73);
+  nrq_memory_deallocate_checked(pointer);
+  ASSERT_EQ(nrq_allocator_reset(allocator), int32_t{1});
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
+}
+
 TEST(AllocatorTest, ConcurrentSharedRetainsAndReleasesKeepFinalOwnerAlive) {
   void* pointer = nrq_memory_shared_allocate(64, 16);
   ASSERT_NE(pointer, nullptr);

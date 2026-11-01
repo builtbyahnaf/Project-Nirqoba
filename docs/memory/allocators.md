@@ -30,10 +30,11 @@ use a backing region (with a minimum region size).
 `memory.get_allocator()` returns the selected handle, or zero when the default
 allocator is selected. `memory.use_allocator(handle)` returns the previous
 selection. Passing zero restores the default. Selection is thread-local.
-`memory.reset_allocator(handle)` invalidates that allocator's outstanding
-allocations and resets its storage. Reset fails while an allocation from that
-allocator is still being created on another thread. `memory.destroy_allocator(handle)`
-fails while allocations remain live or the allocator is selected.
+`memory.reset_allocator(handle)` resets its storage only after all allocations
+from that allocator have been released. It fails while allocations remain live
+or while an allocation from that allocator is still being created on another
+thread. `memory.destroy_allocator(handle)` fails while allocations remain live
+or the allocator is selected.
 
 General allocation supports arbitrary valid power-of-two alignments. Pool and
 slab are intended for repeated small requests, arenas for bulk lifetimes,

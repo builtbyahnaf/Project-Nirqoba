@@ -91,6 +91,12 @@ take ownership in between. A concurrent retain/release unit test passed.
 RelWithDebInfo validation: CTest 1/1 and integration 85/85. No GC benchmark was
 run.
 
+Allocator reset now fails while any allocation remains live, preserving owner
+validity instead of silently invalidating pointers. A runtime regression checks
+that a live arena allocation remains readable after a rejected reset and that
+reset succeeds once the owner is released. The full suite passed again: CTest
+1/1 and integration 85/85. No GC benchmark was run.
+
 The tuple-layout regression now passes a struct containing nested managed
 references into a function that collects before reading it, covering the
 aggregate parameter root-copy path. RelWithDebInfo validation passed: CTest

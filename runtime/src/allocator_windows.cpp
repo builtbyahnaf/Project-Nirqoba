@@ -1025,14 +1025,9 @@ int32_t nrq_allocator_reset(void* handle) {
   auto in_flight = in_flight_allocations.find(allocator);
   if (in_flight != in_flight_allocations.end() && in_flight->second != 0)
     return 0;
+  for (const auto& allocation : live_allocations)
+    if (allocation.second.allocator == allocator) return 0;
   if (!allocator->reset_serialized()) return 0;
-  for (auto it = live_allocations.begin(); it != live_allocations.end();) {
-    if (it->second.allocator == allocator) {
-      shared_reference_counts.erase(it->first);
-      record_deallocation_profile(it->second.bytes);
-      it = live_allocations.erase(it);
-    } else ++it;
-  }
   return 1;
 }
 

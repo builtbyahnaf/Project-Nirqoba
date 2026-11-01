@@ -91,6 +91,9 @@ typedef struct NrqMemoryProfile {
 void* nrq_allocator_create(NrqAllocatorKind kind, size_t capacity);
 void* nrq_allocator_create_custom(const NrqCustomAllocatorVTable* callbacks);
 int32_t nrq_allocator_destroy(void* allocator);
+// Resets allocator storage only when it has no live allocations and no
+// allocation operation is in flight. Returns zero without invalidating live
+// owners when the allocator is busy.
 int32_t nrq_allocator_reset(void* allocator);
 int32_t nrq_memory_allocator_kind(uint64_t allocator_handle);
 void* nrq_memory_get_allocator(void);
