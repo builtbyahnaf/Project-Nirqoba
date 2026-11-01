@@ -91,7 +91,7 @@ string Type::to_string() const {
     case TypeKind::Char: return "char";
     case TypeKind::String: return "string";
     case TypeKind::Array:
-      return element_type().to_string() + "[" + to_string(array_length()) + "]";
+      return element_type().to_string() + "[" + std::to_string(array_length()) + "]";
     case TypeKind::DynamicArray:
       return element_type().to_string() + "[]";
     case TypeKind::Pointer:
@@ -133,7 +133,7 @@ string Type::mangle() const {
     case TypeKind::F64: return "f64";
     case TypeKind::String: return "ptr";
     case TypeKind::Array:
-      return "A" + to_string(array_length()) + "_" + element_type().mangle();
+      return "A" + std::to_string(array_length()) + "_" + element_type().mangle();
     case TypeKind::DynamicArray:
       return "DA_" + element_type().mangle();
     case TypeKind::Pointer:
@@ -141,14 +141,14 @@ string Type::mangle() const {
     case TypeKind::ManagedPointer:
       return "MP_" + element_type().mangle();
     case TypeKind::Tuple: {
-      string s = "T" + to_string(tuple_elements().size());
+      string s = "T" + std::to_string(tuple_elements().size());
       for (const auto& elem : tuple_elements()) {
         s += "_" + elem.mangle();
       }
       return s;
     }
     case TypeKind::Struct:
-      return "S" + to_string(struct_name().size()) + struct_name();
+      return "S" + std::to_string(struct_name().size()) + struct_name();
     case TypeKind::Error: return "error";
   }
   return "error";

@@ -80,29 +80,29 @@ static bool parse_emit_kind(string_view str, EmitKind& kind) {
 // --- `nirqoba new` project template -----------------------------------------
 
 static constexpr const char* kProjectMainTemplate = R"(// Entry point of the project.
- //
- // Build: nirqoba build src/main.nrqba --module-path lib -o app.exe
- // Run:   nirqoba run src/main.nrqba --module-path lib -- <arguments>
+//
+// Build: nirqoba build src/main.nrqba --module-path lib -o app.exe
+// Run:   nirqoba run src/main.nrqba --module-path lib -- <arguments>
 
- import greeting;
+import greeting;
 
- int function main(string[] args) {
-     greeting.greet(args.length);
-     return 0;
- }
- )";
+int function main(string[] args) {
+    greeting.greet(args.length);
+    return 0;
+}
+)";
 
 static constexpr const char* kProjectGreetingTemplate = R"(module greeting;
 
- // Called from main with the number of command-line arguments.
- public void function greet(int argument_count) {
-     if (argument_count == 0) {
-         print("Hello from Nirqoba!");
-         return;
-     }
-     print("Hello from Nirqoba, with arguments!");
- }
- )";
+// Called from main with the number of command-line arguments.
+public void function greet(int argument_count) {
+    if (argument_count == 0) {
+        print("Hello from Nirqoba!");
+        return;
+    }
+    print("Hello from Nirqoba, with arguments!");
+}
+)";
 
 static bool write_scaffold_file(const fs::path& path, const string& contents,
                                 string& error) {
