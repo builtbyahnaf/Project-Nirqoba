@@ -664,14 +664,27 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
   if (assignment.is_simple_name() && symbol && symbol->is_mutable() &&
       target_type.is_pointer()) {
     uint64_t allocation_id = 0;
+    const Symbol* source = nullptr;
     if (assignment.value().kind() == Expr::Kind::Name) {
       const auto& source_name = static_cast<const NameExpr&>(assignment.value());
-      const Symbol* source = symbols_.lookup(source_name.name());
+      source = symbols_.lookup(source_name.name());
       if (source && !source->moved && source->type.is_pointer())
         allocation_id = source->allocation_id;
     }
+    if (symbol->owns_allocation && !symbol->moved &&
+        allocation_id != 0 && allocation_id != symbol->allocation_id) {
+      diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
+                         "cannot overwrite a live owned pointer; release it first");
+      return;
+    }
     if (allocation_id == 0) allocation_id = next_allocation_id_++;
+    const bool transfer_owner = source && source->owns_allocation && !source->moved;
+    const bool borrowed = source && source->borrowed;
+    const bool mutable_borrow = source && source->mutable_borrow;
+    if (transfer_owner) symbols_.mark_allocation_moved(allocation_id);
     symbols_.rebind_pointer(assignment.name(), allocation_id);
+    symbols_.set_pointer_ownership(assignment.name(), transfer_owner, borrowed,
+                                   mutable_borrow);
   }
 }
 
@@ -885,6 +898,15 @@ Type TypeChecker::check_expression(Expr& expr) {
                            "use of undeclared variable '" + name.name() + "'");
       } else {
         type = symbol->type;
+        if (symbol->borrowed)
+          name.set_ownership(symbol->mutable_borrow
+              ? ValueOwnership::MutableBorrowed : ValueOwnership::Borrowed);
+        else if (symbol->owns_allocation)
+          name.set_ownership(ValueOwnership::Owned);
+        else if (symbol->type.is_managed_pointer())
+          name.set_ownership(ValueOwnership::GcManaged);
+        else if (symbol->type.is_pointer())
+          name.set_ownership(ValueOwnership::Raw);
         if (symbol->moved) {
           diagnostics_.error(diag::kUseAfterFree, name.location(),
                              "use of '" + name.name() +
@@ -895,6 +917,15 @@ Type TypeChecker::check_expression(Expr& expr) {
     }
     case Expr::Kind::Call:
       type = check_call(static_cast<CallExpr&>(expr));
+      if (type.is_pointer()) {
+        auto& call = static_cast<CallExpr&>(expr);
+        const FunctionSignature* signature = find_function(call.callee());
+        expr.set_ownership(expression_creates_owned_pointer(expr) ||
+                                   (signature && signature->return_type.is_pointer())
+                               ? ValueOwnership::Owned : ValueOwnership::Raw);
+      } else if (type.is_managed_pointer()) {
+        expr.set_ownership(ValueOwnership::GcManaged);
+      }
       break;
     case Expr::Kind::Unary: {
       auto& unary = static_cast<UnaryExpr&>(expr);

@@ -35,3 +35,7 @@ Arrays/tensors target contiguous owned storage, with borrowed views carrying val
 The compiler now treats pointers returned by explicit owning producers (`memory.allocate`, `memory.secure_allocate`, `memory.reallocate`, `memory.map_file`, `file.open`, and user functions returning pointers) as owned. Binding an owned pointer to another name transfers it. Pointer parameters default to owned transfer, and pointer return values transfer to the caller. `borrow T* name` declares a non-owning immutable borrow; `borrow mut T* name` declares an exclusive mutable borrow. Borrows cannot be deallocated, closed, transferred to an owning parameter, or returned. A call cannot pass the same allocation through overlapping mutable borrows. `defer` remains the deterministic cleanup mechanism for explicit resources.
 
 This syntax and model apply to pointer bindings and function boundaries. Struct/tuple field ownership, heap allocation escape analysis, automatic compiler-inserted drops, shared reference counting, raw unsafe scopes, and aggregate partial moves remain future implementation work.
+
+## Ownership metadata in IR
+
+Semantic ownership and borrow modes are carried on TIR values and function parameters. MLIR function arguments and produced values receive `nirqoba.ownership` attributes (`owned`, `borrowed`, `mutable_borrowed`, `gc_managed`, or `raw`) so later passes can preserve the checked memory domain.

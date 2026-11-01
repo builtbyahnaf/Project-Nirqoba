@@ -88,8 +88,13 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
   push_scope();
 
   for (const Parameter& parameter : function.parameters()) {
-    tir::Value param_val = function_ir->allocate_value(parameter.type);
-    function_ir->add_parameter(parameter.name, parameter.type, param_val);
+    const ValueOwnership ownership = parameter.borrowed
+        ? (parameter.mutable_borrow ? ValueOwnership::MutableBorrowed
+                                    : ValueOwnership::Borrowed)
+        : (parameter.type.is_pointer() ? ValueOwnership::Owned
+                                       : ValueOwnership::Trivial);
+    tir::Value param_val = function_ir->allocate_value(parameter.type, ownership);
+    function_ir->add_parameter(parameter.name, parameter.type, param_val, ownership);
 
     tir::Value slot = function_ir->allocate_value(parameter.type);
     tir::Op alloca;
@@ -612,7 +617,7 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
                            "internal: variable '" + name.name() + "' has no TIR slot");
         return tir::Value{};
       }
-      tir::Value result = function.allocate_value(slot.type);
+      tir::Value result = function.allocate_value(slot.type, name.ownership());
       tir::Op op;
       op.kind = tir::OpKind::Load;
       op.location = name.location();
@@ -788,7 +793,7 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
 
       tir::Value result;
       if (call.type().is_valid() && !call.type().is_void()) {
-        result = function.allocate_value(call.type());
+        result = function.allocate_value(call.type(), call.ownership());
       }
 
       tir::Op op;
@@ -1111,3 +1116,4 @@ tir::Value TirBuilder::resolve_lvalue_ptr(const Expr& target, tir::Function& fun
 }
 
 }  // namespace nirq
+

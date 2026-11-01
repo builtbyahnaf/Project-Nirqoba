@@ -1,0 +1,7 @@
+void function inspect(borrow byte* input) { print(input[0] as int); }
+int function main() {
+    let input = memory.allocate<byte>(4);
+    inspect(input);
+    memory.deallocate(input);
+    return 0;
+}

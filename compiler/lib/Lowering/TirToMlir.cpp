@@ -167,6 +167,18 @@ static mlir::Location to_mlir_loc(const SourceLocation& loc, mlir::MLIRContext* 
     static_cast<unsigned>(loc.column));
 }
 
+static llvm::StringRef ownership_spelling(ValueOwnership ownership) {
+  switch (ownership) {
+    case ValueOwnership::Owned: return "owned";
+    case ValueOwnership::Borrowed: return "borrowed";
+    case ValueOwnership::MutableBorrowed: return "mutable_borrowed";
+    case ValueOwnership::GcManaged: return "gc_managed";
+    case ValueOwnership::Raw: return "raw";
+    case ValueOwnership::Trivial: return "trivial";
+  }
+  return "trivial";
+}
+
 static mlir::LLVM::LLVMFuncOp ensure_runtime_fn(
     mlir::ModuleOp module, mlir::OpBuilder& builder,
     llvm::StringRef symbol, mlir::Type retTy, llvm::ArrayRef<mlir::Type> argTys) {
@@ -236,6 +248,10 @@ class FunctionTranslator {
 
   void set(tir::Value v, mlir::Value mlir_val) {
     if (!v.is_valid()) return;
+    if (v.ownership != ValueOwnership::Trivial && mlir_val.getDefiningOp())
+      mlir_val.getDefiningOp()->setAttr(
+          "nirqoba.ownership",
+          builder_.getStringAttr(ownership_spelling(v.ownership)));
     values_[static_cast<std::size_t>(v.id)] = mlir_val;
   }
 
@@ -1725,6 +1741,18 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
 
     auto func_op = builder.create<mlir::func::FuncOp>(
         builder.getUnknownLoc(), symbol, fn_type);
+    if (!tir_fn->parameters().empty()) {
+      llvm::SmallVector<mlir::Attribute> argument_attrs;
+      argument_attrs.reserve(tir_fn->parameters().size());
+      for (const auto& param : tir_fn->parameters()) {
+        mlir::NamedAttrList attrs;
+        if (param.ownership != ValueOwnership::Trivial)
+          attrs.set("nirqoba.ownership",
+                    builder.getStringAttr(ownership_spelling(param.ownership)));
+        argument_attrs.push_back(attrs.getDictionary(&context));
+      }
+      func_op.setArgAttrsAttr(builder.getArrayAttr(argument_attrs));
+    }
 
     FunctionTranslator translator(*module, *tir_fn, func_op, builder, &context, diagnostics);
     if (!translator.translate()) return nullptr;

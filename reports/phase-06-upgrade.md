@@ -40,6 +40,7 @@ Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tes
 
 Implemented pointer ownership transfer through declarations, pointer parameters, and pointer returns. Added `borrow T* name` and `borrow mut T* name` parameter modifiers. The checker rejects use after move, borrowed pointer escape through returns, deallocation/close of borrows, transfer of borrowed values into owners, immutable sources for mutable borrows, and conflicting call-site aliases. Explicit memory/resource producers are tagged as owning in semantic symbols.
 
-Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and all 47 integration tests passed. Positive tests cover owned argument/return transfer, borrowed file access, and mutable borrowing; negative tests cover use after move, borrow escape, freeing a borrow, immutable mutable-borrow source, and alias conflicts.
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and all 49 integration tests passed. Positive tests cover owned argument/return transfer, borrowed file access, and mutable borrowing; negative tests cover use after move, borrow escape, freeing a borrow, immutable mutable-borrow source, and alias conflicts.
 
-Limitations: ownership state is currently symbol-table metadata and is not yet serialized into TIR/MLIR attributes. Borrow lifetimes are limited to function parameters; local borrow expressions, aggregate field propagation, closures, loops with path-sensitive state merging, automatic drop insertion, shared ownership, and unsafe scopes are incomplete.
+Limitations: ownership and borrow categories are now carried on TIR values/parameters and emitted as `nirqoba.ownership` MLIR attributes. Borrow lifetimes are limited to function parameters; local borrow expressions, aggregate field propagation, closures, loops with path-sensitive state merging, automatic drop insertion, shared ownership, and unsafe scopes are incomplete.
+
