@@ -1,0 +1,20 @@
+int function main() {
+    let bytes = memory.allocate<byte>(8);
+    file.close(bytes);
+    return 0;
+}
+
+void function deallocate_file_resource() {
+    let resource = file.open("NUL", false);
+    memory.deallocate(resource);
+}
+
+void function unmap_plain_allocation() {
+    let bytes = memory.allocate<byte>(8);
+    memory.unmap_file(bytes);
+}
+
+void function unpin_plain_allocation() {
+    let bytes = memory.allocate<byte>(8);
+    memory.unpin(bytes);
+}

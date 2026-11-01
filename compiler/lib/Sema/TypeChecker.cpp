@@ -891,6 +891,24 @@ static const Symbol* find_root_symbol(const Expr& expr, const SymbolTable& symbo
   return nullptr;
 }
 
+static bool has_cleanup_domain(const Expr& expr, const SymbolTable& symbols,
+                              const std::string& expected,
+                              bool allow_borrow = false) {
+  if (expr.kind() == Expr::Kind::Call) {
+    const auto& call = static_cast<const CallExpr&>(expr);
+    if (cleanup_for_owner_producer(call.callee()) == expected) return true;
+  }
+  const Symbol* source = find_root_symbol(expr, symbols);
+  if (!source) return false;
+  if (source->borrowed) return allow_borrow;
+  if (source->shared_allocation) return false;
+  const std::string actual = source->cleanup_callee.empty() &&
+                                     source->owns_allocation
+                                 ? "memory.deallocate"
+                                 : source->cleanup_callee;
+  return actual == expected;
+}
+
 void TypeChecker::check_assignment(AssignmentStmt& assignment) {
   const Type value_type = check_expression(const_cast<Expr&>(assignment.value()));
   const Type target_type = assignment.is_simple_name()
@@ -2445,9 +2463,13 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "'" + call.callee() + "' takes one pointer");
     for (const ExprPtr& argument : call.arguments()) {
       const Type type = check_expression(const_cast<Expr&>(*argument));
-      if (type.is_valid() && !type.is_pointer() && !type.is_managed_pointer())
+      const bool unpin = call.callee() == "memory.unpin";
+      if (type.is_valid() &&
+          (unpin ? !type.is_managed_pointer()
+                 : !type.is_pointer()))
         diagnostics_.error(diag::kTypeMismatch, argument->location(),
-                           "argument must be a pointer");
+                           unpin ? "memory.unpin requires a managed pointer"
+                                 : "argument must be an explicitly allocated pointer");
     }
     if (!checking_deferred_cleanup_ &&
         (call.callee() == "memory.secure_release" ||
@@ -2456,6 +2478,18 @@ Type TypeChecker::check_call(CallExpr& call) {
       if (pointer_symbol && pointer_symbol->borrowed)
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                            "borrowed pointers cannot be released or unmapped");
+      else if (call.callee() == "memory.unmap_file" &&
+               !has_cleanup_domain(*call.arguments()[0], symbols_,
+                                   "memory.unmap_file"))
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "memory.unmap_file requires a mapped file resource");
+      else if (call.callee() == "memory.secure_release" && pointer_symbol &&
+               pointer_symbol->owns_allocation &&
+               pointer_symbol->cleanup_callee != "" &&
+               pointer_symbol->cleanup_callee != "memory.secure_release" &&
+               pointer_symbol->cleanup_callee != "memory.deallocate")
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "secure release cannot destroy a different resource type");
       else if (pointer_symbol && pointer_symbol->type.is_pointer()) {
         const_cast<Expr&>(*call.arguments()[0]).set_transfers_ownership();
         symbols_.mark_allocation_moved(pointer_symbol->allocation_id);
@@ -2718,6 +2752,11 @@ Type TypeChecker::check_call(CallExpr& call) {
     } else if (pointer_symbol && pointer_symbol->borrowed) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "borrowed pointers cannot be deallocated");
+    } else if (pointer_symbol && pointer_symbol->owns_allocation &&
+               !has_cleanup_domain(*call.arguments()[0], symbols_,
+                                   "memory.deallocate")) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "owned resource requires its specialized cleanup function");
     } else if (!checking_deferred_cleanup_ && pointer_symbol && pointer_symbol->type.is_pointer()) {
       const_cast<Expr&>(*call.arguments()[0]).set_transfers_ownership();
       symbols_.mark_allocation_moved(pointer_symbol->allocation_id);
@@ -2859,6 +2898,9 @@ Type TypeChecker::check_call(CallExpr& call) {
     for (const ExprPtr& argument : call.arguments()) {
       const Type type = check_expression(const_cast<Expr&>(*argument));
       if (type.is_valid() && !type.is_pointer()) diagnostics_.error(diag::kTypeMismatch, argument->location(), "file.close requires a file resource handle");
+      else if (!has_cleanup_domain(*argument, symbols_, "file.close"))
+        diagnostics_.error(diag::kTypeMismatch, argument->location(),
+                           "file.close requires an owned file resource");
     }
     if (!checking_deferred_cleanup_ && !call.arguments().empty()) {
       const Symbol* resource = find_root_symbol(*call.arguments()[0], symbols_);
@@ -2875,6 +2917,9 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (!call.arguments().empty()) {
       const Type handle = check_expression(const_cast<Expr&>(*call.arguments()[0]));
       if (handle.is_valid() && !handle.is_pointer()) diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(), "file.write requires a file resource handle");
+      else if (!has_cleanup_domain(*call.arguments()[0], symbols_, "file.close", true))
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "file.write requires a file resource or borrowed file handle");
     }
     if (call.arguments().size() > 1) {
       const Type text = check_expression(const_cast<Expr&>(*call.arguments()[1]));
@@ -2888,6 +2933,9 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (!call.arguments().empty()) {
       const Type handle = check_expression(const_cast<Expr&>(*call.arguments()[0]));
       if (handle.is_valid() && !handle.is_pointer()) diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(), "file.read requires a file resource handle");
+      else if (!has_cleanup_domain(*call.arguments()[0], symbols_, "file.close", true))
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "file.read requires a file resource or borrowed file handle");
     }
     if (call.arguments().size() > 1) {
       const Type destination = check_expression(const_cast<Expr&>(*call.arguments()[1]));

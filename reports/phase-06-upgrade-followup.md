@@ -68,6 +68,13 @@ This prevents nested empty frames or stale markers from aliasing the same root
 count. Unit coverage checks nested frames created at identical depths, and the
 full suite passed: CTest 1/1 and integration 84/84. No GC benchmark was run.
 
+Semantic cleanup checks now preserve allocator/resource domains: files cannot
+be closed through a generic allocation destructor, generic allocations cannot
+be unmapped as files, and unpin accepts only GC-managed pointers. File reads and
+writes require a file owner or a borrowed handle. Regression coverage includes
+cross-domain close, deallocate, unmap, and unpin calls. RelWithDebInfo
+validation passed: CTest 1/1 and integration 85/85. No GC benchmark was run.
+
 Owned arrays whose element types contain GC-managed references register their
 contiguous backing store as a repeated-layout GC root region. Array cleanup
 unregisters that region before releasing the buffer. A unit test verifies the
