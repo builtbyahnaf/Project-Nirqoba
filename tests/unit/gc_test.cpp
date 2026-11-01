@@ -1,7 +1,6 @@
 #include "test_harness.h"
 
 #include <cstddef>
-#include <chrono>
 #include <atomic>
 #include <thread>
 #include <vector>
@@ -209,9 +208,7 @@ TEST(GcTest, AutomaticCollectionStateIsObservable) {
   ASSERT_EQ(nrq_gc_is_enabled(), int32_t{1});
 }
 
-TEST(GcTest, BenchmarksAllocationAndCollectionOverhead) {
-  // A bounded measurement rather than a performance claim: it records how long
-  // a fixed allocation/collection workload takes so a regression is visible.
+TEST(GcTest, AllocationPressureIsCollectedWithoutLosingLiveObjects) {
   nrq_gc_enable();
   nrq_gc_set_threshold(1024 * 1024 * 1024);
   nrq_gc_collect();
@@ -219,27 +216,13 @@ TEST(GcTest, BenchmarksAllocationAndCollectionOverhead) {
   std::vector<void*> objects;
   objects.reserve(kObjects);
 
-  const auto allocation_start = std::chrono::steady_clock::now();
   for (int index = 0; index < kObjects; ++index) {
     void* object = nrq_gc_allocate(64, nullptr);
     ASSERT_NE(object, nullptr);
     objects.push_back(object);
   }
-  const auto allocation_end = std::chrono::steady_clock::now();
-
   objects.clear();
-  const auto collection_start = std::chrono::steady_clock::now();
   nrq_gc_collect();
-  const auto collection_end = std::chrono::steady_clock::now();
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
-
-  const auto allocation_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-      allocation_end - allocation_start).count();
-  const auto collection_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-      collection_end - collection_start).count();
-  std::cout << "[benchmark] gc: " << kObjects << " allocations in "
-            << allocation_ns / 1000 << " us (" << allocation_ns / kObjects
-            << " ns/object), collection in " << collection_ns / 1000 << " us"
-            << std::endl;
   nrq_gc_set_threshold(1024 * 1024);
 }
