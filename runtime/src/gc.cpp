@@ -499,15 +499,24 @@ void nrq_gc_root_unregister(void** slot) {
   std::lock_guard<std::mutex> lock(gc_mutex);
   auto found = roots.find(slot);
   if (found != roots.end()) {
+    auto thread_root = thread_roots.rend();
+    for (auto item = thread_roots.rbegin(); item != thread_roots.rend(); ++item) {
+      if (*item == slot) {
+        thread_root = item;
+        break;
+      }
+    }
+    // Array roots are registered as external storage rather than as a stack
+    // root on the calling thread. Ordinary root slots must be unregistered by
+    // a thread that owns one of their registrations; otherwise a cross-thread
+    // unregister could leave a stale TLS entry that later affects a reused slot.
+    if (thread_root == thread_roots.rend() && found->second.repeated_count == 0)
+      nrq_runtime_fatal("GC root unregistration must match a registration on the current thread");
     if (found->second.references == 0)
       nrq_runtime_fatal("GC root unregistration count underflow");
+    if (thread_root != thread_roots.rend())
+      thread_roots.erase(std::next(thread_root).base());
     if (--found->second.references == 0) roots.erase(found);
-  }
-  for (auto item = thread_roots.rbegin(); item != thread_roots.rend(); ++item) {
-    if (*item == slot) {
-      thread_roots.erase(std::next(item).base());
-      break;
-    }
   }
 }
 
