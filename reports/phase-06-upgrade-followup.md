@@ -38,6 +38,13 @@ mutation against explicit collection and checks reachability and reclamation;
 this does not establish safety for raw uninstrumented writes. No GC benchmark
 was run for this follow-up.
 
+Owned arrays whose element types contain GC-managed references register their
+contiguous backing store as a repeated-layout GC root region. Array cleanup
+unregisters that region before releasing the buffer. A unit test verifies the
+runtime repeated-offset API, and an integration test verifies an owned array
+keeps a managed object alive after its last local pointer is overwritten and
+collection runs.
+
 ## Phase 6.9 native resources
 
 File resources and native mutex handles now have explicit close/destroy behavior

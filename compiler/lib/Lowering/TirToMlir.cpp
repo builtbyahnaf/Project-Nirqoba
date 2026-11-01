@@ -343,6 +343,45 @@ class FunctionTranslator {
         mlir::ValueRange{slot, object_size, offsets_slot, reference_count});
   }
 
+  void emit_gc_array_root_registration(mlir::Value data, mlir::Value count,
+                                       const Type& element_type,
+                                       mlir::Location loc) {
+    std::vector<uint64_t> offsets;
+    collect_managed_reference_offsets(element_type, 0, offsets);
+    if (offsets.empty()) return;
+    const mlir::Type i64 = builder_.getI64Type();
+    auto offsets_type = mlir::LLVM::LLVMArrayType::get(
+        i64, static_cast<unsigned>(offsets.size()));
+    mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, i64, builder_.getI64IntegerAttr(1)).getResult();
+    mlir::Value offsets_slot = builder_.create<mlir::LLVM::AllocaOp>(
+        loc, llvm_ptr_type(ctx_), offsets_type, one).getResult();
+    mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
+    for (std::size_t index = 0; index < offsets.size(); ++index) {
+      mlir::Value index_value = builder_.create<mlir::LLVM::ConstantOp>(
+          loc, i64, builder_.getI64IntegerAttr(static_cast<int64_t>(index))).getResult();
+      mlir::Value field_slot = builder_.create<mlir::LLVM::GEPOp>(
+          loc, llvm_ptr_type(ctx_), offsets_type, offsets_slot,
+          mlir::ValueRange{zero, index_value}).getResult();
+      mlir::Value offset = builder_.create<mlir::LLVM::ConstantOp>(
+          loc, i64, builder_.getI64IntegerAttr(static_cast<int64_t>(offsets[index]))).getResult();
+      builder_.create<mlir::LLVM::StoreOp>(loc, offset, field_slot);
+    }
+    auto register_fn = ensure_runtime_fn(
+        module_, builder_, "nrq_gc_root_register_array",
+        mlir::LLVM::LLVMVoidType::get(ctx_),
+        {llvm_ptr_type(ctx_), i64, i64, llvm_ptr_type(ctx_), i64});
+    mlir::Value element_size = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, i64, builder_.getI64IntegerAttr(type_size(element_type))).getResult();
+    mlir::Value offset_count = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, i64,
+        builder_.getI64IntegerAttr(static_cast<int64_t>(offsets.size()))).getResult();
+    builder_.create<mlir::LLVM::CallOp>(
+        loc, register_fn,
+        mlir::ValueRange{data, count, element_size, offsets_slot, offset_count});
+  }
+
   // Converts a runtime call's ABI result to the type the language assigned to
   // the call, e.g. an i32 status code to a 64-bit `int` or a 0/1 code to
   // `bool`. A no-op when the types already match.
@@ -815,6 +854,8 @@ class FunctionTranslator {
           }
           mlir::Value data = builder_.create<mlir::LLVM::CallOp>(
               loc, allocate, mlir::ValueRange{count, element_bytes, alignment}).getResult();
+          emit_gc_array_root_registration(
+              data, count, op.result.type.element_type(), loc);
           mlir::Value null_pointer = builder_.create<mlir::LLVM::ZeroOp>(
               loc, llvm_ptr_type(ctx_)).getResult();
           mlir::Value succeeded = builder_.create<mlir::LLVM::ICmpOp>(
@@ -876,6 +917,11 @@ class FunctionTranslator {
         if (op.callee == "array.owned_release" && args.size() == 1) {
           mlir::Value data = builder_.create<mlir::LLVM::ExtractValueOp>(
               loc, args[0], builder_.getDenseI64ArrayAttr({0})).getResult();
+          auto unregister = ensure_runtime_fn(
+              module_, builder_, "nrq_gc_root_unregister",
+              mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
+          builder_.create<mlir::LLVM::CallOp>(
+              loc, unregister, mlir::ValueRange{data});
           auto release = ensure_runtime_fn(
               module_, builder_, "nrq_memory_deallocate_checked",
               mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});

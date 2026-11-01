@@ -38,6 +38,12 @@ void nrq_gc_root_register(void** slot);
 void nrq_gc_root_register_typed(void* slot, size_t object_size,
                                 const size_t* reference_offsets,
                                 size_t reference_count);
+// Registers an externally owned contiguous array as a root region. Offsets are
+// relative to each element and are repeated count times with element_size as
+// the stride. The caller must unregister the data address before freeing it.
+void nrq_gc_root_register_array(void* data, size_t count, size_t element_size,
+                                const size_t* reference_offsets,
+                                size_t reference_count);
 void nrq_gc_root_unregister(void** slot);
 void nrq_gc_root_store(void** slot, void* value);
 void nrq_gc_root_copy(void* destination, const void* source, size_t bytes);
