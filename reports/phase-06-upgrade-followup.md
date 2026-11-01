@@ -78,6 +78,17 @@ deallocate, secure release, unmap, mutex, mapping-size, and unpin calls.
 RelWithDebInfo validation passed: CTest 1/1 and integration 85/85. No GC
 benchmark was run.
 
+Managed stack roots are now zeroed and registered in the function prologue,
+before any managed allocation or explicit collection. Managed parameter values
+are copied into registered slots through the synchronized root-copy API. This
+fixes a lowering-order bug where local registrations could appear after frame
+closure. The full suite passed, and `gc_managed_graph` passed 500 consecutive
+executions. The final shared-reference release now removes the shared token and
+deallocates under one registry lock, so a reset or unique deallocator cannot
+take ownership in between. A concurrent retain/release unit test passed.
+RelWithDebInfo validation: CTest 1/1 and integration 85/85. No GC benchmark was
+run.
+
 Owned arrays whose element types contain GC-managed references register their
 contiguous backing store as a repeated-layout GC root region. Array cleanup
 unregisters that region before releasing the buffer. A unit test verifies the
