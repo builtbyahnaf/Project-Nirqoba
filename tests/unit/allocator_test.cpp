@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <algorithm>
+#include <chrono>
 #include <atomic>
 #include <thread>
 
@@ -223,4 +224,193 @@ TEST(AllocatorTest, FileMappingsReportSizeAndUnmapDeterministically) {
   ASSERT_EQ(updated[0], static_cast<unsigned char>(9));
   CloseHandle(file);
   DeleteFileW(path);
+}
+
+TEST(AllocatorTest, ReallocatePreservesContentsAndAllocatorIdentity) {
+  // Reallocation must keep the owning allocator and the alignment recorded when
+  // the block was created, and it must carry the surviving bytes across.
+  void* region = nrq_allocator_create(NRQ_ALLOCATOR_FREE_LIST, 64 * 1024);
+  ASSERT_NE(region, nullptr);
+  auto* first = static_cast<unsigned char*>(nrq_memory_allocate_from(region, 8, 16));
+  ASSERT_NE(first, nullptr);
+  for (int index = 0; index < 8; ++index)
+    first[index] = static_cast<unsigned char>(index + 1);
+
+  auto* grown = static_cast<unsigned char*>(nrq_memory_reallocate(first, 4096));
+  ASSERT_NE(grown, nullptr);
+  ASSERT_EQ(reinterpret_cast<uintptr_t>(grown) % 16, uintptr_t{0});
+  for (int index = 0; index < 8; ++index)
+    ASSERT_EQ(static_cast<int>(grown[index]), index + 1);
+
+  // The block still belongs to its original allocator, so destroying the
+  // allocator must fail while the resized allocation is live.
+  ASSERT_EQ(nrq_allocator_destroy(region), int32_t{0});
+
+  auto* shrunk = static_cast<unsigned char*>(nrq_memory_reallocate(grown, 8));
+  ASSERT_NE(shrunk, nullptr);
+  ASSERT_EQ(static_cast<int>(shrunk[7]), 8);
+  nrq_memory_deallocate_checked(shrunk);
+  ASSERT_EQ(nrq_allocator_destroy(region), int32_t{1});
+}
+
+TEST(AllocatorTest, ReallocateRespectsStackAndRegionLifetimeRules) {
+  // A stack allocator can only resize its most recent block, because releasing
+  // anything else would break the LIFO order it guarantees.
+  void* stack = nrq_allocator_create(NRQ_ALLOCATOR_STACK, 64 * 1024);
+  ASSERT_NE(stack, nullptr);
+  auto* below = static_cast<unsigned char*>(nrq_memory_allocate_from(stack, 64, 8));
+  auto* top = static_cast<unsigned char*>(nrq_memory_allocate_from(stack, 64, 8));
+  ASSERT_NE(below, nullptr);
+  ASSERT_NE(top, nullptr);
+  ASSERT_EQ(nrq_memory_reallocate(below, 128), nullptr);
+  auto* resized = static_cast<unsigned char*>(nrq_memory_reallocate(top, 128));
+  ASSERT_TRUE(resized == top);
+  nrq_memory_deallocate_checked(resized);
+  nrq_memory_deallocate_checked(below);
+  ASSERT_EQ(nrq_allocator_destroy(stack), int32_t{1});
+
+  // A region allocator extends its bump pointer when the block is the most
+  // recent allocation, which keeps the address stable.
+  void* arena = nrq_allocator_create(NRQ_ALLOCATOR_ARENA, 64 * 1024);
+  ASSERT_NE(arena, nullptr);
+  auto* block = static_cast<unsigned char*>(nrq_memory_allocate_from(arena, 64, 8));
+  ASSERT_NE(block, nullptr);
+  block[0] = 3;
+  auto* extended = static_cast<unsigned char*>(nrq_memory_reallocate(block, 1024));
+  ASSERT_TRUE(extended == block);
+  ASSERT_EQ(static_cast<int>(extended[0]), 3);
+  nrq_memory_deallocate_checked(extended);
+  ASSERT_EQ(nrq_allocator_destroy(arena), int32_t{1});
+}
+
+TEST(AllocatorTest, DefaultAllocatorPolicyGovernsExplicitAllocations) {
+  void* pool = nrq_allocator_create(NRQ_ALLOCATOR_POOL, 64);
+  ASSERT_NE(pool, nullptr);
+  ASSERT_EQ(nrq_memory_allocator_kind(0), int32_t{NRQ_ALLOCATOR_GENERAL});
+  ASSERT_EQ(nrq_memory_set_default_allocator(pool), nullptr);
+  // Handle zero now means "the configured default", so the kind follows it.
+  ASSERT_EQ(nrq_memory_allocator_kind(0), int32_t{NRQ_ALLOCATOR_POOL});
+  ASSERT_EQ(nrq_memory_get_default_allocator(), pool);
+  // The policy default cannot be destroyed while allocations may still land in
+  // it, and it must be restorable to the general-purpose default.
+  ASSERT_EQ(nrq_allocator_destroy(pool), int32_t{0});
+
+  auto* value = static_cast<unsigned char*>(nrq_memory_allocate(8, 8));
+  ASSERT_NE(value, nullptr);
+  value[0] = 42;
+  ASSERT_EQ(static_cast<int>(value[0]), 42);
+  nrq_memory_deallocate_checked(value);
+
+  ASSERT_EQ(nrq_memory_set_default_allocator(nullptr), pool);
+  ASSERT_EQ(nrq_memory_get_default_allocator(), nullptr);
+  ASSERT_EQ(nrq_memory_allocator_kind(0), int32_t{NRQ_ALLOCATOR_GENERAL});
+  ASSERT_EQ(nrq_allocator_destroy(pool), int32_t{1});
+}
+
+TEST(AllocatorTest, ReportsFreeSpaceAndFragmentation) {
+  const size_t capacity = 64 * 1024;
+  void* region = nrq_allocator_create(NRQ_ALLOCATOR_FREE_LIST, capacity);
+  ASSERT_NE(region, nullptr);
+  const uint64_t handle = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(region));
+  ASSERT_EQ(nrq_memory_allocator_free_bytes(handle), static_cast<uint64_t>(capacity));
+  ASSERT_EQ(nrq_memory_allocator_fragmentation_bytes(handle), uint64_t{0});
+
+  auto* first = static_cast<unsigned char*>(nrq_memory_allocate_from(region, 1024, 8));
+  auto* second = static_cast<unsigned char*>(nrq_memory_allocate_from(region, 1024, 8));
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(nrq_memory_allocator_free_bytes(handle),
+            static_cast<uint64_t>(capacity - 2048));
+
+  // Freeing the lower block leaves a hole that cannot serve the largest
+  // remaining request; that difference is the fragmentation estimate.
+  nrq_memory_deallocate_checked(first);
+  ASSERT_EQ(nrq_memory_allocator_free_bytes(handle),
+            static_cast<uint64_t>(capacity - 1024));
+  ASSERT_EQ(nrq_memory_allocator_fragmentation_bytes(handle), uint64_t{1024});
+
+  nrq_memory_deallocate_checked(second);
+  ASSERT_EQ(nrq_memory_allocator_fragmentation_bytes(handle), uint64_t{0});
+  ASSERT_EQ(nrq_allocator_destroy(region), int32_t{1});
+}
+
+TEST(AllocatorTest, ProfilerReportsSizeHistogramAndAllocatorAttribution) {
+  const NrqMemoryProfile before = nrq_memory_profiler_capture();
+  nrq_memory_profiler_start();
+  void* pool = nrq_allocator_create(NRQ_ALLOCATOR_POOL, 64);
+  void* arena = nrq_allocator_create(NRQ_ALLOCATOR_ARENA, 64 * 1024);
+  ASSERT_NE(pool, nullptr);
+  ASSERT_NE(arena, nullptr);
+  auto* small = nrq_memory_allocate_from(pool, 32, 8);
+  auto* large = nrq_memory_allocate_from(arena, 4096, 8);
+  ASSERT_NE(small, nullptr);
+  ASSERT_NE(large, nullptr);
+
+  const NrqMemoryProfile profile = nrq_memory_profiler_capture();
+  ASSERT_EQ(profile.allocations, uint64_t{2});
+  ASSERT_EQ(profile.allocations_le_64, uint64_t{1});
+  ASSERT_EQ(profile.allocations_le_4096, uint64_t{1});
+  ASSERT_EQ(profile.largest_allocation, uint64_t{4096});
+  ASSERT_EQ(profile.pool_bytes, before.pool_bytes + 32);
+  ASSERT_EQ(profile.arena_bytes, before.arena_bytes + 4096);
+  ASSERT_TRUE(profile.free_bytes > before.free_bytes);
+  ASSERT_TRUE(profile.largest_free_block > 0);
+  ASSERT_EQ(profile.fragmentation_bytes,
+            profile.free_bytes > profile.largest_free_block
+                ? profile.free_bytes - profile.largest_free_block
+                : 0);
+
+  nrq_memory_deallocate_checked(small);
+  nrq_memory_deallocate_checked(large);
+  nrq_memory_profiler_stop();
+  const NrqMemoryProfile after = nrq_memory_profiler_capture();
+  ASSERT_EQ(after.pool_bytes, before.pool_bytes);
+  ASSERT_EQ(after.arena_bytes, before.arena_bytes);
+  nrq_allocator_destroy(pool);
+  nrq_allocator_destroy(arena);
+}
+
+TEST(AllocatorTest, BenchmarksSmallLargeAndMixedWorkloads) {
+  // Timings are recorded for CI visibility; this is not a claim that one
+  // strategy is faster than another on arbitrary workloads.
+  constexpr int kSmallAllocations = 20000;
+  constexpr int kMixedAllocations = 4000;
+  const NrqAllocatorKind kinds[] = {NRQ_ALLOCATOR_GENERAL, NRQ_ALLOCATOR_POOL,
+                                    NRQ_ALLOCATOR_TLSF};
+  for (NrqAllocatorKind kind : kinds) {
+    void* allocator = nrq_allocator_create(kind, 1024 * 1024);
+    ASSERT_NE(allocator, nullptr);
+    std::vector<void*> blocks;
+    blocks.reserve(kSmallAllocations);
+
+    const auto small_start = std::chrono::steady_clock::now();
+    for (int index = 0; index < kSmallAllocations; ++index) {
+      void* block = nrq_memory_allocate_from(allocator, 48, 8);
+      ASSERT_NE(block, nullptr);
+      blocks.push_back(block);
+    }
+    const auto small_end = std::chrono::steady_clock::now();
+    for (void* block : blocks) nrq_memory_deallocate_checked(block);
+    blocks.clear();
+
+    const auto mixed_start = std::chrono::steady_clock::now();
+    for (int index = 0; index < kMixedAllocations; ++index) {
+      const size_t bytes = 16 + static_cast<size_t>(index % 32) * 128;
+      void* block = nrq_memory_allocate_from(allocator, bytes, 8);
+      ASSERT_NE(block, nullptr);
+      blocks.push_back(block);
+    }
+    const auto mixed_end = std::chrono::steady_clock::now();
+    for (void* block : blocks) nrq_memory_deallocate_checked(block);
+
+    const auto small_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        small_end - small_start).count();
+    const auto mixed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        mixed_end - mixed_start).count();
+    std::cout << "[benchmark] allocator kind " << static_cast<int>(kind) << ": "
+              << kSmallAllocations << " small allocations in " << small_ns / 1000
+              << " us, " << kMixedAllocations << " mixed allocations in "
+              << mixed_ns / 1000 << " us" << std::endl;
+    ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
+  }
 }

@@ -1,0 +1,22 @@
+int function main() {
+    var data = memory.allocate<byte>(8);
+    data[0] = 7 as byte;
+    data[7] = 9 as byte;
+
+    memory.profiler.start();
+    var grown = memory.reallocate<byte>(data, 64);
+
+    // The surviving bytes must cross the resize unchanged.
+    print(grown[0] as int);
+    print(grown[7] as int);
+    grown[63] = 11 as byte;
+    print(grown[63] as int);
+
+    // The profiler must see one live block of the new size.
+    var profile = memory.profiler.capture();
+    print(profile.current_bytes);
+
+    memory.deallocate(grown);
+    memory.profiler.stop();
+    return 42;
+}

@@ -1391,6 +1391,15 @@ Type TypeChecker::check_call(CallExpr& call) {
         {"collections", Type::u64_type()},
         {"live_objects", Type::u64_type()}});
   }
+  if (call.callee() == "gc.is_enabled") {
+    if (!call.arguments().empty()) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'gc.is_enabled' takes no arguments");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+    }
+    return Type::bool_type();
+  }
   if (call.callee() == "memory.secure_allocate" && call.has_generic_argument()) {
     if (call.arguments().size() != 1) {
       diagnostics_.error(diag::kPrintArity, call.location(),
@@ -1440,6 +1449,8 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (!call.arguments().empty())
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'memory.profiler.capture' takes no arguments");
+    // Field order matches `NrqMemoryProfile` in the runtime allocator header;
+    // the generated code loads the whole report as one aggregate.
     return Type::struct_type("MemoryProfile", {
         {"current_bytes", Type::u64_type()}, {"total_bytes", Type::u64_type()},
         {"peak_bytes", Type::u64_type()}, {"allocations", Type::u64_type()},
@@ -1447,7 +1458,40 @@ Type TypeChecker::check_call(CallExpr& call) {
         {"gc_allocated_bytes", Type::u64_type()},
         {"gc_collected_bytes", Type::u64_type()},
         {"gc_collections", Type::u64_type()},
-        {"gc_live_objects", Type::u64_type()}});
+        {"gc_live_objects", Type::u64_type()},
+        {"free_bytes", Type::u64_type()},
+        {"fragmentation_bytes", Type::u64_type()},
+        {"largest_free_block", Type::u64_type()},
+        {"largest_allocation", Type::u64_type()},
+        {"allocations_le_64", Type::u64_type()},
+        {"allocations_le_256", Type::u64_type()},
+        {"allocations_le_1024", Type::u64_type()},
+        {"allocations_le_4096", Type::u64_type()},
+        {"allocations_le_65536", Type::u64_type()},
+        {"allocations_gt_65536", Type::u64_type()},
+        {"general_bytes", Type::u64_type()},
+        {"pool_bytes", Type::u64_type()},
+        {"arena_bytes", Type::u64_type()},
+        {"stack_bytes", Type::u64_type()},
+        {"slab_bytes", Type::u64_type()},
+        {"buddy_bytes", Type::u64_type()},
+        {"free_list_bytes", Type::u64_type()},
+        {"tlsf_bytes", Type::u64_type()},
+        {"custom_bytes", Type::u64_type()}});
+  }
+  if (call.callee() == "memory.used_bytes" ||
+      call.callee() == "memory.total_bytes") {
+    if (!call.arguments().empty())
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "' takes no arguments");
+    return Type::u64_type();
+  }
+  if (call.callee() == "memory.pin_count" ||
+      call.callee() == "memory.pin_violations") {
+    if (!call.arguments().empty())
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "' takes no arguments");
+    return Type::u64_type();
   }
   if (call.callee() == "memory.available_bytes") {
     if (!call.arguments().empty())
@@ -1604,6 +1648,24 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "'memory.get_allocator' takes no arguments");
     return Type::u64_type();
   }
+  if (call.callee() == "memory.set_default_allocator") {
+    if (call.arguments().size() != 1)
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.set_default_allocator' takes one allocator handle");
+    for (const ExprPtr& argument : call.arguments()) {
+      const Type type = check_expression(const_cast<Expr&>(*argument));
+      if (type.is_valid() && !type.is_integer())
+        diagnostics_.error(diag::kTypeMismatch, argument->location(),
+                           "allocator handle must be an integer");
+    }
+    return Type::u64_type();
+  }
+  if (call.callee() == "memory.get_default_allocator") {
+    if (!call.arguments().empty())
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.get_default_allocator' takes no arguments");
+    return Type::u64_type();
+  }
   if (call.callee() == "memory.use_allocator" ||
       call.callee() == "memory.reset_allocator" ||
       call.callee() == "memory.destroy_allocator") {
@@ -1621,6 +1683,26 @@ Type TypeChecker::check_call(CallExpr& call) {
   }
 
   // Builtin 'nrq_memory_allocate'
+  if (call.callee() == "memory.reallocate" && call.has_generic_argument()) {
+    if (call.arguments().size() != 2) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.reallocate<T>' takes a pointer and a new byte count");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::pointer_type(resolve_generic_type(call.generic_argument()));
+    }
+    const Type pointer_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (pointer_type.is_valid() && !pointer_type.is_pointer()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'memory.reallocate<T>' requires an explicitly allocated pointer");
+    }
+    const Type size_type = check_expression(const_cast<Expr&>(*call.arguments()[1]));
+    if (size_type.is_valid() && !size_type.is_integer())
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
+                         "'memory.reallocate<T>' requires an integer byte count");
+    return Type::pointer_type(resolve_generic_type(call.generic_argument()));
+  }
+
   if (call.callee() == "memory.allocate" && call.has_generic_argument()) {
     if (call.arguments().size() != 1 && call.arguments().size() != 2) {
       diagnostics_.error(diag::kPrintArity, call.location(),

@@ -55,6 +55,16 @@ uint64_t nrq_gc_get_collection_count(void);
 uint64_t nrq_gc_get_live_objects(void);
 void* nrq_gc_pin(void* object);
 void nrq_gc_unpin(void* object);
+// Pinning diagnostics. `nrq_gc_pin_count` reports how many distinct objects are
+// pinned right now. A pin request that would exceed the documented per-object
+// pin limit is rejected (returns null) and counted by `nrq_gc_pin_violations`,
+// which makes excessive pinning observable from the language without failing
+// the program.
+uint64_t nrq_gc_pin_count(void);
+uint64_t nrq_gc_pin_violations(void);
+// Reports whether automatic collection is currently enabled. Explicit
+// collection stays available in both states.
+int32_t nrq_gc_is_enabled(void);
 void nrq_gc_ref_count_start(void);
 void nrq_gc_ref_count_stop(void);
 int64_t nrq_gc_get_ref_count(void* object);

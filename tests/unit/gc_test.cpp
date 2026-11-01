@@ -1,6 +1,7 @@
 #include "test_harness.h"
 
 #include <cstddef>
+#include <chrono>
 #include <atomic>
 #include <thread>
 #include <vector>
@@ -151,5 +152,81 @@ TEST(GcTest, ConcurrentAllocationIsSerializedAndReclaimed) {
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{512});
   nrq_gc_collect();
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+  nrq_gc_set_threshold(1024 * 1024);
+}
+TEST(GcTest, PinDiagnosticsReportCountAndRejectExcessivePins) {
+  nrq_gc_enable();
+  nrq_gc_collect();
+  const uint64_t baseline_pins = nrq_gc_pin_count();
+  const uint64_t baseline_violations = nrq_gc_pin_violations();
+  ASSERT_EQ(baseline_pins, uint64_t{0});
+
+  auto* node = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(node, nullptr);
+  ASSERT_TRUE(nrq_gc_pin(node) == node);
+  ASSERT_EQ(nrq_gc_pin_count(), baseline_pins + 1);
+
+  // Repeating a pin without a matching unpin would keep the object alive
+  // forever, so the runtime caps the per-object pin depth and records every
+  // rejection instead of failing the process.
+  int accepted = 0;
+  for (int attempt = 0; attempt < 64; ++attempt) {
+    if (nrq_gc_pin(node)) ++accepted;
+  }
+  ASSERT_TRUE(accepted > 0);
+  ASSERT_TRUE(accepted < 64);
+  ASSERT_EQ(nrq_gc_pin_violations() - baseline_violations,
+            static_cast<uint64_t>(64 - accepted));
+  ASSERT_EQ(nrq_gc_pin_count(), baseline_pins + 1);
+
+  for (int pin = 0; pin <= accepted; ++pin) nrq_gc_unpin(node);
+  ASSERT_EQ(nrq_gc_pin_count(), baseline_pins);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
+TEST(GcTest, AutomaticCollectionStateIsObservable) {
+  nrq_gc_enable();
+  ASSERT_EQ(nrq_gc_is_enabled(), int32_t{1});
+  nrq_gc_disable();
+  ASSERT_EQ(nrq_gc_is_enabled(), int32_t{0});
+  // Explicit collection stays available while automatic collection is off.
+  nrq_gc_collect();
+  nrq_gc_enable();
+  ASSERT_EQ(nrq_gc_is_enabled(), int32_t{1});
+}
+
+TEST(GcTest, BenchmarksAllocationAndCollectionOverhead) {
+  // A bounded measurement rather than a performance claim: it records how long
+  // a fixed allocation/collection workload takes so a regression is visible.
+  nrq_gc_enable();
+  nrq_gc_set_threshold(1024 * 1024 * 1024);
+  nrq_gc_collect();
+  constexpr int kObjects = 20000;
+  std::vector<void*> objects;
+  objects.reserve(kObjects);
+
+  const auto allocation_start = std::chrono::steady_clock::now();
+  for (int index = 0; index < kObjects; ++index) {
+    void* object = nrq_gc_allocate(64, nullptr);
+    ASSERT_NE(object, nullptr);
+    objects.push_back(object);
+  }
+  const auto allocation_end = std::chrono::steady_clock::now();
+
+  objects.clear();
+  const auto collection_start = std::chrono::steady_clock::now();
+  nrq_gc_collect();
+  const auto collection_end = std::chrono::steady_clock::now();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+
+  const auto allocation_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      allocation_end - allocation_start).count();
+  const auto collection_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      collection_end - collection_start).count();
+  std::cout << "[benchmark] gc: " << kObjects << " allocations in "
+            << allocation_ns / 1000 << " us (" << allocation_ns / kObjects
+            << " ns/object), collection in " << collection_ns / 1000 << " us"
+            << std::endl;
   nrq_gc_set_threshold(1024 * 1024);
 }

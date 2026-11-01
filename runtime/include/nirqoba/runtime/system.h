@@ -14,6 +14,12 @@ extern "C" {
 int64_t nrq_time_now_ms(void);
 int32_t nrq_system_cpu_count(void);
 
+// Installed physical memory in bytes, as reported by the operating system.
+uint64_t nrq_system_total_bytes(void);
+// Working-set size of the current process in bytes. This is a reported
+// estimate of resident memory, not a guarantee about total process footprint.
+uint64_t nrq_system_used_bytes(void);
+
 // Exits the process with the given exit code.
 void nrq_system_exit(int32_t exit_code);
 
