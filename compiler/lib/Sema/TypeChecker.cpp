@@ -1114,22 +1114,31 @@ void TypeChecker::check_if(IfStmt& statement) {
 }
 
 void TypeChecker::check_while(WhileStmt& statement) {
+  const SymbolTable before_condition = symbols_;
   const Type cond_type = check_expression(const_cast<Expr&>(statement.condition()));
   if (cond_type.is_valid() && !cond_type.is_bool()) {
     diagnostics_.error(diag::kTypeMismatch, statement.condition().location(),
                        "'while' condition must be 'bool', not '" + cond_type.to_string() + "'");
   }
-  const SymbolTable incoming = symbols_;
+  const SymbolTable condition_state = symbols_;
   ++loop_depth_;
   check_block(const_cast<BlockStmt&>(statement.body()));
   --loop_depth_;
   const SymbolTable body_state = symbols_;
-  for (const string& name : body_state.owners_moved_since(incoming))
-    diagnostics_.error(diag::kTypeMismatch, statement.body().location(),
+  const bool body_falls_through = block_falls_through(statement.body());
+  if (body_falls_through) {
+    for (const string& name : condition_state.owners_moved_since(before_condition))
+      diagnostics_.error(diag::kTypeMismatch, statement.condition().location(),
+                         "owner '" + name +
+                             "' cannot be consumed by a loop condition that can repeat");
+    for (const string& name : body_state.owners_moved_since(condition_state))
+      diagnostics_.error(diag::kTypeMismatch, statement.body().location(),
                        "owner '" + name +
                            "' cannot remain moved at a loop back-edge; reinitialize it before the next iteration");
-  symbols_ = incoming;
-  symbols_.merge_conditional_ownership(body_state, incoming);
+  }
+  symbols_ = condition_state;
+  if (body_falls_through)
+    symbols_.merge_conditional_ownership(body_state, condition_state);
 }
 
 void TypeChecker::check_for(ForStmt& statement) {
@@ -1137,6 +1146,7 @@ void TypeChecker::check_for(ForStmt& statement) {
   if (statement.has_initializer()) {
     check_statement(const_cast<Stmt&>(*statement.initializer()));
   }
+  const SymbolTable before_condition = symbols_;
   if (statement.has_condition()) {
     const Type cond_type = check_expression(const_cast<Expr&>(*statement.condition()));
     if (cond_type.is_valid() && !cond_type.is_bool()) {
@@ -1144,19 +1154,33 @@ void TypeChecker::check_for(ForStmt& statement) {
                          "'for' condition must be 'bool', not '" + cond_type.to_string() + "'");
     }
   }
-  const SymbolTable incoming = symbols_;
+  const SymbolTable condition_state = symbols_;
   ++loop_depth_;
   check_block(const_cast<BlockStmt&>(statement.body()));
   --loop_depth_;
-  if (statement.has_step())
+  const SymbolTable body_state = symbols_;
+  const bool body_falls_through = block_falls_through(statement.body());
+  if (statement.has_step()) {
+    if (!body_falls_through) symbols_ = condition_state;
     check_statement(const_cast<Stmt&>(*statement.step()));
+  }
   const SymbolTable loop_back_state = symbols_;
-  for (const string& name : loop_back_state.owners_moved_since(incoming))
-    diagnostics_.error(diag::kTypeMismatch, statement.location(),
-                       "owner '" + name +
-                           "' cannot remain moved at a loop back-edge; reinitialize it before the next iteration");
-  symbols_ = incoming;
-  symbols_.merge_conditional_ownership(loop_back_state, incoming);
+  const bool step_falls_through = !statement.has_step() ||
+      statement_can_fall_through(*statement.step());
+  if (body_falls_through && step_falls_through) {
+    for (const string& name : condition_state.owners_moved_since(before_condition))
+      diagnostics_.error(diag::kTypeMismatch, statement.condition()->location(),
+                         "owner '" + name +
+                             "' cannot be consumed by a loop condition that can repeat");
+    for (const string& name : loop_back_state.owners_moved_since(condition_state))
+      diagnostics_.error(diag::kTypeMismatch, statement.location(),
+                         "owner '" + name +
+                             "' cannot remain moved at a loop back-edge; reinitialize it before the next iteration");
+    symbols_ = condition_state;
+    symbols_.merge_conditional_ownership(loop_back_state, condition_state);
+  } else {
+    symbols_ = condition_state;
+  }
   symbols_.pop_scope();
 }
 

@@ -1,0 +1,10 @@
+int function consume(owned_array<int> values) {
+    return values[0];
+}
+
+int function main() {
+    var values = memory.owned_array<int>(1);
+    while (consume(values) > 0) {
+    }
+    return 0;
+}
