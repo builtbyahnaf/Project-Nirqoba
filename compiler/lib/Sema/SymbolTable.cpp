@@ -81,4 +81,33 @@ void SymbolTable::set_pointer_ownership(const string& name,
   }
 }
 
+void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
+                                               const SymbolTable& else_state) {
+  for (auto& scope : scopes_) {
+    for (auto& entry : scope) {
+      Symbol& destination = entry.second;
+      const Symbol* then_symbol = then_state.lookup(destination.name);
+      const Symbol* else_symbol = else_state.lookup(destination.name);
+      if (!then_symbol || !else_symbol) continue;
+      const bool same_allocation =
+          then_symbol->allocation_id == else_symbol->allocation_id &&
+          then_symbol->allocation_id == destination.allocation_id;
+      if (!same_allocation) {
+        // A single symbol cannot represent different owners selected by
+        // mutually exclusive branches. Keep it unusable after the merge.
+        destination.moved = true;
+        continue;
+      }
+      destination.moved = then_symbol->moved || else_symbol->moved;
+      destination.owns_allocation = then_symbol->owns_allocation &&
+                                    else_symbol->owns_allocation;
+      destination.borrowed = then_symbol->borrowed || else_symbol->borrowed;
+      destination.mutable_borrow = then_symbol->mutable_borrow ||
+                                   else_symbol->mutable_borrow;
+      destination.shared_allocation = then_symbol->shared_allocation ||
+                                      else_symbol->shared_allocation;
+    }
+  }
+}
+
 }  // namespace nirq

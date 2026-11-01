@@ -1013,9 +1013,26 @@ void TypeChecker::check_if(IfStmt& statement) {
     diagnostics_.error(diag::kTypeMismatch, statement.condition().location(),
                        "'if' condition must be 'bool', not '" + cond_type.to_string() + "'");
   }
+  const SymbolTable incoming = symbols_;
   check_block(const_cast<BlockStmt&>(statement.then_branch()));
+  const SymbolTable then_state = symbols_;
+  symbols_ = incoming;
   if (statement.has_else()) {
     check_statement(const_cast<Stmt&>(*statement.else_branch()));
+  }
+  const SymbolTable else_state = symbols_;
+  const bool then_falls_through = block_falls_through(statement.then_branch());
+  const bool else_falls_through = statement.has_else()
+      ? statement_can_fall_through(*statement.else_branch()) : true;
+  if (then_falls_through && else_falls_through) {
+    symbols_ = incoming;
+    symbols_.merge_conditional_ownership(then_state, else_state);
+  } else if (then_falls_through) {
+    symbols_ = then_state;
+  } else if (else_falls_through) {
+    symbols_ = else_state;
+  } else {
+    symbols_ = incoming;
   }
 }
 
