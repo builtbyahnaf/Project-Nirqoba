@@ -587,7 +587,8 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
   Symbol symbol{declaration.name(), binding_type, declaration.binding(),
                 declaration.location()};
   if ((binding_type.is_owned_array() || contains_owned_array(binding_type)) &&
-      declaration.initializer().kind() == Expr::Kind::MemberAccess) {
+      (declaration.initializer().kind() == Expr::Kind::MemberAccess ||
+       declaration.initializer().kind() == Expr::Kind::Index)) {
     diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
                        "owned fields cannot be moved out of an aggregate individually");
   }
@@ -769,7 +770,8 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
              ? symbols_.lookup(assignment.name())->type : Type::error())
       : check_expression(const_cast<Expr&>(assignment.target()));
 
-  if (assignment.target().kind() == Expr::Kind::MemberAccess &&
+  if ((assignment.target().kind() == Expr::Kind::MemberAccess ||
+       assignment.target().kind() == Expr::Kind::Index) &&
       (target_type.is_owned_array() || contains_owned_array(target_type))) {
     diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
                        "owned fields cannot be replaced individually; move the whole aggregate");
@@ -1437,6 +1439,25 @@ Type TypeChecker::check_array_literal(ArrayLiteralExpr& expr) {
   }
 
   if (!ok) return Type::error();
+  if (contains_owned_array(elem_type)) {
+    for (const ExprPtr& element : elements) {
+      Expr& value = const_cast<Expr&>(*element);
+      const Symbol* source = value.kind() == Expr::Kind::Name
+                                 ? find_root_symbol(value, symbols_) : nullptr;
+      if (source && source->owns_allocation && !source->moved) {
+        if (symbols_.has_live_borrow(source->allocation_id))
+          diagnostics_.error(diag::kTypeMismatch, value.location(),
+                             "cannot move an owner while an array view is live");
+        else {
+          value.set_transfers_ownership();
+          symbols_.mark_allocation_moved(source->allocation_id);
+        }
+      } else if (value.ownership() != ValueOwnership::Owned) {
+        diagnostics_.error(diag::kTypeMismatch, value.location(),
+                           "resource-bearing array elements require an owned value");
+      }
+    }
+  }
   return Type::array_type(elem_type, elements.size());
 }
 
@@ -1448,6 +1469,23 @@ Type TypeChecker::check_tuple_literal(TupleLiteralExpr& expr) {
     Type t = check_expression(const_cast<Expr&>(*elem));
     element_types.push_back(t);
     if (!t.is_valid()) ok = false;
+    if (contains_owned_array(t)) {
+      Expr& value = const_cast<Expr&>(*elem);
+      const Symbol* source = value.kind() == Expr::Kind::Name
+                                 ? find_root_symbol(value, symbols_) : nullptr;
+      if (source && source->owns_allocation && !source->moved) {
+        if (symbols_.has_live_borrow(source->allocation_id))
+          diagnostics_.error(diag::kTypeMismatch, value.location(),
+                             "cannot move an owner while an array view is live");
+        else {
+          value.set_transfers_ownership();
+          symbols_.mark_allocation_moved(source->allocation_id);
+        }
+      } else if (value.ownership() != ValueOwnership::Owned) {
+        diagnostics_.error(diag::kTypeMismatch, value.location(),
+                           "resource-bearing tuple elements require an owned value");
+      }
+    }
   }
   if (!ok) return Type::error();
   return Type::tuple_type(move(element_types));

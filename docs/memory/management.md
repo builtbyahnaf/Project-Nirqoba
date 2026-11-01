@@ -9,7 +9,7 @@ GC domain can enable automatic collection with `gc.enable()`; explicit
 `gc.collect()` always remains available. The Phase 6 Upgrade decision is to make
 ownership-based memory the language default. The compiler now tracks pointer ownership, moves, borrows, shared references, and deterministic cleanup for recognized resource producers. GC objects remain explicitly managed and cannot be released through the owned allocator.
 
-The implemented memory domains include owned pointers and arrays (move and deterministic cleanup), borrowed pointer parameters and array views (non-owning and lifetime constrained), explicitly shared references (reference counted), and GC-managed references (traced and opt-in). Raw pointers remain available in the current low-level subset; full unsafe scopes and ownership of resource-bearing aggregate fields are not implemented.
+The implemented memory domains include owned pointers and arrays (move and deterministic cleanup), borrowed pointer parameters and array views (non-owning and lifetime constrained), explicitly shared references (reference counted), and GC-managed references (traced and opt-in). Raw pointers remain available in the current low-level subset; full unsafe scopes and field-level ownership operations are not implemented.
 
 `gc.get_statistics()` returns `allocated_bytes`, `collected_bytes`,
 `collections`, and `live_objects`. The collector is non-moving. It discovers
@@ -88,7 +88,7 @@ memory.cpu_features() returns a bit mask of CPU features the Windows operating s
 
 ## Ownership, borrows, and cleanup
 
-Owned values from supported allocation and resource producers transfer when bound to another name, passed to an owning parameter, or returned through a matching owner return type. Tracked owners are cleaned in LIFO order at lexical exit, including return, break, and continue. Owner moves clear the source slot so generated cleanup remains safe across conditional control flow. Reassigning a live owner is rejected; release it before reusing the binding.
+Owned values from supported allocation and resource producers transfer when bound to another name, passed to an owning parameter, or returned through a matching owner return type. Resource-bearing structs, tuples, and fixed arrays move as whole values; their nested owned arrays are released recursively. Individual owned fields cannot be extracted or replaced, preventing partial moves and duplicate cleanup. Tracked owners are cleaned in LIFO order at lexical exit, including return, break, and continue. Owner moves clear the source slot so generated cleanup remains safe across conditional control flow. Reassigning a live owner is rejected; release it before reusing the binding.
 
 Use `borrow T* name` for an immutable pointer borrow and `borrow mut T* name` for an exclusive mutable pointer borrow. Borrows cannot be freed, closed, returned, or passed to owning parameters. The checker rejects conflicting aliases at a call site. Borrowed array views are described below. Borrow analysis is conservative and lexical; general returned references, closure capture, arbitrary interprocedural lifetimes, and path-sensitive aggregate aliases are not implemented.
 
@@ -112,4 +112,4 @@ When an owned array element type contains GC-managed references, the runtime reg
 
 `memory.array_view<T>(source, start, length)` creates a read-only, non-owning view into an owned array or another view. The runtime checks the range without overflowing. Views expose `.length`, checked indexing, and can be passed to `array_view<T>` parameters. Views cannot be returned or written through. While a view binding is live, the compiler rejects moving, releasing, or mutating its owner. End the view's lexical scope before performing those operations. View lifetime tracking is conservative and lexical; views cannot be stored in aggregates.
 
-Aggregate fields that own resources, partial moves, closure capture, exception-unwind cleanup, GPU buffers, and non-Windows runtime support remain future work.
+Partial field moves and replacement, shared references inside aggregates, closure capture, exception-unwind cleanup, GPU buffers, and non-Windows runtime support remain future work.
