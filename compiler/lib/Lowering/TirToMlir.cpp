@@ -933,6 +933,13 @@ class FunctionTranslator {
               loc, fn, mlir::ValueRange{}).getResult());
           return true;
         }
+        if (op.callee == "memory.cpu_features") {
+          auto fn = ensure_runtime_fn(module_, builder_, "nrq_system_cpu_features",
+                                      builder_.getI64Type(), {});
+          set(op.result, builder_.create<mlir::LLVM::CallOp>(
+              loc, fn, mlir::ValueRange{}).getResult());
+          return true;
+        }
         if (op.callee == "memory.allocator_kind") {
           mlir::Value handle;
           if (args.empty()) {

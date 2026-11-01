@@ -1573,6 +1573,12 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "'memory.cpu_count' takes no arguments");
     return Type::i32_type();
   }
+  if (call.callee() == "memory.cpu_features") {
+    if (!call.arguments().empty())
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.cpu_features' takes no arguments");
+    return Type::u64_type();
+  }
   if (call.callee() == "memory.allocator_kind") {
     if (call.arguments().size() != 1) {
       diagnostics_.error(diag::kPrintArity, call.location(),

@@ -41,6 +41,18 @@ int32_t nrq_system_cpu_count(void) {
     return static_cast<int32_t>(system_info.dwNumberOfProcessors);
 }
 
+uint64_t nrq_system_cpu_features(void) {
+    uint64_t features = 0;
+    if (IsProcessorFeaturePresent(PF_XMMI64_INSTRUCTIONS_AVAILABLE)) features |= 1ull << 0;
+#ifdef PF_AVX_INSTRUCTIONS_AVAILABLE
+    if (IsProcessorFeaturePresent(PF_AVX_INSTRUCTIONS_AVAILABLE)) features |= 1ull << 1;
+#endif
+#ifdef PF_AVX2_INSTRUCTIONS_AVAILABLE
+    if (IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE)) features |= 1ull << 2;
+#endif
+    return features;
+}
+
 uint64_t nrq_system_total_bytes(void) {
     MEMORYSTATUSEX status{};
     status.dwLength = sizeof(status);
