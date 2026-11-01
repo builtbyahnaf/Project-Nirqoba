@@ -5,6 +5,7 @@
 // never treated as a reference.
 
 #include "nirqoba/runtime/gc.h"
+#include "nirqoba/runtime/fatal.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -188,7 +189,11 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     header->element_size = element_size;
     header->trace = trace;
     header->next = objects;
-    object_index.emplace(object, header);
+      const auto indexed = object_index.emplace(object, header);
+      if (!indexed.second) {
+        destroy_object_storage(header);
+        return nullptr;
+      }
   } catch (...) {
     destroy_object_storage(header);
     return nullptr;
@@ -238,7 +243,7 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
                                 const size_t* reference_offsets,
                                 size_t reference_count) {
   if (!slot || object_size == 0 || reference_count == 0 || !reference_offsets)
-    return;
+    nrq_runtime_fatal("GC root registration received an invalid root descriptor");
   std::lock_guard<std::mutex> lock(gc_mutex);
   auto found = roots.find(slot);
   bool inserted = false;
@@ -252,19 +257,19 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
       found = result.first;
       inserted = result.second;
     } catch (...) {
-      return;
+      nrq_runtime_fatal("GC root registration failed to allocate root metadata");
     }
   } else if (found->second.object_size != object_size ||
              found->second.reference_offsets.size() != reference_count ||
              !std::equal(found->second.reference_offsets.begin(),
                          found->second.reference_offsets.end(), reference_offsets)) {
-    return;
+    nrq_runtime_fatal("GC root slot was registered with an incompatible layout");
   }
   try {
     thread_roots.push_back(slot);
   } catch (...) {
     if (inserted) roots.erase(found);
-    return;
+    nrq_runtime_fatal("GC root registration failed to track the current thread");
   }
   ++found->second.references;
 }
