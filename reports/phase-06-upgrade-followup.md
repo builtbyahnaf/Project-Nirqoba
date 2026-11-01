@@ -78,6 +78,14 @@ because those runtime subsystems do not yet exist.
   performance claim is made. Phase 6U:G remains a later measurement task; GC
   benchmarking is intentionally deferred.
 
+The benchmark harness now separates 16-byte allocation, 4-KiB allocation, and
+alternating mixed-size allocation workloads, in addition to its 64-byte,
+scalar, contiguous-array, graph, and four-thread workloads. The C++/Rust runner
+checks checksums for each workload and records repeated percentile samples and
+environment metadata. This runner was not executed in this follow-up because
+the current environment has neither `cl.exe` in the active shell nor
+`rustc.exe`; no GC workload was run.
+
 ## Explicit allocator synchronization
 
 Stateful operations now use a per-allocator mutex. Allocation selects and pins
