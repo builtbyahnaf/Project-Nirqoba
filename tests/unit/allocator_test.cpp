@@ -377,12 +377,15 @@ TEST(AllocatorTest, BenchmarksSmallLargeAndMixedWorkloads) {
   constexpr int kSmallAllocations = 20000;
   constexpr int kMixedAllocations = 4000;
   constexpr size_t kLiveWindow = 128;
-  const NrqAllocatorKind kinds[] = {NRQ_ALLOCATOR_GENERAL, NRQ_ALLOCATOR_POOL,
-                                    NRQ_ALLOCATOR_TLSF};
+  const NrqAllocatorKind kinds[] = {
+      NRQ_ALLOCATOR_GENERAL, NRQ_ALLOCATOR_POOL, NRQ_ALLOCATOR_ARENA,
+      NRQ_ALLOCATOR_STACK, NRQ_ALLOCATOR_SLAB, NRQ_ALLOCATOR_BUDDY,
+      NRQ_ALLOCATOR_FREE_LIST, NRQ_ALLOCATOR_TLSF};
   for (NrqAllocatorKind kind : kinds) {
     // A pool's capacity is its largest request class, not a region size, so it
     // is sized to the largest block this benchmark asks for.
-    const size_t capacity = kind == NRQ_ALLOCATOR_POOL ? 4096 : 1024 * 1024;
+    const size_t capacity = (kind == NRQ_ALLOCATOR_POOL || kind == NRQ_ALLOCATOR_SLAB)
+        ? 4096 : 1024 * 1024;
     void* allocator = nrq_allocator_create(kind, capacity);
     ASSERT_NE(allocator, nullptr);
     std::vector<void*> blocks;
@@ -394,12 +397,14 @@ TEST(AllocatorTest, BenchmarksSmallLargeAndMixedWorkloads) {
       ASSERT_NE(block, nullptr);
       blocks.push_back(block);
       if (blocks.size() == kLiveWindow) {
-        for (void* live : blocks) nrq_memory_deallocate_checked(live);
+        for (auto live = blocks.rbegin(); live != blocks.rend(); ++live)
+          nrq_memory_deallocate_checked(*live);
         blocks.clear();
       }
     }
     const auto small_end = std::chrono::steady_clock::now();
-    for (void* live : blocks) nrq_memory_deallocate_checked(live);
+    for (auto live = blocks.rbegin(); live != blocks.rend(); ++live)
+      nrq_memory_deallocate_checked(*live);
     blocks.clear();
 
     const auto mixed_start = std::chrono::steady_clock::now();
@@ -409,12 +414,14 @@ TEST(AllocatorTest, BenchmarksSmallLargeAndMixedWorkloads) {
       ASSERT_NE(block, nullptr);
       blocks.push_back(block);
       if (blocks.size() == kLiveWindow) {
-        for (void* live : blocks) nrq_memory_deallocate_checked(live);
+        for (auto live = blocks.rbegin(); live != blocks.rend(); ++live)
+          nrq_memory_deallocate_checked(*live);
         blocks.clear();
       }
     }
     const auto mixed_end = std::chrono::steady_clock::now();
-    for (void* live : blocks) nrq_memory_deallocate_checked(live);
+    for (auto live = blocks.rbegin(); live != blocks.rend(); ++live)
+      nrq_memory_deallocate_checked(*live);
     blocks.clear();
 
     const auto small_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -427,4 +434,34 @@ TEST(AllocatorTest, BenchmarksSmallLargeAndMixedWorkloads) {
               << mixed_ns / 1000 << " us" << std::endl;
     ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
   }
+}
+
+TEST(AllocatorTest, BenchmarksSharedAllocatorContentionAcrossThreads) {
+  constexpr int kIterationsPerThread = 10000;
+  void* allocator = nrq_allocator_create(NRQ_ALLOCATOR_GENERAL, 0);
+  ASSERT_NE(allocator, nullptr);
+  for (int worker_count : {1, 2, 4}) {
+    std::atomic<int> failures{0};
+    std::vector<std::thread> workers;
+    workers.reserve(worker_count);
+    const auto start = std::chrono::steady_clock::now();
+    for (int worker = 0; worker < worker_count; ++worker) {
+      workers.emplace_back([&] {
+        for (int i = 0; i < kIterationsPerThread; ++i) {
+          void* block = nrq_memory_allocate_from(allocator, 64, 16);
+          if (!block) { ++failures; continue; }
+          static_cast<unsigned char*>(block)[0] = static_cast<unsigned char>(i);
+          nrq_memory_deallocate_checked(block);
+        }
+      });
+    }
+    for (std::thread& worker : workers) worker.join();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    ASSERT_EQ(failures.load(), 0);
+    std::cout << "[benchmark] shared general allocator with " << worker_count
+              << " thread(s): " << worker_count * kIterationsPerThread
+              << " allocate/free pairs in " << elapsed << " us" << std::endl;
+  }
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
 }
