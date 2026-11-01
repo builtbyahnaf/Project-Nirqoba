@@ -43,6 +43,15 @@ bool SymbolTable::allocation_is_moved(uint64_t allocation_id) const {
   return found_allocation && !found_live_allocation;
 }
 
+bool SymbolTable::has_live_borrow(uint64_t allocation_id) const {
+  if (allocation_id == 0) return false;
+  for (const auto& scope : scopes_)
+    for (const auto& entry : scope)
+      if (entry.second.allocation_id == allocation_id &&
+          entry.second.borrowed && !entry.second.moved) return true;
+  return false;
+}
+
 void SymbolTable::rebind_pointer(const string& name, uint64_t allocation_id) {
   for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
     auto found = scope->find(name);

@@ -50,6 +50,7 @@ class SymbolTable {
   const Symbol* lookup(const std::string& name) const;
   void mark_allocation_moved(uint64_t allocation_id);
   bool allocation_is_moved(uint64_t allocation_id) const;
+  bool has_live_borrow(uint64_t allocation_id) const;
   void rebind_pointer(const std::string& name, uint64_t allocation_id);
   void set_pointer_ownership(const std::string& name, bool owns_allocation,
                              bool borrowed, bool mutable_borrow,

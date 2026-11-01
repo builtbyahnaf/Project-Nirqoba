@@ -1,0 +1,5 @@
+{
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": ["cannot mutate an owner while an array view is live"]
+}

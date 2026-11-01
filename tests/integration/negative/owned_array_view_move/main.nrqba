@@ -1,0 +1,6 @@
+int function main() {
+    var values = memory.owned_array<int>(2);
+    let view = memory.array_view<int>(values, 0, 2);
+    let moved = values;
+    return view[0];
+}

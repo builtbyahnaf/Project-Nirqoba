@@ -144,6 +144,21 @@ TEST(GcTest, ReferenceDiagnosticsCountHeapAndRootReferencesWhenEnabled) {
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
 }
 
+TEST(GcTest, ReferenceDiagnosticsCountPinnedRoots) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  nrq_gc_ref_count_start();
+  void* object = nrq_gc_allocate(32, nullptr);
+  ASSERT_NE(object, nullptr);
+  ASSERT_EQ(nrq_gc_get_ref_count(object), int64_t{0});
+  ASSERT_EQ(nrq_gc_pin(object), object);
+  ASSERT_EQ(nrq_gc_get_ref_count(object), int64_t{1});
+  nrq_gc_unpin(object);
+  ASSERT_EQ(nrq_gc_get_ref_count(object), int64_t{0});
+  nrq_gc_ref_count_stop();
+  nrq_gc_collect();
+}
+
 TEST(GcTest, ConcurrentAllocationIsSerializedAndReclaimed) {
   nrq_gc_enable();
   nrq_gc_set_threshold(1024 * 1024 * 1024);

@@ -21,7 +21,8 @@ static bool expression_creates_owned_pointer(const Expr& expr) {
          callee == "memory.secure_allocate" || callee == "memory.reallocate" ||
          callee == "memory.map_file" || callee == "memory.shared_allocate" ||
          callee == "memory.shared_retain" || callee == "mutex.create" ||
-         callee == "memory.owned_array";
+         callee == "memory.owned_array" ||
+         callee == "memory.owned_array_aligned";
 }
 
 static std::string cleanup_for_owner_producer(const std::string& callee,
@@ -34,7 +35,8 @@ static std::string cleanup_for_owner_producer(const std::string& callee,
   if (callee == "memory.allocate" || callee == "memory.reallocate")
     return "memory.deallocate";
   if (callee == "mutex.create") return "mutex.destroy";
-  if (callee == "memory.owned_array") return "array.owned_release";
+  if (callee == "memory.owned_array" ||
+      callee == "memory.owned_array_aligned") return "array.owned_release";
   return {};
 }
 
@@ -411,11 +413,12 @@ void TypeChecker::check_function(FunctionDecl& function) {
                   parameter.borrowed && !parameter.mutable_borrow
                       ? BindingKind::Let : BindingKind::Var,
                   parameter.location};
-    if (parameter.type.is_pointer() || parameter.type.is_owned_array()) {
+    if (parameter.type.is_pointer() || parameter.type.is_owned_array() ||
+        parameter.type.is_array_view()) {
       symbol.allocation_id = next_allocation_id_++;
-      symbol.borrowed = parameter.borrowed;
+      symbol.borrowed = parameter.borrowed || parameter.type.is_array_view();
       symbol.mutable_borrow = parameter.mutable_borrow;
-      symbol.owns_allocation = !parameter.borrowed;
+      symbol.owns_allocation = !symbol.borrowed;
       symbol.shared_allocation = parameter.shared;
     }
     if (!symbols_.declare(move(symbol))) {
@@ -587,13 +590,35 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
         symbol.shared_allocation = source->shared_allocation;
         symbol.cleanup_callee = source->cleanup_callee;
         if (source->owns_allocation && !source->moved) {
-          symbol.owns_allocation = true;
-          transferred_owner = source;
-          const_cast<Expr&>(declaration.initializer()).set_transfers_ownership();
+          if (symbols_.has_live_borrow(source->allocation_id)) {
+            diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
+                               "cannot move an owner while an array view is live");
+          } else {
+            symbol.owns_allocation = true;
+            transferred_owner = source;
+            const_cast<Expr&>(declaration.initializer()).set_transfers_ownership();
+          }
         }
       }
     }
     if (symbol.allocation_id == 0) symbol.allocation_id = next_allocation_id_++;
+  } else if (binding_type.is_array_view()) {
+    symbol.borrowed = true;
+    if (declaration.initializer().kind() == Expr::Kind::Call) {
+      const auto& call = static_cast<const CallExpr&>(declaration.initializer());
+      if (call.callee() == "memory.array_view" && !call.arguments().empty()) {
+        if (const Symbol* source = find_root_symbol(*call.arguments()[0], symbols_))
+          symbol.allocation_id = source->allocation_id;
+      }
+    } else {
+      const Symbol* source = find_root_symbol(declaration.initializer(), symbols_);
+      if (source && source->type.is_array_view() && source->borrowed && !source->moved)
+        symbol.allocation_id = source->allocation_id;
+    }
+    if (symbol.allocation_id == 0) {
+      diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
+                         "array views require a tracked owner or borrowed source");
+    }
   }
   const uint64_t allocation_id = symbol.allocation_id;
   const string new_name = declaration.name();
@@ -694,6 +719,18 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       : check_expression(const_cast<Expr&>(assignment.target()));
 
   const Symbol* symbol = find_root_symbol(assignment.target(), symbols_);
+  if (assignment.target().kind() == Expr::Kind::Index &&
+      static_cast<const IndexExpr&>(assignment.target()).base().type().is_array_view()) {
+    diagnostics_.error(diag::kImmutableAssignment, assignment.target().location(),
+                       "array views are read-only; mutate through the owning array");
+    return;
+  }
+  if (symbol && symbol->owns_allocation &&
+      symbols_.has_live_borrow(symbol->allocation_id)) {
+    diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
+                       "cannot mutate an owner while an array view is live");
+    return;
+  }
   if (symbol == nullptr && assignment.is_simple_name()) {
     diagnostics_.error(diag::kUndefinedName, assignment.name_location(),
                        "assignment to undeclared variable '" + assignment.name() + "'");
@@ -755,7 +792,12 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                              ? "array.owned_release"
                              : "memory.deallocate";
     } else if (source && source->owns_allocation && !source->moved) {
-      const_cast<Expr&>(assignment.value()).set_transfers_ownership();
+      if (symbols_.has_live_borrow(source->allocation_id)) {
+        diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                           "cannot move an owner while an array view is live");
+      } else {
+        const_cast<Expr&>(assignment.value()).set_transfers_ownership();
+      }
     }
     if (!symbol->cleanup_callee.empty() &&
         (cleanup_callee.empty() || cleanup_callee != symbol->cleanup_callee)) {
@@ -909,6 +951,10 @@ void TypeChecker::check_return(ReturnStmt& statement) {
                        "function returns '" + current_return_type_.to_string() +
                            "' but this 'return' yields '" + value_type.to_string() + "'");
   }
+  if (value_type.is_array_view()) {
+    diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                       "borrowed array views cannot escape through a return value");
+  }
   bool value_is_shared = statement.value()->ownership() == ValueOwnership::Shared;
   if (statement.value()->kind() == Expr::Kind::Name) {
     const Symbol* source = find_root_symbol(*statement.value(), symbols_);
@@ -932,6 +978,10 @@ void TypeChecker::check_return(ReturnStmt& statement) {
     if (source && source->borrowed) {
       diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                          "a borrowed pointer cannot escape through a return value");
+    } else if (source && source->owns_allocation && !source->moved &&
+               symbols_.has_live_borrow(source->allocation_id)) {
+      diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                         "cannot return an owner while an array view is live");
     } else if (source && source->owns_allocation && !source->moved) {
       const_cast<Expr&>(*statement.value()).set_transfers_ownership();
       symbols_.mark_allocation_moved(source->allocation_id);
@@ -1037,6 +1087,8 @@ Type TypeChecker::check_expression(Expr& expr) {
         expr.set_ownership(ValueOwnership::GcManaged);
       } else if (type.is_owned_array()) {
         expr.set_ownership(ValueOwnership::Owned);
+      } else if (type.is_array_view()) {
+        expr.set_ownership(ValueOwnership::Borrowed);
       }
       break;
     case Expr::Kind::Unary: {
@@ -1245,6 +1297,8 @@ Type TypeChecker::resolve_aggregate_type(const Type& type,
   }
   if (type.is_owned_array())
     return Type::owned_array_type(resolve_aggregate_type(type.element_type(), active));
+  if (type.is_array_view())
+    return Type::array_view_type(resolve_aggregate_type(type.element_type(), active));
   // Pointer elements are deliberately left shallow: layout of a pointee is
   // resolved where the pointee is allocated, and expanding through pointers
   // would recurse forever on a self-referential struct.
@@ -1335,7 +1389,7 @@ Type TypeChecker::check_index_expr(IndexExpr& expr) {
   }
 
   if (base_type.is_array() || base_type.is_dynamic_array() ||
-      base_type.is_owned_array() ||
+      base_type.is_owned_array() || base_type.is_array_view() ||
       base_type.is_pointer() || base_type.is_managed_pointer()) {
     // Constant-index bounds check for fixed arrays.
     if (base_type.is_array() && expr.index().kind() == Expr::Kind::IntegerLiteral) {
@@ -1428,7 +1482,8 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
   }
 
   // Dynamic array .length property (for example `args.length`).
-  if ((base_type.is_dynamic_array() || base_type.is_owned_array()) &&
+  if ((base_type.is_dynamic_array() || base_type.is_owned_array() ||
+       base_type.is_array_view()) &&
       expr.member() == "length") {
     return Type::int_type();
   }
@@ -1509,10 +1564,49 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
 }
 
 Type TypeChecker::check_call(CallExpr& call) {
-  if (call.callee() == "memory.owned_array" && call.has_generic_argument()) {
-    if (call.arguments().size() != 1) {
+  if (call.callee() == "memory.array_view" && call.has_generic_argument()) {
+    if (call.arguments().size() != 3) {
       diagnostics_.error(diag::kPrintArity, call.location(),
-                         "'memory.owned_array<T>' takes one element count");
+                         "'memory.array_view<T>' takes a source, start, and length");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::error();
+    }
+    const Type source_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    const Type start_type = check_expression(const_cast<Expr&>(*call.arguments()[1]));
+    const Type length_type = check_expression(const_cast<Expr&>(*call.arguments()[2]));
+    const Type element_type = resolve_aggregate_type(call.generic_argument());
+    if (!source_type.is_owned_array() && !source_type.is_array_view()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "array views require an owned array or an existing array view");
+    } else if (source_type.element_type() != element_type) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "array view element type must match its source");
+    }
+    if (start_type.is_valid() && !start_type.is_integer())
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
+                         "array view start must be an integer");
+    if (length_type.is_valid() && !length_type.is_integer())
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[2]->location(),
+                         "array view length must be an integer");
+    const Symbol* source = find_root_symbol(*call.arguments()[0], symbols_);
+    if (!source || source->allocation_id == 0 || source->moved ||
+        (!source->owns_allocation && !source->borrowed)) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "array views require a live tracked owner");
+    }
+    return Type::array_view_type(element_type);
+  }
+  if ((call.callee() == "memory.owned_array" ||
+       call.callee() == "memory.owned_array_aligned") &&
+      call.has_generic_argument()) {
+    const bool aligned = call.callee() == "memory.owned_array_aligned";
+    const size_t expected_arguments = aligned ? 2 : 1;
+    if (call.arguments().size() != expected_arguments) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         aligned
+                             ? "'memory.owned_array_aligned<T>' takes an element count and alignment"
+                             : "'memory.owned_array<T>' takes one element count");
       for (const ExprPtr& argument : call.arguments())
         check_expression(const_cast<Expr&>(*argument));
     } else {
@@ -1520,6 +1614,12 @@ Type TypeChecker::check_call(CallExpr& call) {
       if (count.is_valid() && !count.is_integer())
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                            "owned array element count must be an integer");
+      if (aligned) {
+        const Type alignment = check_expression(const_cast<Expr&>(*call.arguments()[1]));
+        if (alignment.is_valid() && !alignment.is_integer())
+          diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
+                             "owned array alignment must be an integer");
+      }
     }
     return Type::owned_array_type(resolve_aggregate_type(call.generic_argument()));
   }
@@ -1539,7 +1639,10 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (!owner || owner->cleanup_callee != "array.owned_release")
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "'array.owned_release' requires an owned array binding");
-    else if (!checking_deferred_cleanup_) {
+    else if (symbols_.has_live_borrow(owner->allocation_id)) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "cannot release an array while an array view is live");
+    } else if (!checking_deferred_cleanup_) {
       const_cast<Expr&>(*call.arguments()[0]).set_transfers_ownership();
       symbols_.mark_allocation_moved(owner->allocation_id);
     }
@@ -2458,8 +2561,13 @@ Type TypeChecker::check_call(CallExpr& call) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                            "owned array parameter requires an owned array value");
       } else if (source && source->owns_allocation && !source->moved) {
-        const_cast<Expr&>(*call.arguments()[i]).set_transfers_ownership();
-        ownership_transfers.push_back(source->allocation_id);
+        if (symbols_.has_live_borrow(source->allocation_id)) {
+          diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                             "cannot transfer an owner while an array view is live");
+        } else {
+          const_cast<Expr&>(*call.arguments()[i]).set_transfers_ownership();
+          ownership_transfers.push_back(source->allocation_id);
+        }
       }
       continue;
     }

@@ -1,0 +1,5 @@
+int function main() {
+    var values = memory.owned_array<int>(2);
+    let view = memory.array_view<int>(values, 1, 2);
+    return view[0];
+}
