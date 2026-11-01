@@ -42,6 +42,14 @@ struct BlockingDeallocateState {
   bool release = false;
 };
 
+struct BlockingReallocateState {
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool block = false;
+  bool entered = false;
+  bool release = false;
+};
+
 void* blocking_allocate(void* context, size_t bytes, size_t alignment) {
   auto* state = static_cast<BlockingAllocatorState*>(context);
   {
@@ -69,6 +77,24 @@ void blocking_deallocate_wait(void* context, void* pointer, size_t, size_t) {
     state->condition.notify_all();
     state->condition.wait(lock, [&] { return state->release; });
   }
+  _aligned_free(pointer);
+}
+
+void* blocking_reallocate_allocate(void* context, size_t bytes,
+                                   size_t alignment) {
+  auto* state = static_cast<BlockingReallocateState*>(context);
+  {
+    std::unique_lock<std::mutex> lock(state->mutex);
+    if (state->block) {
+      state->entered = true;
+      state->condition.notify_all();
+      state->condition.wait(lock, [&] { return state->release; });
+    }
+  }
+  return _aligned_malloc(bytes, std::max(alignment, sizeof(void*)));
+}
+
+void blocking_reallocate_deallocate(void*, void* pointer, size_t, size_t) {
   _aligned_free(pointer);
 }
 
@@ -196,6 +222,40 @@ TEST(AllocatorTest, DeallocationDoesNotHoldTheGlobalAllocatorRegistryLock) {
   state.condition.notify_all();
   worker.join();
   ASSERT_NE(unrelated, nullptr);
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
+  ASSERT_EQ(nrq_allocator_destroy(unrelated), int32_t{1});
+}
+
+TEST(AllocatorTest, ReallocationDoesNotHoldTheGlobalAllocatorRegistryLock) {
+  BlockingReallocateState state;
+  const NrqCustomAllocatorVTable callbacks{
+      &state, blocking_reallocate_allocate,
+      blocking_reallocate_deallocate, nullptr};
+  void* allocator = nrq_allocator_create_custom(&callbacks);
+  ASSERT_NE(allocator, nullptr);
+  void* pointer = nrq_memory_allocate_from(allocator, 32, 16);
+  ASSERT_NE(pointer, nullptr);
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.block = true;
+  }
+  std::atomic<void*> resized = nullptr;
+  std::thread worker([&] { resized = nrq_memory_reallocate(pointer, 256); });
+  {
+    std::unique_lock<std::mutex> lock(state.mutex);
+    state.condition.wait(lock, [&] { return state.entered; });
+  }
+  void* unrelated = nrq_allocator_create(NRQ_ALLOCATOR_GENERAL, 0);
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.release = true;
+  }
+  state.condition.notify_all();
+  worker.join();
+  void* new_pointer = resized.load();
+  ASSERT_NE(unrelated, nullptr);
+  ASSERT_NE(new_pointer, nullptr);
+  nrq_memory_deallocate_checked(new_pointer);
   ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
   ASSERT_EQ(nrq_allocator_destroy(unrelated), int32_t{1});
 }

@@ -888,7 +888,7 @@ struct AllocationOwner {
   Allocator* allocator;
   size_t bytes;
   size_t alignment;
-  bool deallocating = false;
+  bool operation_in_flight = false;
 };
 std::unordered_map<void*, AllocationOwner> live_allocations;
 std::unordered_map<void*, uint64_t> shared_reference_counts;
@@ -1121,7 +1121,7 @@ static void* allocate_with_allocator(Allocator* allocator, size_t bytes,
     std::unique_lock<std::mutex> lock(allocator_mutex);
     auto existing = live_allocations.find(pointer);
     while (existing != live_allocations.end() &&
-           existing->second.deallocating) {
+           existing->second.operation_in_flight) {
       allocation_registry_changed.wait(lock);
       existing = live_allocations.find(pointer);
     }
@@ -1276,12 +1276,12 @@ void nrq_memory_deallocate_checked(void* pointer) {
     if (shared_reference_counts.find(pointer) != shared_reference_counts.end())
       nrq_runtime_fatal("shared allocations must be released with memory.shared_release");
     auto found = live_allocations.find(pointer);
-    if (found == live_allocations.end() || found->second.deallocating)
+    if (found == live_allocations.end() || found->second.operation_in_flight)
       nrq_runtime_fatal("memory.deallocate received an invalid or already freed pointer");
     allocator = found->second.allocator;
     if (!increment_operation_pin_locked(allocator))
       nrq_runtime_fatal("memory.deallocate could not pin the owning allocator");
-    found->second.deallocating = true;
+    found->second.operation_in_flight = true;
   }
 
   bool released = false;
@@ -1295,14 +1295,14 @@ void nrq_memory_deallocate_checked(void* pointer) {
   {
     std::lock_guard<std::mutex> lock(allocator_mutex);
     auto found = live_allocations.find(pointer);
-    if (found == live_allocations.end() || !found->second.deallocating)
+    if (found == live_allocations.end() || !found->second.operation_in_flight)
       nrq_runtime_fatal("allocator ownership changed during deallocation");
     if (released) {
       record_deallocation_profile(found->second.bytes);
       live_allocations.erase(found);
       allocation_registry_changed.notify_all();
     } else {
-      found->second.deallocating = false;
+      found->second.operation_in_flight = false;
     }
     release_operation_pin_locked(allocator);
   }
@@ -1329,67 +1329,81 @@ void* nrq_memory_reallocate(void* pointer, size_t bytes) {
     }
     return allocate_with_allocator(allocator, bytes, kDefaultAlignmentBytes);
   }
-  std::lock_guard<std::mutex> lock(allocator_mutex);
-  if (shared_reference_counts.find(pointer) != shared_reference_counts.end())
-    nrq_runtime_fatal("shared allocations cannot be resized");
-  auto found = live_allocations.find(pointer);
-  if (found == live_allocations.end())
-    nrq_runtime_fatal(
-        "memory.reallocate received an invalid or already freed pointer");
-  if (found->second.deallocating)
-    nrq_runtime_fatal("memory.reallocate raced with deallocation of the same pointer");
-  Allocator* allocator = found->second.allocator;
-  const size_t old_bytes = found->second.bytes;
-  const size_t alignment = found->second.alignment;
+  Allocator* allocator = nullptr;
+  size_t old_bytes = 0;
+  size_t alignment = 0;
+  {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    if (shared_reference_counts.find(pointer) != shared_reference_counts.end())
+      nrq_runtime_fatal("shared allocations cannot be resized");
+    auto found = live_allocations.find(pointer);
+    if (found == live_allocations.end())
+      nrq_runtime_fatal(
+          "memory.reallocate received an invalid or already freed pointer");
+    if (found->second.operation_in_flight)
+      nrq_runtime_fatal("memory.reallocate raced with another operation on the same pointer");
+    allocator = found->second.allocator;
+    old_bytes = found->second.bytes;
+    alignment = found->second.alignment;
+    if (bytes != 0) {
+      if (!increment_operation_pin_locked(allocator)) return nullptr;
+      found->second.operation_in_flight = true;
+    }
+  }
   if (bytes == 0) {
     // Zero bytes releases the block, matching the C realloc convention; the
     // caller cannot distinguish this from failure, which is why the language
     // documentation states that a zero-byte reallocation frees the block.
-    if (!allocator->try_deallocate_serialized(pointer))
-      nrq_runtime_fatal(
-          "stack allocator allocations must be deallocated in LIFO order");
-    record_deallocation_profile(old_bytes);
-    live_allocations.erase(found);
+    nrq_memory_deallocate_checked(pointer);
     return nullptr;
   }
-  // Keep the already-allocated registry node attached to the owner through
-  // resize. Reallocating the node after the allocator has moved the block could
-  // itself fail and leave the new pointer untracked.
-  auto allocation_node = live_allocations.extract(found);
+
   void* replacement = nullptr;
   try {
     replacement = allocator->reallocate_serialized(pointer, old_bytes, bytes,
                                                      alignment);
   } catch (...) {
-    live_allocations.insert(std::move(allocation_node));
-    return nullptr;
+    replacement = nullptr;
   }
-  if (!replacement) {
-    live_allocations.insert(std::move(allocation_node));
-    return nullptr;  // The original allocation is untouched.
-  }
-  allocation_node.key() = replacement;
-  allocation_node.mapped() = AllocationOwner{allocator, bytes, alignment};
-  auto inserted = live_allocations.insert(std::move(allocation_node));
-  if (!inserted.inserted)
-    nrq_runtime_fatal("allocator reallocation returned an already-live address");
-  if (memory_profiler_enabled) {
-    memory_profile.current_bytes = memory_profile.current_bytes - old_bytes + bytes;
-    memory_profile.peak_bytes = std::max(memory_profile.peak_bytes,
-                                         memory_profile.current_bytes);
-    // Only growth requests additional bytes; a shrink is not an allocation.
-    if (bytes > old_bytes) {
-      memory_profile.total_bytes += bytes - old_bytes;
-      ++memory_profile.allocations;
-      if (bytes <= 64) ++memory_profile.allocations_le_64;
-      else if (bytes <= 256) ++memory_profile.allocations_le_256;
-      else if (bytes <= 1024) ++memory_profile.allocations_le_1024;
-      else if (bytes <= 4096) ++memory_profile.allocations_le_4096;
-      else if (bytes <= 65536) ++memory_profile.allocations_le_65536;
-      else ++memory_profile.allocations_gt_65536;
-      memory_profile.largest_allocation = std::max(
-          memory_profile.largest_allocation, static_cast<uint64_t>(bytes));
+
+  {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    auto found = live_allocations.find(pointer);
+    if (found == live_allocations.end() || !found->second.operation_in_flight)
+      nrq_runtime_fatal("allocator ownership changed during reallocation");
+    if (!replacement) {
+      found->second.operation_in_flight = false;
+      release_operation_pin_locked(allocator);
+      allocation_registry_changed.notify_all();
+      return nullptr;  // The original allocation is untouched.
     }
+
+    auto allocation_node = live_allocations.extract(found);
+    allocation_node.key() = replacement;
+    allocation_node.mapped() = AllocationOwner{allocator, bytes, alignment};
+    auto inserted = live_allocations.insert(std::move(allocation_node));
+    if (!inserted.inserted)
+      nrq_runtime_fatal("allocator reallocation returned an already-live address");
+    if (memory_profiler_enabled) {
+      memory_profile.current_bytes = memory_profile.current_bytes - old_bytes + bytes;
+      memory_profile.peak_bytes = std::max(memory_profile.peak_bytes,
+                                           memory_profile.current_bytes);
+      // Only growth requests additional bytes; a shrink is not an allocation.
+      if (bytes > old_bytes) {
+        memory_profile.total_bytes += bytes - old_bytes;
+        ++memory_profile.allocations;
+        if (bytes <= 64) ++memory_profile.allocations_le_64;
+        else if (bytes <= 256) ++memory_profile.allocations_le_256;
+        else if (bytes <= 1024) ++memory_profile.allocations_le_1024;
+        else if (bytes <= 4096) ++memory_profile.allocations_le_4096;
+        else if (bytes <= 65536) ++memory_profile.allocations_le_65536;
+        else ++memory_profile.allocations_gt_65536;
+        memory_profile.largest_allocation = std::max(
+            memory_profile.largest_allocation, static_cast<uint64_t>(bytes));
+      }
+    }
+    release_operation_pin_locked(allocator);
+    allocation_registry_changed.notify_all();
   }
   return replacement;
 }
@@ -1525,7 +1539,7 @@ void nrq_memory_secure_release(void* pointer) {
   auto found = live_allocations.find(pointer);
   if (found == live_allocations.end())
     nrq_runtime_fatal("memory.secure_release received an invalid pointer");
-  if (found->second.deallocating)
+  if (found->second.operation_in_flight)
     nrq_runtime_fatal("memory.secure_release raced with deallocation of the same pointer");
   SecureZeroMemory(pointer, found->second.bytes);
   if (!found->second.allocator->try_deallocate_serialized(pointer))
