@@ -18,6 +18,8 @@ The compiler/runtime distinguish allocations from the GC heap and the explicit a
 
 ## Current implementation boundary
 
+Owned, shared, and borrowed raw pointers cannot be embedded in aggregates because fields do not declare an ownership contract; GC-managed and raw pointers remain non-owning.
+
 - Owned pointers from supported allocation/resource producers move through bindings and ordinary pointer function parameters/returns. Borrowed pointer parameters and shared pointer parameter/return contracts are checked.
 - Files, mutexes, secure buffers, mappings, and owned arrays receive deterministic cleanup. Automatic cleanup applies on supported lexical control-flow exits.
 - `owned_array<T>` provides contiguous, checked storage, `.length`, allocator selection, optional stronger alignment, and ownership transfer. Read-only `array_view<T>` supports checked nested ranges, view parameters, and lexical owner-lifetime protection.
