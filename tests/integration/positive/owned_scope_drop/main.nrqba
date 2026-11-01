@@ -7,12 +7,25 @@ int function main() {
         let replacement = memory.allocate<byte>(12);
     }
     return_owner_early();
+    owner_cleanup_on_loop_exits();
     conditional_release(false);
     conditional_release(true);
     let report = memory.profiler.capture();
     print(report.current_bytes);
     memory.profiler.stop();
     return 0;
+}
+
+void function owner_cleanup_on_loop_exits() {
+    var iteration = 0;
+    while (iteration < 2) {
+        let buffer = memory.allocate<byte>(8);
+        iteration += 1;
+        if (iteration == 1) {
+            continue;
+        }
+        break;
+    }
 }
 
 void function return_owner_early() {
