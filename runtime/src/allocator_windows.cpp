@@ -879,6 +879,7 @@ class TlsfAllocator final : public Allocator {
 std::mutex allocator_mutex;
 std::unordered_map<void*, std::unique_ptr<Allocator>> allocator_handles;
 std::unordered_map<Allocator*, size_t> selected_counts;
+std::unordered_map<Allocator*, size_t> in_flight_allocations;
 struct AllocationOwner { Allocator* allocator; size_t bytes; size_t alignment; };
 std::unordered_map<void*, AllocationOwner> live_allocations;
 std::unordered_map<void*, uint64_t> shared_reference_counts;
@@ -1021,6 +1022,9 @@ int32_t nrq_allocator_reset(void* handle) {
   auto found = allocator_handles.find(handle);
   if (found == allocator_handles.end()) return 0;
   Allocator* allocator = found->second.get();
+  auto in_flight = in_flight_allocations.find(allocator);
+  if (in_flight != in_flight_allocations.end() && in_flight->second != 0)
+    return 0;
   if (!allocator->reset_serialized()) return 0;
   for (auto it = live_allocations.begin(); it != live_allocations.end();) {
     if (it->second.allocator == allocator) {
@@ -1088,6 +1092,9 @@ static void* allocate_with_allocator(Allocator* allocator, size_t bytes,
     auto selected = selected_counts.find(allocator);
     if (selected != selected_counts.end() && --selected->second == 0)
       selected_counts.erase(selected);
+    auto in_flight = in_flight_allocations.find(allocator);
+    if (in_flight != in_flight_allocations.end() && --in_flight->second == 0)
+      in_flight_allocations.erase(in_flight);
   };
   void* pointer = nullptr;
   try {
@@ -1117,12 +1124,34 @@ static void* allocate_with_allocator(Allocator* allocator, size_t bytes,
 }
 
 static bool increment_operation_pin_locked(Allocator* allocator) {
+  auto selected = selected_counts.end();
+  bool selected_inserted = false;
+  auto in_flight = in_flight_allocations.end();
+  bool in_flight_inserted = false;
   try {
-    size_t& count = selected_counts[allocator];
-    if (count == SIZE_MAX) return false;
-    ++count;
+    auto selected_result = selected_counts.try_emplace(allocator, 0);
+    selected = selected_result.first;
+    selected_inserted = selected_result.second;
+    if (selected->second == SIZE_MAX) {
+      if (selected_inserted) selected_counts.erase(selected);
+      return false;
+    }
+    auto in_flight_result = in_flight_allocations.try_emplace(allocator, 0);
+    in_flight = in_flight_result.first;
+    in_flight_inserted = in_flight_result.second;
+    if (in_flight->second == SIZE_MAX) {
+      if (in_flight_inserted) in_flight_allocations.erase(in_flight);
+      if (selected_inserted) selected_counts.erase(selected);
+      return false;
+    }
+    ++selected->second;
+    ++in_flight->second;
     return true;
   } catch (...) {
+    if (in_flight_inserted && in_flight != in_flight_allocations.end())
+      in_flight_allocations.erase(in_flight);
+    if (selected_inserted && selected != selected_counts.end())
+      selected_counts.erase(selected);
     return false;
   }
 }

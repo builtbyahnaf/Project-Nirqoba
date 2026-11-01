@@ -153,6 +153,34 @@ TEST(AllocatorTest, InFlightExplicitAllocationPreventsAllocatorDestruction) {
   ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
 }
 
+TEST(AllocatorTest, InFlightAllocationPreventsAllocatorReset) {
+  BlockingAllocatorState state;
+  const NrqCustomAllocatorVTable callbacks{
+      &state, blocking_allocate, blocking_deallocate, nullptr};
+  void* allocator = nrq_allocator_create_custom(&callbacks);
+  ASSERT_NE(allocator, nullptr);
+  std::atomic<void*> result = nullptr;
+  std::thread worker([&] {
+    result = nrq_memory_allocate_from(allocator, 128, 64);
+  });
+  {
+    std::unique_lock<std::mutex> lock(state.mutex);
+    state.condition.wait(lock, [&] { return state.entered; });
+  }
+  const int32_t reset_while_allocating = nrq_allocator_reset(allocator);
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.release = true;
+  }
+  state.condition.notify_all();
+  worker.join();
+  ASSERT_EQ(reset_while_allocating, int32_t{0});
+  void* pointer = result.load();
+  ASSERT_NE(pointer, nullptr);
+  nrq_memory_deallocate_checked(pointer);
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
+}
+
 TEST(AllocatorTest, PoolRejectsRequestsLargerThanItsCapacity) {
   void* allocator = nrq_allocator_create(NRQ_ALLOCATOR_POOL, 32);
   ASSERT_NE(allocator, nullptr);
