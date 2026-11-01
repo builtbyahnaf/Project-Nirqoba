@@ -317,11 +317,11 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
   }
   auto body = parse_block();
   if (!body) return nullptr;
-return make_unique<FunctionDecl>(return_type, name_token.text, move(parameters),
-                                         move(body),
-                                         type_token.location.is_valid() ? type_token.location
-                                                                        : name_token.location,
-                                         visibility);
+  return make_unique<FunctionDecl>(return_type, name_token.text, move(parameters),
+                                   move(body),
+                                   type_token.location.is_valid() ? type_token.location
+                                                                  : name_token.location,
+                                   visibility);
 }
 
 Type Parser::parse_type_annotation() {
@@ -431,8 +431,8 @@ StmtPtr Parser::parse_statement() {
     const Token keyword = advance();
     ExprPtr expression = parse_expression();
     expect(TokenKind::Semicolon, "after the deferred cleanup call");
-return make_unique<DeferredCleanupStmt>(keyword.location,
-                                                 move(expression));
+    return make_unique<DeferredCleanupStmt>(keyword.location,
+                                            move(expression));
   }
   if (check(TokenKind::KwReturn)) {
     const Token keyword = advance();
@@ -511,9 +511,9 @@ StmtPtr Parser::parse_variable_declaration() {
   advance();  // '='
   ExprPtr initializer = parse_expression();
   expect(TokenKind::Semicolon, "after the variable initializer");
-return make_unique<VariableDeclarationStmt>(keyword.location, binding, name.text,
-                                                     has_annotation, annotation,
-                                                     move(initializer));
+  return make_unique<VariableDeclarationStmt>(keyword.location, binding, name.text,
+                                              has_annotation, annotation,
+                                              move(initializer));
 }
 
 StmtPtr Parser::parse_assignment_or_expression() {
@@ -575,8 +575,8 @@ StmtPtr Parser::parse_if() {
       synchronize();
     }
   }
-return make_unique<IfStmt>(if_tok.location, move(condition),
-                                   move(then_branch), move(else_branch));
+  return make_unique<IfStmt>(if_tok.location, move(condition),
+                             move(then_branch), move(else_branch));
 }
 
 StmtPtr Parser::parse_while() {
@@ -654,8 +654,8 @@ StmtPtr Parser::parse_for() {
     return nullptr;
   }
   auto body = parse_block();
-return make_unique<ForStmt>(for_tok.location, move(initializer),
-                                   move(condition), move(step), move(body));
+  return make_unique<ForStmt>(for_tok.location, move(initializer),
+                              move(condition), move(step), move(body));
 }
 
 StmtPtr Parser::parse_break() {
@@ -889,7 +889,7 @@ ExprPtr Parser::parse_struct_init(string struct_name, SourceLocation location) {
   expect(TokenKind::LBrace, "to open struct initializer");
   if (match(TokenKind::RBrace)) {
     return make_unique<StructInitExpr>(location, move(struct_name),
-                                            vector<ExprPtr>{});
+                                       vector<ExprPtr>{});
   }
 
   if (check(TokenKind::Identifier) && peek(1).kind == TokenKind::Colon) {
@@ -907,7 +907,7 @@ ExprPtr Parser::parse_struct_init(string struct_name, SourceLocation location) {
     } while (match(TokenKind::Comma));
     expect(TokenKind::RBrace, "to close struct initializer");
     return make_unique<StructInitExpr>(location, move(struct_name),
-                                           move(field_inits));
+                                       move(field_inits));
   } else {
     vector<ExprPtr> positional_inits;
     do {
@@ -916,7 +916,7 @@ ExprPtr Parser::parse_struct_init(string struct_name, SourceLocation location) {
     } while (match(TokenKind::Comma));
     expect(TokenKind::RBrace, "to close struct initializer");
     return make_unique<StructInitExpr>(location, move(struct_name),
-                                           move(positional_inits));
+                                       move(positional_inits));
   }
 }
 
@@ -926,7 +926,7 @@ ExprPtr Parser::parse_primary() {
     case TokenKind::IntegerLiteral:
       advance();
       return make_unique<IntegerLiteralExpr>(token.location, token.integer_value,
-                                                  token.suffix);
+                                             token.suffix);
     case TokenKind::FloatLiteral:
       advance();
       return make_unique<FloatLiteralExpr>(token.location, token.float_value, token.suffix);
@@ -960,15 +960,15 @@ ExprPtr Parser::parse_primary() {
           peek(2).kind == TokenKind::Less) {
         advance();  // '.'
         const Token operation = advance();
-advance();  // '<'
+        advance();  // '<'
         Type allocated_type = parse_type_annotation();
         expect(TokenKind::Greater, "after the allocated element type");
         expect(TokenKind::LParen, "after the typed memory allocation operation");
         vector<ExprPtr> arguments = parse_argument_list();
         expect(TokenKind::RParen, "to close memory.allocate<T>");
         return make_unique<CallExpr>(token.location,
-                                           token.text + "." + operation.text,
-                                           move(arguments), allocated_type);
+                                     token.text + "." + operation.text,
+                                     move(arguments), allocated_type);
       }
       // A dotted callable such as memory.profiler.capture() is distinguished
       // from member access by the final parenthesis. Preserve the complete
@@ -990,7 +990,7 @@ advance();  // '<'
         vector<ExprPtr> arguments = parse_argument_list();
         expect(TokenKind::RParen, "to close the qualified call");
         return make_unique<CallExpr>(token.location, move(qualified_name),
-                                           move(arguments));
+                                     move(arguments));
       }
       // `module.name` is a member access, except when it is immediately called:
       // then it is a call to a function in another module (Phase 5).
@@ -1002,7 +1002,7 @@ advance();  // '<'
         vector<ExprPtr> arguments = parse_argument_list();
         expect(TokenKind::RParen, "to close the call");
         return make_unique<CallExpr>(token.location, token.text + "." + member.text,
-                                           move(arguments));
+                                     move(arguments));
       }
       if (check(TokenKind::LBrace)) {
         return parse_struct_init(token.text, token.location);

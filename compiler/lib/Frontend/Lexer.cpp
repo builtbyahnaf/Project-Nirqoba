@@ -57,7 +57,7 @@ void Lexer::skip_trivia() {
       continue;
     }
     if (c == '/' && peek(1) == '*') {
-const size_t start = offset_;
+      const size_t start = offset_;
       offset_ += 2;
       bool closed = false;
       while (!at_end()) {

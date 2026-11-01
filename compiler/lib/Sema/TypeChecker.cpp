@@ -197,38 +197,38 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
       vector<Type> param_types;
       param_types.reserve(function->parameters().size());
       for (const Parameter& param : function->parameters()) {
-param_types.push_back(param.type);
-    }
+        param_types.push_back(param.type);
+      }
 
-    const bool is_entry = (unit.get() == entry_unit);
-    const string qualified = unit->name + "." + function->name();
+      const bool is_entry = (unit.get() == entry_unit);
+      const string qualified = unit->name + "." + function->name();
 
-    FunctionSignature sig{
-        function->name(),
-        function->return_type(),
-        move(param_types),
-        function->location(),
-        unit->name,
-        function->visibility(),
-        is_entry ? function->name() : qualified
-    };
+      FunctionSignature sig{
+          function->name(),
+          function->return_type(),
+          move(param_types),
+          function->location(),
+          unit->name,
+          function->visibility(),
+          is_entry ? function->name() : qualified
+      };
 
-    // Every module is reachable by its qualified name, including the entry
-    // module, so `import app; app.helper()` keeps working.
-    if (!functions_.emplace(qualified, sig).second) {
-      diagnostics_.error(diag::kDuplicateFunction, function->location(),
-                         "function '" + function->name() +
-                             "' is already defined in module '" + unit->name + "'");
-    }
-    if (is_entry) {
-      functions_.emplace(function->name(), sig);
-    }
+      // Every module is reachable by its qualified name, including the entry
+      // module, so `import app; app.helper()` keeps working.
+      if (!functions_.emplace(qualified, sig).second) {
+        diagnostics_.error(diag::kDuplicateFunction, function->location(),
+                           "function '" + function->name() +
+                               "' is already defined in module '" + unit->name + "'");
+      }
+      if (is_entry) {
+        functions_.emplace(function->name(), sig);
+      }
 
-    if (function->name() == "main" && is_entry && main_function == nullptr) {
-      main_function = function.get();
+      if (function->name() == "main" && is_entry && main_function == nullptr) {
+        main_function = function.get();
+      }
     }
   }
-}
 
   // Pass 2: apply imports. A selective import binds one item into the importing
   // module's namespace; an aliased import binds every item of the target under
@@ -296,10 +296,10 @@ param_types.push_back(param.type);
         }
         for (const StructInfo& info : module_structs) {
           structs_.emplace(imp->alias() + "." + info.name, info);
-}
+        }
+      }
     }
   }
-}
 
   // Entry point validation.
   if (main_count == 0) {

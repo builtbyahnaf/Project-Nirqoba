@@ -18,6 +18,8 @@
 
 using namespace std;
 
+static const char kEmptyString[] = "";
+
 extern "C" {
 
 NrqStringArray* nrq_args_build(int32_t argc, const char* const* argv) {
