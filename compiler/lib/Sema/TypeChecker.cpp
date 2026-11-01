@@ -3007,8 +3007,8 @@ Type TypeChecker::check_call(CallExpr& call) {
     } else if (source && source->borrowed) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "a borrowed pointer cannot be transferred to an owning parameter");
-    } else if (!expects_shared &&
-               source && active_borrows.find(source->allocation_id) != active_borrows.end()) {
+    } else if (source &&
+               active_borrows.find(source->allocation_id) != active_borrows.end()) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "cannot transfer an owner while another argument borrows it");
     } else if (source && source->owns_allocation && !source->moved &&
