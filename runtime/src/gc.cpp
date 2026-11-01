@@ -89,7 +89,10 @@ void enqueue_reference(void* object, void* opaque_context) {
 void count_reference(void* object, void* opaque_context) {
   if (!object) return;
   auto* counts = static_cast<std::unordered_map<void*, uint64_t>*>(opaque_context);
-  if (object_index.find(object) != object_index.end()) ++(*counts)[object];
+  if (object_index.find(object) != object_index.end()) {
+    uint64_t& count = (*counts)[object];
+    count = saturated_add(count, 1);
+  }
 }
 
 void collect_locked() {
@@ -265,6 +268,10 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
                          found->second.reference_offsets.end(), reference_offsets)) {
     nrq_runtime_fatal("GC root slot was registered with an incompatible layout");
   }
+  if (found->second.references == SIZE_MAX) {
+    if (inserted) roots.erase(found);
+    nrq_runtime_fatal("GC root registration count overflow");
+  }
   try {
     thread_roots.push_back(slot);
   } catch (...) {
@@ -363,7 +370,7 @@ void* nrq_gc_pin(void* object) {
   if (object_index.find(object) == object_index.end()) return nullptr;
   auto existing = pinned_objects.find(object);
   if (existing != pinned_objects.end() && existing->second >= kMaxPinsPerObject) {
-    ++pin_violations;
+    pin_violations = saturated_add(pin_violations, 1);
     return nullptr;
   }
   try {
