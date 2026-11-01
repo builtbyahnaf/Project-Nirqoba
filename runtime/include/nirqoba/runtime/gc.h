@@ -50,6 +50,7 @@ void nrq_gc_root_unregister(void** slot);
 void nrq_gc_root_store(void** slot, void* value);
 void nrq_gc_root_copy(void* destination, const void* source, size_t bytes);
 uint64_t nrq_gc_root_frame_begin(void);
+// Root frames are thread-local and must be ended in strict LIFO order.
 void nrq_gc_root_frame_end(uint64_t marker);
 
 void nrq_gc_enable(void);
