@@ -1211,37 +1211,71 @@ void* nrq_memory_shared_allocate(size_t bytes, size_t alignment) {
   return pointer;
 }
 
+static bool increment_operation_pin_locked(Allocator* allocator);
+static void release_operation_pin_locked(Allocator* allocator);
+
 void* nrq_memory_shared_retain(void* pointer) {
   if (!pointer) return nullptr;
   std::lock_guard<std::mutex> lock(allocator_mutex);
   auto found = shared_reference_counts.find(pointer);
-  if (found == shared_reference_counts.end() || found->second == UINT64_MAX) return nullptr;
+  if (found == shared_reference_counts.end() || found->second == 0 ||
+      found->second == UINT64_MAX) return nullptr;
   ++found->second;
   return pointer;
 }
 
-// The allocator registry mutex must be held by the caller. In particular, the
-// last shared release removes its count and frees the allocation in one critical
-// section so no unique deallocator or allocator reset can claim it in between.
-static void deallocate_allocation_locked(void* pointer) {
-  auto found = live_allocations.find(pointer);
-  if (found == live_allocations.end())
-    nrq_runtime_fatal("memory.deallocate received an invalid or already freed pointer");
-  if (!found->second.allocator->try_deallocate_serialized(pointer))
-    nrq_runtime_fatal("stack allocator allocations must be deallocated in LIFO order");
-  record_deallocation_profile(found->second.bytes);
-  live_allocations.erase(found);
-}
-
 int32_t nrq_memory_shared_release(void* pointer) {
   if (!pointer) return 0;
-  std::lock_guard<std::mutex> lock(allocator_mutex);
-  auto found = shared_reference_counts.find(pointer);
-  if (found == shared_reference_counts.end()) return 0;
-  if (--found->second == 0) {
-    shared_reference_counts.erase(found);
-    deallocate_allocation_locked(pointer);
+  Allocator* allocator = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    auto shared = shared_reference_counts.find(pointer);
+    if (shared == shared_reference_counts.end() || shared->second == 0) return 0;
+    if (shared->second > 1) {
+      --shared->second;
+      return 1;
+    }
+    auto owner = live_allocations.find(pointer);
+    if (owner == live_allocations.end() || owner->second.operation_in_flight)
+      return 0;
+    allocator = owner->second.allocator;
+    if (!increment_operation_pin_locked(allocator)) return 0;
+    // A zero count reserves this final release. Retain and competing releases
+    // cannot claim the pointer while its allocator callback runs unlocked.
+    shared->second = 0;
+    owner->second.operation_in_flight = true;
   }
+
+  bool released = false;
+  bool callback_failed = false;
+  try {
+    released = allocator->try_deallocate_serialized(pointer);
+  } catch (...) {
+    callback_failed = true;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    auto shared = shared_reference_counts.find(pointer);
+    auto owner = live_allocations.find(pointer);
+    if (shared == shared_reference_counts.end() || shared->second != 0 ||
+        owner == live_allocations.end() || !owner->second.operation_in_flight)
+      nrq_runtime_fatal("allocator ownership changed during shared release");
+    if (released) {
+      record_deallocation_profile(owner->second.bytes);
+      live_allocations.erase(owner);
+      shared_reference_counts.erase(shared);
+      allocation_registry_changed.notify_all();
+    } else {
+      owner->second.operation_in_flight = false;
+      shared->second = 1;
+    }
+    release_operation_pin_locked(allocator);
+  }
+  if (callback_failed)
+    nrq_runtime_fatal("allocator deallocation callback failed during shared release");
+  if (!released)
+    nrq_runtime_fatal("stack allocator allocations must be deallocated in LIFO order");
   return 1;
 }
 
@@ -1533,19 +1567,51 @@ void nrq_memory_secure_zero(void* pointer, size_t bytes) {
 
 void nrq_memory_secure_release(void* pointer) {
   if (!pointer) return;
-  std::lock_guard<std::mutex> lock(allocator_mutex);
-  if (shared_reference_counts.find(pointer) != shared_reference_counts.end())
-    nrq_runtime_fatal("shared allocations must be released with memory.shared_release");
-  auto found = live_allocations.find(pointer);
-  if (found == live_allocations.end())
-    nrq_runtime_fatal("memory.secure_release received an invalid pointer");
-  if (found->second.operation_in_flight)
-    nrq_runtime_fatal("memory.secure_release raced with deallocation of the same pointer");
-  SecureZeroMemory(pointer, found->second.bytes);
-  if (!found->second.allocator->try_deallocate_serialized(pointer))
+  Allocator* allocator = nullptr;
+  size_t bytes = 0;
+  {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    if (shared_reference_counts.find(pointer) != shared_reference_counts.end())
+      nrq_runtime_fatal("shared allocations must be released with memory.shared_release");
+    auto found = live_allocations.find(pointer);
+    if (found == live_allocations.end())
+      nrq_runtime_fatal("memory.secure_release received an invalid pointer");
+    if (found->second.operation_in_flight)
+      nrq_runtime_fatal("memory.secure_release raced with another operation on the same pointer");
+    allocator = found->second.allocator;
+    bytes = found->second.bytes;
+    if (!increment_operation_pin_locked(allocator))
+      nrq_runtime_fatal("memory.secure_release could not pin the owning allocator");
+    found->second.operation_in_flight = true;
+  }
+
+  SecureZeroMemory(pointer, bytes);
+  bool released = false;
+  bool callback_failed = false;
+  try {
+    released = allocator->try_deallocate_serialized(pointer);
+  } catch (...) {
+    callback_failed = true;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    auto found = live_allocations.find(pointer);
+    if (found == live_allocations.end() || !found->second.operation_in_flight)
+      nrq_runtime_fatal("allocator ownership changed during secure release");
+    if (released) {
+      record_deallocation_profile(found->second.bytes);
+      live_allocations.erase(found);
+      allocation_registry_changed.notify_all();
+    } else {
+      found->second.operation_in_flight = false;
+    }
+    release_operation_pin_locked(allocator);
+  }
+  if (callback_failed)
+    nrq_runtime_fatal("allocator deallocation callback failed during secure release");
+  if (!released)
     nrq_runtime_fatal("stack allocator allocations must be deallocated in LIFO order");
-  record_deallocation_profile(found->second.bytes);
-  live_allocations.erase(found);
 }
 
 uint64_t nrq_memory_available_bytes(void) {

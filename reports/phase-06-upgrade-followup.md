@@ -154,10 +154,9 @@ because those runtime subsystems do not yet exist.
   allocator-specific containers, explicit SIMD alignment, mutable views, and
   tensor/GPU buffer types remain open.
 - The explicit allocator still uses global registry/profile synchronization and
-  live-allocation bookkeeping. Generic allocate, deallocate, and reallocate
-  callbacks run outside the registry lock; secure release and final shared
-  release remain serialized under it. Thread-local fast paths are not
-  implemented.
+  live-allocation bookkeeping. Allocate, deallocate, reallocate, secure release,
+  and final shared release callbacks run outside the registry lock with pinned
+  owner records. Thread-local fast paths are not implemented.
 - Specialized pointer resources such as files, mutexes, secure buffers, and
   mappings cannot yet cross function returns because pointer signatures do not
   preserve their cleanup function. The checker rejects those returns rather
@@ -192,8 +191,10 @@ marks the owner record and pins the allocator, invokes the allocator outside
 the registry lock, then removes the record under the lock. Reallocation uses an
 in-flight owner marker and keeps its existing registry node while resizing
 outside the lock. Same-allocator operations remain serialized, and address reuse
-waits until the old owner operation completes. Secure release and final shared
-release still invoke allocator operations while holding the registry lock.
+  waits until the old owner operation completes. Secure release and final shared
+  release also mark and pin the owner before invoking allocator callbacks outside
+  the registry lock. A final shared release reserves its count at zero until the
+  callback finishes, preventing concurrent retain and release from claiming it.
 Blocking custom deallocator and reallocator tests verify unrelated allocator
 creation proceeds during each callback. The existing allocator benchmark matrix
 remains the measurement path; no GC benchmark was run.
@@ -212,4 +213,8 @@ file-open and named mutex-resource returns are covered. Full validation passed:
 CTest 1/1 and integration 84/84. No GC benchmark was run.
 
 Reallocation lock-scope coverage and the full suite passed: CTest 1/1 and
+integration 85/85. Secure release and final shared release now use the same
+out-of-lock owner protocol. Blocking callback regressions confirm unrelated
+allocator creation proceeds, and shared retain/release cannot claim a pointer
+reserved for final release. RelWithDebInfo validation passed: CTest 1/1 and
 integration 85/85. No GC benchmark was run.
