@@ -110,6 +110,12 @@ callback regression confirms unrelated allocator operations remain available.
 Full validation passed: CTest 1/1 and integration 85/85. No GC benchmark was
 run.
 
+The allocator now checks stack LIFO eligibility and performs deallocation under
+one per-allocator operation lock for generic release, secure release, final
+shared release, and zero-byte reallocation. This closes the gap where another
+allocation could change stack order between a separate eligibility check and
+the actual free.
+
 The tuple-layout regression now passes a struct containing nested managed
 references into a function that collects before reading it, covering the
 aggregate parameter root-copy path. RelWithDebInfo validation passed: CTest

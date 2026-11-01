@@ -119,10 +119,6 @@ class Allocator {
     deallocate(pointer);
     return true;
   }
-  bool can_deallocate_serialized(void* pointer) const {
-    std::lock_guard<std::mutex> lock(operation_mutex_);
-    return can_deallocate(pointer);
-  }
   bool reset_serialized() {
     std::lock_guard<std::mutex> lock(operation_mutex_);
     return reset();
@@ -1231,9 +1227,8 @@ static void deallocate_allocation_locked(void* pointer) {
   auto found = live_allocations.find(pointer);
   if (found == live_allocations.end())
     nrq_runtime_fatal("memory.deallocate received an invalid or already freed pointer");
-  if (!found->second.allocator->can_deallocate_serialized(pointer))
+  if (!found->second.allocator->try_deallocate_serialized(pointer))
     nrq_runtime_fatal("stack allocator allocations must be deallocated in LIFO order");
-  found->second.allocator->deallocate_serialized(pointer);
   record_deallocation_profile(found->second.bytes);
   live_allocations.erase(found);
 }
@@ -1290,10 +1285,11 @@ void nrq_memory_deallocate_checked(void* pointer) {
   }
 
   bool released = false;
+  bool callback_failed = false;
   try {
     released = allocator->try_deallocate_serialized(pointer);
   } catch (...) {
-    released = false;
+    callback_failed = true;
   }
 
   {
@@ -1310,6 +1306,8 @@ void nrq_memory_deallocate_checked(void* pointer) {
     }
     release_operation_pin_locked(allocator);
   }
+  if (callback_failed)
+    nrq_runtime_fatal("allocator deallocation callback failed");
   if (!released)
     nrq_runtime_fatal("stack allocator allocations must be deallocated in LIFO order");
 }
@@ -1347,10 +1345,9 @@ void* nrq_memory_reallocate(void* pointer, size_t bytes) {
     // Zero bytes releases the block, matching the C realloc convention; the
     // caller cannot distinguish this from failure, which is why the language
     // documentation states that a zero-byte reallocation frees the block.
-    if (!allocator->can_deallocate_serialized(pointer))
+    if (!allocator->try_deallocate_serialized(pointer))
       nrq_runtime_fatal(
           "stack allocator allocations must be deallocated in LIFO order");
-    allocator->deallocate_serialized(pointer);
     record_deallocation_profile(old_bytes);
     live_allocations.erase(found);
     return nullptr;
@@ -1531,9 +1528,8 @@ void nrq_memory_secure_release(void* pointer) {
   if (found->second.deallocating)
     nrq_runtime_fatal("memory.secure_release raced with deallocation of the same pointer");
   SecureZeroMemory(pointer, found->second.bytes);
-  if (!found->second.allocator->can_deallocate_serialized(pointer))
+  if (!found->second.allocator->try_deallocate_serialized(pointer))
     nrq_runtime_fatal("stack allocator allocations must be deallocated in LIFO order");
-  found->second.allocator->deallocate_serialized(pointer);
   record_deallocation_profile(found->second.bytes);
   live_allocations.erase(found);
 }
