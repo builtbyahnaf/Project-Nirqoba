@@ -35,3 +35,11 @@ Phase 6U:G now has a repeatable source and runner matrix for scalar, contiguous-
 The collector now stores each aligned object header and payload in one allocation rather than separate header and payload allocations. Precise reference-offset metadata remains in the header, object payload remains zero-initialized, and collection still uses the existing global stop-the-world mutex and pointer index. This removes one allocator call per GC object; it does not add TLABs, generational collection, or concurrent collection.
 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 38/38, including cycle tracing, pinning, roots, and managed arrays. A five-process smoke sample of the existing 20,000-object benchmark measured 3,117, 3,029, 3,243, 2,988, and 3,055 µs (median 3,055 µs, about 153 ns/object). An earlier single run before the storage change was 4,999 µs, but that is too weak a baseline for a speedup claim. Repeat paired runs with controlled machine load before quantifying the improvement.
+
+## 22. Function-boundary ownership and borrowing — 2026-11-01
+
+Implemented pointer ownership transfer through declarations, pointer parameters, and pointer returns. Added `borrow T* name` and `borrow mut T* name` parameter modifiers. The checker rejects use after move, borrowed pointer escape through returns, deallocation/close of borrows, transfer of borrowed values into owners, immutable sources for mutable borrows, and conflicting call-site aliases. Explicit memory/resource producers are tagged as owning in semantic symbols.
+
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and all 47 integration tests passed. Positive tests cover owned argument/return transfer, borrowed file access, and mutable borrowing; negative tests cover use after move, borrow escape, freeing a borrow, immutable mutable-borrow source, and alias conflicts.
+
+Limitations: ownership state is currently symbol-table metadata and is not yet serialized into TIR/MLIR attributes. Borrow lifetimes are limited to function parameters; local borrow expressions, aggregate field propagation, closures, loops with path-sensitive state merging, automatic drop insertion, shared ownership, and unsafe scopes are incomplete.
