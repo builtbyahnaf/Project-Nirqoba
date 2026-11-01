@@ -1,41 +1,42 @@
-# Phase 6 Upgrade � memory model decision record
+# Phase 6 Upgrade — memory model decision record
 
-Status: design baseline established; enforcement and runtime migration are in progress.
+Status: architectural decisions are adopted; compiler and runtime enforcement are partial and continue in `reports/phase-06-upgrade-followup.md`.
 
 ## Memory domains
 
-1. **Owned** is the intended default for newly specified resource-bearing values. A value has one owner; assignment transfers ownership; leaving its owning scope destroys it exactly once.
-2. **Borrowed** values do not own storage. Immutable borrows may alias; a mutable borrow is exclusive. A borrow cannot outlive the storage it references or escape a function unless its lifetime is tied to an input by a future explicit rule.
-3. **Shared** values opt into reference-counted shared ownership. The count's thread-safety must be explicit; sharing does not imply mutable thread safety.
-4. **GC-managed** values opt into the tracing heap, support cycles, and are reclaimed by tracing collection. They cannot also be owned or explicitly freed.
-5. **Raw/unsafe** pointers carry no automatic lifetime or aliasing guarantee. Operations requiring unchecked lifetime, layout, or aliasing assumptions belong in an explicitly marked unsafe boundary.
+1. **Owned** is the default for supported resource-bearing values. One binding owns the allocation; a move transfers that responsibility, and deterministic cleanup releases a still-live owner once.
+2. **Borrowed** values do not own storage. Immutable borrows may alias; mutable pointer borrows are exclusive at a call site. A borrow must remain within the owner's lifetime.
+3. **Shared** values opt into reference-counted ownership. Reference-count updates are synchronized; sharing does not make the pointed-to data thread-safe.
+4. **GC-managed** values opt into the precise tracing heap, support cycles, and are reclaimed by collection. The collector starts with automatic triggers disabled. GC allocations cannot be explicitly released through the owned allocator.
+5. **Raw** pointers carry no automatic lifetime or aliasing guarantee. An explicit unsafe boundary is the intended long-term design; the current language has only a restricted low-level subset and does not yet provide unsafe scopes.
 
 ## Transfer and destruction
 
-Owned arguments transfer into parameters by default; borrowing must be explicit in the eventual syntax. Returning an owned value transfers it to the caller. Aggregate fields and array elements recursively own their owned members. A move leaves the source unusable until reinitialized. Destruction is exactly once and reverse construction order (LIFO), on normal block exit and every supported control-flow exit. `defer` remains available for explicit cleanup and runs in LIFO order. Error unwinding semantics must be specified before exceptions can be introduced.
+Owned pointer and array arguments transfer to ordinary owning parameters; a borrow must be explicit. Matching owned returns transfer to the caller. Moving an owner makes its source unusable until that binding is reinitialized. Compiler-generated cleanup runs in reverse registration order on scope exit, return, break, and continue. `defer` captures arguments at registration and runs in LIFO order; an explicit deferred cleanup replaces inferred cleanup for its owner. Exception/error-unwind cleanup is undefined because the language has no unwind model.
 
-GC and owned values form disjoint allocation domains. A GC reference may be held by an owned wrapper only if the wrapper is a non-owning handle with documented tracing/root behavior; freeing or moving the GC allocation through the owned allocator is invalid. Raw pointers require an explicit unsafe boundary to cross domains. Native resources use deterministic owned wrappers, never GC finalizers as the correctness mechanism.
+The compiler/runtime distinguish allocations from the GC heap and the explicit allocator. An owned array may contain GC references only because its backing region is registered as a precise repeated-layout GC root; dropping the array unregisters the root before freeing the explicit buffer. GC does not own or free that buffer. Native resources use deterministic cleanup rather than GC finalization.
 
 ## Current implementation boundary
 
-The current language has no ownership/borrow syntax or compiler lifetime model. Existing pointers and `defer` retain their existing semantics. The runtime currently initializes automatic GC as enabled for compatibility; changing that flag alone would not implement owned-by-default semantics and is therefore not treated as completion. The next implementation work must add ownership metadata to semantic values and TIR, diagnose moves/borrows, then lower drops across all exits before changing defaults.
-
-Arrays/tensors target contiguous owned storage, with borrowed views carrying validated lifetimes. GPU buffers are explicit device-owned resources with transfer/synchronization boundaries. Numerical storage must not allocate one GC object per scalar.
+- Owned pointers from supported allocation/resource producers move through bindings and ordinary pointer function parameters/returns. Borrowed pointer parameters and shared pointer parameter/return contracts are checked.
+- Files, mutexes, secure buffers, mappings, and owned arrays receive deterministic cleanup. Automatic cleanup applies on supported lexical control-flow exits.
+- `owned_array<T>` provides contiguous, checked storage, `.length`, allocator selection, optional stronger alignment, and ownership transfer. Read-only `array_view<T>` supports checked nested ranges, view parameters, and lexical owner-lifetime protection.
+- Shared allocation uses explicit retain/release tokens. GC uses precise roots, pins, per-object trace metadata, aligned bump regions, and an open-addressed object index. It remains stop-the-world under a global mutex; root-slot writes synchronize with collection through the runtime API.
+- Ownership remains conservative. Aggregate fields that own resources, partial moves, closure capture, arbitrary returned references, general escape analysis, and path-sensitive state merging are not implemented. Views cannot be returned or stored in aggregates.
+- GC TLABs, safepoints, generational/incremental collection, and concurrent mutator writes are not implemented. The implementation does not claim concurrent-GC safety for uninstrumented writes.
+- Allocator operations now use per-instance synchronization and allocation work is performed outside the global registry lock. Ownership registry updates, deallocation, reallocation, shared counts, selection, and profiler snapshots still use global synchronization.
+- CPU/GPU tensor abstractions and device-owned buffers do not exist. The runtime is currently Windows x64 only.
 
 ## Acceptance mapping
 
-- A: this document defines domains and transfer/drop boundaries; concrete syntax is intentionally gated on compiler representation support.
-- B/C: not yet enforced; existing use-after-free checks and `defer` are narrower mechanisms.
-- D/E: allocator and collector performance work is not claimed complete without controlled measurements and synchronization design.
-- F: target constraints are defined above; current tensor subsystem does not exist.
-- G: benchmark harnesses and actual baseline numbers are required before any performance claim.
+- **A — Design:** this record defines memory domains, transfer, borrows, cleanup order, GC/owned boundaries, and implementation limits.
+- **B — Ownership analysis:** partial; supported pointer and array moves, pointer borrowing, shared contracts, use-after-move checks, and view lifetime checks are enforced. Aggregate ownership and general escape/lifetime analysis remain open.
+- **C — Deterministic cleanup:** partial; tracked owners/resources are dropped on normal lexical exits and `defer` runs LIFO. Error/exception unwinding has no language model.
+- **D — Explicit allocators:** partial; all built-in strategies remain, allocator identity checks remain, and lock scope is narrowed. Comparative general-purpose allocator evaluation and controlled contention measurements remain.
+- **E — GC:** partial; contiguous regions, precise root validation, array root regions, and the compact object index are implemented. TLABs, safepoints, generational/incremental collection, and concurrent mutation are open.
+- **F — Arrays:** partial; contiguous owned arrays, explicit alignment requests, and read-only borrowed views are implemented. Tensors, GPU buffers, mutable views, and aggregate lifetimes remain open.
+- **G — Benchmarks:** the C++/Rust runner includes scalar, array, small/large/mixed allocation, graph, and multithread workloads with checksums, warmups, repeated percentiles, and environment metadata. Comparative execution has not been possible in the current environment because the active shell lacks `cl.exe` and `rustc.exe`. GC benchmarking is intentionally deferred.
 
-## Implemented ownership syntax subset
+## IR preservation
 
-The compiler now treats pointers returned by explicit owning producers (`memory.allocate`, `memory.secure_allocate`, `memory.reallocate`, `memory.map_file`, `file.open`, and user functions returning pointers) as owned. Binding an owned pointer to another name transfers it. Pointer parameters default to owned transfer, and pointer return values transfer to the caller. `borrow T* name` declares a non-owning immutable borrow; `borrow mut T* name` declares an exclusive mutable borrow. Borrows cannot be deallocated, closed, transferred to an owning parameter, or returned. A call cannot pass the same allocation through overlapping mutable borrows. `defer` remains the deterministic cleanup mechanism for explicit resources.
-
-This syntax and model apply to pointer bindings and function boundaries. Struct/tuple field ownership, heap allocation escape analysis, automatic compiler-inserted drops, shared reference counting, raw unsafe scopes, and aggregate partial moves remain future implementation work.
-
-## Ownership metadata in IR
-
-Semantic ownership and borrow modes are carried on TIR values and function parameters. MLIR function arguments and produced values receive `nirqoba.ownership` attributes (`owned`, `borrowed`, `mutable_borrowed`, `gc_managed`, or `raw`) so later passes can preserve the checked memory domain.
+TIR values and function parameters retain ownership categories. MLIR carries `nirqoba.ownership` and return ownership attributes so lowering can preserve owned, borrowed, shared, GC-managed, and raw boundaries. Root stores for GC references go through the synchronized runtime API.
