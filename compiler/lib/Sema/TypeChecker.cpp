@@ -862,6 +862,10 @@ void TypeChecker::check_return(ReturnStmt& statement) {
   } else if (!current_return_shared_ && value_is_shared) {
     diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                        "shared references require a shared return type");
+  } else if (current_return_type_.is_pointer() && !current_return_shared_ &&
+             statement.value()->ownership() != ValueOwnership::Owned) {
+    diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                       "owned pointer return requires an owned pointer; borrowed or raw pointers cannot escape");
   }
   if (current_return_type_.is_pointer() && statement.value()->kind() == Expr::Kind::Name) {
     const Symbol* source = find_root_symbol(*statement.value(), symbols_);
@@ -2320,6 +2324,11 @@ Type TypeChecker::check_call(CallExpr& call) {
     } else if (source && source->borrowed) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "a borrowed pointer cannot be transferred to an owning parameter");
+    } else if (!expects_shared &&
+               !(source && source->owns_allocation && !source->moved) &&
+               call.arguments()[i]->ownership() != ValueOwnership::Owned) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                         "owning parameter requires an owned pointer; use a borrow parameter for non-owning access");
     } else if (source && source->owns_allocation && !source->moved) {
       ownership_transfers.push_back(source->allocation_id);
     }

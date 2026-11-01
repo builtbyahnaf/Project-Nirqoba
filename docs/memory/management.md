@@ -125,3 +125,8 @@ the pointer type, for example `shared byte* function create()`. Returning a
 shared value transfers one reference to the caller. The compiler records the
 return domain on the MLIR function and rejects returning it through a unique
 pointer return type.
+
+Raw pointers do not satisfy owning function parameters or pointer return types.
+Declare an explicit `borrow` or `borrow mut` parameter for temporary access; a
+borrowed or raw pointer cannot escape through a pointer return. Explicit owning
+producers and previously tracked owners may be transferred.
