@@ -8,6 +8,7 @@
 #include "nirqoba/runtime/fatal.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -185,7 +186,12 @@ constexpr size_t kMaxPinsPerObject = 16;
 uint64_t pin_violations = 0;
 bool reference_diagnostics_enabled = false;
 thread_local std::vector<void*> thread_roots;
-thread_local std::vector<uint64_t> thread_root_frames;
+struct RootFrame {
+  uint64_t marker;
+  size_t root_depth;
+};
+thread_local std::vector<RootFrame> thread_root_frames;
+std::atomic<uint64_t> next_root_frame_marker{1};
 // Collection is an explicit opt-in policy. Programs using the GC domain may
 // call gc.enable() to request automatic triggers; explicit gc.collect() always
 // works regardless of this state.
@@ -538,9 +544,16 @@ void nrq_gc_root_copy(void* destination, const void* source, size_t bytes) {
 }
 
 uint64_t nrq_gc_root_frame_begin(void) {
-  const uint64_t marker = static_cast<uint64_t>(thread_roots.size());
+  uint64_t marker = next_root_frame_marker.load(std::memory_order_relaxed);
+  for (;;) {
+    if (marker == 0 || marker == UINT64_MAX)
+      nrq_runtime_fatal("GC root frame marker space exhausted");
+    if (next_root_frame_marker.compare_exchange_weak(
+            marker, marker + 1, std::memory_order_relaxed,
+            std::memory_order_relaxed)) break;
+  }
   try {
-    thread_root_frames.push_back(marker);
+    thread_root_frames.push_back(RootFrame{marker, thread_roots.size()});
   } catch (...) {
     nrq_runtime_fatal("GC root frame registration failed to allocate thread metadata");
   }
@@ -549,11 +562,11 @@ uint64_t nrq_gc_root_frame_begin(void) {
 
 void nrq_gc_root_frame_end(uint64_t marker) {
   std::lock_guard<std::mutex> lock(gc_mutex);
-  if (thread_root_frames.empty() || thread_root_frames.back() != marker ||
-      marker > thread_roots.size())
+  if (thread_root_frames.empty() || thread_root_frames.back().marker != marker ||
+      thread_root_frames.back().root_depth > thread_roots.size())
     nrq_runtime_fatal("GC root frames must end in LIFO order with a valid marker");
+  const size_t target = thread_root_frames.back().root_depth;
   thread_root_frames.pop_back();
-  const size_t target = static_cast<size_t>(marker);
   while (thread_roots.size() > target) {
     void* slot = thread_roots.back();
     thread_roots.pop_back();
