@@ -28,6 +28,8 @@ struct Symbol {
   bool moved = false;
   // True when the binding uniquely owns an explicit runtime allocation/resource.
   bool owns_allocation = false;
+  bool borrowed = false;
+  bool mutable_borrow = false;
 
   bool is_mutable() const { return binding == BindingKind::Var; }
 };

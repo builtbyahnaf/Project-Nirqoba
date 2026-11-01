@@ -1,0 +1,9 @@
+void function consume(byte* buffer) {
+    memory.deallocate(buffer);
+}
+int function main() {
+    let buffer = memory.allocate<byte>(16);
+    consume(buffer);
+    buffer[0] = 1u8;
+    return 0;
+}

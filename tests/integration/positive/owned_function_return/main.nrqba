@@ -1,0 +1,8 @@
+byte* function make_buffer() {
+    return memory.allocate<byte>(16);
+}
+int function main() {
+    let buffer = make_buffer();
+    defer memory.deallocate(buffer);
+    return 0;
+}

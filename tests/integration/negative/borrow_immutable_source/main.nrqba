@@ -1,0 +1,8 @@
+void function clear_first(borrow mut byte* buffer) { buffer[0] = 0u8; }
+int function main() {
+    let buffer = memory.allocate<byte>(8);
+    clear_first(buffer);
+    memory.deallocate(buffer);
+    return 0;
+}
+

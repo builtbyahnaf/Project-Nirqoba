@@ -1,0 +1,9 @@
+i32 function write_text(borrow byte* handle, string content) {
+    return file.write(handle, content);
+}
+int function main() {
+    let handle = file.open("NUL", true);
+    defer file.close(handle);
+    print(write_text(handle, "borrowed"));
+    return 0;
+}

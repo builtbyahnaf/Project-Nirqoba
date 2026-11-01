@@ -102,6 +102,10 @@ bool TypeChecker::check(Program& program) {
         function->visibility(),
         function->name()  // single-module compilation links symbols by name
     };
+    for (const Parameter& param : function->parameters()) {
+      sig.parameter_borrowed.push_back(param.borrowed);
+      sig.parameter_mutable_borrow.push_back(param.mutable_borrow);
+    }
 
     if (!functions_.emplace(function->name(), move(sig)).second) {
       diagnostics_.error(diag::kDuplicateFunction, function->location(),
@@ -223,6 +227,10 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
           function->visibility(),
           is_entry ? function->name() : qualified
       };
+      for (const Parameter& param : function->parameters()) {
+        sig.parameter_borrowed.push_back(param.borrowed);
+        sig.parameter_mutable_borrow.push_back(param.mutable_borrow);
+      }
 
       // Every module is reachable by its qualified name, including the entry
       // module, so `import app; app.helper()` keeps working.
@@ -362,9 +370,24 @@ void TypeChecker::check_function(FunctionDecl& function) {
     // makes them `let`, and there is no syntax to opt into mutability; treating
     // them as immutable would make it impossible to modify an array or struct
     // passed to a helper function at all.
-    Symbol symbol{parameter.name, parameter.type, BindingKind::Var,
+    if (parameter.borrowed && !parameter.type.is_pointer()) {
+      diagnostics_.error(diag::kTypeMismatch, parameter.location,
+                         "borrow parameters must have pointer type");
+    }
+    if (parameter.mutable_borrow && !parameter.borrowed) {
+      diagnostics_.error(diag::kTypeMismatch, parameter.location,
+                         "'mut' requires a borrowed parameter");
+    }
+    Symbol symbol{parameter.name, parameter.type,
+                  parameter.borrowed && !parameter.mutable_borrow
+                      ? BindingKind::Let : BindingKind::Var,
                   parameter.location};
-    if (parameter.type.is_pointer()) symbol.allocation_id = next_allocation_id_++;
+    if (parameter.type.is_pointer()) {
+      symbol.allocation_id = next_allocation_id_++;
+      symbol.borrowed = parameter.borrowed;
+      symbol.mutable_borrow = parameter.mutable_borrow;
+      symbol.owns_allocation = !parameter.borrowed;
+    }
     if (!symbols_.declare(move(symbol))) {
       diagnostics_.error(diag::kDuplicateName, parameter.location,
                          "parameter '" + parameter.name + "' is already declared");
@@ -497,11 +520,20 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
   const Symbol* transferred_owner = nullptr;
   if (binding_type.is_pointer()) {
     symbol.owns_allocation = expression_creates_owned_pointer(declaration.initializer());
+    if (!symbol.owns_allocation && declaration.initializer().kind() == Expr::Kind::Call) {
+      const auto& call = static_cast<const CallExpr&>(declaration.initializer());
+      const FunctionSignature* signature = find_function(call.callee());
+      symbol.owns_allocation = signature && signature->return_type.is_pointer();
+    }
     if (declaration.initializer().kind() == Expr::Kind::Name) {
       const auto& source_name = static_cast<const NameExpr&>(declaration.initializer());
       const Symbol* source = symbols_.lookup(source_name.name());
       if (source && source->type.is_pointer()) {
         symbol.allocation_id = source->allocation_id;
+        if (source->borrowed) {
+          symbol.borrowed = true;
+          symbol.mutable_borrow = source->mutable_borrow;
+        }
         if (source->owns_allocation && !source->moved) {
           symbol.owns_allocation = true;
           transferred_owner = source;
@@ -617,6 +649,11 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                        "'" + symbol->name + "' was declared as " +
                            string(binding_kind_spelling(symbol->binding)) +
                            " and cannot be mutated; declare it with 'var' to mutate it");
+    return;
+  }
+  if (symbol != nullptr && symbol->borrowed && assignment.is_simple_name()) {
+    diagnostics_.error(diag::kImmutableAssignment, assignment.target().location(),
+                       "a borrowed binding cannot be rebound");
     return;
   }
   if (target_type.is_valid() && value_type.is_valid() && target_type != value_type) {
@@ -775,6 +812,15 @@ void TypeChecker::check_return(ReturnStmt& statement) {
     diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                        "function returns '" + current_return_type_.to_string() +
                            "' but this 'return' yields '" + value_type.to_string() + "'");
+  }
+  if (current_return_type_.is_pointer() && statement.value()->kind() == Expr::Kind::Name) {
+    const Symbol* source = find_root_symbol(*statement.value(), symbols_);
+    if (source && source->borrowed) {
+      diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                         "a borrowed pointer cannot escape through a return value");
+    } else if (source && source->owns_allocation && !source->moved) {
+      symbols_.mark_allocation_moved(source->allocation_id);
+    }
   }
 }
 
@@ -1670,7 +1716,10 @@ Type TypeChecker::check_call(CallExpr& call) {
         (call.callee() == "memory.secure_release" ||
          call.callee() == "memory.unmap_file") && !call.arguments().empty()) {
       const Symbol* pointer_symbol = find_root_symbol(*call.arguments()[0], symbols_);
-      if (pointer_symbol && pointer_symbol->type.is_pointer())
+      if (pointer_symbol && pointer_symbol->borrowed)
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "borrowed pointers cannot be released or unmapped");
+      else if (pointer_symbol && pointer_symbol->type.is_pointer())
         symbols_.mark_allocation_moved(pointer_symbol->allocation_id);
     }
     return call.callee() == "memory.unmap_file" ? Type::i32_type()
@@ -1851,7 +1900,10 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "'memory.deallocate' requires an explicitly allocated pointer");
     }
     const Symbol* pointer_symbol = find_root_symbol(*call.arguments()[0], symbols_);
-    if (!checking_deferred_cleanup_ && pointer_symbol && pointer_symbol->type.is_pointer())
+    if (pointer_symbol && pointer_symbol->borrowed) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "borrowed pointers cannot be deallocated");
+    } else if (!checking_deferred_cleanup_ && pointer_symbol && pointer_symbol->type.is_pointer())
       symbols_.mark_allocation_moved(pointer_symbol->allocation_id);
     return Type::void_type();
   }
@@ -1993,7 +2045,11 @@ Type TypeChecker::check_call(CallExpr& call) {
     }
     if (!checking_deferred_cleanup_ && !call.arguments().empty()) {
       const Symbol* resource = find_root_symbol(*call.arguments()[0], symbols_);
-      if (resource && resource->type.is_pointer()) symbols_.mark_allocation_moved(resource->allocation_id);
+      if (resource && resource->borrowed)
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "borrowed file resources cannot be closed");
+      else if (resource && resource->type.is_pointer())
+        symbols_.mark_allocation_moved(resource->allocation_id);
     }
     return Type::i32_type();
   }
@@ -2082,6 +2138,8 @@ Type TypeChecker::check_call(CallExpr& call) {
   }
 
   const size_t count = min(call.arguments().size(), sig.parameter_types.size());
+  vector<uint64_t> ownership_transfers;
+  unordered_map<uint64_t, bool> active_borrows;
   for (size_t i = 0; i < count; ++i) {
     const Type arg_type = check_expression(const_cast<Expr&>(*call.arguments()[i]));
     if (arg_type.is_valid() && arg_type != sig.parameter_types[i]) {
@@ -2090,11 +2148,40 @@ Type TypeChecker::check_call(CallExpr& call) {
                              "' must be of type '" + sig.parameter_types[i].to_string() +
                              "', not '" + arg_type.to_string() + "'");
     }
+    if (!sig.parameter_types[i].is_pointer()) continue;
+    const Symbol* source = find_root_symbol(*call.arguments()[i], symbols_);
+    if (i < sig.parameter_borrowed.size() && sig.parameter_borrowed[i]) {
+      if (!source) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                           "borrow arguments must refer to a named pointer with a tracked lifetime");
+        continue;
+      }
+      const bool mutable_borrow = i < sig.parameter_mutable_borrow.size() &&
+                                  sig.parameter_mutable_borrow[i];
+      if (mutable_borrow && !source->is_mutable()) {
+        diagnostics_.error(diag::kImmutableAssignment, call.arguments()[i]->location(),
+                           "mutable borrowing requires a mutable binding");
+      }
+      auto found = active_borrows.find(source->allocation_id);
+      if (found != active_borrows.end() && (found->second || mutable_borrow)) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                           "conflicting borrows of the same allocation in one call");
+      }
+      active_borrows[source->allocation_id] = mutable_borrow;
+    } else if (source && source->borrowed) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                         "a borrowed pointer cannot be transferred to an owning parameter");
+    } else if (source && source->owns_allocation && !source->moved) {
+      ownership_transfers.push_back(source->allocation_id);
+    }
   }
 
   for (size_t i = count; i < call.arguments().size(); ++i) {
     check_expression(const_cast<Expr&>(*call.arguments()[i]));
   }
+
+  for (uint64_t allocation_id : ownership_transfers)
+    symbols_.mark_allocation_moved(allocation_id);
 
   return sig.return_type;
 }

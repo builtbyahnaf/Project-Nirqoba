@@ -1,0 +1,6 @@
+byte* function escape(borrow byte* input) {
+    return input;
+}
+int function main() {
+    return 0;
+}

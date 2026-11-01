@@ -27,6 +27,8 @@ struct FunctionSignature {
   // qualified as `module.name` to keep modules link-compatible without a
   // separate name-mangling table.
   std::string symbol;
+  std::vector<bool> parameter_borrowed;
+  std::vector<bool> parameter_mutable_borrow;
 };
 
 // Lightweight catalog entry for a registered struct type.
