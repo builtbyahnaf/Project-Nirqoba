@@ -748,6 +748,12 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     } else if (source && source->owns_allocation && !source->moved) {
       const_cast<Expr&>(assignment.value()).set_transfers_ownership();
     }
+    if (!symbol->cleanup_callee.empty() &&
+        (cleanup_callee.empty() || cleanup_callee != symbol->cleanup_callee)) {
+      diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                         "an owned binding cannot be rebound to a pointer with a different ownership domain");
+      return;
+    }
     if (owns_allocation) symbols_.mark_allocation_moved(allocation_id);
     symbols_.rebind_pointer(assignment.name(), allocation_id);
     symbols_.set_pointer_ownership(assignment.name(), owns_allocation, borrowed,

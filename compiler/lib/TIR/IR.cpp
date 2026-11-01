@@ -14,6 +14,7 @@ Value Function::allocate_value(Type type, ValueOwnership ownership) {
 std::string_view op_name(OpKind kind) {
   switch (kind) {
     case OpKind::ConstantInt: return "const_int";
+    case OpKind::ConstantNull: return "const_null";
     case OpKind::ConstantFloat: return "const_float";
     case OpKind::ConstantString: return "const_string";
     case OpKind::Alloca: return "alloca";

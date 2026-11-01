@@ -7,6 +7,8 @@ int function main() {
         let replacement = memory.allocate<byte>(12);
     }
     return_owner_early();
+    conditional_release(false);
+    conditional_release(true);
     let report = memory.profiler.capture();
     print(report.current_bytes);
     memory.profiler.stop();
@@ -16,4 +18,11 @@ int function main() {
 void function return_owner_early() {
     let value = memory.allocate<byte>(24);
     return;
+}
+
+void function conditional_release(bool release) {
+    let value = memory.allocate<byte>(8);
+    if (release) {
+        memory.deallocate(value);
+    }
 }

@@ -203,6 +203,22 @@ void TirBuilder::emit_deferred_from(size_t scope_depth, tir::Function& function)
       if (deferred->result_type.is_valid() && !deferred->result_type.is_void())
         call.result = function.allocate_value(deferred->result_type);
       function.add_operation(move(call));
+      if ((deferred->automatic || deferred->clear_owner_slot_after_call) &&
+          deferred->owner_slot.is_valid()) {
+        tir::Value null_value = function.allocate_value(deferred->owner_slot.type);
+        tir::Op null_op;
+        null_op.kind = tir::OpKind::ConstantNull;
+        null_op.location = deferred->location;
+        null_op.result = null_value;
+        function.add_operation(std::move(null_op));
+        tir::Op clear;
+        clear.kind = tir::OpKind::Store;
+        clear.location = deferred->location;
+        clear.lhs = deferred->owner_slot;
+        clear.operand = null_value;
+        clear.result = deferred->owner_slot;
+        function.add_operation(std::move(clear));
+      }
     }
   }
 }
@@ -315,17 +331,28 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       store.lhs = slot;
       store.result = slot;
       function.add_operation(std::move(store));
-      for (auto& scope : deferred_expressions_)
-        for (auto& pending : scope)
-          if (pending.automatic && pending.owner_slot.id == slot.id)
-            pending.active = false;
       if (!assignment.cleanup_callee().empty()) {
-        DeferredCall cleanup;
-        cleanup.callee = assignment.cleanup_callee();
-        cleanup.location = assignment.location();
-        cleanup.automatic = true;
-        cleanup.owner_slot = slot;
-        deferred_expressions_.back().push_back(std::move(cleanup));
+        std::size_t owner_scope = scopes_.empty() ? 0 : scopes_.size() - 1;
+        for (std::size_t depth = scopes_.size(); depth > 0; --depth) {
+          bool found_slot = false;
+          for (const auto& binding : scopes_[depth - 1])
+            if (binding.second.id == slot.id) found_slot = true;
+          if (found_slot) { owner_scope = depth - 1; break; }
+        }
+        bool already_tracked = false;
+        if (owner_scope < deferred_expressions_.size())
+          for (const auto& pending : deferred_expressions_[owner_scope])
+            if (pending.automatic && pending.owner_slot.id == slot.id &&
+                pending.callee == assignment.cleanup_callee())
+              already_tracked = true;
+        if (!already_tracked && owner_scope < deferred_expressions_.size()) {
+          DeferredCall cleanup;
+          cleanup.callee = assignment.cleanup_callee();
+          cleanup.location = assignment.location();
+          cleanup.automatic = true;
+          cleanup.owner_slot = slot;
+          deferred_expressions_[owner_scope].push_back(std::move(cleanup));
+        }
       }
       return;
     }
@@ -589,8 +616,10 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
           for (auto& scope : deferred_expressions_)
             for (auto& pending : scope)
               if (pending.automatic && pending.active && slot.is_valid() &&
-                  pending.owner_slot.id == slot.id)
-                pending.active = false;
+                  pending.owner_slot.id == slot.id) {
+                lowered.owner_slot = slot;
+                lowered.clear_owner_slot_after_call = true;
+              }
         }
         lowered.arguments.push_back(lower_expression(*argument, function));
       }
@@ -672,13 +701,6 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
                            "internal: variable '" + name.name() + "' has no TIR slot");
         return tir::Value{};
       }
-      if (expr.transfers_ownership()) {
-        for (auto& scope : deferred_expressions_)
-          for (auto& pending : scope)
-            if (pending.automatic && pending.active &&
-                pending.owner_slot.id == slot.id)
-              pending.active = false;
-      }
       tir::Value result = function.allocate_value(slot.type, name.ownership());
       tir::Op op;
       op.kind = tir::OpKind::Load;
@@ -686,6 +708,21 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       op.result = result;
       op.lhs = slot;
       function.add_operation(std::move(op));
+      if (expr.transfers_ownership()) {
+        tir::Value null_value = function.allocate_value(slot.type);
+        tir::Op null_op;
+        null_op.kind = tir::OpKind::ConstantNull;
+        null_op.location = name.location();
+        null_op.result = null_value;
+        function.add_operation(std::move(null_op));
+        tir::Op clear;
+        clear.kind = tir::OpKind::Store;
+        clear.location = name.location();
+        clear.lhs = slot;
+        clear.operand = null_value;
+        clear.result = slot;
+        function.add_operation(std::move(clear));
+      }
       return result;
     }
     case Expr::Kind::Cast: {

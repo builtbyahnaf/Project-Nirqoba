@@ -437,6 +437,17 @@ class FunctionTranslator {
         return true;
       }
 
+      case tir::OpKind::ConstantNull: {
+        mlir::Type ty = tir_type_to_mlir(op.result.type, ctx_, builder_);
+        if (!ty) {
+          diag_.error("NRQ4005", op.location,
+                      "internal: null constant has an unsupported type");
+          return false;
+        }
+        set(op.result, builder_.create<mlir::LLVM::ZeroOp>(loc, ty).getResult());
+        return true;
+      }
+
       case tir::OpKind::ConstantFloat: {
         mlir::Type ty = tir_type_to_mlir(op.result.type, ctx_, builder_);
         if (!ty) ty = builder_.getF64Type();

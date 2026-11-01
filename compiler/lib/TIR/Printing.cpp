@@ -54,6 +54,9 @@ string print_tir(const tir::Module& module) {
         case tir::OpKind::ConstantInt:
           out << " " << op.integer_value << " : " << op.result.type.mangle();
           break;
+        case tir::OpKind::ConstantNull:
+          out << " : " << op.result.type.mangle();
+          break;
         case tir::OpKind::ConstantFloat:
           out << " " << op.float_value << " : " << op.result.type.mangle();
           break;

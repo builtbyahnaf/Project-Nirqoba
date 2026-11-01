@@ -84,3 +84,9 @@ Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tes
 GC correctness hardening: allocation, live-object, collection, and collected-byte counters now saturate instead of wrapping, including the automatic-allocation byte accumulator. This is accounting correctness work; no GC benchmark or speed claim is included.
 
 Limitations: aggregate/partial moves, closure capture, raw unsafe scopes, exception unwinding, and function return contracts for specialized resources still need type-system representation. GC remains stop-the-world and globally synchronized.
+
+## 28. Path-safe owner transfer lowering — 2026-11-01
+
+Owner transfers now load the current value and clear the source slot in TIR, while generated cleanup remains attached to the slot and safely receives null after a move. This makes implicit drop correct across conditional move paths: if a branch is skipped, the original owner is still released; if it runs, cleanup sees null. Deferred explicit cleanup clears the same slot after running, so the inferred cleanup remains safe. Assignments attach cleanup to the binding's lexical owner scope, and ownership-domain changes on an existing owner binding are rejected.
+
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 57/57. The owner cleanup integration case exercises both taken and skipped conditional release branches, manual release, early return, scope exit, and shared cleanup.
