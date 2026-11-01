@@ -7,6 +7,7 @@
 #include "nirqoba/runtime/gc.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -18,7 +19,7 @@ using namespace std;
 
 namespace {
 
-struct ObjectHeader {
+struct alignas(std::max_align_t) ObjectHeader {
   ObjectHeader* next = nullptr;
   ObjectHeader* mark_next = nullptr;
   void* object = nullptr;
@@ -28,6 +29,12 @@ struct ObjectHeader {
   bool marked = false;
   std::vector<size_t> reference_offsets;
 };
+
+void destroy_object_storage(ObjectHeader* header) {
+  if (!header) return;
+  header->~ObjectHeader();
+  ::operator delete(header);
+}
 
 std::mutex gc_mutex;
 ObjectHeader* objects = nullptr;
@@ -129,8 +136,7 @@ void collect_locked() {
       object_index.erase(header->object);
       statistics.collected_bytes += header->size;
       --statistics.live_objects;
-      std::free(header->object);
-      delete header;
+      destroy_object_storage(header);
     } else {
       header->marked = false;
       link = &header->next;
@@ -150,26 +156,23 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   if (automatic_collection_enabled && bytes_since_collection >= collection_threshold)
     collect_locked();
 
-  auto* header = new (std::nothrow) ObjectHeader();
-  if (!header) return nullptr;
-  void* object = std::calloc(1, bytes);
-  if (!object) {
-    delete header;
-    return nullptr;
-  }
+  if (bytes > SIZE_MAX - sizeof(ObjectHeader)) return nullptr;
+  void* storage = ::operator new(sizeof(ObjectHeader) + bytes, std::nothrow);
+  if (!storage) return nullptr;
+  auto* header = new (storage) ObjectHeader();
+  void* object = static_cast<unsigned char*>(storage) + sizeof(ObjectHeader);
+  std::memset(object, 0, bytes);
   try {
     if (reference_count != 0) {
       if (!reference_offsets || reference_count > SIZE_MAX / sizeof(size_t)) {
-        std::free(object);
-        delete header;
+        destroy_object_storage(header);
         return nullptr;
       }
       header->reference_offsets.assign(reference_offsets,
                                        reference_offsets + reference_count);
       for (size_t offset : header->reference_offsets) {
         if (offset > element_size || sizeof(void*) > element_size - offset) {
-          std::free(object);
-          delete header;
+          destroy_object_storage(header);
           return nullptr;
         }
       }
@@ -181,8 +184,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     header->next = objects;
     object_index.emplace(object, header);
   } catch (...) {
-    std::free(object);
-    delete header;
+    destroy_object_storage(header);
     return nullptr;
   }
   objects = header;

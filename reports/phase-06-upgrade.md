@@ -29,3 +29,9 @@ Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tes
 ## Benchmark harness scope
 
 Phase 6U:G now has a repeatable source and runner matrix for scalar, contiguous-array, small allocation, pointer-rich graph, and multithreaded allocation workloads in C++ and Rust. The runner records warmups, repeated measurements, p50/p95/p99, environment/compiler metadata, and checksums, and isolates artifacts in a temp directory. The current machine has no `rustc.exe`; the runner parsed successfully but the comparative matrix could not be executed. No comparative performance claim or G acceptance pass is made.
+
+## 21. GC object storage co-allocation — 2026-11-01
+
+The collector now stores each aligned object header and payload in one allocation rather than separate header and payload allocations. Precise reference-offset metadata remains in the header, object payload remains zero-initialized, and collection still uses the existing global stop-the-world mutex and pointer index. This removes one allocator call per GC object; it does not add TLABs, generational collection, or concurrent collection.
+
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 38/38, including cycle tracing, pinning, roots, and managed arrays. A five-process smoke sample of the existing 20,000-object benchmark measured 3,117, 3,029, 3,243, 2,988, and 3,055 µs (median 3,055 µs, about 153 ns/object). An earlier single run before the storage change was 4,999 µs, but that is too weak a baseline for a speedup claim. Repeat paired runs with controlled machine load before quantifying the improvement.
