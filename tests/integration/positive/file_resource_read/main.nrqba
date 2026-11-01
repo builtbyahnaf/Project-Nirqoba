@@ -1,0 +1,9 @@
+int function main() {
+    let resource = file.open("tests/integration/positive/file_resource_read/expect.json", false);
+    defer file.close(resource);
+    let bytes = memory.allocate<byte>(1);
+    defer memory.deallocate(bytes);
+    print(file.read(resource, bytes, 1));
+    print(bytes[0] as int);
+    return 0;
+}
