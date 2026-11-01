@@ -110,4 +110,19 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
   }
 }
 
+std::vector<std::string> SymbolTable::owners_moved_since(
+    const SymbolTable& previous) const {
+  std::vector<std::string> moved_owners;
+  for (const auto& scope : previous.scopes_) {
+    for (const auto& entry : scope) {
+      const Symbol& before = entry.second;
+      if (!before.owns_allocation || before.moved) continue;
+      const Symbol* after = lookup(before.name);
+      if (after && after->allocation_id == before.allocation_id && after->moved)
+        moved_owners.push_back(before.name);
+    }
+  }
+  return moved_owners;
+}
+
 }  // namespace nirq

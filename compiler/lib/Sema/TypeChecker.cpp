@@ -1042,9 +1042,17 @@ void TypeChecker::check_while(WhileStmt& statement) {
     diagnostics_.error(diag::kTypeMismatch, statement.condition().location(),
                        "'while' condition must be 'bool', not '" + cond_type.to_string() + "'");
   }
+  const SymbolTable incoming = symbols_;
   ++loop_depth_;
   check_block(const_cast<BlockStmt&>(statement.body()));
   --loop_depth_;
+  const SymbolTable body_state = symbols_;
+  for (const string& name : body_state.owners_moved_since(incoming))
+    diagnostics_.error(diag::kTypeMismatch, statement.body().location(),
+                       "owner '" + name +
+                           "' cannot remain moved at a loop back-edge; reinitialize it before the next iteration");
+  symbols_ = incoming;
+  symbols_.merge_conditional_ownership(body_state, incoming);
 }
 
 void TypeChecker::check_for(ForStmt& statement) {
@@ -1059,12 +1067,19 @@ void TypeChecker::check_for(ForStmt& statement) {
                          "'for' condition must be 'bool', not '" + cond_type.to_string() + "'");
     }
   }
-  if (statement.has_step()) {
-    check_statement(const_cast<Stmt&>(*statement.step()));
-  }
+  const SymbolTable incoming = symbols_;
   ++loop_depth_;
   check_block(const_cast<BlockStmt&>(statement.body()));
   --loop_depth_;
+  if (statement.has_step())
+    check_statement(const_cast<Stmt&>(*statement.step()));
+  const SymbolTable loop_back_state = symbols_;
+  for (const string& name : loop_back_state.owners_moved_since(incoming))
+    diagnostics_.error(diag::kTypeMismatch, statement.location(),
+                       "owner '" + name +
+                           "' cannot remain moved at a loop back-edge; reinitialize it before the next iteration");
+  symbols_ = incoming;
+  symbols_.merge_conditional_ownership(loop_back_state, incoming);
   symbols_.pop_scope();
 }
 
