@@ -9,6 +9,20 @@ namespace {
 constexpr const char* kUnresolvedSymbol = "NRQ4001";
 constexpr const char* kUnsupportedExpression = "NRQ4002";
 
+bool contains_owned_array(const Type& type) {
+  if (type.is_owned_array()) return true;
+  if (type.is_array()) return contains_owned_array(type.element_type());
+  if (type.is_tuple()) {
+    for (const Type& element : type.tuple_elements())
+      if (contains_owned_array(element)) return true;
+  }
+  if (type.is_struct()) {
+    for (const auto& field : type.struct_fields())
+      if (contains_owned_array(field.second)) return true;
+  }
+  return false;
+}
+
 tir::BinaryOp map_binary_op(BinaryOp op) {
   switch (op) {
     case BinaryOp::Add: return tir::BinaryOp::Add;
@@ -83,6 +97,8 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
   if (function.returns_shared()) body->set_return_ownership(ValueOwnership::Shared);
   else if (function.return_type().is_owned_array())
     body->set_return_ownership(ValueOwnership::Owned);
+  else if (contains_owned_array(function.return_type()))
+    body->set_return_ownership(ValueOwnership::Owned);
   tir::Function* function_ir = module.add_function(move(body));
 
   scopes_.clear();
@@ -99,7 +115,8 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
                                     : ValueOwnership::Borrowed)
         : parameter.type.is_array_view()
         ? ValueOwnership::Borrowed
-        : ((parameter.type.is_pointer() || parameter.type.is_owned_array())
+        : ((parameter.type.is_pointer() || parameter.type.is_owned_array() ||
+            contains_owned_array(parameter.type))
                                        ? ValueOwnership::Owned
                                        : ValueOwnership::Trivial);
     tir::Value param_val = function_ir->allocate_value(parameter.type, ownership);
@@ -122,12 +139,14 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
     function_ir->add_operation(move(store));
 
     scopes_.back().emplace(parameter.name, slot);
-    if ((parameter.type.is_pointer() || parameter.type.is_owned_array()) &&
+    if ((parameter.type.is_pointer() || parameter.type.is_owned_array() ||
+         contains_owned_array(parameter.type)) &&
         !parameter.borrowed) {
       DeferredCall cleanup;
       cleanup.callee = parameter.shared ? "memory.shared_release"
           : parameter.type.is_owned_array() ? "array.owned_release"
-                                            : "memory.deallocate";
+          : contains_owned_array(parameter.type) ? "aggregate.owned_drop"
+                                                 : "memory.deallocate";
       cleanup.location = parameter.location;
       cleanup.automatic = true;
       cleanup.owner_slot = slot;
