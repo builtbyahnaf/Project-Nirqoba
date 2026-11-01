@@ -1,6 +1,6 @@
 # Managed and explicit memory
 
-Nirqoba currently has explicit raw allocations and an opt-in tracing-GC domain.
+Nirqoba currently has explicit raw allocations and a distinct tracing-GC domain.
 `array.allocate<T>(count)` creates a managed array and `managed<T>` marks
 references for tracing. Cycles are supported, and `gc.collect()` can reclaim
 unreachable objects even when automatic collection is disabled. The runtime
@@ -86,3 +86,4 @@ Owned/borrowed/shared types, native resource wrapper types, and exception-unwind
 cleanup remain unimplemented: the roadmap requires their syntax to be settled in
 the language specification first, and this document currently defines no such
 syntax. GC does not provide timely finalization.
+
