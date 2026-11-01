@@ -386,7 +386,7 @@ void TypeChecker::check_block(BlockStmt& block) {
        cleanup != deferred_calls_.back().rend(); ++cleanup) {
     const CallExpr* call = cleanup->call;
     const string& callee = call->callee();
-    if ((callee == "memory.deallocate" || callee == "memory.secure_release" ||
+    if ((callee == "memory.deallocate" || callee == "file.close" || callee == "memory.secure_release" ||
          callee == "memory.unmap_file") && cleanup->allocation_id != 0) {
       if (symbols_.allocation_is_moved(cleanup->allocation_id)) {
           diagnostics_.error(diag::kUseAfterFree, call->location(),
@@ -457,7 +457,7 @@ void TypeChecker::check_deferred_cleanup(DeferredCleanupStmt& statement) {
   checking_deferred_cleanup_ = false;
   const auto* call = static_cast<const CallExpr*>(&expression);
   uint64_t allocation_id = 0;
-  if ((call->callee() == "memory.deallocate" ||
+  if ((call->callee() == "memory.deallocate" || call->callee() == "file.close" ||
        call->callee() == "memory.secure_release" ||
        call->callee() == "memory.unmap_file") && !call->arguments().empty()) {
     const Symbol* pointer = find_root_symbol(*call->arguments()[0], symbols_);
@@ -1943,6 +1943,44 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "'file.exists' path must be a 'string', not '" + path_type.to_string() + "'");
     }
     return Type::bool_type();
+  }
+
+  if (call.callee() == "file.open") {
+    if (call.arguments().size() != 2)
+      diagnostics_.error(diag::kPrintArity, call.location(), "'file.open' expects path and writable flag");
+    if (!call.arguments().empty()) {
+      const Type path = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+      if (path.is_valid() && !path.is_string()) diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(), "file.open path must be a string");
+    }
+    if (call.arguments().size() > 1) {
+      const Type writable = check_expression(const_cast<Expr&>(*call.arguments()[1]));
+      if (writable.is_valid() && !writable.is_bool()) diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(), "file.open writable flag must be bool");
+    }
+    return Type::pointer_type(Type::u8_type());
+  }
+  if (call.callee() == "file.close") {
+    if (call.arguments().size() != 1) diagnostics_.error(diag::kPrintArity, call.location(), "'file.close' expects one resource handle");
+    for (const ExprPtr& argument : call.arguments()) {
+      const Type type = check_expression(const_cast<Expr&>(*argument));
+      if (type.is_valid() && !type.is_pointer()) diagnostics_.error(diag::kTypeMismatch, argument->location(), "file.close requires a file resource handle");
+    }
+    if (!checking_deferred_cleanup_ && !call.arguments().empty()) {
+      const Symbol* resource = find_root_symbol(*call.arguments()[0], symbols_);
+      if (resource && resource->type.is_pointer()) symbols_.mark_allocation_moved(resource->allocation_id);
+    }
+    return Type::i32_type();
+  }
+  if (call.callee() == "file.write") {
+    if (call.arguments().size() != 2) diagnostics_.error(diag::kPrintArity, call.location(), "'file.write' expects a resource handle and string");
+    if (!call.arguments().empty()) {
+      const Type handle = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+      if (handle.is_valid() && !handle.is_pointer()) diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(), "file.write requires a file resource handle");
+    }
+    if (call.arguments().size() > 1) {
+      const Type text = check_expression(const_cast<Expr&>(*call.arguments()[1]));
+      if (text.is_valid() && !text.is_string()) diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(), "file.write content must be a string");
+    }
+    return Type::i32_type();
   }
 
   // Time & System builtins: time.now, system.exit

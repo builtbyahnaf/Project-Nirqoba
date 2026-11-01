@@ -1231,7 +1231,19 @@ class FunctionTranslator {
         mlir::Type runtime_ret_ty;
         std::vector<mlir::Type> runtime_arg_tys;
 
-        if (callee == "file.read_text") {
+        if (callee == "file.open") {
+          runtime_sym = "nrq_file_open_handle";
+          runtime_ret_ty = llvm_ptr_type(ctx_);
+          runtime_arg_tys = {llvm_ptr_type(ctx_), builder_.getI32Type()};
+        } else if (callee == "file.close") {
+          runtime_sym = "nrq_file_close_handle";
+          runtime_ret_ty = builder_.getI32Type();
+          runtime_arg_tys = {llvm_ptr_type(ctx_)};
+        } else if (callee == "file.write") {
+          runtime_sym = "nrq_file_write_handle";
+          runtime_ret_ty = builder_.getI32Type();
+          runtime_arg_tys = {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)};
+        } else if (callee == "file.read_text") {
           runtime_sym = "nrq_file_read_text";
           runtime_ret_ty = llvm_ptr_type(ctx_);
           runtime_arg_tys = {llvm_ptr_type(ctx_)};
@@ -1305,7 +1317,27 @@ class FunctionTranslator {
 
         if (!runtime_sym.empty()) {
           auto fn = ensure_runtime_fn(module_, builder_, runtime_sym, runtime_ret_ty, runtime_arg_tys);
-          auto call_op = builder_.create<mlir::LLVM::CallOp>(loc, fn, args);
+          llvm::SmallVector<mlir::Value> abi_args;
+          abi_args.reserve(args.size());
+          for (size_t index = 0; index < args.size(); ++index) {
+            mlir::Value value = args[index];
+            if (index < runtime_arg_tys.size() && value.getType() != runtime_arg_tys[index]) {
+              mlir::Type target = runtime_arg_tys[index];
+              if (value.getType().isInteger(1) && target.isInteger()) {
+                value = builder_.create<mlir::LLVM::ZExtOp>(loc, target, value).getResult();
+              } else if (target.isInteger() &&
+                         value.getType().getIntOrFloatBitWidth() != 0) {
+                const unsigned source_width = value.getType().getIntOrFloatBitWidth();
+                const unsigned target_width = target.getIntOrFloatBitWidth();
+                if (source_width < target_width)
+                  value = builder_.create<mlir::LLVM::ZExtOp>(loc, target, value).getResult();
+                else
+                  value = builder_.create<mlir::LLVM::TruncOp>(loc, target, value).getResult();
+              }
+            }
+            abi_args.push_back(value);
+          }
+          auto call_op = builder_.create<mlir::LLVM::CallOp>(loc, fn, abi_args);
           if (op.result.is_valid()) {
             // The runtime ABI is deliberately narrow (i32 status codes, i64
             // timestamps), while the language types the same call as `int`,

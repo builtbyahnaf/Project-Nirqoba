@@ -83,3 +83,9 @@ Still not implemented:
 Added `memory.cpu_features()` backed by `IsProcessorFeaturePresent` on Windows. The returned `u64` mask currently defines SSE2 (bit 0), AVX (bit 1), and AVX2 (bit 2). The operating system's usable-feature report is queried at runtime; no unsupported capabilities are inferred. Compiler semantic checking and LLVM lowering are wired, and the positive integration case checks the x64 SSE2 baseline.
 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and the full integration suite passed 32/32. The feature set is Windows-only, matching the runtime's current supported platform.
+
+## 15. Deterministic file resources — 2026-11-01
+
+Added an opaque Windows file resource API exposed as `file.open(path, writable)`, `file.write(resource, text)`, and `file.close(resource)`. Runtime handles are registered, invalid or repeated close/use returns an error status, and `defer file.close(resource)` participates in existing LIFO cleanup. Semantic analysis marks the resource invalid after close and rejects later use.
+
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 34/34, including successful deferred close and compile-time use-after-close rejection. The initial file API currently supports text writes; read APIs, wrappers for sockets/locks/GPU objects, and error-unwind cleanup remain open work. No exception unwinding is claimed.

@@ -10,8 +10,15 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <cstring>
+#include <mutex>
+#include <unordered_set>
 
 static const char kEmptyString[] = "";
+namespace {
+struct FileResource { HANDLE handle; };
+std::mutex file_resource_mutex;
+std::unordered_set<FileResource*> file_resources;
+}
 
 extern "C" {
 
@@ -115,6 +122,57 @@ int32_t nrq_file_exists(const char* path) {
     if (attr == INVALID_FILE_ATTRIBUTES) return 0;
     if (attr & FILE_ATTRIBUTE_DIRECTORY) return 0;
     return 1;
+}
+
+void* nrq_file_open_handle(const char* path, int32_t writable) {
+    if (!path || !*path) return nullptr;
+    const DWORD access = writable ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
+    const DWORD creation = writable ? OPEN_ALWAYS : OPEN_EXISTING;
+    HANDLE handle = CreateFileA(path, access, FILE_SHARE_READ, nullptr, creation,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) return nullptr;
+    auto* resource = static_cast<FileResource*>(HeapAlloc(
+        GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(FileResource)));
+    if (!resource) { CloseHandle(handle); return nullptr; }
+    resource->handle = handle;
+    try {
+        std::lock_guard<std::mutex> lock(file_resource_mutex);
+        file_resources.insert(resource);
+    } catch (...) {
+        CloseHandle(handle); HeapFree(GetProcessHeap(), 0, resource); return nullptr;
+    }
+    return resource;
+}
+
+int32_t nrq_file_close_handle(void* opaque) {
+    if (!opaque) return 0;
+    auto* resource = static_cast<FileResource*>(opaque);
+    std::lock_guard<std::mutex> lock(file_resource_mutex);
+    auto found = file_resources.find(resource);
+    if (found == file_resources.end()) return ERROR_INVALID_HANDLE;
+    file_resources.erase(found);
+    const BOOL closed = CloseHandle(resource->handle);
+    HeapFree(GetProcessHeap(), 0, resource);
+    return closed ? 0 : static_cast<int32_t>(GetLastError());
+}
+
+int32_t nrq_file_write_handle(void* opaque, const char* text) {
+    if (!opaque) return ERROR_INVALID_HANDLE;
+    auto* resource = static_cast<FileResource*>(opaque);
+    std::lock_guard<std::mutex> lock(file_resource_mutex);
+    if (file_resources.find(resource) == file_resources.end()) return ERROR_INVALID_HANDLE;
+    if (!text) text = kEmptyString;
+    const size_t length = std::strlen(text);
+    size_t offset = 0;
+    while (offset < length) {
+        const DWORD request = static_cast<DWORD>(std::min<size_t>(length - offset, MAXDWORD));
+        DWORD written = 0;
+        if (!WriteFile(resource->handle, text + offset, request, &written, nullptr))
+            return static_cast<int32_t>(GetLastError());
+        if (written == 0) return ERROR_WRITE_FAULT;
+        offset += written;
+    }
+    return 0;
 }
 
 }  // extern "C"
