@@ -95,6 +95,10 @@ int32_t nrq_memory_allocator_kind(uint64_t allocator_handle);
 void* nrq_memory_get_allocator(void);
 void* nrq_memory_use_allocator(void* allocator);
 void* nrq_memory_allocate(size_t bytes, size_t alignment);
+void* nrq_memory_shared_allocate(size_t bytes, size_t alignment);
+void* nrq_memory_shared_retain(void* pointer);
+int32_t nrq_memory_shared_release(void* pointer);
+uint64_t nrq_memory_shared_count(void* pointer);
 void* nrq_memory_allocate_from(void* allocator, size_t bytes, size_t alignment);
 void nrq_memory_deallocate_checked(void* pointer);
 // Resizes an explicit allocation, preserving the allocator identity and the

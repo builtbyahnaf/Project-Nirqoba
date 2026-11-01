@@ -851,6 +851,7 @@ std::unordered_map<void*, std::unique_ptr<Allocator>> allocator_handles;
 std::unordered_map<Allocator*, size_t> selected_counts;
 struct AllocationOwner { Allocator* allocator; size_t bytes; size_t alignment; };
 std::unordered_map<void*, AllocationOwner> live_allocations;
+std::unordered_map<void*, uint64_t> shared_reference_counts;
 NrqMemoryProfile memory_profile{};
 bool memory_profiler_enabled = false;
 // The generated code loads the whole report as an aggregate, so every field must
@@ -993,6 +994,7 @@ int32_t nrq_allocator_reset(void* handle) {
   if (!allocator->reset()) return 0;
   for (auto it = live_allocations.begin(); it != live_allocations.end();) {
     if (it->second.allocator == allocator) {
+      shared_reference_counts.erase(it->first);
       record_deallocation_profile(it->second.bytes);
       it = live_allocations.erase(it);
     } else ++it;
@@ -1073,6 +1075,50 @@ void* nrq_memory_allocate(size_t bytes, size_t alignment) {
   return allocate_with_allocator(active_allocator(), bytes, alignment);
 }
 
+void* nrq_memory_shared_allocate(size_t bytes, size_t alignment) {
+  void* pointer = nrq_memory_allocate(bytes, alignment);
+  if (!pointer) return nullptr;
+  try {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    shared_reference_counts.emplace(pointer, 1);
+  } catch (...) {
+    nrq_memory_deallocate_checked(pointer);
+    return nullptr;
+  }
+  return pointer;
+}
+
+void* nrq_memory_shared_retain(void* pointer) {
+  if (!pointer) return nullptr;
+  std::lock_guard<std::mutex> lock(allocator_mutex);
+  auto found = shared_reference_counts.find(pointer);
+  if (found == shared_reference_counts.end() || found->second == UINT64_MAX) return nullptr;
+  ++found->second;
+  return pointer;
+}
+
+int32_t nrq_memory_shared_release(void* pointer) {
+  if (!pointer) return 0;
+  bool release_allocation = false;
+  {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    auto found = shared_reference_counts.find(pointer);
+    if (found == shared_reference_counts.end()) return 0;
+    if (--found->second == 0) {
+      shared_reference_counts.erase(found);
+      release_allocation = true;
+    }
+  }
+  if (release_allocation) nrq_memory_deallocate_checked(pointer);
+  return 1;
+}
+
+uint64_t nrq_memory_shared_count(void* pointer) {
+  std::lock_guard<std::mutex> lock(allocator_mutex);
+  auto found = shared_reference_counts.find(pointer);
+  return found == shared_reference_counts.end() ? 0 : found->second;
+}
+
 void* nrq_memory_allocate_from(void* handle, size_t bytes, size_t alignment) {
   std::lock_guard<std::mutex> lock(allocator_mutex);
   if (!handle) {
@@ -1088,6 +1134,8 @@ void* nrq_memory_allocate_from(void* handle, size_t bytes, size_t alignment) {
 void nrq_memory_deallocate_checked(void* pointer) {
   if (!pointer) return;
   std::lock_guard<std::mutex> lock(allocator_mutex);
+  if (shared_reference_counts.find(pointer) != shared_reference_counts.end())
+    nrq_runtime_fatal("shared allocations must be released with memory.shared_release");
   auto found = live_allocations.find(pointer);
   if (found == live_allocations.end())
     nrq_runtime_fatal("memory.deallocate received an invalid or already freed pointer");
@@ -1110,6 +1158,8 @@ void* nrq_memory_reallocate(void* pointer, size_t bytes) {
     if (bytes == 0) return nullptr;
     return allocate_with_allocator(active_allocator(), bytes, kDefaultAlignmentBytes);
   }
+  if (shared_reference_counts.find(pointer) != shared_reference_counts.end())
+    nrq_runtime_fatal("shared allocations cannot be resized");
   auto found = live_allocations.find(pointer);
   if (found == live_allocations.end())
     nrq_runtime_fatal(
@@ -1282,6 +1332,8 @@ void nrq_memory_secure_zero(void* pointer, size_t bytes) {
 void nrq_memory_secure_release(void* pointer) {
   if (!pointer) return;
   std::lock_guard<std::mutex> lock(allocator_mutex);
+  if (shared_reference_counts.find(pointer) != shared_reference_counts.end())
+    nrq_runtime_fatal("shared allocations must be released with memory.shared_release");
   auto found = live_allocations.find(pointer);
   if (found == live_allocations.end())
     nrq_runtime_fatal("memory.secure_release received an invalid pointer");

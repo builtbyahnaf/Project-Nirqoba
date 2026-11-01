@@ -19,7 +19,8 @@ static bool expression_creates_owned_pointer(const Expr& expr) {
   const std::string& callee = static_cast<const CallExpr&>(expr).callee();
   return callee == "file.open" || callee == "memory.allocate" ||
          callee == "memory.secure_allocate" || callee == "memory.reallocate" ||
-         callee == "memory.map_file";
+         callee == "memory.map_file" || callee == "memory.shared_allocate" ||
+         callee == "memory.shared_retain";
 }
 
 static bool block_falls_through(const BlockStmt& block) {
@@ -417,7 +418,7 @@ void TypeChecker::check_block(BlockStmt& block) {
        cleanup != deferred_calls_.back().rend(); ++cleanup) {
     const CallExpr* call = cleanup->call;
     const string& callee = call->callee();
-    if ((callee == "memory.deallocate" || callee == "file.close" || callee == "memory.secure_release" ||
+    if ((callee == "memory.deallocate" || callee == "memory.shared_release" || callee == "file.close" || callee == "memory.secure_release" ||
          callee == "memory.unmap_file") && cleanup->allocation_id != 0) {
       if (symbols_.allocation_is_moved(cleanup->allocation_id)) {
           diagnostics_.error(diag::kUseAfterFree, call->location(),
@@ -488,7 +489,7 @@ void TypeChecker::check_deferred_cleanup(DeferredCleanupStmt& statement) {
   checking_deferred_cleanup_ = false;
   const auto* call = static_cast<const CallExpr*>(&expression);
   uint64_t allocation_id = 0;
-  if ((call->callee() == "memory.deallocate" || call->callee() == "file.close" ||
+  if ((call->callee() == "memory.deallocate" || call->callee() == "memory.shared_release" || call->callee() == "file.close" ||
        call->callee() == "memory.secure_release" ||
        call->callee() == "memory.unmap_file") && !call->arguments().empty()) {
     const Symbol* pointer = find_root_symbol(*call->arguments()[0], symbols_);
@@ -520,6 +521,11 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
   const Symbol* transferred_owner = nullptr;
   if (binding_type.is_pointer()) {
     symbol.owns_allocation = expression_creates_owned_pointer(declaration.initializer());
+    if (declaration.initializer().kind() == Expr::Kind::Call) {
+      const auto& call = static_cast<const CallExpr&>(declaration.initializer());
+      symbol.shared_allocation = call.callee() == "memory.shared_allocate" ||
+                                 call.callee() == "memory.shared_retain";
+    }
     if (!symbol.owns_allocation && declaration.initializer().kind() == Expr::Kind::Call) {
       const auto& call = static_cast<const CallExpr&>(declaration.initializer());
       const FunctionSignature* signature = find_function(call.callee());
@@ -534,6 +540,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
           symbol.borrowed = true;
           symbol.mutable_borrow = source->mutable_borrow;
         }
+        symbol.shared_allocation = source->shared_allocation;
         if (source->owns_allocation && !source->moved) {
           symbol.owns_allocation = true;
           transferred_owner = source;
@@ -681,10 +688,11 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     const bool transfer_owner = source && source->owns_allocation && !source->moved;
     const bool borrowed = source && source->borrowed;
     const bool mutable_borrow = source && source->mutable_borrow;
+        const bool shared_allocation = source && source->shared_allocation;
     if (transfer_owner) symbols_.mark_allocation_moved(allocation_id);
     symbols_.rebind_pointer(assignment.name(), allocation_id);
     symbols_.set_pointer_ownership(assignment.name(), transfer_owner, borrowed,
-                                   mutable_borrow);
+                                   mutable_borrow, shared_allocation);
   }
 }
 
@@ -901,6 +909,8 @@ Type TypeChecker::check_expression(Expr& expr) {
         if (symbol->borrowed)
           name.set_ownership(symbol->mutable_borrow
               ? ValueOwnership::MutableBorrowed : ValueOwnership::Borrowed);
+        else if (symbol->shared_allocation)
+          name.set_ownership(ValueOwnership::Shared);
         else if (symbol->owns_allocation)
           name.set_ownership(ValueOwnership::Owned);
         else if (symbol->type.is_managed_pointer())
@@ -920,9 +930,13 @@ Type TypeChecker::check_expression(Expr& expr) {
       if (type.is_pointer()) {
         auto& call = static_cast<CallExpr&>(expr);
         const FunctionSignature* signature = find_function(call.callee());
-        expr.set_ownership(expression_creates_owned_pointer(expr) ||
-                                   (signature && signature->return_type.is_pointer())
-                               ? ValueOwnership::Owned : ValueOwnership::Raw);
+        if (call.callee() == "memory.shared_allocate" ||
+            call.callee() == "memory.shared_retain")
+          expr.set_ownership(ValueOwnership::Shared);
+        else
+          expr.set_ownership(expression_creates_owned_pointer(expr) ||
+                                     (signature && signature->return_type.is_pointer())
+                                 ? ValueOwnership::Owned : ValueOwnership::Raw);
       } else if (type.is_managed_pointer()) {
         expr.set_ownership(ValueOwnership::GcManaged);
       }
@@ -1878,6 +1892,62 @@ Type TypeChecker::check_call(CallExpr& call) {
     return Type::pointer_type(resolve_generic_type(call.generic_argument()));
   }
 
+  if (call.callee() == "memory.shared_allocate" && call.has_generic_argument()) {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.shared_allocate<T>' takes one byte count");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+    } else {
+      const Type size_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+      if (size_type.is_valid() && !size_type.is_integer())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "shared allocation size must be an integer");
+    }
+    return Type::pointer_type(resolve_generic_type(call.generic_argument()));
+  }
+  if (call.callee() == "memory.shared_retain") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.shared_retain' takes one shared pointer");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::error();
+    }
+    const Type type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    const Symbol* source = find_root_symbol(*call.arguments()[0], symbols_);
+    if (type.is_valid() && !type.is_pointer())
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "shared retain requires a pointer");
+    if (!source || !source->shared_allocation)
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "shared retain requires a shared allocation");
+    return type;
+  }
+  if (call.callee() == "memory.shared_release" || call.callee() == "memory.shared_count") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "' takes one shared pointer");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return call.callee() == "memory.shared_count" ? Type::u64_type()
+                                                      : Type::void_type();
+    }
+    const Type type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    const Symbol* source = find_root_symbol(*call.arguments()[0], symbols_);
+    if (type.is_valid() && !type.is_pointer())
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "shared operation requires a pointer");
+    if (!source || !source->shared_allocation)
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "operation requires a shared allocation");
+    if (call.callee() == "memory.shared_release" && !checking_deferred_cleanup_ &&
+        source && source->shared_allocation)
+      symbols_.mark_allocation_moved(source->allocation_id);
+    return call.callee() == "memory.shared_count" ? Type::u64_type()
+                                                    : Type::void_type();
+  }
+
   if (call.callee() == "memory.allocate" && call.has_generic_argument()) {
     if (call.arguments().size() != 1 && call.arguments().size() != 2) {
       diagnostics_.error(diag::kPrintArity, call.location(),
@@ -1931,7 +2001,10 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "'memory.deallocate' requires an explicitly allocated pointer");
     }
     const Symbol* pointer_symbol = find_root_symbol(*call.arguments()[0], symbols_);
-    if (pointer_symbol && pointer_symbol->borrowed) {
+    if (pointer_symbol && pointer_symbol->shared_allocation) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "shared allocations must be released with memory.shared_release");
+    } else if (pointer_symbol && pointer_symbol->borrowed) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "borrowed pointers cannot be deallocated");
     } else if (!checking_deferred_cleanup_ && pointer_symbol && pointer_symbol->type.is_pointer())

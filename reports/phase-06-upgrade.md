@@ -44,3 +44,11 @@ Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and all 49 integrat
 
 Limitations: ownership and borrow categories are now carried on TIR values/parameters and emitted as `nirqoba.ownership` MLIR attributes. Borrow lifetimes are limited to function parameters; local borrow expressions, aggregate field propagation, closures, loops with path-sensitive state merging, automatic drop insertion, shared ownership, and unsafe scopes are incomplete.
 
+
+## 23. Explicit shared allocation domain — 2026-11-01
+
+Added `memory.shared_allocate<T>(bytes)`, `memory.shared_retain(pointer)`, `memory.shared_release(pointer)`, and `memory.shared_count(pointer)`. Shared allocations are tracked separately from unique owners, reference updates are protected by the allocator synchronization domain, and the final release frees the allocation using its original allocator. Unique deallocation, secure release, and resizing reject shared pointers. Semantic analysis tracks shared handles independently and prevents using unique-owner release APIs for them; TIR/MLIR marks shared values explicitly.
+
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 51/51. Positive coverage checks count transitions across retain and release; negative coverage rejects releasing a unique allocation through the shared API.
+
+Limitations: shared handles are currently scoped to local pointer bindings. Shared function parameter/return contracts, aggregate propagation, automatic drops, and synchronization of the pointed-to data are not implemented. Reference counting itself is synchronized; pointee mutation is not.

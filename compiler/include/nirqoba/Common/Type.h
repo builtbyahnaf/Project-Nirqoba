@@ -29,6 +29,7 @@ enum class ValueOwnership {
   Owned,
   Borrowed,
   MutableBorrowed,
+  Shared,
   GcManaged,
   Raw
 };
