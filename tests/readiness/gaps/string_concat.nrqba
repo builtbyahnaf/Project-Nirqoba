@@ -1,0 +1,7 @@
+// GAP PROBE: building a string from two strings.
+int function main() {
+    let left: string = "nair";
+    let right: string = "qoba";
+    print(left + right);
+    return 0;
+}

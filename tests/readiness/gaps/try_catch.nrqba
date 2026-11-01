@@ -1,0 +1,9 @@
+// GAP PROBE: error handling with try/catch (SYNTAX.md 5.4).
+int function main() {
+    try {
+        print(10 / 0);
+    } catch (error) {
+        print("division failed");
+    }
+    return 0;
+}

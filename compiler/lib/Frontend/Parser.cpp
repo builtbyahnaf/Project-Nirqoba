@@ -367,16 +367,28 @@ Type Parser::parse_type_annotation() {
     return Type::error();
   }
 
-  // Parse any array suffixes: `[N]` or `[]`
+  // Parse any array suffixes: `[N]` or `[]`. Suffixes nest left to right, so
+  // `int[2][3]` is two rows of three: the first suffix is the outermost
+  // dimension. Building innermost-last keeps that reading and matches how an
+  // array literal infers its type.
+  struct ArraySuffix {
+    bool dynamic;
+    size_t length;
+  };
+  vector<ArraySuffix> suffixes;
   while (match(TokenKind::LBracket)) {
     if (check(TokenKind::IntegerLiteral)) {
       const Token len_tok = advance();
       expect(TokenKind::RBracket, "to close array type");
-      base_type = Type::array_type(base_type, static_cast<size_t>(len_tok.integer_value));
+      suffixes.push_back(ArraySuffix{false, static_cast<size_t>(len_tok.integer_value)});
     } else {
       expect(TokenKind::RBracket, "to close dynamic array type");
-      base_type = Type::dynamic_array_type(base_type);
+      suffixes.push_back(ArraySuffix{true, 0});
     }
+  }
+  for (auto suffix = suffixes.rbegin(); suffix != suffixes.rend(); ++suffix) {
+    base_type = suffix->dynamic ? Type::dynamic_array_type(base_type)
+                                : Type::array_type(base_type, suffix->length);
   }
   while (match(TokenKind::Star)) {
     base_type = Type::pointer_type(base_type);

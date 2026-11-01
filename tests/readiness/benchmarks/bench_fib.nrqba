@@ -1,0 +1,12 @@
+// Function calls and recursion: fib(32) computed recursively (~7 million calls).
+int function fib(int n) {
+    if (n < 2) {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+int function main() {
+    print(fib(32));
+    return 0;
+}

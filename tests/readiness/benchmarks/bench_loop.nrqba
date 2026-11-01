@@ -1,0 +1,11 @@
+// Baseline: integer arithmetic in a counting loop (100,000,000 iterations).
+int function main() {
+    var total = 0;
+    for (var i = 0; i < 100000000; i += 1) {
+        total += i % 7;
+        total ^= i;
+        total = total & 268435455;
+    }
+    print(total);
+    return 0;
+}

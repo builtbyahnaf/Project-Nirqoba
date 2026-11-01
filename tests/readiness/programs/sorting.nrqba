@@ -1,5 +1,8 @@
 // Insertion sort: array mutation, nested loops, swap through a temporary.
-int function sort(int[10] values) {
+// Note: array arguments are passed by value, so the sort happens in `main`
+// rather than in a helper (see docs/readiness.md, "aggregate arguments").
+int function main() {
+    var values: int[10] = [9, 4, 7, 1, 8, 2, 6, 3, 5, 0];
     var i = 1;
     while (i < 10) {
         let key = values[i];
@@ -11,12 +14,6 @@ int function sort(int[10] values) {
         values[j + 1] = key;
         i += 1;
     }
-    return 0;
-}
-
-int function main() {
-    var values: int[10] = [9, 4, 7, 1, 8, 2, 6, 3, 5, 0];
-    sort(values);
     for (var i = 0; i < 10; i += 1) {
         print(values[i]);
     }

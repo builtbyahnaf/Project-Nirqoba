@@ -1,0 +1,7 @@
+// GAP PROBE: indexing a string to read one character.
+int function main() {
+    let text: string = "nirqoba";
+    let first = text[0];
+    print(first);
+    return 0;
+}

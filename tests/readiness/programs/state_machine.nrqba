@@ -1,0 +1,49 @@
+// A small state machine: symbolic constants, function returning a status code.
+int function red() { return 0; }
+int function green() { return 1; }
+int function yellow() { return 2; }
+
+int function next_state(int state) {
+    if (state == 0) {
+        return 1;
+    }
+    if (state == 1) {
+        return 2;
+    }
+    return 0;
+}
+
+int function name_length(int state) {
+    if (state == 0) {
+        return 3;
+    }
+    if (state == 1) {
+        return 5;
+    }
+    return 6;
+}
+
+int function main() {
+    var state = red();
+    var time_in_red = 0;
+    for (var tick = 0; tick < 12; tick += 1) {
+        if (state == red()) {
+            time_in_red += 1;
+        }
+        if (tick % 3 == 2) {
+            state = next_state(state);
+        }
+    }
+    print(time_in_red);
+    print(state);
+    print(name_length(state));
+
+    var steps = 0;
+    state = green();
+    while (steps < 10 && state != yellow()) {
+        state = next_state(state);
+        steps += 1;
+    }
+    print(steps);
+    return 0;
+}

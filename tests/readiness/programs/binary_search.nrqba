@@ -1,0 +1,26 @@
+// Binary search: early returns, sentinel values, sorted array literal.
+int function find(int[12] values, int target) {
+    var low = 0;
+    var high = 11;
+    while (low <= high) {
+        let mid = low + (high - low) / 2;
+        if (values[mid] == target) {
+            return mid;
+        }
+        if (values[mid] < target) {
+            low = mid + 1;
+        } else {
+            high = mid - 1;
+        }
+    }
+    return -1;
+}
+
+int function main() {
+    var values: int[12] = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24];
+    print(find(values, 2));
+    print(find(values, 14));
+    print(find(values, 24));
+    print(find(values, 5));
+    return 0;
+}

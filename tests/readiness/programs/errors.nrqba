@@ -1,0 +1,31 @@
+// Error handling as it exists today: sentinel return values and status checks.
+// There is no try/catch yet, so every fallible call is checked by hand.
+int function divide(int a, int b, int[1] status) {
+    if (b == 0) {
+        status[0] = 1;
+        return 0;
+    }
+    status[0] = 0;
+    return a / b;
+}
+
+int function parse_positive(int value) {
+    if (value < 0) {
+        return -1;
+    }
+    return value;
+}
+
+int function main() {
+    var status: int[1] = [0];
+    print(divide(10, 2, status));
+    print(status[0]);
+    print(divide(10, 0, status));
+    print(status[0]);
+
+    print(parse_positive(-5));
+    if (parse_positive(-5) < 0) {
+        print("negative value rejected");
+    }
+    return 0;
+}

@@ -1,0 +1,48 @@
+// Numeric helpers: gcd, lcm, collatz, float functions from math.
+int function gcd(int a, int b) {
+    while (b != 0) {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    return a;
+}
+
+int function lcm(int a, int b) {
+    return a / gcd(a, b) * b;
+}
+
+int function collatz_length(int start) {
+    var n = start;
+    var steps = 0;
+    while (n != 1) {
+        if (n % 2 == 0) {
+            n = n / 2;
+        } else {
+            n = 3 * n + 1;
+        }
+        steps += 1;
+    }
+    return steps;
+}
+
+int function main() {
+    print(gcd(48, 18));
+    print(lcm(4, 6));
+
+    var longest = 0;
+    var longest_start = 1;
+    for (var i = 1; i < 100; i += 1) {
+        let steps = collatz_length(i);
+        if (steps > longest) {
+            longest = steps;
+            longest_start = i;
+        }
+    }
+    print(longest_start);
+    print(longest);
+
+    print(math.sqrt(81.0) as int);
+    print(math.abs(-17.0));
+    return 0;
+}

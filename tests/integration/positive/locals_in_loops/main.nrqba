@@ -1,0 +1,15 @@
+// Regression: a local declared inside a loop body must not grow the stack once
+// per iteration. The former lowering emitted `alloca` in the loop block, so a
+// few tens of thousands of iterations exhausted the stack and the process died.
+int function main() {
+    var checksum = 0;
+    for (var i = 0; i < 200000; i += 1) {
+        var local = i % 97;
+        var block = memory.allocate<byte>(32);
+        block[0] = local as byte;
+        checksum += block[0] as int;
+        memory.deallocate(block);
+    }
+    print(checksum);
+    return 0;
+}
