@@ -217,4 +217,6 @@ integration 85/85. Secure release and final shared release now use the same
 out-of-lock owner protocol. Blocking callback regressions confirm unrelated
 allocator creation proceeds, and shared retain/release cannot claim a pointer
 reserved for final release. RelWithDebInfo validation passed: CTest 1/1 and
-integration 85/85. No GC benchmark was run.
+integration 85/85. Secure release is also checked at the allocator callback
+boundary to confirm the payload has been zeroed before deallocation. No GC
+benchmark was run.
