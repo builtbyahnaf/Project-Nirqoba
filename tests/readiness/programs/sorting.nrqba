@@ -1,0 +1,24 @@
+// Insertion sort: array mutation, nested loops, swap through a temporary.
+int function sort(int[10] values) {
+    var i = 1;
+    while (i < 10) {
+        let key = values[i];
+        var j = i - 1;
+        while (j >= 0 && values[j] > key) {
+            values[j + 1] = values[j];
+            j -= 1;
+        }
+        values[j + 1] = key;
+        i += 1;
+    }
+    return 0;
+}
+
+int function main() {
+    var values: int[10] = [9, 4, 7, 1, 8, 2, 6, 3, 5, 0];
+    sort(values);
+    for (var i = 0; i < 10; i += 1) {
+        print(values[i]);
+    }
+    return 0;
+}

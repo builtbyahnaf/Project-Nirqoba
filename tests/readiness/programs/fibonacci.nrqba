@@ -1,0 +1,29 @@
+// Recursion versus iteration: the classic first program.
+int function fib_recursive(int n) {
+    if (n < 2) {
+        return n;
+    }
+    return fib_recursive(n - 1) + fib_recursive(n - 2);
+}
+
+int function fib_iterative(int n) {
+    var a = 0;
+    var b = 1;
+    for (var i = 0; i < n; i += 1) {
+        let next = a + b;
+        a = b;
+        b = next;
+    }
+    return a;
+}
+
+int function main() {
+    for (var i = 0; i <= 12; i += 1) {
+        if (fib_recursive(i) != fib_iterative(i)) {
+            print("mismatch");
+        }
+    }
+    print(fib_recursive(15));
+    print(fib_iterative(30));
+    return 0;
+}

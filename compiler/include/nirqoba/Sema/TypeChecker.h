@@ -4,6 +4,7 @@
 #include <string>
 #include <cstdint>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "nirqoba/Diagnostics/DiagnosticEngine.h"
@@ -79,6 +80,18 @@ class TypeChecker {
   // first resolves against the module currently being checked, then against the
   // root module's catalog.
   const StructInfo* find_struct(const std::string& name) const;
+
+  // Expands struct names in an annotation into structs carrying their field
+  // layout, recursively through arrays and tuples. A struct parsed from source
+  // is only a name, and lowering cannot lay out or index a struct without its
+  // fields; resolving here keeps the parser free of catalog knowledge.
+  Type resolve_aggregate_type(const Type& type);
+  Type resolve_aggregate_type(const Type& type,
+                              std::unordered_set<std::string>& active);
+
+  // Resolves a declaration's annotation and records it back on the AST node so
+  // lowering sees the same type semantic analysis checked.
+  void resolve_declaration_types(FunctionDecl& function);
 
   // Looks a function up by the spelling used at the call site, falling back to
   // the current module's namespace for unqualified names.

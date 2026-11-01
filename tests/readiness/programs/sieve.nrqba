@@ -1,0 +1,37 @@
+// Sieve of Eratosthenes: bool arrays, nested loops, accumulation.
+int function main() {
+    var composite: bool[120] = [false, false, false, false, false, false, false, false, false, false,
+                                false, false, false, false, false, false, false, false, false, false,
+                                false, false, false, false, false, false, false, false, false, false,
+                                false, false, false, false, false, false, false, false, false, false,
+                                false, false, false, false, false, false, false, false, false, false,
+                                false, false, false, false, false, false, false, false, false, false,
+                                false, false, false, false, false, false, false, false, false, false,
+                                false, false, false, false, false, false, false, false, false, false,
+                                false, false, false, false, false, false, false, false, false, false,
+                                false, false, false, false, false, false, false, false, false, false,
+                                false, false, false, false, false, false, false, false, false, false,
+                                false, false, false, false, false, false, false, false, false, false];
+    var p = 2;
+    while (p * p < 120) {
+        if (!composite[p]) {
+            var multiple = p * p;
+            while (multiple < 120) {
+                composite[multiple] = true;
+                multiple += p;
+            }
+        }
+        p += 1;
+    }
+    var count = 0;
+    var last = 0;
+    for (var i = 2; i < 120; i += 1) {
+        if (!composite[i]) {
+            count += 1;
+            last = i;
+        }
+    }
+    print(count);
+    print(last);
+    return 0;
+}

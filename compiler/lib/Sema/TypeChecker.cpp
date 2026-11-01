@@ -78,6 +78,7 @@ bool TypeChecker::check(Program& program) {
 
   // Pass 1: Collect function signatures for forward references & mutual recursion.
   for (const auto& function : program.functions()) {
+    resolve_declaration_types(*function);
     vector<Type> param_types;
     param_types.reserve(function->parameters().size());
     for (const Parameter& param : function->parameters()) {
@@ -193,7 +194,9 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
   // emitted as `main`.
   for (const auto& unit : modules) {
     if (!unit || !unit->ast) continue;
+    current_module_ = unit->name;
     for (const auto& function : unit->ast->functions()) {
+      resolve_declaration_types(*function);
       vector<Type> param_types;
       param_types.reserve(function->parameters().size());
       for (const Parameter& param : function->parameters()) {
@@ -465,14 +468,16 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
   Type binding_type = initializer_type;
 
   if (declaration.has_annotation()) {
-    if (declaration.annotation().is_valid() && initializer_type.is_valid() &&
-        declaration.annotation() != initializer_type) {
+    const Type annotation = resolve_aggregate_type(declaration.annotation());
+    declaration.set_annotation(annotation);
+    if (annotation.is_valid() && initializer_type.is_valid() &&
+        annotation != initializer_type) {
       diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
                          "cannot initialize '" + declaration.name() + "' of type '" +
-                             declaration.annotation().to_string() + "' with a value of type '" +
+                             annotation.to_string() + "' with a value of type '" +
                              initializer_type.to_string() + "'");
     }
-    binding_type = declaration.annotation();
+    binding_type = annotation;
   }
 
   Symbol symbol{declaration.name(), binding_type, declaration.binding(),
@@ -997,6 +1002,56 @@ const StructInfo* TypeChecker::find_struct(const string& name) const {
   }
   auto it = structs_.find(name);
   return it != structs_.end() ? &it->second : nullptr;
+}
+
+Type TypeChecker::resolve_aggregate_type(const Type& type) {
+  unordered_set<string> active;
+  return resolve_aggregate_type(type, active);
+}
+
+Type TypeChecker::resolve_aggregate_type(const Type& type,
+                                        unordered_set<string>& active) {
+  if (!type.is_valid()) return type;
+  if (type.is_array()) {
+    // Rebuild unconditionally: struct types compare equal by name alone, so an
+    // equality test cannot tell a resolved struct from an opaque one.
+    return Type::array_type(resolve_aggregate_type(type.element_type(), active),
+                            type.array_length());
+  }
+  if (type.is_tuple()) {
+    vector<Type> elements;
+    elements.reserve(type.tuple_elements().size());
+    for (const Type& element : type.tuple_elements()) {
+      elements.push_back(resolve_aggregate_type(element, active));
+    }
+    return Type::tuple_type(move(elements));
+  }
+  // Pointer elements are deliberately left shallow: layout of a pointee is
+  // resolved where the pointee is allocated, and expanding through pointers
+  // would recurse forever on a self-referential struct.
+  if (!type.is_struct() || !type.struct_fields().empty()) return type;
+
+  const string& name = type.struct_name();
+  if (!active.insert(name).second) return type;
+  const StructInfo* info = find_struct(name);
+  if (info == nullptr) {
+    active.erase(name);
+    return type;
+  }
+  vector<pair<string, Type>> fields;
+  fields.reserve(info->fields.size());
+  for (const Parameter& field : info->fields) {
+    fields.emplace_back(field.name, resolve_aggregate_type(field.type, active));
+  }
+  active.erase(name);
+  return Type::struct_type(name, move(fields));
+}
+
+void TypeChecker::resolve_declaration_types(FunctionDecl& function) {
+  function.set_return_type(resolve_aggregate_type(function.return_type()));
+  for (Parameter& parameter : function.parameters()) {
+    parameter.type = resolve_aggregate_type(parameter.type);
+  }
 }
 
 const FunctionSignature* TypeChecker::find_function(const string& name) const {

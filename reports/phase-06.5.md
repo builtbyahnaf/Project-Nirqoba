@@ -4,7 +4,8 @@
 
 - **Phase:** 6.5 — Automatic Garbage Collection and Advanced Memory Management
 - **Implementation date:** 2026-10-31
-- **Status:** Partial implementation
+- **Status:** Implemented core collector; items blocked on the language specification remain (§13)
+- **Plan:** [`phase_plans/PHASE_6.5.md`](../phase_plans/PHASE_6.5.md)
 - **Objective:** Provide precise, non-moving tracing collection for managed objects.
 - **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
 
