@@ -33,7 +33,10 @@ with one mutex. It is not concurrent with mutator pointer writes unless those
 writes use the root-store API. TLABs, bump regions, safepoints, generational or
 incremental collection, and concurrent mutation remain unimplemented. They are
 not safe to add as allocator-only fast paths without first defining and testing
-a mutator safepoint protocol. No GC benchmark was run for this follow-up.
+a mutator safepoint protocol. A threaded correctness test races root-store
+mutation against explicit collection and checks reachability and reclamation;
+this does not establish safety for raw uninstrumented writes. No GC benchmark
+was run for this follow-up.
 
 ## Phase 6.9 native resources
 

@@ -179,6 +179,44 @@ TEST(GcTest, ConcurrentAllocationIsSerializedAndReclaimed) {
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
   nrq_gc_set_threshold(1024 * 1024);
 }
+
+TEST(GcTest, RootStoreSynchronizesConcurrentMutationAndCollection) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+  auto* root = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  auto* first = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  auto* second = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(root, nullptr);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  nrq_gc_root_register(reinterpret_cast<void**>(&root));
+  nrq_gc_root_register(reinterpret_cast<void**>(&first));
+  nrq_gc_root_register(reinterpret_cast<void**>(&second));
+  nrq_gc_root_store(reinterpret_cast<void**>(&root->next), first);
+
+  std::thread mutator([&] {
+    for (int index = 0; index < 2000; ++index) {
+      Node* target = index % 2 == 0 ? first : second;
+      nrq_gc_root_store(reinterpret_cast<void**>(&root->next), target);
+    }
+  });
+  std::thread collector([] {
+    for (int index = 0; index < 200; ++index) nrq_gc_collect();
+  });
+  mutator.join();
+  collector.join();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 3);
+
+  nrq_gc_root_unregister(reinterpret_cast<void**>(&second));
+  nrq_gc_root_unregister(reinterpret_cast<void**>(&first));
+  nrq_gc_root_unregister(reinterpret_cast<void**>(&root));
+  root = nullptr;
+  first = nullptr;
+  second = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+}
 TEST(GcTest, PinDiagnosticsReportCountAndRejectExcessivePins) {
   nrq_gc_enable();
   nrq_gc_collect();
