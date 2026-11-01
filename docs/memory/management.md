@@ -1,11 +1,20 @@
 # Managed and explicit memory
 
-Nirqoba currently has two distinct allocation paths. `array.allocate<T>(count)`
-creates a managed array on the tracing garbage collected heap. `managed<T>`
-marks references that the collector must trace. Cycles are supported, and
-`gc.collect()` can reclaim unreachable objects even when automatic collection
-is disabled. Automatic collection is enabled by default. Disabling it stops
-automatic triggers; it does not stop allocation or explicit collection.
+Nirqoba currently has explicit raw allocations and an opt-in tracing-GC domain.
+`array.allocate<T>(count)` creates a managed array and `managed<T>` marks
+references for tracing. Cycles are supported, and `gc.collect()` can reclaim
+unreachable objects even when automatic collection is disabled. The runtime
+still enables automatic collection by default for compatibility. The Phase 6
+Upgrade decision is to make ownership-based memory the language default. This
+is a migration target; ownership analysis is not yet implemented. GC objects
+remain explicitly managed and must not be silently treated as owned allocations.
+
+The target memory domains are owned values (move and deterministic drop),
+borrowed references (non-owning and lifetime checked), explicitly shared
+references (reference counted), GC-managed references (traced, opt-in), and
+raw/unsafe pointers. Until syntax is specified and the compiler enforces these
+rules, programs must use the existing allocation APIs and `defer` cleanup. No
+lifetime or use-after-move safety is implied by this target design.
 
 `gc.get_statistics()` returns `allocated_bytes`, `collected_bytes`,
 `collections`, and `live_objects`. The collector is non-moving. It discovers
