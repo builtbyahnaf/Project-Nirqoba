@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <chrono>
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <thread>
 
 #define WIN32_LEAN_AND_MEAN
@@ -25,6 +27,28 @@ struct CustomAllocatorState {
   bool destroyed = false;
   bool fail_allocation = false;
 };
+
+struct BlockingAllocatorState {
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool entered = false;
+  bool release = false;
+};
+
+void* blocking_allocate(void* context, size_t bytes, size_t alignment) {
+  auto* state = static_cast<BlockingAllocatorState*>(context);
+  {
+    std::unique_lock<std::mutex> lock(state->mutex);
+    state->entered = true;
+    state->condition.notify_all();
+    state->condition.wait(lock, [&] { return state->release; });
+  }
+  return _aligned_malloc(bytes, std::max(alignment, sizeof(void*)));
+}
+
+void blocking_deallocate(void*, void* pointer, size_t, size_t) {
+  _aligned_free(pointer);
+}
 
 void* custom_allocate(void* context, size_t bytes, size_t alignment) {
   auto* state = static_cast<CustomAllocatorState*>(context);
@@ -99,6 +123,34 @@ TEST(AllocatorTest, CustomCallbacksReceiveOriginalSizeAndAlignment) {
   ASSERT_EQ(nrq_memory_use_allocator(previous), allocator);
   ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
   ASSERT_TRUE(state.destroyed);
+}
+
+TEST(AllocatorTest, InFlightExplicitAllocationPreventsAllocatorDestruction) {
+  BlockingAllocatorState state;
+  const NrqCustomAllocatorVTable callbacks{
+      &state, blocking_allocate, blocking_deallocate, nullptr};
+  void* allocator = nrq_allocator_create_custom(&callbacks);
+  ASSERT_NE(allocator, nullptr);
+  std::atomic<void*> result = nullptr;
+  std::thread worker([&] {
+    result = nrq_memory_allocate_from(allocator, 128, 64);
+  });
+  {
+    std::unique_lock<std::mutex> lock(state.mutex);
+    state.condition.wait(lock, [&] { return state.entered; });
+  }
+  const int32_t destroy_while_allocating = nrq_allocator_destroy(allocator);
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.release = true;
+  }
+  state.condition.notify_all();
+  worker.join();
+  ASSERT_EQ(destroy_while_allocating, int32_t{0});
+  void* pointer = result.load();
+  ASSERT_NE(pointer, nullptr);
+  nrq_memory_deallocate_checked(pointer);
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
 }
 
 TEST(AllocatorTest, PoolRejectsRequestsLargerThanItsCapacity) {

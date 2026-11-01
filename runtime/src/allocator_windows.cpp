@@ -104,6 +104,33 @@ class Allocator {
   virtual NrqAllocatorKind kind() const { return NRQ_ALLOCATOR_GENERAL; }
   size_t capacity() const { return capacity_; }
 
+  void* allocate_serialized(size_t bytes, size_t alignment) {
+    std::lock_guard<std::mutex> lock(operation_mutex_);
+    return allocate(bytes, alignment);
+  }
+  void deallocate_serialized(void* pointer) {
+    std::lock_guard<std::mutex> lock(operation_mutex_);
+    deallocate(pointer);
+  }
+  bool can_deallocate_serialized(void* pointer) const {
+    std::lock_guard<std::mutex> lock(operation_mutex_);
+    return can_deallocate(pointer);
+  }
+  bool reset_serialized() {
+    std::lock_guard<std::mutex> lock(operation_mutex_);
+    return reset();
+  }
+  void* reallocate_serialized(void* pointer, size_t old_bytes, size_t bytes,
+                              size_t alignment) {
+    std::lock_guard<std::mutex> lock(operation_mutex_);
+    return reallocate(pointer, old_bytes, bytes, alignment);
+  }
+  void free_statistics_serialized(size_t& free_bytes,
+                                  size_t& largest_free_block) const {
+    std::lock_guard<std::mutex> lock(operation_mutex_);
+    free_statistics(free_bytes, largest_free_block);
+  }
+
   // Reports how many bytes the allocator can still serve and the largest single
   // request it can satisfy. Strategies that cannot enumerate their free space
   // (the general-purpose and custom allocators) inherit these zeros, which the
@@ -134,6 +161,9 @@ class Allocator {
 
  protected:
   size_t capacity_;
+
+ private:
+  mutable std::mutex operation_mutex_;
 };
 
 class GeneralAllocator final : public Allocator {
@@ -991,7 +1021,7 @@ int32_t nrq_allocator_reset(void* handle) {
   auto found = allocator_handles.find(handle);
   if (found == allocator_handles.end()) return 0;
   Allocator* allocator = found->second.get();
-  if (!allocator->reset()) return 0;
+  if (!allocator->reset_serialized()) return 0;
   for (auto it = live_allocations.begin(); it != live_allocations.end();) {
     if (it->second.allocator == allocator) {
       shared_reference_counts.erase(it->first);
@@ -1053,26 +1083,58 @@ void* nrq_memory_use_allocator(void* handle) {
 
 static void* allocate_with_allocator(Allocator* allocator, size_t bytes,
                                      size_t alignment) {
+  auto release_operation_pin = [&] {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    auto selected = selected_counts.find(allocator);
+    if (selected != selected_counts.end() && --selected->second == 0)
+      selected_counts.erase(selected);
+  };
   void* pointer = nullptr;
   try {
-    pointer = allocator->allocate(bytes, alignment);
+    pointer = allocator->allocate_serialized(bytes, alignment);
   } catch (...) {
+    release_operation_pin();
     return nullptr;
   }
-  if (!pointer) return nullptr;
+  if (!pointer) {
+    release_operation_pin();
+    return nullptr;
+  }
+  bool recorded = false;
   try {
-    live_allocations.emplace(pointer, AllocationOwner{allocator, bytes, alignment});
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    recorded = live_allocations.emplace(
+        pointer, AllocationOwner{allocator, bytes, alignment}).second;
+    if (recorded) record_allocation_profile(bytes);
+    else nrq_runtime_fatal("allocator returned an address that is already live");
   } catch (...) {
-    allocator->deallocate(pointer);
+    allocator->deallocate_serialized(pointer);
+    release_operation_pin();
     return nullptr;
   }
-  record_allocation_profile(bytes);
+  release_operation_pin();
   return pointer;
 }
 
+static bool increment_operation_pin_locked(Allocator* allocator) {
+  try {
+    size_t& count = selected_counts[allocator];
+    if (count == SIZE_MAX) return false;
+    ++count;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
 void* nrq_memory_allocate(size_t bytes, size_t alignment) {
-  std::lock_guard<std::mutex> lock(allocator_mutex);
-  return allocate_with_allocator(active_allocator(), bytes, alignment);
+  Allocator* allocator = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    allocator = active_allocator();
+    if (!increment_operation_pin_locked(allocator)) return nullptr;
+  }
+  return allocate_with_allocator(allocator, bytes, alignment);
 }
 
 void* nrq_memory_allocate_array(size_t count, size_t element_size,
@@ -1137,15 +1199,20 @@ uint64_t nrq_memory_shared_count(void* pointer) {
 }
 
 void* nrq_memory_allocate_from(void* handle, size_t bytes, size_t alignment) {
-  std::lock_guard<std::mutex> lock(allocator_mutex);
-  if (!handle) {
-    Allocator* target = policy_default_allocator ? policy_default_allocator
-                                                 : &default_allocator;
-    return allocate_with_allocator(target, bytes, alignment);
+  Allocator* target = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    if (!handle) {
+      target = policy_default_allocator ? policy_default_allocator
+                                       : &default_allocator;
+    } else {
+      auto found = allocator_handles.find(handle);
+      if (found == allocator_handles.end()) return nullptr;
+      target = found->second.get();
+    }
+    if (!increment_operation_pin_locked(target)) return nullptr;
   }
-  auto found = allocator_handles.find(handle);
-  if (found == allocator_handles.end()) return nullptr;
-  return allocate_with_allocator(found->second.get(), bytes, alignment);
+  return allocate_with_allocator(target, bytes, alignment);
 }
 
 void nrq_memory_deallocate_checked(void* pointer) {
@@ -1156,9 +1223,9 @@ void nrq_memory_deallocate_checked(void* pointer) {
   auto found = live_allocations.find(pointer);
   if (found == live_allocations.end())
     nrq_runtime_fatal("memory.deallocate received an invalid or already freed pointer");
-  if (!found->second.allocator->can_deallocate(pointer))
+  if (!found->second.allocator->can_deallocate_serialized(pointer))
     nrq_runtime_fatal("stack allocator allocations must be deallocated in LIFO order");
-  found->second.allocator->deallocate(pointer);
+  found->second.allocator->deallocate_serialized(pointer);
   record_deallocation_profile(found->second.bytes);
   live_allocations.erase(found);
 }
@@ -1188,15 +1255,15 @@ void* nrq_memory_reallocate(void* pointer, size_t bytes) {
     // Zero bytes releases the block, matching the C realloc convention; the
     // caller cannot distinguish this from failure, which is why the language
     // documentation states that a zero-byte reallocation frees the block.
-    if (!allocator->can_deallocate(pointer))
+    if (!allocator->can_deallocate_serialized(pointer))
       nrq_runtime_fatal(
           "stack allocator allocations must be deallocated in LIFO order");
-    allocator->deallocate(pointer);
+    allocator->deallocate_serialized(pointer);
     record_deallocation_profile(old_bytes);
     live_allocations.erase(found);
     return nullptr;
   }
-  void* replacement = allocator->reallocate(pointer, old_bytes, bytes, alignment);
+  void* replacement = allocator->reallocate_serialized(pointer, old_bytes, bytes, alignment);
   if (!replacement) return nullptr;  // The original allocation is untouched.
   // The registry entry is keyed by the old address; `reallocate` may hand back
   // the same address when a strategy resized in place.
@@ -1229,7 +1296,7 @@ uint64_t nrq_memory_allocator_free_bytes(uint64_t allocator_handle) {
   if (!allocator) return 0;
   size_t free_bytes = 0;
   size_t largest_free_block = 0;
-  allocator->free_statistics(free_bytes, largest_free_block);
+  allocator->free_statistics_serialized(free_bytes, largest_free_block);
   return free_bytes;
 }
 
@@ -1239,7 +1306,7 @@ uint64_t nrq_memory_allocator_fragmentation_bytes(uint64_t allocator_handle) {
   if (!allocator) return 0;
   size_t free_bytes = 0;
   size_t largest_free_block = 0;
-  allocator->free_statistics(free_bytes, largest_free_block);
+  allocator->free_statistics_serialized(free_bytes, largest_free_block);
   return free_bytes > largest_free_block ? free_bytes - largest_free_block : 0;
 }
 
@@ -1272,7 +1339,7 @@ NrqMemoryProfile nrq_memory_profiler_capture(void) {
   auto sample = [&](const Allocator* allocator) {
     size_t allocator_free = 0;
     size_t allocator_largest = 0;
-    allocator->free_statistics(allocator_free, allocator_largest);
+    allocator->free_statistics_serialized(allocator_free, allocator_largest);
     free_bytes += allocator_free;
     largest_free_block = std::max(largest_free_block, allocator_largest);
   };
@@ -1355,9 +1422,9 @@ void nrq_memory_secure_release(void* pointer) {
   if (found == live_allocations.end())
     nrq_runtime_fatal("memory.secure_release received an invalid pointer");
   SecureZeroMemory(pointer, found->second.bytes);
-  if (!found->second.allocator->can_deallocate(pointer))
+  if (!found->second.allocator->can_deallocate_serialized(pointer))
     nrq_runtime_fatal("stack allocator allocations must be deallocated in LIFO order");
-  found->second.allocator->deallocate(pointer);
+  found->second.allocator->deallocate_serialized(pointer);
   record_deallocation_profile(found->second.bytes);
   live_allocations.erase(found);
 }
