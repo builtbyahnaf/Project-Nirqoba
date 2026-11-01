@@ -2934,6 +2934,10 @@ Type TypeChecker::check_call(CallExpr& call) {
       } else if (source && active_borrows.find(source->allocation_id) != active_borrows.end()) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                            "cannot transfer an owner while another argument borrows it");
+      } else if (source && std::find(ownership_transfers.begin(), ownership_transfers.end(),
+                                     source->allocation_id) != ownership_transfers.end()) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                           "the same owner cannot be transferred to multiple parameters in one call");
       } else if (!(source && source->owns_allocation && !source->moved) &&
                  call.arguments()[i]->ownership() != ValueOwnership::Owned) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
@@ -3007,6 +3011,11 @@ Type TypeChecker::check_call(CallExpr& call) {
                source && active_borrows.find(source->allocation_id) != active_borrows.end()) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "cannot transfer an owner while another argument borrows it");
+    } else if (source && source->owns_allocation && !source->moved &&
+               std::find(ownership_transfers.begin(), ownership_transfers.end(),
+                         source->allocation_id) != ownership_transfers.end()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                         "the same owner cannot be transferred to multiple parameters in one call");
     } else if (!expects_shared &&
                !(source && source->owns_allocation && !source->moved) &&
                call.arguments()[i]->ownership() != ValueOwnership::Owned) {
