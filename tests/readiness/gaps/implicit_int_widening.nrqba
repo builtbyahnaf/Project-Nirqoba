@@ -1,0 +1,11 @@
+// GAP PROBE: assigning an `int` literal to an `i32` field.
+struct Counter {
+    i32 hits;
+}
+
+int function main() {
+    var counter: Counter = Counter {0};
+    counter.hits = counter.hits + 1;
+    print(counter.hits);
+    return 0;
+}

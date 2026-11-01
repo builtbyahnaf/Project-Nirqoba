@@ -1,0 +1,12 @@
+// Runtime cost: 1,000,000 explicit allocate/deallocate pairs through the registry.
+int function main() {
+    var checksum = 0;
+    for (var i = 0; i < 1000000; i += 1) {
+        var block = memory.allocate<byte>(64);
+        block[0] = (i % 251) as byte;
+        checksum += block[0] as int;
+        memory.deallocate(block);
+    }
+    print(checksum);
+    return 0;
+}

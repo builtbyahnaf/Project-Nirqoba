@@ -350,7 +350,11 @@ void TypeChecker::check_function(FunctionDecl& function) {
   loop_depth_ = 0;
 
   for (const Parameter& parameter : function.parameters()) {
-    Symbol symbol{parameter.name, parameter.type, BindingKind::Let,
+    // Parameters are assignable inside the body. Nothing in the specification
+    // makes them `let`, and there is no syntax to opt into mutability; treating
+    // them as immutable would make it impossible to modify an array or struct
+    // passed to a helper function at all.
+    Symbol symbol{parameter.name, parameter.type, BindingKind::Var,
                   parameter.location};
     if (parameter.type.is_pointer()) symbol.allocation_id = next_allocation_id_++;
     if (!symbols_.declare(move(symbol))) {
@@ -939,7 +943,10 @@ Type TypeChecker::check_expression(Expr& expr) {
         case BinaryOp::LessEqual:
         case BinaryOp::Greater:
         case BinaryOp::GreaterEqual:
-          if (!lhs_type.is_numeric() || !rhs_type.is_numeric()) {
+          // `char` is an ordered code unit, so range checks such as
+          // `c >= '0' && c <= '9'` are ordinary comparisons.
+          if ((!lhs_type.is_numeric() && !lhs_type.is_char()) ||
+              (!rhs_type.is_numeric() && !rhs_type.is_char())) {
             diagnostics_.error(diag::kTypeMismatch, binary.location(),
                                "comparison operator '" + spelling + "' requires numeric operands, found '" +
                                    lhs_type.to_string() + "' and '" + rhs_type.to_string() + "'");

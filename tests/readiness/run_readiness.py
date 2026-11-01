@@ -22,6 +22,7 @@ import os
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -75,7 +76,7 @@ def first_error_line(stderr: str) -> str:
 
 def check_program(compiler: Path, source: Path) -> dict:
     result = run_program(compiler, source)
-    expect_path = source.with_name("expect.txt")
+    expect_path = source.with_suffix(".expect.txt")
     expected = expect_path.read_text(encoding="utf-8").replace("\r\n", "\n") if expect_path.exists() else None
     status = "pass"
     detail = ""
@@ -97,29 +98,104 @@ def check_program(compiler: Path, source: Path) -> dict:
     }
 
 
-def benchmark(compiler: Path, source: Path, runs: int) -> dict:
-    samples = []
+def gap_probe(compiler: Path, source: Path) -> dict:
+    """Build probe: does the whole pipeline accept this construct?"""
+    completed = subprocess.run(
+        [str(compiler), "build", str(source)],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT_SECONDS,
+    )
+    stderr = completed.stderr.replace("\r\n", "\n")
+    available = completed.returncode == 0 and not [
+        line for line in stderr.splitlines() if "error" in line
+    ]
+    return {
+        "name": source.stem,
+        "path": str(source.relative_to(ROOT)).replace("\\", "/"),
+        "status": "available" if available else "unavailable",
+        "detail": "" if available else first_error_line(stderr),
+    }
+
+
+def build_to(compiler: Path, source: Path, directory: Path) -> tuple[Path | None, str]:
+    """Compiles `source` into `directory`; returns the executable or a diagnostic."""
+    completed = subprocess.run(
+        [str(compiler), "build", str(source)],
+        cwd=str(directory),
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT_SECONDS,
+    )
+    if completed.returncode != 0:
+        return None, first_error_line(completed.stderr.replace("\r\n", "\n")) or f"exit {completed.returncode}"
+    for candidate in (directory / f"{source.stem}.exe", directory / source.stem):
+        if candidate.exists():
+            return candidate, ""
+    return None, "build produced no executable"
+
+
+def time_executable(executable: Path, runs: int) -> tuple[list[float], str, int]:
+    samples: list[float] = []
     stdout = ""
-    status = "pass"
-    detail = ""
+    code = 0
     for _ in range(runs):
-        result = run_program(compiler, source)
-        if result["exit"] != 0:
-            status = "failed"
-            detail = first_error_line(result["stderr"]) or f"exit {result['exit']}"
+        started = time.perf_counter()
+        completed = subprocess.run(
+            [str(executable)],
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_SECONDS,
+        )
+        samples.append(time.perf_counter() - started)
+        code = completed.returncode
+        stdout = completed.stdout
+        if code != 0:
             break
-        samples.append(result["seconds"])
-        stdout = result["stdout"]
+    return samples, stdout, code
+
+
+def benchmark(compiler: Path, source: Path, runs: int, workdir: Path) -> dict:
+    executable, detail = build_to(compiler, source, workdir)
+    if executable is None:
+        return {
+            "name": source.stem,
+            "path": str(source.relative_to(ROOT)).replace("\\", "/"),
+            "status": "failed",
+            "detail": detail,
+            "runs": 0,
+            "median_seconds": None,
+            "min_seconds": None,
+            "max_seconds": None,
+            "stdout": "",
+        }
+    samples, stdout, code = time_executable(executable, runs)
+    status = "pass" if code == 0 and samples else "failed"
     return {
         "name": source.stem,
         "path": str(source.relative_to(ROOT)).replace("\\", "/"),
         "status": status,
-        "detail": detail,
+        "detail": "" if status == "pass" else f"exit {code}",
         "runs": len(samples),
-        "median_seconds": round(statistics.median(samples), 3) if samples else None,
-        "min_seconds": round(min(samples), 3) if samples else None,
-        "max_seconds": round(max(samples), 3) if samples else None,
+        "median_seconds": round(statistics.median(samples), 4) if samples else None,
+        "min_seconds": round(min(samples), 4) if samples else None,
+        "max_seconds": round(max(samples), 4) if samples else None,
         "stdout": stdout.strip(),
+    }
+
+
+def startup_baseline(compiler: Path, runs: int, workdir: Path) -> dict:
+    """Times an empty program so process startup can be separated from work."""
+    source = workdir / "__baseline.nrqba"
+    source.write_text("int function main() {\n    return 0;\n}\n", encoding="utf-8")
+    executable, detail = build_to(compiler, source, workdir)
+    if executable is None:
+        return {"median_seconds": None, "detail": detail}
+    samples, _, _ = time_executable(executable, runs)
+    return {
+        "median_seconds": round(statistics.median(samples), 4) if samples else None,
+        "detail": "",
     }
 
 
@@ -137,12 +213,16 @@ def main() -> int:
 
     programs = sorted((READINESS / "programs").glob("*.nrqba"))
     benchmarks = sorted((READINESS / "benchmarks").glob("*.nrqba"))
+    gaps = sorted((READINESS / "gaps").glob("*.nrqba"))
     if not programs and not benchmarks:
         print("no readiness programs found", file=sys.stderr)
         return 2
 
     program_results = [check_program(compiler, source) for source in programs]
-    benchmark_results = [benchmark(compiler, source, args.runs) for source in benchmarks]
+    gap_results = [gap_probe(compiler, source) for source in gaps]
+    workdir = Path(tempfile.mkdtemp(prefix="nrq-readiness-"))
+    baseline = startup_baseline(compiler, args.runs, workdir)
+    benchmark_results = [benchmark(compiler, source, args.runs, workdir) for source in benchmarks]
 
     passed = sum(1 for r in program_results if r["status"] == "pass")
     print(f"Readiness programs: {passed}/{len(program_results)} pass")
@@ -150,7 +230,14 @@ def main() -> int:
         suffix = f" — {result['detail']}" if result["detail"] else ""
         print(f"  [{result['status']:>11}] {result['name']:<24} {result['seconds']:>6.2f}s{suffix}")
 
-    print(f"\nBenchmarks:")
+    print("\nGap probes (language features the corpus had to work around):")
+    for result in gap_results:
+        suffix = f" — {result['detail']}" if result["detail"] else ""
+        print(f"  [{result['status']:>11}] {result['name']:<24}{suffix}")
+
+    print("\nBenchmarks:")
+    if baseline["median_seconds"] is not None:
+        print(f"  process startup baseline: {baseline['median_seconds']:.4f}s (n={args.runs})")
     for result in benchmark_results:
         timing = (
             f"median {result['median_seconds']:.3f}s "
@@ -163,7 +250,9 @@ def main() -> int:
 
     report = {
         "compiler": str(compiler),
+        "startup_baseline_seconds": baseline["median_seconds"],
         "programs": program_results,
+        "gaps": gap_results,
         "benchmarks": benchmark_results,
     }
     if args.json:

@@ -224,6 +224,7 @@ class FunctionTranslator {
     for (const tir::Op& op : tir_fn_.operations()) {
       if (!translate_op(op)) return false;
     }
+    flush_gc_root_registrations();
     return true;
   }
 
@@ -238,8 +239,48 @@ class FunctionTranslator {
     values_[static_cast<std::size_t>(v.id)] = mlir_val;
   }
 
+  // Every stack slot is allocated in the function's entry block, never at the
+  // point of the `tir.alloca`. A loop body re-executes its instructions, and an
+  // alloca executed per iteration grows the stack without bound until the
+  // process dies; hoisting also lets the backend fold the frame into one
+  // prologue adjustment.
+  mlir::Value alloca_at_entry(mlir::Type element_type, mlir::Location loc) {
+    if (entry_block_ == nullptr) return {};
+    mlir::OpBuilder::InsertionGuard guard(builder_);
+    builder_.setInsertionPointToStart(entry_block_);
+    mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
+    return builder_.create<mlir::LLVM::AllocaOp>(
+        loc, llvm_ptr_type(ctx_), element_type, one).getResult();
+  }
+
+  // Root registration is likewise a per-activation action: the same slot must
+  // be registered once, not once per loop iteration. Registrations are queued
+  // and emitted into the entry block after the body is translated.
   void register_gc_root(mlir::Value slot, const Type& value_type,
                         mlir::Location loc) {
+    std::vector<uint64_t> offsets;
+    collect_managed_reference_offsets(value_type, 0, offsets);
+    if (offsets.empty()) return;
+    pending_gc_roots_.push_back(PendingGcRoot{slot, value_type, loc});
+  }
+
+  void flush_gc_root_registrations() {
+    if (pending_gc_roots_.empty() || entry_block_ == nullptr) return;
+    mlir::OpBuilder::InsertionGuard guard(builder_);
+    if (mlir::Operation* terminator = entry_block_->getTerminator()) {
+      builder_.setInsertionPoint(terminator);
+    } else {
+      builder_.setInsertionPointToEnd(entry_block_);
+    }
+    for (const PendingGcRoot& root : pending_gc_roots_) {
+      emit_gc_root_registration(root.slot, root.type, root.loc);
+    }
+    pending_gc_roots_.clear();
+  }
+
+  void emit_gc_root_registration(mlir::Value slot, const Type& value_type,
+                                 mlir::Location loc) {
     std::vector<uint64_t> offsets;
     collect_managed_reference_offsets(value_type, 0, offsets);
     if (offsets.empty()) return;
@@ -250,10 +291,8 @@ class FunctionTranslator {
                                           llvm_ptr_type(ctx_), builder_.getI64Type()});
     auto offsets_type = mlir::LLVM::LLVMArrayType::get(
         builder_.getI64Type(), static_cast<unsigned>(offsets.size()));
-    mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
-        loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
-    mlir::Value offsets_slot = builder_.create<mlir::LLVM::AllocaOp>(
-        loc, llvm_ptr_type(ctx_), offsets_type, one).getResult();
+    mlir::Value offsets_slot = alloca_at_entry(offsets_type, loc);
+    if (!offsets_slot) return;
     mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
         loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
     for (std::size_t index = 0; index < offsets.size(); ++index) {
@@ -403,10 +442,11 @@ class FunctionTranslator {
           diag_.error("NRQ4005", op.location, "internal: alloca of unsupported type");
           return false;
         }
-        mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
-            loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
-        mlir::Value slot = builder_.create<mlir::LLVM::AllocaOp>(
-            loc, llvm_ptr_type(ctx_), elem_type, one).getResult();
+        mlir::Value slot = alloca_at_entry(elem_type, loc);
+        if (!slot) {
+          diag_.error("NRQ4005", op.location, "internal: no entry block for a stack slot");
+          return false;
+        }
         std::vector<uint64_t> root_offsets;
         collect_managed_reference_offsets(op.result.type, 0, root_offsets);
         if (!root_offsets.empty()) {
@@ -1347,14 +1387,10 @@ class FunctionTranslator {
       }
 
       case tir::OpKind::ArrayAlloca: {
-        // Alloca for a fixed-size array: llvm.alloca count x elem_type.
+        // Alloca for a fixed-size array, hoisted into the entry block.
         mlir::Type arr_mlir = tir_type_to_mlir(op.result.type, ctx_, builder_);
         if (!arr_mlir) return true;
-        mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
-            loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
-        mlir::Value ptr = builder_.create<mlir::LLVM::AllocaOp>(
-            loc, llvm_ptr_type(ctx_), arr_mlir, one).getResult();
-        set(op.result, ptr);
+        set(op.result, alloca_at_entry(arr_mlir, loc));
         return true;
       }
 
@@ -1512,6 +1548,12 @@ class FunctionTranslator {
   mlir::MLIRContext* ctx_;
   DiagnosticEngine& diag_;
   mlir::Block* entry_block_;
+  struct PendingGcRoot {
+    mlir::Value slot;
+    Type type;
+    mlir::Location loc;
+  };
+  std::vector<PendingGcRoot> pending_gc_roots_;
   std::vector<mlir::Value> values_;
   std::unordered_map<int, mlir::Block*> label_blocks_;
   std::unordered_map<std::string, std::string> string_literals_;

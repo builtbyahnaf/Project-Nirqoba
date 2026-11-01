@@ -1,0 +1,43 @@
+// Regression: struct-typed annotations lost their field layout, so a struct
+// local was an "unsized type" that could not be allocated or indexed, and a
+// member read on a struct value crashed the compiler.
+struct Point {
+    int x;
+    int y;
+}
+
+int function distance_squared(Point a, Point b) {
+    let dx = a.x - b.x;
+    let dy = a.y - b.y;
+    return dx * dx + dy * dy;
+}
+
+// A parameter is assignable inside the body. Aggregate arguments are values, so
+// the callee fills its own copy and returns the result; the caller's array is
+// untouched (see docs/readiness.md).
+int function fill(int[3] buffer, int seed) {
+    buffer[0] = seed;
+    buffer[1] = seed + 1;
+    buffer[2] = seed + 2;
+    return buffer[0] + buffer[1] + buffer[2];
+}
+
+int function main() {
+    var origin: Point = Point {0, 0};
+    var corner: Point = Point {x: 3, y: 4};
+    print(distance_squared(origin, corner));
+
+    var points: Point[2] = [Point {1, 2}, Point {7, 8}];
+    print(points[1].y);
+
+    // Nested array dimensions read left to right: two rows of three.
+    var grid: int[2][3] = [[1, 2, 3], [4, 5, 6]];
+    print(grid[1][2]);
+
+    var buffer: int[3] = [0, 0, 0];
+    print(fill(buffer, 10));
+    print(buffer[0] + buffer[1] + buffer[2]);
+
+    print('m' >= 'a');
+    return 0;
+}

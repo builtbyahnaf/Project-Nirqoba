@@ -1,0 +1,28 @@
+// Mutual recursion, towers of hanoi, and a parameter-passing pattern.
+int function is_even(int n) {
+    if (n == 0) {
+        return 1;
+    }
+    return is_odd(n - 1);
+}
+
+int function is_odd(int n) {
+    if (n == 0) {
+        return 0;
+    }
+    return is_even(n - 1);
+}
+
+int function hanoi_moves(int disks) {
+    if (disks <= 0) {
+        return 0;
+    }
+    return 2 * hanoi_moves(disks - 1) + 1;
+}
+
+int function main() {
+    print(is_even(10));
+    print(is_odd(10));
+    print(hanoi_moves(10));
+    return 0;
+}

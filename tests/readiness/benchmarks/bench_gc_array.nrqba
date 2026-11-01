@@ -1,0 +1,23 @@
+// Managed-heap throughput: allocate, fill and read a 1,000,000-element array,
+// then collect explicitly.
+int function main() {
+    var values = array.allocate<int>(1000000);
+    for (var i = 0; i < 1000000; i += 1) {
+        values[i] = i % 97;
+    }
+    var total = 0;
+    for (var i = 0; i < 1000000; i += 1) {
+        total += values[i];
+    }
+    print(total);
+
+    var collections = 0;
+    for (var round = 0; round < 20; round += 1) {
+        var scratch = array.allocate<int>(50000);
+        scratch[0] = round;
+        gc.collect();
+        collections += 1;
+    }
+    print(collections);
+    return 0;
+}

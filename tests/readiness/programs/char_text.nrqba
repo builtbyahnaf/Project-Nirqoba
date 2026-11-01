@@ -1,0 +1,29 @@
+// Text as char arrays: counting, in-place reversal, char comparison.
+bool function is_vowel(char c) {
+    return c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u';
+}
+
+int function main() {
+    var text: char[11] = ['h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd'];
+    var vowels = 0;
+    for (var i = 0; i < 11; i += 1) {
+        if (is_vowel(text[i])) {
+            vowels += 1;
+        }
+    }
+    print(vowels);
+
+    var left = 0;
+    var right = 10;
+    while (left < right) {
+        let tmp = text[left];
+        text[left] = text[right];
+        text[right] = tmp;
+        left += 1;
+        right -= 1;
+    }
+    for (var i = 0; i < 11; i += 1) {
+        print(text[i]);
+    }
+    return 0;
+}

@@ -1,0 +1,7 @@
+// GAP PROBE: dynamic array growth (specified in SYNTAX.md 4.2).
+int function main() {
+    var numbers: int[] = [1, 2, 3];
+    numbers.push(4);
+    print(numbers.length);
+    return 0;
+}
