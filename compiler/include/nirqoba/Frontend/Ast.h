@@ -44,12 +44,15 @@ class Expr {
   void set_type(Type type) { type_ = type; }
   ValueOwnership ownership() const { return ownership_; }
   void set_ownership(ValueOwnership ownership) { ownership_ = ownership; }
+  bool transfers_ownership() const { return transfers_ownership_; }
+  void set_transfers_ownership(bool transfer = true) { transfers_ownership_ = transfer; }
 
  private:
   Kind kind_;
   SourceLocation location_;
   Type type_;
   ValueOwnership ownership_ = ValueOwnership::Trivial;
+  bool transfers_ownership_ = false;
 };
 
 using ExprPtr = std::unique_ptr<Expr>;
@@ -349,6 +352,8 @@ class VariableDeclarationStmt : public Stmt {
     has_annotation_ = true;
   }
   const Expr& initializer() const { return *initializer_; }
+  const std::string& cleanup_callee() const { return cleanup_callee_; }
+  void set_cleanup_callee(std::string callee) { cleanup_callee_ = std::move(callee); }
 
  private:
   BindingKind binding_;
@@ -356,6 +361,7 @@ class VariableDeclarationStmt : public Stmt {
   bool has_annotation_;
   Type annotation_;
   ExprPtr initializer_;
+  std::string cleanup_callee_;
 };
 
 class DestructuringStmt : public Stmt {
@@ -389,6 +395,8 @@ class AssignmentStmt : public Stmt {
   Expr& target() { return *target_; }
   const Expr& value() const { return *value_; }
   Expr& value() { return *value_; }
+  const std::string& cleanup_callee() const { return cleanup_callee_; }
+  void set_cleanup_callee(std::string callee) { cleanup_callee_ = std::move(callee); }
 
   bool is_simple_name() const { return target_ != nullptr && target_->kind() == Expr::Kind::Name; }
   const std::string& name() const {
@@ -401,6 +409,7 @@ class AssignmentStmt : public Stmt {
  private:
   ExprPtr target_;
   ExprPtr value_;
+  std::string cleanup_callee_;
 };
 
 class CompoundAssignmentStmt : public Stmt {

@@ -10,7 +10,6 @@ int function main() {
 
 void function consume(shared byte* reference) {
     print(memory.shared_count(reference));
-    memory.shared_release(reference);
 }
 
 shared byte* function make_shared() {

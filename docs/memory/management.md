@@ -1,4 +1,4 @@
-# Managed and explicit memory
+﻿# Managed and explicit memory
 
 Nirqoba currently has explicit raw allocations and a distinct tracing-GC domain.
 `array.allocate<T>(count)` creates a managed array and `managed<T>` marks
@@ -7,16 +7,9 @@ unreachable objects even when automatic collection is disabled. The runtime
 starts with automatic collection disabled. Programs that explicitly use the
 GC domain can enable automatic collection with `gc.enable()`; explicit
 `gc.collect()` always remains available. The Phase 6 Upgrade decision is to make
-ownership-based memory the language default. This is a migration target;
-ownership analysis is not yet implemented. GC objects
-remain explicitly managed and must not be silently treated as owned allocations.
+ownership-based memory the language default. The compiler now tracks pointer ownership, moves, borrows, shared references, and deterministic cleanup for recognized resource producers. GC objects remain explicitly managed and cannot be released through the owned allocator.
 
-The target memory domains are owned values (move and deterministic drop),
-borrowed references (non-owning and lifetime checked), explicitly shared
-references (reference counted), GC-managed references (traced, opt-in), and
-raw/unsafe pointers. Until syntax is specified and the compiler enforces these
-rules, programs must use the existing allocation APIs and `defer` cleanup. No
-lifetime or use-after-move safety is implied by this target design.
+The implemented memory domains include owned pointers (move and deterministic cleanup), borrowed function parameters (non-owning and lifetime constrained), explicitly shared references (reference counted), and GC-managed references (traced and opt-in). Raw pointers remain available only within the current low-level subset; full unsafe scopes and aggregate ownership are not implemented.
 
 `gc.get_statistics()` returns `allocated_bytes`, `collected_bytes`,
 `collections`, and `live_objects`. The collector is non-moving. It discovers
@@ -84,10 +77,7 @@ See [allocator strategies](allocators.md) for selection and lifetime rules.
 `defer call(...)` captures call arguments when registered and runs calls in
 LIFO order when a lexical block exits, including return, break, and continue.
 It can release explicit allocations and restore a prior allocator selection.
-Owned/borrowed/shared types, native resource wrapper types, and exception-unwind
-cleanup remain unimplemented: the roadmap requires their syntax to be settled in
-the language specification first, and this document currently defines no such
-syntax. GC does not provide timely finalization.
+Recognized owned pointers and resources are cleaned automatically at lexical exit, including return, break, and continue. Explicit `defer` may select a custom cleanup call and overrides the inferred automatic cleanup for that resource. Cleanup on exception unwinding remains unavailable because the language has no exception model. GC does not provide timely finalization.
 
 
 memory.cpu_features() returns a bit mask of CPU features the Windows operating system reports usable by this process: bit 0 is SSE2, bit 1 is AVX, and bit 2 is AVX2. A set bit means the runtime reports support; callers should still use an appropriate target-specific code path and retain a fallback. This API reports only the currently implemented feature set.
@@ -130,3 +120,6 @@ Raw pointers do not satisfy owning function parameters or pointer return types.
 Declare an explicit `borrow` or `borrow mut` parameter for temporary access; a
 borrowed or raw pointer cannot escape through a pointer return. Explicit owning
 producers and previously tracked owners may be transferred.
+
+
+

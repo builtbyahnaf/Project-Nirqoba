@@ -1,0 +1,19 @@
+int function main() {
+    memory.profiler.start();
+    {
+        let first = memory.allocate<byte>(8);
+        let second = memory.shared_allocate<byte>(16);
+        memory.deallocate(first);
+        let replacement = memory.allocate<byte>(12);
+    }
+    return_owner_early();
+    let report = memory.profiler.capture();
+    print(report.current_bytes);
+    memory.profiler.stop();
+    return 0;
+}
+
+void function return_owner_early() {
+    let value = memory.allocate<byte>(24);
+    return;
+}

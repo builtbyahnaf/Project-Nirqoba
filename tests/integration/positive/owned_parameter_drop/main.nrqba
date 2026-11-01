@@ -1,0 +1,12 @@
+void function consume(byte* buffer) {
+}
+
+int function main() {
+    memory.profiler.start();
+    let buffer = memory.allocate<byte>(8);
+    consume(buffer);
+    let report = memory.profiler.capture();
+    print(report.current_bytes);
+    memory.profiler.stop();
+    return 0;
+}

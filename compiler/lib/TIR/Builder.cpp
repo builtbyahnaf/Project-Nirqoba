@@ -87,6 +87,7 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
   loop_stack_.clear();
   deferred_expressions_.clear();
   push_scope();
+  deferred_expressions_.emplace_back();
 
   for (const Parameter& parameter : function.parameters()) {
     const ValueOwnership ownership = parameter.shared
@@ -116,9 +117,19 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
     function_ir->add_operation(move(store));
 
     scopes_.back().emplace(parameter.name, slot);
+    if (parameter.type.is_pointer() && !parameter.borrowed) {
+      DeferredCall cleanup;
+      cleanup.callee = parameter.shared ? "memory.shared_release" : "memory.deallocate";
+      cleanup.location = parameter.location;
+      cleanup.automatic = true;
+      cleanup.owner_slot = slot;
+      deferred_expressions_.front().push_back(std::move(cleanup));
+    }
   }
 
   lower_block(function.body(), *function_ir);
+  if (!block_terminated(*function_ir)) emit_deferred_from(0, *function_ir);
+  deferred_expressions_.clear();
   pop_scope();
 
   // Every block must end in a terminator. A void function may fall off the end
@@ -165,6 +176,7 @@ void TirBuilder::emit_deferred_from(size_t scope_depth, tir::Function& function)
   for (size_t depth = deferred_expressions_.size(); depth > scope_depth; --depth) {
     const auto& expressions = deferred_expressions_[depth - 1];
     for (auto deferred = expressions.rbegin(); deferred != expressions.rend(); ++deferred) {
+      if (!deferred->active) continue;
       if (deferred->callee == "print" && deferred->arguments.size() == 1) {
         tir::Op print;
         print.kind = tir::OpKind::Print;
@@ -178,6 +190,16 @@ void TirBuilder::emit_deferred_from(size_t scope_depth, tir::Function& function)
       call.location = deferred->location;
       call.callee = deferred->callee;
       call.arguments = deferred->arguments;
+      if (deferred->automatic && deferred->owner_slot.is_valid()) {
+        tir::Value owner = function.allocate_value(deferred->owner_slot.type);
+        tir::Op load;
+        load.kind = tir::OpKind::Load;
+        load.location = deferred->location;
+        load.lhs = deferred->owner_slot;
+        load.result = owner;
+        function.add_operation(std::move(load));
+        call.arguments = {owner};
+      }
       if (deferred->result_type.is_valid() && !deferred->result_type.is_void())
         call.result = function.allocate_value(deferred->result_type);
       function.add_operation(move(call));
@@ -267,6 +289,14 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       function.add_operation(std::move(store));
 
       scopes_.back().emplace(declaration.name(), slot);
+      if (!declaration.cleanup_callee().empty()) {
+        DeferredCall cleanup;
+        cleanup.callee = declaration.cleanup_callee();
+        cleanup.location = declaration.location();
+        cleanup.automatic = true;
+        cleanup.owner_slot = slot;
+        deferred_expressions_.back().push_back(std::move(cleanup));
+      }
       return;
     }
     case Stmt::Kind::Assignment: {
@@ -285,6 +315,18 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       store.lhs = slot;
       store.result = slot;
       function.add_operation(std::move(store));
+      for (auto& scope : deferred_expressions_)
+        for (auto& pending : scope)
+          if (pending.automatic && pending.owner_slot.id == slot.id)
+            pending.active = false;
+      if (!assignment.cleanup_callee().empty()) {
+        DeferredCall cleanup;
+        cleanup.callee = assignment.cleanup_callee();
+        cleanup.location = assignment.location();
+        cleanup.automatic = true;
+        cleanup.owner_slot = slot;
+        deferred_expressions_.back().push_back(std::move(cleanup));
+      }
       return;
     }
     case Stmt::Kind::CompoundAssignment: {
@@ -540,8 +582,18 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       lowered.location = call.location();
       lowered.result_type = call.type();
       lowered.arguments.reserve(call.arguments().size());
-      for (const ExprPtr& argument : call.arguments())
+      for (const ExprPtr& argument : call.arguments()) {
+        if (argument->kind() == Expr::Kind::Name) {
+          const tir::Value slot = lookup_slot(
+              static_cast<const NameExpr&>(*argument).name());
+          for (auto& scope : deferred_expressions_)
+            for (auto& pending : scope)
+              if (pending.automatic && pending.active && slot.is_valid() &&
+                  pending.owner_slot.id == slot.id)
+                pending.active = false;
+        }
         lowered.arguments.push_back(lower_expression(*argument, function));
+      }
       deferred_expressions_.back().push_back(std::move(lowered));
       return;
     }
@@ -619,6 +671,13 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         diagnostics_.error(kUnresolvedSymbol, name.location(),
                            "internal: variable '" + name.name() + "' has no TIR slot");
         return tir::Value{};
+      }
+      if (expr.transfers_ownership()) {
+        for (auto& scope : deferred_expressions_)
+          for (auto& pending : scope)
+            if (pending.automatic && pending.active &&
+                pending.owner_slot.id == slot.id)
+              pending.active = false;
       }
       tir::Value result = function.allocate_value(slot.type, name.ownership());
       tir::Op op;
