@@ -77,3 +77,9 @@ Still not implemented:
   on the concurrency phases and the GPU runtime.
 - Profiler overhead measurement. Allocation benchmarks exist, but the cost of
   running with the profiler enabled versus disabled has not been measured.
+
+## 14. CPU capability query — 2026-11-01
+
+Added `memory.cpu_features()` backed by `IsProcessorFeaturePresent` on Windows. The returned `u64` mask currently defines SSE2 (bit 0), AVX (bit 1), and AVX2 (bit 2). The operating system's usable-feature report is queried at runtime; no unsupported capabilities are inferred. Compiler semantic checking and LLVM lowering are wired, and the positive integration case checks the x64 SSE2 baseline.
+
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and the full integration suite passed 32/32. The feature set is Windows-only, matching the runtime's current supported platform.
