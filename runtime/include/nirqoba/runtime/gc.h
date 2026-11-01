@@ -44,6 +44,8 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
 void nrq_gc_root_register_array(void* data, size_t count, size_t element_size,
                                 const size_t* reference_offsets,
                                 size_t reference_count);
+// Ordinary root slots must be unregistered by a thread that registered them.
+// Repeated array roots are external storage and may be unregistered by owner.
 void nrq_gc_root_unregister(void** slot);
 void nrq_gc_root_store(void** slot, void* value);
 void nrq_gc_root_copy(void* destination, const void* source, size_t bytes);
