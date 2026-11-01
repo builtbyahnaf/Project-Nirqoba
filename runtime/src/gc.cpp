@@ -347,20 +347,24 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   void* header_storage = page->storage + page->used;
   page->used += span;
   auto* header = new (header_storage) ObjectHeader();
+  auto rollback_reservation = [&]() {
+    destroy_object_storage(header);
+    page->used -= span;
+  };
   header->page = page;
   void* object = static_cast<unsigned char*>(header_storage) + sizeof(ObjectHeader);
   std::memset(object, 0, bytes);
   try {
     if (reference_count != 0) {
       if (!reference_offsets || reference_count > SIZE_MAX / sizeof(size_t)) {
-        destroy_object_storage(header);
+        rollback_reservation();
         return nullptr;
       }
       header->reference_offsets.assign(reference_offsets,
                                        reference_offsets + reference_count);
       for (size_t offset : header->reference_offsets) {
         if (offset > element_size || sizeof(void*) > element_size - offset) {
-          destroy_object_storage(header);
+          rollback_reservation();
           return nullptr;
         }
       }
@@ -371,11 +375,11 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     header->trace = trace;
     header->next = objects;
       if (!object_index.insert(object, header)) {
-        destroy_object_storage(header);
+        rollback_reservation();
         return nullptr;
       }
   } catch (...) {
-    destroy_object_storage(header);
+    rollback_reservation();
     return nullptr;
   }
   objects = header;
