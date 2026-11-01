@@ -925,6 +925,10 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                              ? "aggregate.owned_drop"
                              : target_type.is_owned_array() ? "array.owned_release"
                                                             : "memory.deallocate";
+    } else if (contains_owned_array(target_type) &&
+               assignment.value().ownership() == ValueOwnership::Owned) {
+      owns_allocation = true;
+      cleanup_callee = cleanup_for_type(target_type);
     } else if (source && source->owns_allocation && !source->moved) {
       if (symbols_.has_live_borrow(source->allocation_id)) {
         diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
