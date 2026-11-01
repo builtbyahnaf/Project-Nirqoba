@@ -94,6 +94,8 @@ Use `borrow T* name` for an immutable pointer borrow and `borrow mut T* name` fo
 
 `defer call(...)` captures call arguments when registered and runs calls in LIFO order on lexical block exit, including return, break, and continue. It can release explicit allocations, unpin GC objects, unlock mutexes, close files, and restore allocator selection. An explicit deferred cleanup overrides the inferred cleanup for that owner. Cleanup during exception unwinding is unavailable because the language has no exception model.
 
+Owned, shared, and borrowed raw pointers cannot be embedded in aggregate fields because fields do not yet declare an ownership contract. GC-managed and raw pointer fields remain non-owning.
+
 ## Shared references
 
 `memory.shared_allocate<T>(bytes)` creates a reference-counted allocation. `memory.shared_retain(pointer)` creates another release token, `memory.shared_release(pointer)` consumes one token, and `memory.shared_count(pointer)` reports the current count. Use `defer memory.shared_release(reference)` for explicit lexical cleanup; shared parameters are released automatically when the callee exits.

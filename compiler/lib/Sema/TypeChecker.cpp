@@ -67,6 +67,15 @@ static string cleanup_for_type(const Type& type) {
   return contains_owned_array(type) ? "aggregate.owned_drop" : string{};
 }
 
+static bool has_untracked_pointer_ownership(const Type& type,
+                                            ValueOwnership ownership) {
+  if (!type.is_pointer()) return false;
+  return ownership == ValueOwnership::Owned ||
+         ownership == ValueOwnership::Shared ||
+         ownership == ValueOwnership::Borrowed ||
+         ownership == ValueOwnership::MutableBorrowed;
+}
+
 static bool statement_can_fall_through(const Stmt& stmt);
 
 static bool expression_creates_owned_pointer(const Expr& expr) {
@@ -826,6 +835,13 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                        "owned fields cannot be replaced individually; move the whole aggregate");
     return;
   }
+  if ((assignment.target().kind() == Expr::Kind::MemberAccess ||
+       assignment.target().kind() == Expr::Kind::Index) &&
+      has_untracked_pointer_ownership(target_type, assignment.value().ownership())) {
+    diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                       "owned, shared, and borrowed pointers cannot be stored in aggregate fields");
+    return;
+  }
 
   const Symbol* symbol = find_root_symbol(assignment.target(), symbols_);
   if (assignment.target().kind() == Expr::Kind::Index &&
@@ -1490,6 +1506,14 @@ Type TypeChecker::check_array_literal(ArrayLiteralExpr& expr) {
     }
   }
 
+  if (elem_type.is_pointer()) {
+    for (const ExprPtr& element : elements) {
+      if (has_untracked_pointer_ownership(element->type(), element->ownership()))
+        diagnostics_.error(diag::kTypeMismatch, element->location(),
+                           "owned, shared, and borrowed pointers cannot be embedded in arrays");
+    }
+  }
+
   if (!ok) return Type::error();
   if (contains_owned_array(elem_type)) {
     for (const ExprPtr& element : elements) {
@@ -1521,6 +1545,9 @@ Type TypeChecker::check_tuple_literal(TupleLiteralExpr& expr) {
     Type t = check_expression(const_cast<Expr&>(*elem));
     element_types.push_back(t);
     if (!t.is_valid()) ok = false;
+    if (has_untracked_pointer_ownership(t, elem->ownership()))
+      diagnostics_.error(diag::kTypeMismatch, elem->location(),
+                         "owned, shared, and borrowed pointers cannot be embedded in tuples");
     if (contains_owned_array(t)) {
       Expr& value = const_cast<Expr&>(*elem);
       const Symbol* source = value.kind() == Expr::Kind::Name
@@ -1697,6 +1724,11 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
                                fields[i].type.to_string() + "', but was given '" +
                                init_type.to_string() + "'");
       }
+      if (has_untracked_pointer_ownership(fields[i].type,
+                                          expr.positional_inits()[i]->ownership()))
+        diagnostics_.error(diag::kTypeMismatch,
+                           expr.positional_inits()[i]->location(),
+                           "owned, shared, and borrowed pointers cannot be stored in aggregate fields");
       if (contains_owned_array(fields[i].type)) {
         Expr& value = const_cast<Expr&>(*expr.positional_inits()[i]);
         const Symbol* source = value.kind() == Expr::Kind::Name
@@ -1737,6 +1769,10 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
                                "' has type '" + field_def->type.to_string() +
                                "', but was given '" + init_type.to_string() + "'");
       }
+      if (field_def && has_untracked_pointer_ownership(field_def->type,
+                                                       kv.second->ownership()))
+        diagnostics_.error(diag::kTypeMismatch, kv.second->location(),
+                           "owned, shared, and borrowed pointers cannot be stored in aggregate fields");
       if (field_def && contains_owned_array(field_def->type)) {
         Expr& value = const_cast<Expr&>(*kv.second);
         const Symbol* source = value.kind() == Expr::Kind::Name
