@@ -95,3 +95,7 @@ memory.cpu_features() returns a bit mask of CPU features the Windows operating s
 ile.open(path, writable) creates an opaque Windows file resource or returns null. Use defer file.close(resource) immediately after opening; ile.write(resource, text) returns a Windows error code (zero on success). The compiler rejects use through a binding after ile.close. The current wrapper supports text writes and does not implement exception unwinding.
 
 memory.thread_count() returns a Windows process-thread snapshot count. Because threads can start or exit during enumeration, treat it as an estimate rather than a synchronization guarantee.
+
+Owned pointer values produced by explicit allocation/resource APIs transfer when bound to another name or passed to a pointer parameter. Pointer return values transfer to the caller. Use `borrow T* name` for a temporary immutable function borrow and `borrow mut T* name` for an exclusive mutable borrow. Mutable borrowing requires a mutable source binding. Borrowed values cannot be freed, closed, passed to an owning parameter, or returned; the compiler rejects conflicting aliases at a call site. `defer` remains the mechanism to ensure explicit cleanup on supported lexical exits.
+
+These rules currently cover pointer bindings and function boundaries. Aggregates, shared references, automatic drop insertion, and general lifetime inference are not yet implemented.

@@ -29,3 +29,9 @@ Arrays/tensors target contiguous owned storage, with borrowed views carrying val
 - D/E: allocator and collector performance work is not claimed complete without controlled measurements and synchronization design.
 - F: target constraints are defined above; current tensor subsystem does not exist.
 - G: benchmark harnesses and actual baseline numbers are required before any performance claim.
+
+## Implemented ownership syntax subset
+
+The compiler now treats pointers returned by explicit owning producers (`memory.allocate`, `memory.secure_allocate`, `memory.reallocate`, `memory.map_file`, `file.open`, and user functions returning pointers) as owned. Binding an owned pointer to another name transfers it. Pointer parameters default to owned transfer, and pointer return values transfer to the caller. `borrow T* name` declares a non-owning immutable borrow; `borrow mut T* name` declares an exclusive mutable borrow. Borrows cannot be deallocated, closed, transferred to an owning parameter, or returned. A call cannot pass the same allocation through overlapping mutable borrows. `defer` remains the deterministic cleanup mechanism for explicit resources.
+
+This syntax and model apply to pointer bindings and function boundaries. Struct/tuple field ownership, heap allocation escape analysis, automatic compiler-inserted drops, shared reference counting, raw unsafe scopes, and aggregate partial moves remain future implementation work.
