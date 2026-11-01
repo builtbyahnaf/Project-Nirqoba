@@ -5,6 +5,7 @@
 #include <chrono>
 #include <atomic>
 #include <condition_variable>
+#include <cstring>
 #include <mutex>
 #include <thread>
 
@@ -40,6 +41,7 @@ struct BlockingDeallocateState {
   std::condition_variable condition;
   bool entered = false;
   bool release = false;
+  bool all_zero = true;
 };
 
 struct BlockingReallocateState {
@@ -69,10 +71,15 @@ void* blocking_deallocate_allocate(void*, size_t bytes, size_t alignment) {
   return _aligned_malloc(bytes, std::max(alignment, sizeof(void*)));
 }
 
-void blocking_deallocate_wait(void* context, void* pointer, size_t, size_t) {
+void blocking_deallocate_wait(void* context, void* pointer, size_t bytes, size_t) {
   auto* state = static_cast<BlockingDeallocateState*>(context);
+  bool all_zero = true;
+  const auto* contents = static_cast<const unsigned char*>(pointer);
+  for (size_t index = 0; index < bytes; ++index)
+    all_zero = all_zero && contents[index] == 0;
   {
     std::unique_lock<std::mutex> lock(state->mutex);
+    state->all_zero = all_zero;
     state->entered = true;
     state->condition.notify_all();
     state->condition.wait(lock, [&] { return state->release; });
@@ -234,6 +241,7 @@ TEST(AllocatorTest, SecureReleaseDoesNotHoldTheGlobalAllocatorRegistryLock) {
   ASSERT_NE(allocator, nullptr);
   void* pointer = nrq_memory_allocate_from(allocator, 128, 64);
   ASSERT_NE(pointer, nullptr);
+  std::memset(pointer, 0xA5, 128);
   std::thread worker([&] { nrq_memory_secure_release(pointer); });
   {
     std::unique_lock<std::mutex> lock(state.mutex);
@@ -247,6 +255,7 @@ TEST(AllocatorTest, SecureReleaseDoesNotHoldTheGlobalAllocatorRegistryLock) {
   state.condition.notify_all();
   worker.join();
   ASSERT_NE(unrelated, nullptr);
+  ASSERT_TRUE(state.all_zero);
   ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
   ASSERT_EQ(nrq_allocator_destroy(unrelated), int32_t{1});
 }
