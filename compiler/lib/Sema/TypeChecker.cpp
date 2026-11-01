@@ -103,6 +103,7 @@ bool TypeChecker::check(Program& program) {
         function->visibility(),
         function->name()  // single-module compilation links symbols by name
     };
+    sig.returns_shared = function->returns_shared();
     for (const Parameter& param : function->parameters()) {
       sig.parameter_borrowed.push_back(param.borrowed);
       sig.parameter_mutable_borrow.push_back(param.mutable_borrow);
@@ -229,6 +230,7 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
           function->visibility(),
           is_entry ? function->name() : qualified
       };
+      sig.returns_shared = function->returns_shared();
       for (const Parameter& param : function->parameters()) {
         sig.parameter_borrowed.push_back(param.borrowed);
         sig.parameter_mutable_borrow.push_back(param.mutable_borrow);
@@ -366,6 +368,11 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
 void TypeChecker::check_function(FunctionDecl& function) {
   symbols_.push_scope();
   current_return_type_ = function.return_type();
+  current_return_shared_ = function.returns_shared();
+  if (current_return_shared_ && !current_return_type_.is_pointer()) {
+    diagnostics_.error(diag::kTypeMismatch, function.location(),
+                       "shared return types must be pointers");
+  }
   loop_depth_ = 0;
 
   for (const Parameter& parameter : function.parameters()) {
@@ -413,6 +420,7 @@ void TypeChecker::check_function(FunctionDecl& function) {
 
   symbols_.pop_scope();
   current_return_type_ = Type::error();
+  current_return_shared_ = false;
 }
 
 void TypeChecker::check_block(BlockStmt& block) {
@@ -532,6 +540,8 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
       const auto& call = static_cast<const CallExpr&>(declaration.initializer());
       symbol.shared_allocation = call.callee() == "memory.shared_allocate" ||
                                  call.callee() == "memory.shared_retain";
+      if (const FunctionSignature* signature = find_function(call.callee()))
+        symbol.shared_allocation = symbol.shared_allocation || signature->returns_shared;
     }
     if (!symbol.owns_allocation && declaration.initializer().kind() == Expr::Kind::Call) {
       const auto& call = static_cast<const CallExpr&>(declaration.initializer());
@@ -841,6 +851,18 @@ void TypeChecker::check_return(ReturnStmt& statement) {
                        "function returns '" + current_return_type_.to_string() +
                            "' but this 'return' yields '" + value_type.to_string() + "'");
   }
+  bool value_is_shared = statement.value()->ownership() == ValueOwnership::Shared;
+  if (statement.value()->kind() == Expr::Kind::Name) {
+    const Symbol* source = find_root_symbol(*statement.value(), symbols_);
+    value_is_shared = value_is_shared || (source && source->shared_allocation);
+  }
+  if (current_return_shared_ && !value_is_shared) {
+    diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                       "shared return requires a shared reference");
+  } else if (!current_return_shared_ && value_is_shared) {
+    diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                       "shared references require a shared return type");
+  }
   if (current_return_type_.is_pointer() && statement.value()->kind() == Expr::Kind::Name) {
     const Symbol* source = find_root_symbol(*statement.value(), symbols_);
     if (source && source->borrowed) {
@@ -939,6 +961,8 @@ Type TypeChecker::check_expression(Expr& expr) {
         const FunctionSignature* signature = find_function(call.callee());
         if (call.callee() == "memory.shared_allocate" ||
             call.callee() == "memory.shared_retain")
+          expr.set_ownership(ValueOwnership::Shared);
+        else if (signature && signature->returns_shared)
           expr.set_ownership(ValueOwnership::Shared);
         else
           expr.set_ownership(expression_creates_owned_pointer(expr) ||

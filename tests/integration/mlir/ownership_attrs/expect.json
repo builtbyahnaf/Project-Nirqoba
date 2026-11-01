@@ -2,5 +2,5 @@
   "mode": "build",
   "args": ["--emit=mlir"],
   "expect_exit": 0,
-  "expect_stdout_contains": ["nirqoba.ownership = \"borrowed\"", "nirqoba.ownership = \"owned\""]
+  "expect_stdout_contains": ["nirqoba.ownership = \"borrowed\"", "nirqoba.ownership = \"owned\"", "nirqoba.return_ownership = \"shared\""]
 }

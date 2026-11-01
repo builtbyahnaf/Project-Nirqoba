@@ -5,3 +5,6 @@ int function main() {
     memory.deallocate(input);
     return 0;
 }
+shared byte* function make_shared() {
+    return memory.shared_allocate<byte>(4);
+}

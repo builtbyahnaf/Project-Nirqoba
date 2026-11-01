@@ -1781,6 +1781,10 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
 
     auto func_op = builder.create<mlir::func::FuncOp>(
         builder.getUnknownLoc(), symbol, fn_type);
+    if (tir_fn->return_ownership() != ValueOwnership::Trivial)
+      func_op->setAttr("nirqoba.return_ownership",
+                       builder.getStringAttr(
+                           ownership_spelling(tir_fn->return_ownership())));
     if (!tir_fn->parameters().empty()) {
       llvm::SmallVector<mlir::Attribute> argument_attrs;
       argument_attrs.reserve(tir_fn->parameters().size());

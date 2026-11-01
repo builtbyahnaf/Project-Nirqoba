@@ -182,7 +182,9 @@ unique_ptr<Program> Parser::parse_program() {
       synchronize();
       continue;
     }
-    if (is_type_keyword(peek().kind) ||
+    if ((check(TokenKind::Identifier) && peek().text == "shared" &&
+         (is_type_keyword(peek(1).kind) || peek(1).kind == TokenKind::Identifier)) ||
+        is_type_keyword(peek().kind) ||
         (check(TokenKind::Identifier) &&
          (peek(1).kind == TokenKind::KwFunction ||
           (peek().text == "managed" && peek(1).kind == TokenKind::Less)))) {
@@ -278,6 +280,11 @@ unique_ptr<StructDecl> Parser::parse_struct(Visibility visibility) {
 
 unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
   const Token& type_token = peek();
+  bool returns_shared = false;
+  if (check(TokenKind::Identifier) && peek().text == "shared") {
+    advance();
+    returns_shared = true;
+  }
   const Type return_type = parse_type_annotation();
   expect(TokenKind::KwFunction, "after the return type");
   if (!check(TokenKind::Identifier)) {
@@ -336,7 +343,7 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
                                    move(body),
                                    type_token.location.is_valid() ? type_token.location
                                                                   : name_token.location,
-                                   visibility);
+                                   visibility, returns_shared);
 }
 
 Type Parser::parse_type_annotation() {

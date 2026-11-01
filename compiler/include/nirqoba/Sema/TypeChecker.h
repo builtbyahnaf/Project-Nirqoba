@@ -30,6 +30,7 @@ struct FunctionSignature {
   std::vector<bool> parameter_borrowed;
   std::vector<bool> parameter_mutable_borrow;
   std::vector<bool> parameter_shared;
+  bool returns_shared = false;
 };
 
 // Lightweight catalog entry for a registered struct type.
@@ -103,6 +104,7 @@ class TypeChecker {
   DiagnosticEngine& diagnostics_;
   SymbolTable symbols_;
   Type current_return_type_;
+  bool current_return_shared_ = false;
   int loop_depth_ = 0;
   std::string current_module_;
   uint64_t next_allocation_id_ = 1;

@@ -600,10 +600,11 @@ class FunctionDecl {
  public:
   FunctionDecl(Type return_type, std::string name, std::vector<Parameter> parameters,
                std::unique_ptr<BlockStmt> body, SourceLocation location,
-               Visibility visibility = Visibility::Public)
+               Visibility visibility = Visibility::Public, bool returns_shared = false)
       : return_type_(return_type), name_(std::move(name)),
         parameters_(std::move(parameters)), body_(std::move(body)),
-        location_(std::move(location)), visibility_(visibility) {}
+        location_(std::move(location)), visibility_(visibility),
+        returns_shared_(returns_shared) {}
 
   Type return_type() const { return return_type_; }
   void set_return_type(Type type) { return_type_ = type; }
@@ -616,6 +617,7 @@ class FunctionDecl {
   const SourceLocation& location() const { return location_; }
   Visibility visibility() const { return visibility_; }
   bool is_public() const { return visibility_ == Visibility::Public; }
+  bool returns_shared() const { return returns_shared_; }
 
  private:
   Type return_type_;
@@ -624,6 +626,7 @@ class FunctionDecl {
   std::unique_ptr<BlockStmt> body_;
   SourceLocation location_;
   Visibility visibility_;
+  bool returns_shared_ = false;
 };
 
 class Program {
