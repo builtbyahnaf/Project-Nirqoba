@@ -184,6 +184,8 @@ unique_ptr<Program> Parser::parse_program() {
     }
     if ((check(TokenKind::Identifier) && peek().text == "shared" &&
          (is_type_keyword(peek(1).kind) || peek(1).kind == TokenKind::Identifier)) ||
+        (check(TokenKind::Identifier) && peek().text == "owned_array" &&
+         peek(1).kind == TokenKind::Less) ||
         is_type_keyword(peek().kind) ||
         (check(TokenKind::Identifier) &&
          (peek(1).kind == TokenKind::KwFunction ||
@@ -355,6 +357,13 @@ Type Parser::parse_type_annotation() {
     Type managed_type = parse_type_annotation();
     expect(TokenKind::Greater, "after the managed type");
     base_type = Type::managed_pointer_type(managed_type);
+  } else if (check(TokenKind::Identifier) && peek().text == "owned_array" &&
+             peek(1).kind == TokenKind::Less) {
+    advance();
+    advance();
+    Type element_type = parse_type_annotation();
+    expect(TokenKind::Greater, "after the owned array element type");
+    base_type = Type::owned_array_type(element_type);
   } else if (is_type_keyword(peek().kind)) {
     const Token token = advance();
     base_type = parse_type_name(token.text);
@@ -992,6 +1001,7 @@ ExprPtr Parser::parse_primary() {
           (peek(1).text == "allocate" || peek(1).text == "reallocate" ||
            peek(1).text == "secure_allocate" ||
            peek(1).text == "shared_allocate" ||
+           peek(1).text == "owned_array" ||
            peek(1).text == "mapped_read" || peek(1).text == "mapped_write") &&
           peek(2).kind == TokenKind::Less) {
         advance();  // '.'

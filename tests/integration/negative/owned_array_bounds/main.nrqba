@@ -1,0 +1,4 @@
+int function main() {
+    var values = memory.owned_array<int>(1);
+    return values[1];
+}

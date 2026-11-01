@@ -95,6 +95,9 @@ int32_t nrq_memory_allocator_kind(uint64_t allocator_handle);
 void* nrq_memory_get_allocator(void);
 void* nrq_memory_use_allocator(void* allocator);
 void* nrq_memory_allocate(size_t bytes, size_t alignment);
+void* nrq_memory_allocate_array(size_t count, size_t element_size,
+                                size_t alignment);
+void nrq_memory_array_bounds_check(uint64_t index, uint64_t length);
 void* nrq_memory_shared_allocate(size_t bytes, size_t alignment);
 void* nrq_memory_shared_retain(void* pointer);
 int32_t nrq_memory_shared_release(void* pointer);
