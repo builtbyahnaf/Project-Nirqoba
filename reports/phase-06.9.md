@@ -95,3 +95,9 @@ Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tes
 File handles returned by `file.open` now carry ownership identity in the semantic symbol table. Initializing another binding from an owned file handle transfers the owner and invalidates the source binding; closing invalidates the current owner. Deferred cleanup checks whether any live owner remains, avoiding false double-release reports after transfer. This ownership tracking is currently limited to file resources; raw pointers and general aggregate ownership are not covered.
 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 35/35. Added positive ownership-transfer/deferred-close coverage and negative use-after-move coverage.
+
+## 20. Process thread-count introspection — 2026-11-01
+
+Added `memory.thread_count()` using a Toolhelp thread snapshot filtered by the current process ID. The API returns zero if snapshot acquisition fails and is documented as a race-prone estimate, not a synchronization guarantee. No task scheduler exists yet, so task count remains unavailable.
+
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 38/38, including a positive nonzero process-thread count check.

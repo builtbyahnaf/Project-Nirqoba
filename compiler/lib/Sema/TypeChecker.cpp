@@ -1600,6 +1600,12 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "'memory.cpu_features' takes no arguments");
     return Type::u64_type();
   }
+  if (call.callee() == "memory.thread_count") {
+    if (!call.arguments().empty())
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.thread_count' takes no arguments");
+    return Type::u32_type();
+  }
   if (call.callee() == "memory.allocator_kind") {
     if (call.arguments().size() != 1) {
       diagnostics_.error(diag::kPrintArity, call.location(),
