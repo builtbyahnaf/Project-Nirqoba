@@ -98,6 +98,10 @@ because those runtime subsystems do not yet exist.
 - The explicit allocator still uses global synchronization and allocation
   ownership bookkeeping. Per-thread fast paths require allocator thread-safety
   and lifetime review; no lock removal has been made without evidence.
+- Specialized pointer resources such as files, mutexes, secure buffers, and
+  mappings cannot yet cross function returns because pointer signatures do not
+  preserve their cleanup function. The checker rejects those returns rather
+  than letting the caller infer `memory.deallocate`.
 - The C++/Rust benchmark matrix and runner exist, but comparative runs require
   a Rust toolchain and controlled release configuration. No comparative
   performance claim is made. Phase 6U:G remains a later measurement task; GC
@@ -136,3 +140,8 @@ allocation callback so region storage cannot be cleared before its returned
 pointer is registered. Regressions cover null-pointer reallocation and a
 blocking custom allocator racing reset. Full validation passed: CTest 1/1 and
 integration 83/83. No GC benchmark was run.
+
+The ownership checker also rejects returns of resources with specialized
+destructors until function signatures can carry that cleanup contract. Direct
+file-open and named mutex-resource returns are covered. Full validation passed:
+CTest 1/1 and integration 84/84. No GC benchmark was run.

@@ -1226,6 +1226,21 @@ void TypeChecker::check_return(ReturnStmt& statement) {
     diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                        "borrowed array views cannot escape through a return value");
   }
+  if (current_return_type_.is_pointer() && !current_return_shared_) {
+    std::string cleanup_callee;
+    if (statement.value()->kind() == Expr::Kind::Name) {
+      const Symbol* source = find_root_symbol(*statement.value(), symbols_);
+      if (source) cleanup_callee = source->cleanup_callee;
+    } else if (statement.value()->kind() == Expr::Kind::Call) {
+      cleanup_callee = cleanup_for_owner_producer(
+          static_cast<const CallExpr&>(*statement.value()).callee());
+    }
+    if (!cleanup_callee.empty() && cleanup_callee != "memory.deallocate") {
+      diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                         "specialized owned resources cannot be returned until "
+                         "the function signature preserves their cleanup type");
+    }
+  }
   bool value_is_shared = statement.value()->ownership() == ValueOwnership::Shared;
   if (statement.value()->kind() == Expr::Kind::Name) {
     const Symbol* source = find_root_symbol(*statement.value(), symbols_);

@@ -1,0 +1,12 @@
+byte* function return_open_resource() {
+    return file.open("NUL", false);
+}
+
+byte* function return_named_resource() {
+    let resource = mutex.create();
+    return resource;
+}
+
+int function main() {
+    return 0;
+}
