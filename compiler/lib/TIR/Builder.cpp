@@ -81,6 +81,8 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
                                 tir::Module& module) {
   auto body = make_unique<tir::Function>(symbol, function.return_type());
   if (function.returns_shared()) body->set_return_ownership(ValueOwnership::Shared);
+  else if (function.return_type().is_owned_array())
+    body->set_return_ownership(ValueOwnership::Owned);
   tir::Function* function_ir = module.add_function(move(body));
 
   scopes_.clear();
@@ -95,7 +97,8 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
         : parameter.borrowed
         ? (parameter.mutable_borrow ? ValueOwnership::MutableBorrowed
                                     : ValueOwnership::Borrowed)
-        : (parameter.type.is_pointer() ? ValueOwnership::Owned
+        : ((parameter.type.is_pointer() || parameter.type.is_owned_array())
+                                       ? ValueOwnership::Owned
                                        : ValueOwnership::Trivial);
     tir::Value param_val = function_ir->allocate_value(parameter.type, ownership);
     function_ir->add_parameter(parameter.name, parameter.type, param_val, ownership);
@@ -117,9 +120,12 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
     function_ir->add_operation(move(store));
 
     scopes_.back().emplace(parameter.name, slot);
-    if (parameter.type.is_pointer() && !parameter.borrowed) {
+    if ((parameter.type.is_pointer() || parameter.type.is_owned_array()) &&
+        !parameter.borrowed) {
       DeferredCall cleanup;
-      cleanup.callee = parameter.shared ? "memory.shared_release" : "memory.deallocate";
+      cleanup.callee = parameter.shared ? "memory.shared_release"
+          : parameter.type.is_owned_array() ? "array.owned_release"
+                                            : "memory.deallocate";
       cleanup.location = parameter.location;
       cleanup.automatic = true;
       cleanup.owner_slot = slot;
@@ -1006,7 +1012,7 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
 
       // A dynamic array owns its storage, so its elements are fetched through
       // the runtime instead of a stack GEP.
-      if (base_type.is_dynamic_array()) {
+      if (base_type.is_dynamic_array() || base_type.is_owned_array()) {
         const tir::Value array = lower_expression(base_expr, function);
         const tir::Value index_val = lower_expression(idx_expr.index(), function);
 
@@ -1086,7 +1092,8 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       // `value.length` on a string or a dynamic array is a length query, not a
       // field of an aggregate.
       if (mem.member() == "length" &&
-          (base_val.type.is_string() || base_val.type.is_dynamic_array())) {
+          (base_val.type.is_string() || base_val.type.is_dynamic_array() ||
+           base_val.type.is_owned_array())) {
         tir::Value result = function.allocate_value(result_type);
         tir::Op length;
         length.kind = tir::OpKind::Length;
@@ -1170,12 +1177,43 @@ tir::Value TirBuilder::resolve_lvalue_ptr(const Expr& target, tir::Function& fun
   }
   if (target.kind() == Expr::Kind::Index) {
     const auto& idx_expr = static_cast<const IndexExpr&>(target);
-    tir::Value base_ptr = (idx_expr.base().type().is_pointer() ||
-                           idx_expr.base().type().is_managed_pointer())
-        ? lower_expression(idx_expr.base(), function)
-        : resolve_lvalue_ptr(idx_expr.base(), function);
+    tir::Value base_ptr;
+    tir::Value owned_array_value;
+    if (idx_expr.base().type().is_owned_array()) {
+      owned_array_value = lower_expression(idx_expr.base(), function);
+      base_ptr = function.allocate_value(
+          Type::pointer_type(idx_expr.base().type().element_type()));
+      tir::Op data;
+      data.kind = tir::OpKind::AggregateExtract;
+      data.location = idx_expr.base().location();
+      data.operand = owned_array_value;
+      data.field_index = 0;
+      data.result = base_ptr;
+      function.add_operation(std::move(data));
+    } else {
+      base_ptr = (idx_expr.base().type().is_pointer() ||
+                  idx_expr.base().type().is_managed_pointer())
+          ? lower_expression(idx_expr.base(), function)
+          : resolve_lvalue_ptr(idx_expr.base(), function);
+    }
     if (!base_ptr.is_valid()) return tir::Value{};
     tir::Value idx_val = lower_expression(idx_expr.index(), function);
+    if (idx_expr.base().type().is_owned_array()) {
+      tir::Value length = function.allocate_value(Type::u64_type());
+      tir::Op length_extract;
+      length_extract.kind = tir::OpKind::AggregateExtract;
+      length_extract.location = idx_expr.base().location();
+      length_extract.operand = owned_array_value;
+      length_extract.field_index = 1;
+      length_extract.result = length;
+      function.add_operation(std::move(length_extract));
+      tir::Op check;
+      check.kind = tir::OpKind::Call;
+      check.location = idx_expr.location();
+      check.callee = "memory.array_bounds_check";
+      check.arguments = {idx_val, length};
+      function.add_operation(std::move(check));
+    }
     Type elem_type = idx_expr.type().is_valid() ? idx_expr.type() : base_ptr.type.element_type();
     tir::Value elem_ptr = function.allocate_value(elem_type);
     tir::Op gep;

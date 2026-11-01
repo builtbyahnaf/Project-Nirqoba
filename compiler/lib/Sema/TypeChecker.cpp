@@ -20,7 +20,8 @@ static bool expression_creates_owned_pointer(const Expr& expr) {
   return callee == "file.open" || callee == "memory.allocate" ||
          callee == "memory.secure_allocate" || callee == "memory.reallocate" ||
          callee == "memory.map_file" || callee == "memory.shared_allocate" ||
-         callee == "memory.shared_retain" || callee == "mutex.create";
+         callee == "memory.shared_retain" || callee == "mutex.create" ||
+         callee == "memory.owned_array";
 }
 
 static std::string cleanup_for_owner_producer(const std::string& callee,
@@ -33,6 +34,7 @@ static std::string cleanup_for_owner_producer(const std::string& callee,
   if (callee == "memory.allocate" || callee == "memory.reallocate")
     return "memory.deallocate";
   if (callee == "mutex.create") return "mutex.destroy";
+  if (callee == "memory.owned_array") return "array.owned_release";
   return {};
 }
 
@@ -409,7 +411,7 @@ void TypeChecker::check_function(FunctionDecl& function) {
                   parameter.borrowed && !parameter.mutable_borrow
                       ? BindingKind::Let : BindingKind::Var,
                   parameter.location};
-    if (parameter.type.is_pointer()) {
+    if (parameter.type.is_pointer() || parameter.type.is_owned_array()) {
       symbol.allocation_id = next_allocation_id_++;
       symbol.borrowed = parameter.borrowed;
       symbol.mutable_borrow = parameter.mutable_borrow;
@@ -446,7 +448,7 @@ void TypeChecker::check_block(BlockStmt& block) {
        cleanup != deferred_calls_.back().rend(); ++cleanup) {
     const CallExpr* call = cleanup->call;
     const string& callee = call->callee();
-    if ((callee == "memory.deallocate" || callee == "memory.shared_release" || callee == "file.close" || callee == "mutex.destroy" || callee == "memory.secure_release" ||
+    if ((callee == "memory.deallocate" || callee == "memory.shared_release" || callee == "array.owned_release" || callee == "file.close" || callee == "mutex.destroy" || callee == "memory.secure_release" ||
          callee == "memory.unmap_file") && cleanup->allocation_id != 0) {
       if (symbols_.allocation_is_moved(cleanup->allocation_id)) {
           diagnostics_.error(diag::kUseAfterFree, call->location(),
@@ -517,7 +519,7 @@ void TypeChecker::check_deferred_cleanup(DeferredCleanupStmt& statement) {
   checking_deferred_cleanup_ = false;
   const auto* call = static_cast<const CallExpr*>(&expression);
   uint64_t allocation_id = 0;
-  if ((call->callee() == "memory.deallocate" || call->callee() == "memory.shared_release" || call->callee() == "file.close" || call->callee() == "mutex.destroy" ||
+  if ((call->callee() == "memory.deallocate" || call->callee() == "memory.shared_release" || call->callee() == "array.owned_release" || call->callee() == "file.close" || call->callee() == "mutex.destroy" ||
        call->callee() == "memory.secure_release" ||
        call->callee() == "memory.unmap_file") && !call->arguments().empty()) {
     const Symbol* pointer = find_root_symbol(*call->arguments()[0], symbols_);
@@ -547,7 +549,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
   Symbol symbol{declaration.name(), binding_type, declaration.binding(),
                 declaration.location()};
   const Symbol* transferred_owner = nullptr;
-  if (binding_type.is_pointer()) {
+  if (binding_type.is_pointer() || binding_type.is_owned_array()) {
     symbol.owns_allocation = expression_creates_owned_pointer(declaration.initializer());
     if (declaration.initializer().kind() == Expr::Kind::Call) {
       const auto& call = static_cast<const CallExpr&>(declaration.initializer());
@@ -555,7 +557,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
                                  call.callee() == "memory.shared_retain";
       if (const FunctionSignature* signature = find_function(call.callee())) {
         symbol.shared_allocation = symbol.shared_allocation || signature->returns_shared;
-        if (signature->return_type.is_pointer())
+        if (signature->return_type.is_pointer() || signature->return_type.is_owned_array())
           symbol.cleanup_callee = cleanup_for_owner_producer(
               call.callee(), signature->returns_shared);
       }
@@ -565,15 +567,18 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
     if (!symbol.owns_allocation && declaration.initializer().kind() == Expr::Kind::Call) {
       const auto& call = static_cast<const CallExpr&>(declaration.initializer());
       const FunctionSignature* signature = find_function(call.callee());
-      symbol.owns_allocation = signature && signature->return_type.is_pointer();
+      symbol.owns_allocation = signature &&
+          (signature->return_type.is_pointer() || signature->return_type.is_owned_array());
       if (symbol.owns_allocation && symbol.cleanup_callee.empty() &&
           !signature->returns_shared)
-        symbol.cleanup_callee = "memory.deallocate";
+        symbol.cleanup_callee = signature->return_type.is_owned_array()
+                                    ? "array.owned_release"
+                                    : "memory.deallocate";
     }
     if (declaration.initializer().kind() == Expr::Kind::Name) {
       const auto& source_name = static_cast<const NameExpr&>(declaration.initializer());
       const Symbol* source = symbols_.lookup(source_name.name());
-      if (source && source->type.is_pointer()) {
+      if (source && (source->type.is_pointer() || source->type.is_owned_array())) {
         symbol.allocation_id = source->allocation_id;
         if (source->borrowed) {
           symbol.borrowed = true;
@@ -712,7 +717,7 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                            "' to target of type '" + target_type.to_string() + "'");
   }
   if (assignment.is_simple_name() && symbol && symbol->is_mutable() &&
-      target_type.is_pointer()) {
+      (target_type.is_pointer() || target_type.is_owned_array())) {
     uint64_t allocation_id = 0;
     const Symbol* source = nullptr;
     if (assignment.value().kind() == Expr::Kind::Name) {
@@ -737,7 +742,8 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       const auto& call = static_cast<const CallExpr&>(assignment.value());
       const FunctionSignature* signature = find_function(call.callee());
       owns_allocation = expression_creates_owned_pointer(assignment.value()) ||
-                        (signature && signature->return_type.is_pointer());
+                        (signature && (signature->return_type.is_pointer() ||
+                                       signature->return_type.is_owned_array()));
       shared_allocation = call.callee() == "memory.shared_allocate" ||
                           call.callee() == "memory.shared_retain" ||
                           (signature && signature->returns_shared);
@@ -745,7 +751,9 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
         cleanup_callee = cleanup_for_owner_producer(
             call.callee(), signature && signature->returns_shared);
       if (owns_allocation && cleanup_callee.empty())
-        cleanup_callee = "memory.deallocate";
+        cleanup_callee = signature && signature->return_type.is_owned_array()
+                             ? "array.owned_release"
+                             : "memory.deallocate";
     } else if (source && source->owns_allocation && !source->moved) {
       const_cast<Expr&>(assignment.value()).set_transfers_ownership();
     }
@@ -912,12 +920,14 @@ void TypeChecker::check_return(ReturnStmt& statement) {
   } else if (!current_return_shared_ && value_is_shared) {
     diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                        "shared references require a shared return type");
-  } else if (current_return_type_.is_pointer() && !current_return_shared_ &&
+  } else if ((current_return_type_.is_pointer() || current_return_type_.is_owned_array()) &&
+             !current_return_shared_ &&
              statement.value()->ownership() != ValueOwnership::Owned) {
     diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                        "owned pointer return requires an owned pointer; borrowed or raw pointers cannot escape");
   }
-  if (current_return_type_.is_pointer() && statement.value()->kind() == Expr::Kind::Name) {
+  if ((current_return_type_.is_pointer() || current_return_type_.is_owned_array()) &&
+      statement.value()->kind() == Expr::Kind::Name) {
     const Symbol* source = find_root_symbol(*statement.value(), symbols_);
     if (source && source->borrowed) {
       diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
@@ -1025,6 +1035,8 @@ Type TypeChecker::check_expression(Expr& expr) {
                                  ? ValueOwnership::Owned : ValueOwnership::Raw);
       } else if (type.is_managed_pointer()) {
         expr.set_ownership(ValueOwnership::GcManaged);
+      } else if (type.is_owned_array()) {
+        expr.set_ownership(ValueOwnership::Owned);
       }
       break;
     case Expr::Kind::Unary: {
@@ -1231,6 +1243,8 @@ Type TypeChecker::resolve_aggregate_type(const Type& type,
     }
     return Type::tuple_type(move(elements));
   }
+  if (type.is_owned_array())
+    return Type::owned_array_type(resolve_aggregate_type(type.element_type(), active));
   // Pointer elements are deliberately left shallow: layout of a pointee is
   // resolved where the pointee is allocated, and expanding through pointers
   // would recurse forever on a self-referential struct.
@@ -1321,6 +1335,7 @@ Type TypeChecker::check_index_expr(IndexExpr& expr) {
   }
 
   if (base_type.is_array() || base_type.is_dynamic_array() ||
+      base_type.is_owned_array() ||
       base_type.is_pointer() || base_type.is_managed_pointer()) {
     // Constant-index bounds check for fixed arrays.
     if (base_type.is_array() && expr.index().kind() == Expr::Kind::IntegerLiteral) {
@@ -1413,7 +1428,8 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
   }
 
   // Dynamic array .length property (for example `args.length`).
-  if (base_type.is_dynamic_array() && expr.member() == "length") {
+  if ((base_type.is_dynamic_array() || base_type.is_owned_array()) &&
+      expr.member() == "length") {
     return Type::int_type();
   }
 
@@ -1493,6 +1509,42 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
 }
 
 Type TypeChecker::check_call(CallExpr& call) {
+  if (call.callee() == "memory.owned_array" && call.has_generic_argument()) {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.owned_array<T>' takes one element count");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+    } else {
+      const Type count = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+      if (count.is_valid() && !count.is_integer())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "owned array element count must be an integer");
+    }
+    return Type::owned_array_type(resolve_aggregate_type(call.generic_argument()));
+  }
+  if (call.callee() == "array.owned_release") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'array.owned_release' takes one owned array");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::void_type();
+    }
+    const Type type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    const Symbol* owner = find_root_symbol(*call.arguments()[0], symbols_);
+    if (type.is_valid() && !type.is_owned_array())
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'array.owned_release' requires an owned array");
+    if (!owner || owner->cleanup_callee != "array.owned_release")
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'array.owned_release' requires an owned array binding");
+    else if (!checking_deferred_cleanup_) {
+      const_cast<Expr&>(*call.arguments()[0]).set_transfers_ownership();
+      symbols_.mark_allocation_moved(owner->allocation_id);
+    }
+    return Type::void_type();
+  }
   if (call.callee() == "mutex.create") {
     if (!call.arguments().empty()) {
       diagnostics_.error(diag::kPrintArity, call.location(),
@@ -1537,6 +1589,8 @@ Type TypeChecker::check_call(CallExpr& call) {
       return Type::array_type(resolve_generic_type(type.element_type()), type.array_length());
     if (type.is_dynamic_array())
       return Type::dynamic_array_type(resolve_generic_type(type.element_type()));
+    if (type.is_owned_array())
+      return Type::owned_array_type(resolve_generic_type(type.element_type()));
     if (type.is_pointer())
       return Type::pointer_type(type.element_type());
     if (type.is_managed_pointer())
@@ -1608,7 +1662,8 @@ Type TypeChecker::check_call(CallExpr& call) {
       return Type::int_type();
     }
     const Type arg_type = check_expression(const_cast<Expr&>(*call.arguments().front()));
-    if (arg_type.is_valid() && !arg_type.is_string() && !arg_type.is_array() && !arg_type.is_dynamic_array()) {
+    if (arg_type.is_valid() && !arg_type.is_string() && !arg_type.is_array() &&
+        !arg_type.is_dynamic_array() && !arg_type.is_owned_array()) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments().front()->location(),
                          "'length' requires a string or array argument, not '" + arg_type.to_string() + "'");
     }
@@ -2392,6 +2447,21 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "argument " + to_string(i + 1) + " of '" + call.callee() +
                              "' must be of type '" + sig.parameter_types[i].to_string() +
                              "', not '" + arg_type.to_string() + "'");
+    }
+    if (sig.parameter_types[i].is_owned_array()) {
+      const Symbol* source = find_root_symbol(*call.arguments()[i], symbols_);
+      if (source && source->borrowed) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                           "borrowed values cannot be transferred as owned arrays");
+      } else if (!(source && source->owns_allocation && !source->moved) &&
+                 call.arguments()[i]->ownership() != ValueOwnership::Owned) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                           "owned array parameter requires an owned array value");
+      } else if (source && source->owns_allocation && !source->moved) {
+        const_cast<Expr&>(*call.arguments()[i]).set_transfers_ownership();
+        ownership_transfers.push_back(source->allocation_id);
+      }
+      continue;
     }
     if (!sig.parameter_types[i].is_pointer()) continue;
     const Symbol* source = find_root_symbol(*call.arguments()[i], symbols_);
