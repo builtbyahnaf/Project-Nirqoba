@@ -106,6 +106,7 @@ bool TypeChecker::check(Program& program) {
     for (const Parameter& param : function->parameters()) {
       sig.parameter_borrowed.push_back(param.borrowed);
       sig.parameter_mutable_borrow.push_back(param.mutable_borrow);
+      sig.parameter_shared.push_back(param.shared);
     }
 
     if (!functions_.emplace(function->name(), move(sig)).second) {
@@ -231,6 +232,7 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
       for (const Parameter& param : function->parameters()) {
         sig.parameter_borrowed.push_back(param.borrowed);
         sig.parameter_mutable_borrow.push_back(param.mutable_borrow);
+        sig.parameter_shared.push_back(param.shared);
       }
 
       // Every module is reachable by its qualified name, including the entry
@@ -379,6 +381,10 @@ void TypeChecker::check_function(FunctionDecl& function) {
       diagnostics_.error(diag::kTypeMismatch, parameter.location,
                          "'mut' requires a borrowed parameter");
     }
+    if (parameter.shared && (parameter.borrowed || !parameter.type.is_pointer())) {
+      diagnostics_.error(diag::kTypeMismatch, parameter.location,
+                         "shared parameters must have pointer type and cannot be borrowed");
+    }
     Symbol symbol{parameter.name, parameter.type,
                   parameter.borrowed && !parameter.mutable_borrow
                       ? BindingKind::Let : BindingKind::Var,
@@ -388,6 +394,7 @@ void TypeChecker::check_function(FunctionDecl& function) {
       symbol.borrowed = parameter.borrowed;
       symbol.mutable_borrow = parameter.mutable_borrow;
       symbol.owns_allocation = !parameter.borrowed;
+      symbol.shared_allocation = parameter.shared;
     }
     if (!symbols_.declare(move(symbol))) {
       diagnostics_.error(diag::kDuplicateName, parameter.location,
@@ -2254,6 +2261,20 @@ Type TypeChecker::check_call(CallExpr& call) {
     }
     if (!sig.parameter_types[i].is_pointer()) continue;
     const Symbol* source = find_root_symbol(*call.arguments()[i], symbols_);
+    const bool expects_shared = i < sig.parameter_shared.size() && sig.parameter_shared[i];
+    const bool argument_is_shared =
+        (source && source->shared_allocation) ||
+        call.arguments()[i]->ownership() == ValueOwnership::Shared;
+    if (expects_shared && !argument_is_shared) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                         "shared parameter requires a shared reference");
+      continue;
+    }
+    if (!expects_shared && argument_is_shared) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                         "shared references can only be transferred to a shared parameter");
+      continue;
+    }
     if (i < sig.parameter_borrowed.size() && sig.parameter_borrowed[i]) {
       if (!source) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),

@@ -88,7 +88,9 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
   push_scope();
 
   for (const Parameter& parameter : function.parameters()) {
-    const ValueOwnership ownership = parameter.borrowed
+    const ValueOwnership ownership = parameter.shared
+        ? ValueOwnership::Shared
+        : parameter.borrowed
         ? (parameter.mutable_borrow ? ValueOwnership::MutableBorrowed
                                     : ValueOwnership::Borrowed)
         : (parameter.type.is_pointer() ? ValueOwnership::Owned

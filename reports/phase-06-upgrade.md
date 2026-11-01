@@ -52,3 +52,11 @@ Added `memory.shared_allocate<T>(bytes)`, `memory.shared_retain(pointer)`, `memo
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 51/51. Positive coverage checks count transitions across retain and release; negative coverage rejects releasing a unique allocation through the shared API.
 
 Limitations: shared handles are currently scoped to local pointer bindings. Shared function parameter/return contracts, aggregate propagation, automatic drops, and synchronization of the pointed-to data are not implemented. Reference counting itself is synchronized; pointee mutation is not.
+
+## 24. Shared ownership at function parameters — 2026-11-01
+
+Added the `shared T* name` parameter qualifier. A shared reference can be transferred only into a parameter declared shared; passing it to an ordinary unique-owner parameter is rejected. The callee receives one owned reference-count token and may retain, transfer, or release it. TIR function arguments carry shared ownership metadata into MLIR.
+
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 52/52. Coverage includes a reference transferred to a shared parameter and a negative shared-to-unique call.
+
+Limitations: shared function return types are not expressible yet; shared references also cannot be stored in aggregates. These remain part of ownership modeling.
