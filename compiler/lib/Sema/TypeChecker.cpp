@@ -20,7 +20,7 @@ static bool expression_creates_owned_pointer(const Expr& expr) {
   return callee == "file.open" || callee == "memory.allocate" ||
          callee == "memory.secure_allocate" || callee == "memory.reallocate" ||
          callee == "memory.map_file" || callee == "memory.shared_allocate" ||
-         callee == "memory.shared_retain";
+         callee == "memory.shared_retain" || callee == "mutex.create";
 }
 
 static std::string cleanup_for_owner_producer(const std::string& callee,
@@ -32,6 +32,7 @@ static std::string cleanup_for_owner_producer(const std::string& callee,
   if (callee == "memory.secure_allocate") return "memory.secure_release";
   if (callee == "memory.allocate" || callee == "memory.reallocate")
     return "memory.deallocate";
+  if (callee == "mutex.create") return "mutex.destroy";
   return {};
 }
 
@@ -445,7 +446,7 @@ void TypeChecker::check_block(BlockStmt& block) {
        cleanup != deferred_calls_.back().rend(); ++cleanup) {
     const CallExpr* call = cleanup->call;
     const string& callee = call->callee();
-    if ((callee == "memory.deallocate" || callee == "memory.shared_release" || callee == "file.close" || callee == "memory.secure_release" ||
+    if ((callee == "memory.deallocate" || callee == "memory.shared_release" || callee == "file.close" || callee == "mutex.destroy" || callee == "memory.secure_release" ||
          callee == "memory.unmap_file") && cleanup->allocation_id != 0) {
       if (symbols_.allocation_is_moved(cleanup->allocation_id)) {
           diagnostics_.error(diag::kUseAfterFree, call->location(),
@@ -516,7 +517,7 @@ void TypeChecker::check_deferred_cleanup(DeferredCleanupStmt& statement) {
   checking_deferred_cleanup_ = false;
   const auto* call = static_cast<const CallExpr*>(&expression);
   uint64_t allocation_id = 0;
-  if ((call->callee() == "memory.deallocate" || call->callee() == "memory.shared_release" || call->callee() == "file.close" ||
+  if ((call->callee() == "memory.deallocate" || call->callee() == "memory.shared_release" || call->callee() == "file.close" || call->callee() == "mutex.destroy" ||
        call->callee() == "memory.secure_release" ||
        call->callee() == "memory.unmap_file") && !call->arguments().empty()) {
     const Symbol* pointer = find_root_symbol(*call->arguments()[0], symbols_);
@@ -1492,6 +1493,44 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
 }
 
 Type TypeChecker::check_call(CallExpr& call) {
+  if (call.callee() == "mutex.create") {
+    if (!call.arguments().empty()) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'mutex.create' takes no arguments");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+    }
+    return Type::pointer_type(Type::byte_type());
+  }
+  if (call.callee() == "mutex.lock" || call.callee() == "mutex.unlock" ||
+      call.callee() == "mutex.destroy") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "' takes one mutex handle");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::void_type();
+    }
+    const Type type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    const Symbol* mutex = find_root_symbol(*call.arguments()[0], symbols_);
+    if (type.is_valid() && !type.is_pointer())
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "mutex operation requires a mutex handle");
+    if (call.callee() == "mutex.destroy") {
+      if (!mutex || mutex->cleanup_callee != "mutex.destroy") {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "mutex.destroy requires an owned mutex handle");
+      } else if (mutex->borrowed) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "borrowed mutex handles cannot be destroyed");
+      } else if (!checking_deferred_cleanup_) {
+        const_cast<Expr&>(*call.arguments()[0]).set_transfers_ownership();
+        symbols_.mark_allocation_moved(mutex->allocation_id);
+      }
+    }
+    return Type::void_type();
+  }
+
   unordered_set<string> active_structs;
   function<Type(Type)> resolve_generic_type = [&](Type type) -> Type {
     if (type.is_array())

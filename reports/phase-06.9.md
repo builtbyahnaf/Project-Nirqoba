@@ -101,3 +101,11 @@ Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tes
 Added `memory.thread_count()` using a Toolhelp thread snapshot filtered by the current process ID. The API returns zero if snapshot acquisition fails and is documented as a race-prone estimate, not a synchronization guarantee. No task scheduler exists yet, so task count remains unavailable.
 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 38/38, including a positive nonzero process-thread count check.
+
+## 22. Native mutex resource wrapper — 2026-11-01
+
+Added `mutex.create`, `mutex.lock`, `mutex.unlock`, and `mutex.destroy`. Runtime handles are opaque tokens registered to mutex state; lock ownership is tracked by thread ID, recursive acquisition and foreign-thread unlock fail fast, and destroy rejects locked resources. The compiler recognizes creation as owned, inserts deterministic destruction, propagates move/use-after-destroy state, and lets a deferred unlock run before automatic destruction.
+
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1, including a four-thread mutual-exclusion test, and integration tests passed 59/59. Positive coverage verifies deferred unlock and automatic destroy; negative coverage rejects use after destroy.
+
+Limitation: this wrapper is Windows x64 only, matching the current runtime target. Exception-unwind cleanup remains unavailable.

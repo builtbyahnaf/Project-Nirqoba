@@ -123,3 +123,11 @@ producers and previously tracked owners may be transferred.
 
 
 
+
+`mutex.create()` returns an owned native mutex. `mutex.lock(handle)` blocks until
+acquired, and only the owning thread may call `mutex.unlock(handle)`. Mutexes are
+non-recursive; re-locking the same mutex from its owner is a runtime error. The
+compiler destroys an owned mutex at lexical exit. Unlock it first, directly or
+with `defer mutex.unlock(handle)`. Destroying a locked mutex is a runtime error;
+mutex handles are not safe to share by copying and require `borrow` when passed
+temporarily to a helper.
