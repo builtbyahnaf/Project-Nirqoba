@@ -1,0 +1,10 @@
+int function main() {
+    var checksum = 0;
+    for (var i = 0; i < 100000; i += 1) {
+        var block = memory.allocate<byte>(64);
+        block[0] = (i % 251) as byte;
+        checksum += block[0] as int;
+        memory.deallocate(block);
+    }
+    return checksum % 127;
+}

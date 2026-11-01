@@ -1,0 +1,13 @@
+int function main() {
+    memory.profiler.start();
+    var checksum = 0;
+    for (var i = 0; i < 100000; i += 1) {
+        var block = memory.allocate<byte>(64);
+        block[0] = (i % 251) as byte;
+        checksum += block[0] as int;
+        memory.deallocate(block);
+    }
+    let report = memory.profiler.capture();
+    memory.profiler.stop();
+    return (checksum + report.allocations as int) % 127;
+}
