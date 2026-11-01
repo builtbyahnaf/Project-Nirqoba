@@ -37,7 +37,10 @@ function Invoke-Samples([string]$Name, [string]$Exe) {
 }
 $results = @((Invoke-Samples 'cpp' $cppExe), (Invoke-Samples 'rust' $rsExe))
 $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name)
-$payload = [pscustomobject]@{ timestamp=(Get-Date).ToString('o'); os=[Environment]::OSVersion.VersionString; cpu=$cpu; logical_processors=[Environment]::ProcessorCount; iterations=$Iterations; warmups=$Warmups; runs=$Runs; cxx_compiler=(cl 2>&1 | Select-Object -First 1); rustc_version=(& rustc --version); results=$results }
+$compilerVersion = (& cl.exe /Bv 2>&1 | Select-Object -First 2) -join ' '
+$rustVersion = (& rustc.exe --version) -join ' '
+$payload = [pscustomobject]@{ timestamp=(Get-Date).ToString('o'); os=[Environment]::OSVersion.VersionString; cpu=$cpu; logical_processors=[Environment]::ProcessorCount; iterations=$Iterations; warmups=$Warmups; runs=$Runs; cxx_compiler=$compilerVersion; rustc_version=$rustVersion; results=$results }
 $payload | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 $Output
 $payload.results | Format-Table name,median_ns,p95_ns,p99_ns,checksum
 Write-Host "Full metadata and samples: $Output"
+
