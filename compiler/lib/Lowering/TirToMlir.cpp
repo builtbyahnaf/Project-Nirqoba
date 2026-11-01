@@ -284,7 +284,8 @@ class FunctionTranslator {
 
   // Root registration is likewise a per-activation action: the same slot must
   // be registered once, not once per loop iteration. Registrations are queued
-  // and emitted into the entry block after the body is translated.
+  // until all managed slots are known, then emitted after the frame begins and
+  // before any body operation can trigger collection.
   void register_gc_root(mlir::Value slot, const Type& value_type,
                         mlir::Location loc,
                         mlir::Value initial_value = {}) {
