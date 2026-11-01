@@ -1,0 +1,9 @@
+int function main() {
+    var first = memory.allocate<byte>(8);
+    var second = memory.allocate<byte>(8);
+    memory.deallocate(first);
+    first = second;
+    second[0] = 1u8;
+    memory.deallocate(first);
+    return 0;
+}

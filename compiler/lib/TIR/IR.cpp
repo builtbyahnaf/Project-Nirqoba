@@ -2,10 +2,11 @@
 
 namespace nirq::tir {
 
-Value Function::allocate_value(Type type) {
+Value Function::allocate_value(Type type, ValueOwnership ownership) {
   Value value;
   value.id = static_cast<int>(types_.size());
   value.type = type;
+  value.ownership = ownership;
   types_.push_back(type);
   return value;
 }

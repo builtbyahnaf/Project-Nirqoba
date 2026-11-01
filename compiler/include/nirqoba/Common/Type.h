@@ -24,6 +24,15 @@
 
 namespace nirq {
 
+enum class ValueOwnership {
+  Trivial,
+  Owned,
+  Borrowed,
+  MutableBorrowed,
+  GcManaged,
+  Raw
+};
+
 enum class TypeKind {
   Error,
   Void,

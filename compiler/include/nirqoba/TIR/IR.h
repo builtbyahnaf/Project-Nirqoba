@@ -17,6 +17,7 @@ namespace nirq::tir {
 struct Value {
   int id = -1;
   Type type;
+  ValueOwnership ownership = ValueOwnership::Trivial;
 
   bool is_valid() const { return id >= 0; }
 };
@@ -132,6 +133,7 @@ class Function {
     std::string name;
     Type type;
     Value value;
+    ValueOwnership ownership = ValueOwnership::Trivial;
   };
 
   Function(std::string name, Type return_type) : name_(std::move(name)), return_type_(return_type) {}
@@ -143,13 +145,15 @@ class Function {
   const std::vector<Op>& operations() const { return operations_; }
 
   const std::vector<Parameter>& parameters() const { return parameters_; }
-  void add_parameter(std::string name, Type type, Value value) {
-    parameters_.push_back(Parameter{std::move(name), type, value});
+  void add_parameter(std::string name, Type type, Value value,
+                     ValueOwnership ownership = ValueOwnership::Trivial) {
+    parameters_.push_back(Parameter{std::move(name), type, value, ownership});
   }
 
   // Reserves the next value number. Types are recorded so the verifier can
   // check operand types without re-deriving them.
-  Value allocate_value(Type type);
+  Value allocate_value(Type type,
+                       ValueOwnership ownership = ValueOwnership::Trivial);
   int allocate_label() { return next_label_id_++; }
 
   void add_operation(Op op) { operations_.push_back(std::move(op)); }

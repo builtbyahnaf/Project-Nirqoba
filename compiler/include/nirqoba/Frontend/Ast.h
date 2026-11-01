@@ -42,11 +42,14 @@ class Expr {
 
   Type type() const { return type_; }
   void set_type(Type type) { type_ = type; }
+  ValueOwnership ownership() const { return ownership_; }
+  void set_ownership(ValueOwnership ownership) { ownership_ = ownership; }
 
  private:
   Kind kind_;
   SourceLocation location_;
   Type type_;
+  ValueOwnership ownership_ = ValueOwnership::Trivial;
 };
 
 using ExprPtr = std::unique_ptr<Expr>;

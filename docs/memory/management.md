@@ -99,3 +99,5 @@ memory.thread_count() returns a Windows process-thread snapshot count. Because t
 Owned pointer values produced by explicit allocation/resource APIs transfer when bound to another name or passed to a pointer parameter. Pointer return values transfer to the caller. Use `borrow T* name` for a temporary immutable function borrow and `borrow mut T* name` for an exclusive mutable borrow. Mutable borrowing requires a mutable source binding. Borrowed values cannot be freed, closed, passed to an owning parameter, or returned; the compiler rejects conflicting aliases at a call site. `defer` remains the mechanism to ensure explicit cleanup on supported lexical exits.
 
 These rules currently cover pointer bindings and function boundaries. Aggregates, shared references, automatic drop insertion, and general lifetime inference are not yet implemented.
+
+Pointer reassignment follows the same transfer rule: assigning an owned pointer to another mutable binding moves it and invalidates the source. Overwriting a still-live owned pointer is rejected; release it before reusing that binding.
