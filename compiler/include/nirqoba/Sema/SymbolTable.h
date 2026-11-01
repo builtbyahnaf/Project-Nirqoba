@@ -56,6 +56,8 @@ class SymbolTable {
                              bool borrowed, bool mutable_borrow,
                              bool shared_allocation = false,
                              std::string cleanup_callee = {});
+  void merge_conditional_ownership(const SymbolTable& then_state,
+                                   const SymbolTable& else_state);
 
   std::size_t scope_depth() const { return scopes_.size(); }
 
