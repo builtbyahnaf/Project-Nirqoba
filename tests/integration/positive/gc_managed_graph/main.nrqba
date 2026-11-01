@@ -14,8 +14,11 @@ managed<Node> function create_graph() {
 }
 
 int function main() {
+    gc.set_threshold(1);
+    gc.enable();
     var first = create_graph();
     gc.collect();
     print(first[0].next[0].value);
+    gc.disable();
     return 42;
 }
