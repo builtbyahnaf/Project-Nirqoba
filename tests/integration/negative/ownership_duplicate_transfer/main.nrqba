@@ -1,0 +1,8 @@
+int function consume(owned_array<int> first, owned_array<int> second) {
+    return first[0] + second[0];
+}
+
+int function main() {
+    var values = memory.owned_array<int>(1);
+    return consume(values, values);
+}

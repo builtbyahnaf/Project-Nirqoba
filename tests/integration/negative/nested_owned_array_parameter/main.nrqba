@@ -1,0 +1,11 @@
+struct Bundle {
+    owned_array<int> values;
+}
+
+int function consume(owned_array<Bundle> bundles) {
+    return 0;
+}
+
+int function main() {
+    return 0;
+}

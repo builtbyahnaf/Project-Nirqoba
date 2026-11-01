@@ -335,6 +335,22 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
     }
   }
 
+  for (const auto& unit : modules) {
+    if (!unit || !unit->ast) continue;
+    current_module_ = unit->name;
+    for (const auto& decl : unit->ast->structs()) {
+      for (const Parameter& field : decl->fields()) {
+        const Type field_type = resolve_aggregate_type(field.type);
+        if (contains_nested_owned_array(field_type))
+          diagnostics_.error(diag::kTypeMismatch, field.location,
+                             "owned arrays cannot contain elements that own nested allocations yet");
+        if (contains_array_view(field_type))
+          diagnostics_.error(diag::kTypeMismatch, field.location,
+                             "borrowed array views cannot be stored in aggregates");
+      }
+    }
+  }
+
   // Pass 1: register function signatures. Symbols are `module.name` except in
   // the root module, whose functions keep bare names so the entry point is
   // emitted as `main`.
@@ -343,9 +359,21 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
     current_module_ = unit->name;
     for (const auto& function : unit->ast->functions()) {
       resolve_declaration_types(*function);
+      if (contains_nested_owned_array(function->return_type()))
+        diagnostics_.error(diag::kTypeMismatch, function->location(),
+                           "owned arrays cannot contain elements that own nested allocations yet");
+      if (contains_array_view(function->return_type()))
+        diagnostics_.error(diag::kTypeMismatch, function->location(),
+                           "borrowed array views cannot escape through a return value");
       vector<Type> param_types;
       param_types.reserve(function->parameters().size());
       for (const Parameter& param : function->parameters()) {
+        if (contains_nested_owned_array(param.type))
+          diagnostics_.error(diag::kTypeMismatch, param.location,
+                             "owned arrays cannot contain elements that own nested allocations yet");
+        if (contains_array_view(param.type) && !param.type.is_array_view())
+          diagnostics_.error(diag::kTypeMismatch, param.location,
+                             "borrowed array views cannot be nested in aggregate parameters");
         param_types.push_back(param.type);
       }
 
@@ -1756,7 +1784,7 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
       return Type::error();
     }
     for (const Parameter& field : info->fields) {
-      if (field.name == expr.member()) return field.type;
+      if (field.name == expr.member()) return resolve_aggregate_type(field.type);
     }
     diagnostics_.error(diag::kUnknownField, expr.location(),
                        "struct '" + sname + "' has no field '" + expr.member() + "'");
@@ -1810,11 +1838,12 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
     const size_t count = min(expr.positional_inits().size(), fields.size());
     for (size_t i = 0; i < count; ++i) {
       const Type init_type = check_expression(const_cast<Expr&>(*expr.positional_inits()[i]));
-      if (init_type.is_valid() && init_type != fields[i].type) {
+      const Type field_type = resolve_aggregate_type(fields[i].type);
+      if (init_type.is_valid() && init_type != field_type) {
         diagnostics_.error(diag::kTypeMismatch, expr.positional_inits()[i]->location(),
                            "field '" + fields[i].name + "' of struct '" +
                                expr.struct_name() + "' has type '" +
-                               fields[i].type.to_string() + "', but was given '" +
+                                field_type.to_string() + "', but was given '" +
                                init_type.to_string() + "'");
       }
       if (has_untracked_pointer_ownership(fields[i].type,
@@ -1822,7 +1851,7 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
         diagnostics_.error(diag::kTypeMismatch,
                            expr.positional_inits()[i]->location(),
                            "owned, shared, and borrowed pointers cannot be stored in aggregate fields");
-      if (contains_owned_array(fields[i].type)) {
+      if (contains_owned_array(field_type)) {
         Expr& value = const_cast<Expr&>(*expr.positional_inits()[i]);
         const Symbol* source = value.kind() == Expr::Kind::Name
                                    ? find_root_symbol(value, symbols_) : nullptr;
@@ -1856,17 +1885,18 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
         diagnostics_.error(diag::kUnknownField, kv.second->location(),
                            "struct '" + expr.struct_name() + "' has no field '" +
                                field_name + "'");
-      } else if (init_type.is_valid() && init_type != field_def->type) {
+      } else if (init_type.is_valid() &&
+                 init_type != resolve_aggregate_type(field_def->type)) {
         diagnostics_.error(diag::kTypeMismatch, kv.second->location(),
                            "field '" + field_name + "' of struct '" + expr.struct_name() +
-                               "' has type '" + field_def->type.to_string() +
+                           "' has type '" + resolve_aggregate_type(field_def->type).to_string() +
                                "', but was given '" + init_type.to_string() + "'");
       }
       if (field_def && has_untracked_pointer_ownership(field_def->type,
                                                        kv.second->ownership()))
         diagnostics_.error(diag::kTypeMismatch, kv.second->location(),
                            "owned, shared, and borrowed pointers cannot be stored in aggregate fields");
-      if (field_def && contains_owned_array(field_def->type)) {
+      if (field_def && contains_owned_array(resolve_aggregate_type(field_def->type))) {
         Expr& value = const_cast<Expr&>(*kv.second);
         const Symbol* source = value.kind() == Expr::Kind::Name
                                    ? find_root_symbol(value, symbols_) : nullptr;
@@ -1889,7 +1919,7 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
   vector<pair<string, Type>> resolved_fields;
   resolved_fields.reserve(fields.size());
   for (const Parameter& field : fields)
-    resolved_fields.emplace_back(field.name, field.type);
+    resolved_fields.emplace_back(field.name, resolve_aggregate_type(field.type));
   return Type::struct_type(expr.struct_name(), move(resolved_fields));
 }
 

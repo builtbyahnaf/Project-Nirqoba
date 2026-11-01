@@ -1,0 +1,5 @@
+{
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": ["cannot borrow an owner in a call that also transfers it"]
+}

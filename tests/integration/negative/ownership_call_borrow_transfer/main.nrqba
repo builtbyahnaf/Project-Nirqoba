@@ -1,0 +1,9 @@
+int function inspect_and_consume(array_view<int> view, owned_array<int> values) {
+    return view[0] + values[0];
+}
+
+int function main() {
+    var values = memory.owned_array<int>(1);
+    values[0] = 1;
+    return inspect_and_consume(memory.array_view<int>(values, 0, 1), values);
+}

@@ -1,0 +1,9 @@
+struct Holder {
+    int* resource;
+}
+
+int function main() {
+    var resource = memory.allocate<int>(4);
+    var holder = Holder { resource: resource };
+    return 0;
+}

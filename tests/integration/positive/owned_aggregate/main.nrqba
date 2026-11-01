@@ -1,0 +1,25 @@
+struct Bundle {
+    owned_array<int> values;
+    int tag;
+}
+
+struct Envelope {
+    Bundle payload;
+}
+
+Envelope function make_envelope() {
+    var values = memory.owned_array<int>(2);
+    values[0] = 19;
+    values[1] = 23;
+    let bundle = Bundle { values: values, tag: 0 };
+    return Envelope { payload: bundle };
+}
+
+int function consume(Envelope envelope) {
+    return envelope.payload.values[0] + envelope.payload.values[1];
+}
+
+int function main() {
+    var envelope = make_envelope();
+    return consume(envelope);
+}

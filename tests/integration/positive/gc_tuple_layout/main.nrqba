@@ -1,0 +1,18 @@
+struct Node {
+    int value;
+}
+
+struct Holder {
+    char prefix;
+    (int, managed<Node>) pair;
+}
+
+int function main() {
+    var holders = memory.owned_array<Holder>(1);
+    var node = array.allocate<Node>(1);
+    node[0].value = 73;
+    holders[0].pair = (5, node);
+    node = array.allocate<Node>(1);
+    gc.collect();
+    return holders[0].pair.1[0].value;
+}
