@@ -25,3 +25,7 @@ Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tes
 Changed the tracing collector's initial automatic-collection state to disabled, consistent with the Phase 6 Upgrade decision. GC allocations remain supported in their explicit managed domain; programs may call `gc.enable()` to enable automatic triggers, while explicit `gc.collect()` remains available. Updated the superseded Phase 6.5 roadmap wording and memory documentation.
 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 37/37, including updated initial `gc.is_enabled()` output. This policy change does not implement owned arrays or borrowing and therefore does not complete the ownership default by itself.
+
+## Benchmark harness scope
+
+Phase 6U:G now has a repeatable source and runner matrix for scalar, contiguous-array, small allocation, pointer-rich graph, and multithreaded allocation workloads in C++ and Rust. The runner records warmups, repeated measurements, p50/p95/p99, environment/compiler metadata, and checksums, and isolates artifacts in a temp directory. The current machine has no `rustc.exe`; the runner parsed successfully but the comparative matrix could not be executed. No comparative performance claim or G acceptance pass is made.
