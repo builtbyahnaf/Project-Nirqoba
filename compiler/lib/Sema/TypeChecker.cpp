@@ -37,6 +37,31 @@ static bool contains_owned_array(const Type& type) {
   return contains_owned_array(type, active_structs);
 }
 
+static bool contains_nested_owned_array(const Type& type,
+                                        unordered_set<string>& active_structs) {
+  if (type.is_owned_array()) return contains_owned_array(type.element_type());
+  if (type.is_array()) return contains_nested_owned_array(type.element_type(), active_structs);
+  if (type.is_tuple()) {
+    for (const Type& element : type.tuple_elements())
+      if (contains_nested_owned_array(element, active_structs)) return true;
+  }
+  if (type.is_struct() && !type.struct_fields().empty() &&
+      active_structs.insert(type.struct_name()).second) {
+    for (const auto& field : type.struct_fields())
+      if (contains_nested_owned_array(field.second, active_structs)) {
+        active_structs.erase(type.struct_name());
+        return true;
+      }
+    active_structs.erase(type.struct_name());
+  }
+  return false;
+}
+
+static bool contains_nested_owned_array(const Type& type) {
+  unordered_set<string> active_structs;
+  return contains_nested_owned_array(type, active_structs);
+}
+
 static string cleanup_for_type(const Type& type) {
   if (type.is_owned_array()) return "array.owned_release";
   return contains_owned_array(type) ? "aggregate.owned_drop" : string{};
@@ -132,12 +157,27 @@ bool TypeChecker::check(Program& program) {
     }
   }
 
+  for (const auto& decl : program.structs()) {
+    for (const Parameter& field : decl->fields()) {
+      const Type field_type = resolve_aggregate_type(field.type);
+      if (contains_nested_owned_array(field_type))
+        diagnostics_.error(diag::kTypeMismatch, field.location,
+                           "owned arrays cannot contain elements that own nested allocations yet");
+    }
+  }
+
   // Pass 1: Collect function signatures for forward references & mutual recursion.
   for (const auto& function : program.functions()) {
     resolve_declaration_types(*function);
+    if (contains_nested_owned_array(function->return_type()))
+      diagnostics_.error(diag::kTypeMismatch, function->location(),
+                         "owned arrays cannot contain elements that own nested allocations yet");
     vector<Type> param_types;
     param_types.reserve(function->parameters().size());
     for (const Parameter& param : function->parameters()) {
+      if (contains_nested_owned_array(param.type))
+        diagnostics_.error(diag::kTypeMismatch, param.location,
+                           "owned arrays cannot contain elements that own nested allocations yet");
       param_types.push_back(param.type);
     }
 
@@ -1782,7 +1822,13 @@ Type TypeChecker::check_call(CallExpr& call) {
                              "owned array alignment must be an integer");
       }
     }
-    return Type::owned_array_type(resolve_aggregate_type(call.generic_argument()));
+    const Type element_type = resolve_aggregate_type(call.generic_argument());
+    if (contains_owned_array(element_type)) {
+      diagnostics_.error(diag::kTypeMismatch, call.location(),
+                         "owned arrays cannot contain elements that own nested allocations yet");
+      return Type::error();
+    }
+    return Type::owned_array_type(element_type);
   }
   if (call.callee() == "array.owned_release") {
     if (call.arguments().size() != 1) {
