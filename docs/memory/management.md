@@ -4,9 +4,11 @@ Nirqoba currently has explicit raw allocations and a distinct tracing-GC domain.
 `array.allocate<T>(count)` creates a managed array and `managed<T>` marks
 references for tracing. Cycles are supported, and `gc.collect()` can reclaim
 unreachable objects even when automatic collection is disabled. The runtime
-still enables automatic collection by default for compatibility. The Phase 6
-Upgrade decision is to make ownership-based memory the language default. This
-is a migration target; ownership analysis is not yet implemented. GC objects
+starts with automatic collection disabled. Programs that explicitly use the
+GC domain can enable automatic collection with `gc.enable()`; explicit
+`gc.collect()` always remains available. The Phase 6 Upgrade decision is to make
+ownership-based memory the language default. This is a migration target;
+ownership analysis is not yet implemented. GC objects
 remain explicitly managed and must not be silently treated as owned allocations.
 
 The target memory domains are owned values (move and deterministic drop),
