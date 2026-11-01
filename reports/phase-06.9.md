@@ -38,3 +38,42 @@ The profiler does not provide fragmentation estimates, allocator-specific attrib
 | Runtime introspection | Partial; available memory, version, CPU count, and allocator kind |
 
 **Verdict:** Phase 6.9 remains incomplete. Generalized resource integration, full profiler attribution, scoped pinning, and broader introspection remain required.
+## 13. Completion pass — 2026-11-01
+
+Implemented since the first pass:
+
+- Profiler depth. `memory.profiler.capture()` now also reports the allocation
+  size histogram (`allocations_le_64` through `allocations_gt_65536`),
+  `largest_allocation`, bytes currently live per allocator kind (`general_bytes`
+  through `custom_bytes`), and region occupancy (`free_bytes`,
+  `largest_free_block`, `fragmentation_bytes`). Occupancy is sampled from the
+  allocators that can enumerate free space, so the general-purpose and custom
+  allocators report zero, meaning "not measurable".
+- Excessive-pin diagnostics. `memory.pin_count()` reports distinct pinned
+  objects; a repeated pin of the same object beyond 16 is rejected and counted
+  by `memory.pin_violations()`, so a forgotten `unpin` is observable without
+  failing the program.
+- Runtime introspection additions: `memory.total_bytes()` (installed physical
+  memory) and `memory.used_bytes()` (process working set), both documented as
+  operating-system estimates, and `gc.is_enabled()` for the automatic
+  collection state. `memory.allocator_kind(0)` now reports the configured
+  default allocator.
+- Per-allocator fragmentation introspection:
+  `nrq_memory_allocator_free_bytes` and
+  `nrq_memory_allocator_fragmentation_bytes` in the runtime C API.
+- Tests: `AllocatorTest.ReportsFreeSpaceAndFragmentation`,
+  `AllocatorTest.ProfilerReportsSizeHistogramAndAllocatorAttribution`,
+  `GcTest.PinDiagnosticsReportCountAndRejectExcessivePins`,
+  `GcTest.AutomaticCollectionStateIsObservable`, plus the integration cases
+  `memory_profiler_report` and `memory_introspection`.
+
+Still not implemented:
+
+- Native resource wrapper types (files, sockets, locks) and cleanup during
+  exception unwinding. The roadmap leaves the exact shape of these types to the
+  language specification, which still defines none, so only the existing
+  `defer call(...)` mechanism implements deterministic destruction today.
+- Thread/task counts and device-memory reporting in introspection, which depend
+  on the concurrency phases and the GPU runtime.
+- Profiler overhead measurement. Allocation benchmarks exist, but the cost of
+  running with the profiler enabled versus disabled has not been measured.

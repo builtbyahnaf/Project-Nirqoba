@@ -42,8 +42,23 @@ These strategies are correctness choices, not measured performance claims.
 
 Selection is thread-local by default. Per-allocation selection is supported;
 function and block selection can be paired with `defer` to restore the prior
-handle. Collection, module-wide, and application-wide selection are not
-implemented in Nirqoba source; reallocation is also not supported.
+handle. `memory.set_default_allocator(handle)` installs a process-wide default
+for allocations made without a per-allocation handle and returns the previous
+default; thread selection still takes precedence, and zero restores the
+general-purpose default. `memory.get_default_allocator()` reads it. Selection
+for collector-managed containers is not implemented, because those arrays are
+owned by the tracing heap rather than by an explicit allocator.
+
+`memory.reallocate<T>(pointer, new_bytes)` resizes an explicit allocation. The
+block keeps its allocator and alignment, and the surviving bytes are copied up
+to the smaller of the two sizes. Growth of the most recent arena or stack block
+resizes in place; every other strategy allocates a replacement and releases the
+original. A stack allocator only resizes its most recent block, because freeing
+any other block would break its LIFO order, and returns null instead. A null
+result means the request failed and the original allocation is still valid. A
+byte count of zero frees the block and also returns null, following the C
+`realloc` convention. The previous pointer must not be used after a successful
+call.
 
 Native embedders can register a callback allocator through
 `nrq_allocator_create_custom(const NrqCustomAllocatorVTable*)` in the runtime C
@@ -53,7 +68,8 @@ size and alignment. Allocation returns null on failure. The runtime serializes
 callbacks under its allocator registry lock, so callbacks must not re-enter
 allocator APIs. The optional destroy callback runs when the allocator handle is
 destroyed. Custom allocators cannot currently be reset or declared directly in
-Nirqoba source; container integration is not supported.
+Nirqoba source, and container integration is not supported;
+`memory.reallocate` reaches them through the generic allocate-copy-free path.
 
 Use `memory.profiler.start()`, `.capture()`, and `.stop()` to track explicit
 allocator memory. Secure buffers allocated through `memory.secure_allocate`

@@ -111,3 +111,56 @@ Updated `project_context/SYNTAX.md`; added `docs/memory/allocators.md` and
 
 **FAIL** â€” the implemented allocator paths build and pass the current
 integration suite, but safety and acceptance requirements remain incomplete.
+## 13. Completion pass — 2026-11-01
+
+Implemented since the first pass:
+
+- `memory.reallocate<T>(pointer, new_bytes)`, which satisfies the roadmap's
+  reallocation requirement. The block keeps its allocator and recorded
+  alignment; contents survive up to the smaller size; growth of the most recent
+  arena or stack block resizes in place; every other strategy allocates a
+  replacement and releases the original. A null result leaves the original
+  allocation valid, a zero byte count releases it, and an invalid or already
+  freed pointer stops with a runtime diagnostic.
+- `memory.set_default_allocator(handle)` / `memory.get_default_allocator()`
+  provide the application-wide explicit-allocation policy required by 6.7.3.
+  Thread selection still wins; handle zero means the configured default, which
+  also governs `memory.allocate<T>(bytes, 0)` and `memory.allocator_kind(0)`;
+  a policy default cannot be destroyed while it serves that role.
+- Allocator introspection: `nrq_memory_allocator_free_bytes` and
+  `nrq_memory_allocator_fragmentation_bytes`, plus `free_statistics()` overrides
+  for the pool, slab, arena, stack, buddy, free-list, and TLSF strategies. The
+  profiler report now carries `free_bytes`, `largest_free_block`,
+  `fragmentation_bytes`, a six-bucket allocation-size histogram, and per-kind
+  live bytes, which covers the profiler attribution requirement.
+- Benchmarks: `AllocatorTest.BenchmarksSmallLargeAndMixedWorkloads` measures
+  20,000 small and 4,000 mixed-size allocation/deallocation pairs on the
+  general, pool, and TLSF allocators. Timings are printed for CI visibility; no
+  relative performance claim is made.
+- Tests: `AllocatorTest.ReallocatePreservesContentsAndAllocatorIdentity`,
+  `ReallocateRespectsStackAndRegionLifetimeRules`,
+  `DefaultAllocatorPolicyGovernsExplicitAllocations`,
+  `ReportsFreeSpaceAndFragmentation`, and
+  `ProfilerReportsSizeHistogramAndAllocatorAttribution`. Integration cases
+  `memory_reallocate`, `memory_profiler_report`, `memory_default_allocator`, and
+  the negative case `reallocate_managed_pointer` exercise the language surface.
+
+Still blocked or not implemented:
+
+- Nirqoba-source `Allocator` declarations (interface methods taking a
+  `pointer`). The language has no interface or function-pointer types; those
+  arrive with Phase 8 (interfaces/generics) and Phase 13 (C ABI). Native
+  embedders can already register a callback allocator through the C ABI.
+- Container-level allocator selection. Collector-managed arrays are owned by the
+  tracing heap, so they have no explicit allocator to select; container
+  integration needs allocator-aware container types, which the language does not
+  have yet.
+- Complete static pointer lifetime checking. The compiler still tracks only
+  direct variable aliases inside one function; `memory.reallocate` deliberately
+  does not mark the old pointer dead statically, but the runtime rejects a later
+  free of it.
+- Custom allocator reset remains unsupported; reallocation reaches custom
+  allocators through the generic allocate-copy-free path.
+
+This addendum supersedes the "Not run" entries for benchmarks in section 11;
+the overall verdict stays **FAIL** until the blocked items above are resolved.

@@ -1,0 +1,25 @@
+int function main() {
+    memory.profiler.start();
+    var region = memory.free_list_allocator(65536);
+    var first = memory.allocate<byte>(1024, region);
+    var second = memory.allocate<byte>(1024, region);
+    first[0] = 1 as byte;
+
+    // Freeing the lower block leaves a hole below a live block, so the free
+    // space exceeds the largest request the region can still serve.
+    memory.deallocate(first);
+
+    var profile = memory.profiler.capture();
+    print(profile.free_bytes);
+    print(profile.largest_free_block);
+    print(profile.fragmentation_bytes);
+    print(profile.free_list_bytes);
+    print(profile.allocations_le_4096);
+    print(profile.largest_allocation);
+
+    memory.deallocate(second);
+    memory.profiler.stop();
+    memory.reset_allocator(region);
+    memory.destroy_allocator(region);
+    return 42;
+}
