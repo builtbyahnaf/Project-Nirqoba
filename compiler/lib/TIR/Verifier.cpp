@@ -57,6 +57,7 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
 
       switch (op.kind) {
         case tir::OpKind::ConstantInt:
+        case tir::OpKind::ConstantNull:
         case tir::OpKind::ConstantFloat:
         case tir::OpKind::ConstantString:
         case tir::OpKind::Alloca:

@@ -38,6 +38,7 @@ class TirBuilder {
     bool automatic = false;
     bool active = true;
     tir::Value owner_slot;
+    bool clear_owner_slot_after_call = false;
   };
 
   void lower_function(const FunctionDecl& function, const std::string& symbol,

@@ -24,6 +24,7 @@ struct Value {
 
 enum class OpKind {
   ConstantInt,       // result = integer_value
+  ConstantNull,      // result = null/zero value of result.type
   ConstantFloat,     // result = float_value
   ConstantString,    // result = pointer to string_value
   Alloca,            // result = slot for slot_name of result.type
