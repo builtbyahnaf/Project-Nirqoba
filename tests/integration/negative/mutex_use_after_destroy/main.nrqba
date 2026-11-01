@@ -1,0 +1,6 @@
+int function main() {
+    let mutex = mutex.create();
+    mutex.destroy(mutex);
+    mutex.lock(mutex);
+    return 0;
+}

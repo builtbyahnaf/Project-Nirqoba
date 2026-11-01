@@ -616,7 +616,8 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
           for (auto& scope : deferred_expressions_)
             for (auto& pending : scope)
               if (pending.automatic && pending.active && slot.is_valid() &&
-                  pending.owner_slot.id == slot.id) {
+                  pending.owner_slot.id == slot.id &&
+                  pending.callee == lowered.callee) {
                 lowered.owner_slot = slot;
                 lowered.clear_owner_slot_after_call = true;
               }

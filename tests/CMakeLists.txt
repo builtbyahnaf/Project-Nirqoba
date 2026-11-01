@@ -15,6 +15,7 @@ add_executable(nirqoba_unit_tests
   unit/diagnostics_test.cpp
   unit/gc_test.cpp
   unit/allocator_test.cpp
+  unit/sync_test.cpp
   unit/tir_test.cpp
   unit/nrq_dialect_test.cpp
   unit/cli_test.cpp

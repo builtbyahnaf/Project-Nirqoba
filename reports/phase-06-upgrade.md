@@ -96,3 +96,9 @@ Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tes
 GC root registration now fails fast when the root descriptor is invalid, conflicts with an existing slot layout, or cannot be recorded due to metadata allocation failure. Previously those cases silently left a live managed pointer unrooted, allowing later collection to reclaim it. The object index insertion also checks duplicate-address failures before linking the new object into the heap.
 
 Validation: Added a unit case for oversized allocation rejection with unchanged GC statistics. RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 57/57. No GC benchmark was run.
+
+## 30. Owned native mutex resource — 2026-11-01
+
+Added the Windows native mutex wrapper as a first non-file resource integration. `mutex.create()` produces an owned handle, generated cleanup calls `mutex.destroy`, transfers clear the old binding, and borrow parameters remain the path for non-owning helper access. A deferred unlock executes before automatic destroy due to LIFO cleanup ordering.
+
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 with concurrent counter serialization, and integration tests passed 59/59. No GC benchmark was run.

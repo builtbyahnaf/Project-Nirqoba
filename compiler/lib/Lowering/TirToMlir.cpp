@@ -1305,7 +1305,23 @@ class FunctionTranslator {
         mlir::Type runtime_ret_ty;
         std::vector<mlir::Type> runtime_arg_tys;
 
-        if (callee == "file.open") {
+        if (callee == "mutex.create") {
+          runtime_sym = "nrq_mutex_create";
+          runtime_ret_ty = llvm_ptr_type(ctx_);
+          runtime_arg_tys = {};
+        } else if (callee == "mutex.lock") {
+          runtime_sym = "nrq_mutex_lock";
+          runtime_ret_ty = mlir::LLVM::LLVMVoidType::get(ctx_);
+          runtime_arg_tys = {llvm_ptr_type(ctx_)};
+        } else if (callee == "mutex.unlock") {
+          runtime_sym = "nrq_mutex_unlock";
+          runtime_ret_ty = mlir::LLVM::LLVMVoidType::get(ctx_);
+          runtime_arg_tys = {llvm_ptr_type(ctx_)};
+        } else if (callee == "mutex.destroy") {
+          runtime_sym = "nrq_mutex_destroy";
+          runtime_ret_ty = mlir::LLVM::LLVMVoidType::get(ctx_);
+          runtime_arg_tys = {llvm_ptr_type(ctx_)};
+        } else if (callee == "file.open") {
           runtime_sym = "nrq_file_open_handle";
           runtime_ret_ty = llvm_ptr_type(ctx_);
           runtime_arg_tys = {llvm_ptr_type(ctx_), builder_.getI32Type()};
