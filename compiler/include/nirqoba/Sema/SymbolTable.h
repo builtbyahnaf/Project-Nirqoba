@@ -58,6 +58,7 @@ class SymbolTable {
                              std::string cleanup_callee = {});
   void merge_conditional_ownership(const SymbolTable& then_state,
                                    const SymbolTable& else_state);
+  std::vector<std::string> owners_moved_since(const SymbolTable& previous) const;
 
   std::size_t scope_depth() const { return scopes_.size(); }
 
