@@ -1,0 +1,13 @@
+struct Node {
+    int value;
+}
+
+int function main() {
+    var nodes = memory.owned_array<managed<Node> >(2);
+    var node = array.allocate<Node>(1);
+    node[0].value = 73;
+    nodes[0] = node;
+    node = array.allocate<Node>(1);
+    gc.collect();
+    return nodes[0][0].value;
+}

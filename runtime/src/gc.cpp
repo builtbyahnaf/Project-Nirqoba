@@ -43,6 +43,8 @@ std::unordered_map<void*, ObjectHeader*> object_index;
 struct RootInfo {
   size_t references = 0;
   size_t object_size = 0;
+  size_t repeated_count = 0;
+  size_t element_size = 0;
   std::vector<size_t> reference_offsets;
 };
 std::unordered_map<void*, RootInfo> roots;
@@ -101,12 +103,24 @@ void collect_locked() {
   for (const auto& root : roots) {
     auto* bytes = static_cast<const unsigned char*>(root.first);
     if (root.second.reference_offsets.empty()) continue;
-    for (size_t offset : root.second.reference_offsets) {
-      if (offset > root.second.object_size ||
-          sizeof(void*) > root.second.object_size - offset) continue;
-      void* reference = nullptr;
-      std::memcpy(&reference, bytes + offset, sizeof(reference));
-      enqueue_reference(reference, &context);
+    if (root.second.repeated_count != 0) {
+      for (size_t element = 0; element < root.second.repeated_count; ++element) {
+        const unsigned char* element_bytes =
+            bytes + element * root.second.element_size;
+        for (size_t offset : root.second.reference_offsets) {
+          void* reference = nullptr;
+          std::memcpy(&reference, element_bytes + offset, sizeof(reference));
+          enqueue_reference(reference, &context);
+        }
+      }
+    } else {
+      for (size_t offset : root.second.reference_offsets) {
+        if (offset > root.second.object_size ||
+            sizeof(void*) > root.second.object_size - offset) continue;
+        void* reference = nullptr;
+        std::memcpy(&reference, bytes + offset, sizeof(reference));
+        enqueue_reference(reference, &context);
+      }
     }
   }
   for (const auto& pinned : pinned_objects) {
@@ -286,6 +300,37 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
   ++found->second.references;
 }
 
+void nrq_gc_root_register_array(void* data, size_t count, size_t element_size,
+                                const size_t* reference_offsets,
+                                size_t reference_count) {
+  if (!data || count == 0) return;
+  if (element_size == 0 || reference_count == 0 || !reference_offsets ||
+      count > SIZE_MAX / element_size)
+    nrq_runtime_fatal("GC array-root registration received an invalid descriptor");
+  for (size_t index = 0; index < reference_count; ++index) {
+    const size_t offset = reference_offsets[index];
+    if (offset > element_size || sizeof(void*) > element_size - offset)
+      nrq_runtime_fatal("GC array-root registration contains an invalid pointer offset");
+  }
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  auto found = roots.find(data);
+  if (found != roots.end()) {
+    nrq_runtime_fatal("GC array-root storage address is already registered");
+  }
+  try {
+    RootInfo root;
+    root.references = 1;
+    root.object_size = count * element_size;
+    root.repeated_count = count;
+    root.element_size = element_size;
+    root.reference_offsets.assign(reference_offsets,
+                                  reference_offsets + reference_count);
+    roots.emplace(data, std::move(root));
+  } catch (...) {
+    nrq_runtime_fatal("GC array-root registration failed to allocate metadata");
+  }
+}
+
 void nrq_gc_root_unregister(void** slot) {
   if (!slot) return;
   std::lock_guard<std::mutex> lock(gc_mutex);
@@ -438,12 +483,24 @@ int64_t nrq_gc_get_ref_count(void* object) {
         header->trace(header->object, header->size, count_reference, &counts);
     for (const auto& root : roots) {
       auto* bytes = static_cast<const unsigned char*>(root.first);
-      for (size_t offset : root.second.reference_offsets) {
-        if (offset > root.second.object_size ||
-            sizeof(void*) > root.second.object_size - offset) continue;
-        void* reference = nullptr;
-        std::memcpy(&reference, bytes + offset, sizeof(reference));
-        count_reference(reference, &counts);
+      if (root.second.repeated_count != 0) {
+        for (size_t element = 0; element < root.second.repeated_count; ++element) {
+          const unsigned char* element_bytes =
+              bytes + element * root.second.element_size;
+          for (size_t offset : root.second.reference_offsets) {
+            void* reference = nullptr;
+            std::memcpy(&reference, element_bytes + offset, sizeof(reference));
+            count_reference(reference, &counts);
+          }
+        }
+      } else {
+        for (size_t offset : root.second.reference_offsets) {
+          if (offset > root.second.object_size ||
+              sizeof(void*) > root.second.object_size - offset) continue;
+          void* reference = nullptr;
+          std::memcpy(&reference, bytes + offset, sizeof(reference));
+          count_reference(reference, &counts);
+        }
       }
     }
     for (const auto& pinned : pinned_objects) {
