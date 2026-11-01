@@ -45,6 +45,12 @@ runtime repeated-offset API, and an integration test verifies an owned array
 keeps a managed object alive after its last local pointer is overwritten and
 collection runs.
 
+The collector's exact-address object index is now a contiguous open-addressed
+table rather than a node-based `unordered_map`. It grows during serialized
+allocation, uses tombstones during sweep, and performs lookup without per-object
+hash-node allocation. The existing allocation-pressure and cycle/root tests
+exercise growth, lookup, sweep, and subsequent reuse; no timings were collected.
+
 ## Phase 6.9 native resources
 
 File resources and native mutex handles now have explicit close/destroy behavior

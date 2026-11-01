@@ -31,6 +31,123 @@ struct alignas(std::max_align_t) ObjectHeader {
   std::vector<size_t> reference_offsets;
 };
 
+// The collector needs exact-address lookup while marking, but only allocation
+// mutates this table. Open addressing keeps pointer metadata contiguous and
+// avoids one node allocation per managed object.
+class ObjectIndex {
+ public:
+  ObjectHeader* find(void* object) const {
+    if (!object || entries_.empty()) return nullptr;
+    const size_t mask = entries_.size() - 1;
+    size_t index = hash(object) & mask;
+    for (size_t probes = 0; probes < entries_.size(); ++probes) {
+      const Entry& entry = entries_[index];
+      if (entry.object == nullptr) return nullptr;
+      if (entry.object == object) return entry.header;
+      index = (index + 1) & mask;
+    }
+    return nullptr;
+  }
+
+  bool insert(void* object, ObjectHeader* header) {
+    if (!object || !header) return false;
+    const bool needs_rehash = entries_.empty() ||
+        size_ + tombstones_ + 1 >= entries_.size() - entries_.size() / 3;
+    if (needs_rehash) {
+      size_t next = 64;
+      if (!entries_.empty()) {
+        if (size_ >= entries_.size() / 2) {
+          if (entries_.size() > SIZE_MAX / 2) return false;
+          next = entries_.size() * 2;
+        } else {
+          next = entries_.size();
+        }
+      }
+      if (!rehash(next)) return false;
+    }
+    const size_t mask = entries_.size() - 1;
+    size_t index = hash(object) & mask;
+    size_t tombstone = entries_.size();
+    for (size_t probes = 0; probes < entries_.size(); ++probes) {
+      Entry& entry = entries_[index];
+      if (entry.object == object) return false;
+      if (entry.object == tombstone_key() && tombstone == entries_.size())
+        tombstone = index;
+      if (entry.object == nullptr) {
+        if (tombstone != entries_.size()) {
+          index = tombstone;
+          --tombstones_;
+        }
+        entries_[index] = Entry{object, header};
+        ++size_;
+        return true;
+      }
+      index = (index + 1) & mask;
+    }
+    if (tombstone != entries_.size()) {
+      entries_[tombstone] = Entry{object, header};
+      --tombstones_;
+      ++size_;
+      return true;
+    }
+    return false;
+  }
+
+  void erase(void* object) {
+    if (!object || entries_.empty()) return;
+    const size_t mask = entries_.size() - 1;
+    size_t index = hash(object) & mask;
+    for (size_t probes = 0; probes < entries_.size(); ++probes) {
+      Entry& entry = entries_[index];
+      if (entry.object == nullptr) return;
+      if (entry.object == object) {
+        entry = Entry{tombstone_key(), nullptr};
+        --size_;
+        ++tombstones_;
+        return;
+      }
+      index = (index + 1) & mask;
+    }
+  }
+
+ private:
+  struct Entry { void* object = nullptr; ObjectHeader* header = nullptr; };
+  static void* tombstone_key() { return reinterpret_cast<void*>(uintptr_t{1}); }
+
+  static size_t hash(void* object) {
+    uint64_t value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(object));
+    value ^= value >> 30;
+    value *= UINT64_C(0xbf58476d1ce4e5b9);
+    value ^= value >> 27;
+    value *= UINT64_C(0x94d049bb133111eb);
+    value ^= value >> 31;
+    return static_cast<size_t>(value);
+  }
+
+  bool rehash(size_t capacity) {
+    try {
+      std::vector<Entry> replacement(capacity);
+      for (const Entry& entry : entries_) {
+        if (!entry.object || entry.object == tombstone_key()) continue;
+        const size_t mask = capacity - 1;
+        size_t index = hash(entry.object) & mask;
+        while (replacement[index].object != nullptr)
+          index = (index + 1) & mask;
+        replacement[index] = entry;
+      }
+      entries_.swap(replacement);
+      tombstones_ = 0;
+      return true;
+    } catch (...) {
+      return false;
+    }
+  }
+
+  std::vector<Entry> entries_;
+  size_t size_ = 0;
+  size_t tombstones_ = 0;
+};
+
 void destroy_object_storage(ObjectHeader* header) {
   if (!header) return;
   header->~ObjectHeader();
@@ -39,7 +156,7 @@ void destroy_object_storage(ObjectHeader* header) {
 
 std::mutex gc_mutex;
 ObjectHeader* objects = nullptr;
-std::unordered_map<void*, ObjectHeader*> object_index;
+ObjectIndex object_index;
 struct RootInfo {
   size_t references = 0;
   size_t object_size = 0;
@@ -78,11 +195,11 @@ struct MarkContext {
 void enqueue_reference(void* object, void* opaque_context) {
   if (!object) return;
   auto* context = static_cast<MarkContext*>(opaque_context);
-  auto found = object_index.find(object);
+  ObjectHeader* found = object_index.find(object);
   // Roots may refer to static/native objects. Only collector-owned objects
   // enter the intrusive mark stack, so marking never allocates auxiliary heap.
-  if (found == object_index.end() || found->second->marked) return;
-  ObjectHeader* header = found->second;
+  if (!found || found->marked) return;
+  ObjectHeader* header = found;
   header->marked = true;
   header->mark_next = context->pending;
   context->pending = header;
@@ -91,7 +208,7 @@ void enqueue_reference(void* object, void* opaque_context) {
 void count_reference(void* object, void* opaque_context) {
   if (!object) return;
   auto* counts = static_cast<std::unordered_map<void*, uint64_t>*>(opaque_context);
-  if (object_index.find(object) != object_index.end()) {
+  if (object_index.find(object)) {
     uint64_t& count = (*counts)[object];
     count = saturated_add(count, 1);
   }
@@ -206,8 +323,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     header->element_size = element_size;
     header->trace = trace;
     header->next = objects;
-      const auto indexed = object_index.emplace(object, header);
-      if (!indexed.second) {
+      if (!object_index.insert(object, header)) {
         destroy_object_storage(header);
         return nullptr;
       }
@@ -425,7 +541,7 @@ uint64_t nrq_gc_get_live_objects(void) {
 void* nrq_gc_pin(void* object) {
   if (!object) return nullptr;
   std::lock_guard<std::mutex> lock(gc_mutex);
-  if (object_index.find(object) == object_index.end()) return nullptr;
+  if (!object_index.find(object)) return nullptr;
   auto existing = pinned_objects.find(object);
   if (existing != pinned_objects.end() && existing->second >= kMaxPinsPerObject) {
     pin_violations = saturated_add(pin_violations, 1);
@@ -475,7 +591,7 @@ void nrq_gc_ref_count_stop(void) {
 int64_t nrq_gc_get_ref_count(void* object) {
   std::lock_guard<std::mutex> lock(gc_mutex);
   if (!reference_diagnostics_enabled) return -1;
-  if (!object || object_index.find(object) == object_index.end()) return 0;
+  if (!object || !object_index.find(object)) return 0;
   try {
     std::unordered_map<void*, uint64_t> counts;
     for (ObjectHeader* header = objects; header; header = header->next)
