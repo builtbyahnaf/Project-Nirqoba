@@ -697,6 +697,15 @@ void TypeChecker::check_destructuring(DestructuringStmt& statement) {
     return;
   }
 
+  if (contains_owned_array(value_type)) {
+    diagnostics_.error(diag::kTypeMismatch, statement.value().location(),
+                       "resource-bearing aggregates cannot be destructured; move the whole value");
+    for (const string& name : names) {
+      symbols_.declare(Symbol{name, Type::error(), statement.binding(), statement.location()});
+    }
+    return;
+  }
+
   // Tuple destructuring: let (a, b) = tup;
   if (value_type.is_tuple()) {
     const vector<Type>& elements = value_type.tuple_elements();
