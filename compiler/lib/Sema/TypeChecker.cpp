@@ -486,17 +486,32 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
 
   Symbol symbol{declaration.name(), binding_type, declaration.binding(),
                 declaration.location()};
+  const Symbol* transferred_owner = nullptr;
   if (binding_type.is_pointer()) {
+    if (declaration.initializer().kind() == Expr::Kind::Call &&
+        static_cast<const CallExpr&>(declaration.initializer()).callee() == "file.open")
+      symbol.owned_resource = true;
     if (declaration.initializer().kind() == Expr::Kind::Name) {
       const auto& source_name = static_cast<const NameExpr&>(declaration.initializer());
       const Symbol* source = symbols_.lookup(source_name.name());
-      if (source && source->type.is_pointer()) symbol.allocation_id = source->allocation_id;
+      if (source && source->type.is_pointer()) {
+        symbol.allocation_id = source->allocation_id;
+        if (source->owned_resource && !source->moved) {
+          symbol.owned_resource = true;
+          transferred_owner = source;
+        }
+      }
     }
     if (symbol.allocation_id == 0) symbol.allocation_id = next_allocation_id_++;
   }
+  const uint64_t allocation_id = symbol.allocation_id;
+  const string new_name = declaration.name();
   if (!symbols_.declare(move(symbol))) {
     diagnostics_.error(diag::kDuplicateName, declaration.location(),
                        "'" + declaration.name() + "' is already declared in this scope");
+  } else if (transferred_owner) {
+    symbols_.mark_allocation_moved(allocation_id);
+    symbols_.rebind_pointer(new_name, allocation_id);
   }
 }
 

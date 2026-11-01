@@ -2,6 +2,7 @@
 param([Parameter(Mandatory=$true)][string]$Compiler, [int]$Warmups=5, [int]$Runs=30, [string]$Output='profiler-overhead.json')
 $ErrorActionPreference='Stop'
 $root=$PSScriptRoot
+$compilerPath=(Resolve-Path $Compiler).Path
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('nrq-profile-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $temp | Out-Null
 try {
@@ -9,7 +10,9 @@ try {
   foreach ($mode in @('off','on')) {
     $source=Join-Path $root "profile-$mode.nrqba"
     $exe=Join-Path $temp "profile-$mode.exe"
-    & $Compiler build $source -o $exe
+    Push-Location $temp
+    try { & $compilerPath build $source -o $exe }
+    finally { Pop-Location }
     if ($LASTEXITCODE -ne 0) { throw "Could not build profiler $mode workload" }
     $bins[$mode]=$exe
   }
@@ -27,7 +30,7 @@ try {
   $offResult=Measure-Workload 'off'
   $onResult=Measure-Workload 'on'
   $data=@($offResult,$onResult)
-  $payload=[pscustomobject]@{date=(Get-Date).ToString('o');compiler=(Resolve-Path $Compiler).Path;warmups=$Warmups;runs=$Runs;iterations=100000;results=$data}
+  $payload=[pscustomobject]@{date=(Get-Date).ToString('o');compiler=$compilerPath;warmups=$Warmups;runs=$Runs;iterations=100000;results=$data}
   $payload | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 $Output
   $payload.results | Format-Table mode,p50_ms,p95_ms,p99_ms
 } finally { Remove-Item -LiteralPath $temp -Recurse -Force }

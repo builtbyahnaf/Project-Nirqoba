@@ -32,11 +32,15 @@ void SymbolTable::mark_allocation_moved(uint64_t allocation_id) {
 
 bool SymbolTable::allocation_is_moved(uint64_t allocation_id) const {
   if (allocation_id == 0) return false;
+  bool found_allocation = false;
+  bool found_live_allocation = false;
   for (const auto& scope : scopes_)
     for (const auto& entry : scope)
-      if (entry.second.allocation_id == allocation_id && entry.second.moved)
-        return true;
-  return false;
+      if (entry.second.allocation_id == allocation_id) {
+        found_allocation = true;
+        if (!entry.second.moved) found_live_allocation = true;
+      }
+  return found_allocation && !found_live_allocation;
 }
 
 void SymbolTable::rebind_pointer(const string& name, uint64_t allocation_id) {

@@ -89,3 +89,9 @@ Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and the full integr
 Added an opaque Windows file resource API exposed as `file.open(path, writable)`, `file.write(resource, text)`, and `file.close(resource)`. Runtime handles are registered, invalid or repeated close/use returns an error status, and `defer file.close(resource)` participates in existing LIFO cleanup. Semantic analysis marks the resource invalid after close and rejects later use.
 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 34/34, including successful deferred close and compile-time use-after-close rejection. The initial file API currently supports text writes; read APIs, wrappers for sockets/locks/GPU objects, and error-unwind cleanup remain open work. No exception unwinding is claimed.
+
+## 16. Owned file-resource transfer — 2026-11-01
+
+File handles returned by `file.open` now carry ownership identity in the semantic symbol table. Initializing another binding from an owned file handle transfers the owner and invalidates the source binding; closing invalidates the current owner. Deferred cleanup checks whether any live owner remains, avoiding false double-release reports after transfer. This ownership tracking is currently limited to file resources; raw pointers and general aggregate ownership are not covered.
+
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 35/35. Added positive ownership-transfer/deferred-close coverage and negative use-after-move coverage.

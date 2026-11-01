@@ -26,6 +26,8 @@ struct Symbol {
   // every lexical alias visible to the current type-checking pass.
   uint64_t allocation_id = 0;
   bool moved = false;
+  // True for an opaque runtime resource with unique ownership semantics.
+  bool owned_resource = false;
 
   bool is_mutable() const { return binding == BindingKind::Var; }
 };

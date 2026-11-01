@@ -1,0 +1,7 @@
+int function main() {
+    let resource = file.open("NUL", true);
+    let owner = resource;
+    file.write(resource, "invalid");
+    defer file.close(owner);
+    return 0;
+}
