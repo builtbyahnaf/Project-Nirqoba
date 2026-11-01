@@ -101,3 +101,15 @@ Owned pointer values produced by explicit allocation/resource APIs transfer when
 These rules currently cover pointer bindings and function boundaries. Aggregates, shared references, automatic drop insertion, and general lifetime inference are not yet implemented.
 
 Pointer reassignment follows the same transfer rule: assigning an owned pointer to another mutable binding moves it and invalidates the source. Overwriting a still-live owned pointer is rejected; release it before reusing that binding.
+
+Explicit shared raw allocations use `memory.shared_allocate<T>(bytes)` and
+reference management uses `memory.shared_retain(pointer)`,
+`memory.shared_release(pointer)`, and `memory.shared_count(pointer)`. Each retain
+creates an independently releasable reference; use `defer
+memory.shared_release(reference)` when cleanup should happen at lexical scope
+exit. Shared references cannot be passed to the unique-owner deallocator or
+resized. The runtime serializes reference-count updates, but shared ownership
+does not make access to the pointed-to data thread-safe. Shared handles are
+currently limited to local pointer bindings; shared function parameters,
+returns, aggregate propagation, and automatic drop insertion remain future
+work.

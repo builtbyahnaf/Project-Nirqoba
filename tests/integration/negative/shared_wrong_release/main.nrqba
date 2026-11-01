@@ -1,0 +1,6 @@
+int function main() {
+    let pointer = memory.allocate<byte>(8);
+    memory.shared_release(pointer);
+    memory.deallocate(pointer);
+    return 0;
+}

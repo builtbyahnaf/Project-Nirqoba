@@ -1,0 +1,10 @@
+int function main() {
+    let first = memory.shared_allocate<byte>(8);
+    print(memory.shared_count(first));
+    let second = memory.shared_retain(first);
+    print(memory.shared_count(first));
+    memory.shared_release(first);
+    print(memory.shared_count(second));
+    memory.shared_release(second);
+    return 0;
+}

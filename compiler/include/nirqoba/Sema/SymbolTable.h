@@ -28,6 +28,7 @@ struct Symbol {
   bool moved = false;
   // True when the binding uniquely owns an explicit runtime allocation/resource.
   bool owns_allocation = false;
+  bool shared_allocation = false;
   bool borrowed = false;
   bool mutable_borrow = false;
 
@@ -50,7 +51,8 @@ class SymbolTable {
   bool allocation_is_moved(uint64_t allocation_id) const;
   void rebind_pointer(const std::string& name, uint64_t allocation_id);
   void set_pointer_ownership(const std::string& name, bool owns_allocation,
-                             bool borrowed, bool mutable_borrow);
+                             bool borrowed, bool mutable_borrow,
+                             bool shared_allocation = false);
 
   std::size_t scope_depth() const { return scopes_.size(); }
 

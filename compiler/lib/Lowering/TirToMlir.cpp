@@ -172,6 +172,7 @@ static llvm::StringRef ownership_spelling(ValueOwnership ownership) {
     case ValueOwnership::Owned: return "owned";
     case ValueOwnership::Borrowed: return "borrowed";
     case ValueOwnership::MutableBorrowed: return "mutable_borrowed";
+    case ValueOwnership::Shared: return "shared";
     case ValueOwnership::GcManaged: return "gc_managed";
     case ValueOwnership::Raw: return "raw";
     case ValueOwnership::Trivial: return "trivial";
@@ -850,6 +851,45 @@ class FunctionTranslator {
                 loc, fn, mlir::ValueRange{bytes, alignment}).getResult();
           }
           set(op.result, result);
+          return true;
+        }
+        if (op.callee == "memory.shared_allocate" && op.result.is_valid() &&
+            op.result.type.is_pointer()) {
+          if (args.empty()) return false;
+          mlir::Value bytes = args[0];
+          if (bytes.getType() != builder_.getI64Type()) {
+            const unsigned bits = bytes.getType().getIntOrFloatBitWidth();
+            bytes = bits < 64
+                ? builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), bytes).getResult()
+                : builder_.create<mlir::LLVM::TruncOp>(loc, builder_.getI64Type(), bytes).getResult();
+          }
+          mlir::Value alignment = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, builder_.getI64Type(),
+              builder_.getI64IntegerAttr(type_alignment(op.result.type.element_type()))).getResult();
+          auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_shared_allocate",
+              llvm_ptr_type(ctx_), {builder_.getI64Type(), builder_.getI64Type()});
+          set(op.result, builder_.create<mlir::LLVM::CallOp>(
+              loc, fn, mlir::ValueRange{bytes, alignment}).getResult());
+          return true;
+        }
+        if (op.callee == "memory.shared_retain" ||
+            op.callee == "memory.shared_release" ||
+            op.callee == "memory.shared_count") {
+          if (args.empty()) return false;
+          const char* symbol = op.callee == "memory.shared_retain"
+              ? "nrq_memory_shared_retain"
+              : op.callee == "memory.shared_release"
+                  ? "nrq_memory_shared_release" : "nrq_memory_shared_count";
+          const bool count = op.callee == "memory.shared_count";
+          const bool retain = op.callee == "memory.shared_retain";
+          mlir::Type result_type = (count ? builder_.getI64Type()
+                                          : retain ? llvm_ptr_type(ctx_)
+                                                   : builder_.getI32Type());
+          auto fn = ensure_runtime_fn(module_, builder_, symbol, result_type,
+                                      {llvm_ptr_type(ctx_)});
+          auto result = builder_.create<mlir::LLVM::CallOp>(
+              loc, fn, mlir::ValueRange{args[0]});
+          if (op.result.is_valid()) set(op.result, result.getResult());
           return true;
         }
         if (op.callee == "memory.secure_allocate" && op.result.is_valid() &&

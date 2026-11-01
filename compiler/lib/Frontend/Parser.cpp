@@ -980,6 +980,7 @@ ExprPtr Parser::parse_primary() {
           peek(1).kind == TokenKind::Identifier &&
           (peek(1).text == "allocate" || peek(1).text == "reallocate" ||
            peek(1).text == "secure_allocate" ||
+           peek(1).text == "shared_allocate" ||
            peek(1).text == "mapped_read" || peek(1).text == "mapped_write") &&
           peek(2).kind == TokenKind::Less) {
         advance();  // '.'

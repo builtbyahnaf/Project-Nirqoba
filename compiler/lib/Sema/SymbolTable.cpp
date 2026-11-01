@@ -56,13 +56,15 @@ void SymbolTable::rebind_pointer(const string& name, uint64_t allocation_id) {
 
 void SymbolTable::set_pointer_ownership(const string& name,
                                         bool owns_allocation, bool borrowed,
-                                        bool mutable_borrow) {
+                                        bool mutable_borrow,
+                                        bool shared_allocation) {
   for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
     auto found = scope->find(name);
     if (found != scope->end()) {
       found->second.owns_allocation = owns_allocation;
       found->second.borrowed = borrowed;
       found->second.mutable_borrow = mutable_borrow;
+      found->second.shared_allocation = shared_allocation;
       return;
     }
   }
