@@ -1046,7 +1046,10 @@ void TypeChecker::check_return(ReturnStmt& statement) {
        contains_owned_array(current_return_type_)) &&
       statement.value()->kind() == Expr::Kind::Name) {
     const Symbol* source = find_root_symbol(*statement.value(), symbols_);
-    if (source && source->borrowed) {
+    if (source && source->type != current_return_type_) {
+      diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                         "an owned field cannot escape an aggregate individually");
+    } else if (source && source->borrowed) {
       diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                          "a borrowed pointer cannot escape through a return value");
     } else if (source && source->owns_allocation && !source->moved &&
@@ -2702,7 +2705,9 @@ Type TypeChecker::check_call(CallExpr& call) {
     }
     if (sig.parameter_types[i].is_owned_array() ||
         contains_owned_array(sig.parameter_types[i])) {
-      const Symbol* source = find_root_symbol(*call.arguments()[i], symbols_);
+      const Symbol* source = call.arguments()[i]->kind() == Expr::Kind::Name
+                                 ? find_root_symbol(*call.arguments()[i], symbols_) : nullptr;
+      if (source && source->type != sig.parameter_types[i]) source = nullptr;
       if (source && source->borrowed) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                            "borrowed values cannot be transferred as owned resources");
@@ -2722,7 +2727,9 @@ Type TypeChecker::check_call(CallExpr& call) {
       continue;
     }
     if (!sig.parameter_types[i].is_pointer()) continue;
-    const Symbol* source = find_root_symbol(*call.arguments()[i], symbols_);
+    const Symbol* source = call.arguments()[i]->kind() == Expr::Kind::Name
+                               ? find_root_symbol(*call.arguments()[i], symbols_) : nullptr;
+    if (source && source->type != sig.parameter_types[i]) source = nullptr;
     const bool expects_shared = i < sig.parameter_shared.size() && sig.parameter_shared[i];
     const bool argument_is_shared =
         (source && source->shared_allocation) ||
