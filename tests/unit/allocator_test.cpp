@@ -313,6 +313,15 @@ TEST(AllocatorTest, ReallocatePreservesContentsAndAllocatorIdentity) {
   ASSERT_EQ(nrq_allocator_destroy(region), int32_t{1});
 }
 
+TEST(AllocatorTest, ReallocateAllocatesWhenPointerIsNull) {
+  auto* value = static_cast<unsigned char*>(nrq_memory_reallocate(nullptr, 32));
+  ASSERT_NE(value, nullptr);
+  value[0] = 42;
+  ASSERT_EQ(static_cast<int>(value[0]), 42);
+  nrq_memory_deallocate_checked(value);
+  ASSERT_EQ(nrq_memory_reallocate(nullptr, 0), nullptr);
+}
+
 TEST(AllocatorTest, ReallocateRespectsStackAndRegionLifetimeRules) {
   // A stack allocator can only resize its most recent block, because releasing
   // anything else would break the LIFO order it guarantees.

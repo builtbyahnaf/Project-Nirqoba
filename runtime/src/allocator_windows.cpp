@@ -1237,11 +1237,17 @@ void nrq_memory_deallocate(void* pointer, size_t bytes, size_t alignment) {
 }
 
 void* nrq_memory_reallocate(void* pointer, size_t bytes) {
-  std::lock_guard<std::mutex> lock(allocator_mutex);
   if (!pointer) {
     if (bytes == 0) return nullptr;
-    return allocate_with_allocator(active_allocator(), bytes, kDefaultAlignmentBytes);
+    Allocator* allocator = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(allocator_mutex);
+      allocator = active_allocator();
+      if (!increment_operation_pin_locked(allocator)) return nullptr;
+    }
+    return allocate_with_allocator(allocator, bytes, kDefaultAlignmentBytes);
   }
+  std::lock_guard<std::mutex> lock(allocator_mutex);
   if (shared_reference_counts.find(pointer) != shared_reference_counts.end())
     nrq_runtime_fatal("shared allocations cannot be resized");
   auto found = live_allocations.find(pointer);
