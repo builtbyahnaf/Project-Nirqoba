@@ -1,0 +1,14 @@
+int function consume(owned_array<int> values) {
+    return values[0];
+}
+
+int function main() {
+    var values = memory.owned_array<int>(1);
+    values[0] = 9;
+    if (true) {
+        consume(values);
+    } else {
+        consume(values);
+    }
+    return 0;
+}

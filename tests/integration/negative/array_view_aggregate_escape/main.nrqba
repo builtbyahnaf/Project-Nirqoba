@@ -1,0 +1,7 @@
+struct SavedView {
+    array_view<int> view;
+}
+
+int function main() {
+    return 0;
+}

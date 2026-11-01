@@ -1,0 +1,12 @@
+int function consume(owned_array<int> values) {
+    return values[0];
+}
+
+int function main() {
+    var values = memory.owned_array<int>(1);
+    if (true) {
+        consume(values);
+    } else {
+    }
+    return values[0];
+}
