@@ -1,0 +1,6 @@
+int function main() {
+    let allocation = memory.allocate<byte>(8);
+    let owner = allocation;
+    defer memory.deallocate(owner);
+    return 0;
+}
