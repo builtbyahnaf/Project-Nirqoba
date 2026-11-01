@@ -94,10 +94,15 @@ static uint64_t type_alignment(const Type& type) {
   if (type.is_pointer() || type.is_managed_pointer() || type.is_string() ||
       type.is_dynamic_array() || type.is_owned_array() || type.is_array_view()) return 8;
   if (type.is_array()) return type_alignment(type.element_type());
-  if (type.is_struct()) {
+  if (type.is_struct() || type.is_tuple()) {
     uint64_t alignment = 1;
-    for (const auto& field : type.struct_fields())
-      alignment = std::max(alignment, type_alignment(field.second));
+    if (type.is_struct()) {
+      for (const auto& field : type.struct_fields())
+        alignment = std::max(alignment, type_alignment(field.second));
+    } else {
+      for (const Type& field : type.tuple_elements())
+        alignment = std::max(alignment, type_alignment(field));
+    }
     return alignment;
   }
   if (type.is_float()) return type.is_f32() ? 4 : 8;
