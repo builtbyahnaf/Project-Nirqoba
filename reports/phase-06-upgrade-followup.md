@@ -61,3 +61,21 @@ because those runtime subsystems do not yet exist.
   a Rust toolchain and controlled release configuration. No comparative
   performance claim is made. Phase 6U:G remains a later measurement task; GC
   benchmarking is intentionally deferred.
+
+## Explicit allocator synchronization
+
+Stateful operations now use a per-allocator mutex. Allocation selects and pins
+the allocator under the registry lock, performs allocator work outside that
+global lock, then records ownership and profiler data under the registry lock.
+The temporary pin prevents reset or destruction while a callback or allocator
+operation is in flight. A blocking custom-allocator regression test verifies
+that an explicit allocation prevents concurrent destruction until registration
+completes. Different allocator instances can perform allocation work in
+parallel; calls through the same allocator remain serialized.
+
+The live-allocation registry, shared reference counts, selection state, and
+profiler snapshot still use global synchronization. Deallocation and
+reallocation still hold that lock while invoking allocator operations. This is
+a correctness-preserving first reduction of allocator lock scope, not a claim
+that contention has been eliminated. The existing allocator benchmark matrix
+remains the measurement path; no GC benchmark was run.

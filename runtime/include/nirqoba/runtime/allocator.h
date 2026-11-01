@@ -26,9 +26,10 @@ typedef void (*NrqCustomDeallocateFn)(void* context, void* pointer,
                                       size_t bytes, size_t alignment);
 typedef void (*NrqCustomAllocatorDestroyFn)(void* context);
 
-// The runtime serializes callbacks under its allocator registry lock. Callbacks
-// must not re-enter allocator APIs and must pair each pointer with its original
-// size and alignment. The runtime copies this table at registration time.
+// The runtime serializes callbacks per allocator instance, outside the global
+// registry lock for allocation work. Callbacks must not re-enter APIs on the
+// same allocator and must pair each pointer with its original size and
+// alignment. The runtime copies this table at registration time.
 typedef struct NrqCustomAllocatorVTable {
   void* context;
   NrqCustomAllocateFn allocate;
