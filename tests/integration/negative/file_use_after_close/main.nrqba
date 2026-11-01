@@ -1,0 +1,6 @@
+int function main() {
+    let resource = file.open("NUL", true);
+    file.close(resource);
+    file.write(resource, "invalid");
+    return 0;
+}

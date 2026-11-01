@@ -22,6 +22,12 @@ int32_t nrq_file_append_text(const char* path, const char* text);
 // Checks if file exists and is a regular file. Returns 1 if exists, 0 otherwise.
 int32_t nrq_file_exists(const char* path);
 
+// Opaque deterministic file resource. Close with nrq_file_close_handle; the
+// Nirqoba surface pairs this with `defer file.close(handle)`.
+void* nrq_file_open_handle(const char* path, int32_t writable);
+int32_t nrq_file_close_handle(void* resource);
+int32_t nrq_file_write_handle(void* resource, const char* text);
+
 #ifdef __cplusplus
 }
 #endif

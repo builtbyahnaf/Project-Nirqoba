@@ -1,0 +1,6 @@
+int function main() {
+    let resource = file.open("NUL", true);
+    defer file.close(resource);
+    print(file.write(resource, "nirqoba"));
+    return 0;
+}
