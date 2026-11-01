@@ -186,6 +186,8 @@ TEST(GcTest, PinDiagnosticsReportCountAndRejectExcessivePins) {
 }
 
 TEST(GcTest, AutomaticCollectionStateIsObservable) {
+  nrq_gc_disable();
+  ASSERT_EQ(nrq_gc_is_enabled(), int32_t{0});
   nrq_gc_enable();
   ASSERT_EQ(nrq_gc_is_enabled(), int32_t{1});
   nrq_gc_disable();

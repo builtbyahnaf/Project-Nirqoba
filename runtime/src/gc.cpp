@@ -49,7 +49,10 @@ constexpr size_t kMaxPinsPerObject = 16;
 uint64_t pin_violations = 0;
 bool reference_diagnostics_enabled = false;
 thread_local std::vector<void*> thread_roots;
-bool automatic_collection_enabled = true;
+// Collection is an explicit opt-in policy. Programs using the GC domain may
+// call gc.enable() to request automatic triggers; explicit gc.collect() always
+// works regardless of this state.
+bool automatic_collection_enabled = false;
 size_t collection_threshold = 1024 * 1024;
 size_t bytes_since_collection = 0;
 nrq_gc_stats statistics{};
