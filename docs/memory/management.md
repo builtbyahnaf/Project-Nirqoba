@@ -1,4 +1,4 @@
-﻿# Managed and explicit memory
+# Managed and explicit memory
 
 Nirqoba currently has explicit raw allocations and a distinct tracing-GC domain.
 `array.allocate<T>(count)` creates a managed array and `managed<T>` marks
@@ -9,7 +9,7 @@ GC domain can enable automatic collection with `gc.enable()`; explicit
 `gc.collect()` always remains available. The Phase 6 Upgrade decision is to make
 ownership-based memory the language default. The compiler now tracks pointer ownership, moves, borrows, shared references, and deterministic cleanup for recognized resource producers. GC objects remain explicitly managed and cannot be released through the owned allocator.
 
-The implemented memory domains include owned pointers (move and deterministic cleanup), borrowed function parameters (non-owning and lifetime constrained), explicitly shared references (reference counted), and GC-managed references (traced and opt-in). Raw pointers remain available only within the current low-level subset; full unsafe scopes and aggregate ownership are not implemented.
+The implemented memory domains include owned pointers and arrays (move and deterministic cleanup), borrowed pointer parameters and array views (non-owning and lifetime constrained), explicitly shared references (reference counted), and GC-managed references (traced and opt-in). Raw pointers remain available in the current low-level subset; full unsafe scopes and ownership of resource-bearing aggregate fields are not implemented.
 
 `gc.get_statistics()` returns `allocated_bytes`, `collected_bytes`,
 `collections`, and `live_objects`. The collector is non-moving. It discovers
@@ -80,70 +80,36 @@ It can release explicit allocations and restore a prior allocator selection.
 Recognized owned pointers and resources are cleaned automatically at lexical exit, including return, break, and continue. Explicit `defer` may select a custom cleanup call and overrides the inferred automatic cleanup for that resource. Cleanup on exception unwinding remains unavailable because the language has no exception model. GC does not provide timely finalization.
 
 
-memory.cpu_features() returns a bit mask of CPU features the Windows operating system reports usable by this process: bit 0 is SSE2, bit 1 is AVX, and bit 2 is AVX2. A set bit means the runtime reports support; callers should still use an appropriate target-specific code path and retain a fallback. This API reports only the currently implemented feature set.
+memory.cpu_features() returns a bit mask of CPU features the Windows operating system reports usable by this process: bit 0 is SSE2, bit 1 is AVX, and bit 2 is AVX2. A set bit means the runtime reports support; callers should still use an appropriate target-specific code path and retain a fallback.
 
-ile.open(path, writable) creates an opaque Windows file resource or returns null. Use defer file.close(resource) immediately after opening; ile.write(resource, text) returns a Windows error code (zero on success). The compiler rejects use through a binding after ile.close. The current wrapper supports text writes and does not implement exception unwinding.
+`file.open(path, writable)` creates an owned Windows file resource or returns null. The wrapper supports text and byte reads and writes. Use `defer file.close(resource)` when explicit close timing is needed; otherwise the compiler closes an owned file at lexical exit. Ownership moves invalidate the source binding. Use after move or close is rejected.
 
-memory.thread_count() returns a Windows process-thread snapshot count. Because threads can start or exit during enumeration, treat it as an estimate rather than a synchronization guarantee.
+`memory.thread_count()` returns a Windows process-thread snapshot count. Because threads can start or exit during enumeration, treat it as an estimate rather than a synchronization guarantee.
 
-Owned pointer values produced by explicit allocation/resource APIs transfer when bound to another name or passed to a pointer parameter. Pointer return values transfer to the caller. Use `borrow T* name` for a temporary immutable function borrow and `borrow mut T* name` for an exclusive mutable borrow. Mutable borrowing requires a mutable source binding. Borrowed values cannot be freed, closed, passed to an owning parameter, or returned; the compiler rejects conflicting aliases at a call site. `defer` remains the mechanism to ensure explicit cleanup on supported lexical exits.
+## Ownership, borrows, and cleanup
 
-These rules currently cover pointer bindings and function boundaries. Aggregates, shared references, automatic drop insertion, and general lifetime inference are not yet implemented.
+Owned values from supported allocation and resource producers transfer when bound to another name, passed to an owning parameter, or returned through a matching owner return type. Tracked owners are cleaned in LIFO order at lexical exit, including return, break, and continue. Owner moves clear the source slot so generated cleanup remains safe across conditional control flow. Reassigning a live owner is rejected; release it before reusing the binding.
 
-Pointer reassignment follows the same transfer rule: assigning an owned pointer to another mutable binding moves it and invalidates the source. Overwriting a still-live owned pointer is rejected; release it before reusing that binding.
+Use `borrow T* name` for an immutable pointer borrow and `borrow mut T* name` for an exclusive mutable pointer borrow. Borrows cannot be freed, closed, returned, or passed to owning parameters. The checker rejects conflicting aliases at a call site. Borrowed array views are described below. Borrow analysis is conservative and lexical; general returned references, closure capture, arbitrary interprocedural lifetimes, and path-sensitive aggregate aliases are not implemented.
 
-Explicit shared raw allocations use `memory.shared_allocate<T>(bytes)` and
-reference management uses `memory.shared_retain(pointer)`,
-`memory.shared_release(pointer)`, and `memory.shared_count(pointer)`. Each retain
-creates an independently releasable reference; use `defer
-memory.shared_release(reference)` when cleanup should happen at lexical scope
-exit. Shared references cannot be passed to the unique-owner deallocator or
-resized. The runtime serializes reference-count updates, but shared ownership
-does not make access to the pointed-to data thread-safe. Shared handles are
-currently limited to local pointer bindings; shared function parameters,
-returns, aggregate propagation, and automatic drop insertion remain future
-work.
+`defer call(...)` captures call arguments when registered and runs calls in LIFO order on lexical block exit, including return, break, and continue. It can release explicit allocations, unpin GC objects, unlock mutexes, close files, and restore allocator selection. An explicit deferred cleanup overrides the inferred cleanup for that owner. Cleanup during exception unwinding is unavailable because the language has no exception model.
 
-A function parameter may declare `shared T* name` to accept one shared reference
-by ownership transfer. Calls consume the caller's named handle. Shared handles
-cannot be passed to a normal `T*` owning parameter; use `borrow T* name` when a
-callee only needs a temporary non-owning view. Shared return types and shared
-aggregate fields are not supported yet.
+## Shared references
 
-A function that returns a shared reference declares the ownership domain before
-the pointer type, for example `shared byte* function create()`. Returning a
-shared value transfers one reference to the caller. The compiler records the
-return domain on the MLIR function and rejects returning it through a unique
-pointer return type.
+`memory.shared_allocate<T>(bytes)` creates a reference-counted allocation. `memory.shared_retain(pointer)` creates another release token, `memory.shared_release(pointer)` consumes one token, and `memory.shared_count(pointer)` reports the current count. Use `defer memory.shared_release(reference)` for explicit lexical cleanup; shared parameters are released automatically when the callee exits.
 
-Raw pointers do not satisfy owning function parameters or pointer return types.
-Declare an explicit `borrow` or `borrow mut` parameter for temporary access; a
-borrowed or raw pointer cannot escape through a pointer return. Explicit owning
-producers and previously tracked owners may be transferred.
+A function parameter may declare `shared T* name`, and a function returning a shared pointer declares `shared T* function create()`. Calls transfer one token into or out of the function. Shared pointers cannot be passed to unique-owner parameters or released with unique deallocation APIs. Reference-count updates are synchronized; access to the pointed-to data is not made thread-safe. Shared references in aggregates are not supported.
 
+## Native mutex resources
 
-
-
-`mutex.create()` returns an owned native mutex. `mutex.lock(handle)` blocks until
-acquired, and only the owning thread may call `mutex.unlock(handle)`. Mutexes are
-non-recursive; re-locking the same mutex from its owner is a runtime error. The
-compiler destroys an owned mutex at lexical exit. Unlock it first, directly or
-with `defer mutex.unlock(handle)`. Destroying a locked mutex is a runtime error;
-mutex handles are not safe to share by copying and require `borrow` when passed
-temporarily to a helper.
+`mutex.create()` returns an owned native mutex. `mutex.lock(handle)` blocks until acquired, and only the owning thread may call `mutex.unlock(handle)`. Mutexes are non-recursive. The compiler destroys the owned mutex at lexical exit; use `defer mutex.unlock(handle)` so unlock runs before automatic destruction. Destroying a locked mutex, recursive acquisition, and unlocking from another thread are runtime errors. Pass a mutex handle through a borrow parameter when a helper only uses it temporarily.
 
 ## Owned arrays and borrowed views
 
-`memory.owned_array<T>(count)` creates one contiguous, uniquely owned buffer.
-The owner exposes `.length` and checked indexing and is released automatically
-at scope exit. Returning the array or passing it to an `owned_array<T>`
-parameter transfers the allocation.
+`memory.owned_array<T>(count)` creates one contiguous, uniquely owned buffer. `memory.owned_array_aligned<T>(count, alignment)` requests stronger power-of-two alignment, clamped to the element type's natural alignment. Allocation uses the selected explicit allocator. The owner exposes `.length` and checked indexing and is released automatically at scope exit. Returning the array or passing it to an `owned_array<T>` parameter transfers the allocation.
 
-`memory.array_view<T>(source, start, length)` creates a read-only, non-owning
-view into an owned array or another view. The runtime checks the requested range
-without overflowing. Views expose `.length`, checked indexing, and can be passed
-to `array_view<T>` parameters. Views cannot be returned or written through.
-While a view binding is live, the compiler rejects moving, releasing, or
-mutating its owner. End the view's lexical scope before performing those
-operations. This is conservative lexical lifetime checking; the language does
-not yet infer arbitrary reference lifetimes or track views stored in aggregates.
+When an owned array element type contains GC-managed references, the runtime registers the backing storage as a precise repeated-layout root region. Dropping the array unregisters that region before freeing the explicit buffer. The buffer remains explicitly owned; GC traces referenced managed objects without managing the buffer allocation itself.
+
+`memory.array_view<T>(source, start, length)` creates a read-only, non-owning view into an owned array or another view. The runtime checks the range without overflowing. Views expose `.length`, checked indexing, and can be passed to `array_view<T>` parameters. Views cannot be returned or written through. While a view binding is live, the compiler rejects moving, releasing, or mutating its owner. End the view's lexical scope before performing those operations. View lifetime tracking is conservative and lexical; views cannot be stored in aggregates.
+
+Aggregate fields that own resources, partial moves, closure capture, exception-unwind cleanup, GPU buffers, and non-Windows runtime support remain future work.
