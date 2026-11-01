@@ -1,0 +1,4 @@
+int function main() {
+    var items = memory.owned_array_aligned<int>(4, 64);
+    return items.length;
+}
