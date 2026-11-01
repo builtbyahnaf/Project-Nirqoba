@@ -13,6 +13,10 @@ int function main() {
     node[0].value = 73;
     holders[0].pair = (5, node);
     node = array.allocate<Node>(1);
+    return read_after_collection(holders[0]);
+}
+
+int function read_after_collection(Holder holder) {
     gc.collect();
-    return holders[0].pair.1[0].value;
+    return holder.pair.1[0].value;
 }

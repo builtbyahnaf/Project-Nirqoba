@@ -91,6 +91,11 @@ take ownership in between. A concurrent retain/release unit test passed.
 RelWithDebInfo validation: CTest 1/1 and integration 85/85. No GC benchmark was
 run.
 
+The tuple-layout regression now passes a struct containing nested managed
+references into a function that collects before reading it, covering the
+aggregate parameter root-copy path. RelWithDebInfo validation passed: CTest
+1/1 and integration 85/85. No GC benchmark was run.
+
 Owned arrays whose element types contain GC-managed references register their
 contiguous backing store as a repeated-layout GC root region. Array cleanup
 unregisters that region before releasing the buffer. A unit test verifies the
