@@ -1,0 +1,9 @@
+void function consume(byte* pointer) {
+    memory.deallocate(pointer);
+}
+
+int function main() {
+    let reference = memory.shared_allocate<byte>(8);
+    consume(reference);
+    return 0;
+}

@@ -29,6 +29,7 @@ struct FunctionSignature {
   std::string symbol;
   std::vector<bool> parameter_borrowed;
   std::vector<bool> parameter_mutable_borrow;
+  std::vector<bool> parameter_shared;
 };
 
 // Lightweight catalog entry for a registered struct type.

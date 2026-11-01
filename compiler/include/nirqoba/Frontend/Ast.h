@@ -573,6 +573,7 @@ struct Parameter {
   SourceLocation location;
   bool borrowed = false;
   bool mutable_borrow = false;
+  bool shared = false;
 };
 
 class StructDecl {

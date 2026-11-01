@@ -113,3 +113,9 @@ does not make access to the pointed-to data thread-safe. Shared handles are
 currently limited to local pointer bindings; shared function parameters,
 returns, aggregate propagation, and automatic drop insertion remain future
 work.
+
+A function parameter may declare `shared T* name` to accept one shared reference
+by ownership transfer. Calls consume the caller's named handle. Shared handles
+cannot be passed to a normal `T*` owning parameter; use `borrow T* name` when a
+callee only needs a temporary non-owning view. Shared return types and shared
+aggregate fields are not supported yet.

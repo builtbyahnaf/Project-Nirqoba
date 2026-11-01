@@ -296,6 +296,7 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
         const Token& parameter_type_token = peek();
         bool borrowed = false;
         bool mutable_borrow = false;
+        bool shared = false;
         if (check(TokenKind::Identifier) && peek().text == "borrow") {
           advance();
           borrowed = true;
@@ -303,6 +304,9 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
             advance();
             mutable_borrow = true;
           }
+        } else if (check(TokenKind::Identifier) && peek().text == "shared") {
+          advance();
+          shared = true;
         }
         const Type parameter_type = parse_type_annotation();
         if (!check(TokenKind::Identifier)) {
@@ -314,7 +318,7 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
         const Token parameter_name = advance();
         parameters.push_back(
             Parameter{parameter_name.text, parameter_type, parameter_type_token.location,
-                      borrowed, mutable_borrow});
+                      borrowed, mutable_borrow, shared});
       } while (match(TokenKind::Comma));
     }
     expect(TokenKind::RParen, "after the parameter list");
