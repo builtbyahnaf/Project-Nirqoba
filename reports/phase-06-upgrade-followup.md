@@ -32,6 +32,11 @@ loop back-edge and condition rejection, cleanup on a return path, duplicate and 
 view/pointer field restrictions, nested owned-array type rejection, and GC
 tracing through an aligned tuple nested in an owned array.
 
+An additional owner-scope regression now checks compiler-generated cleanup on
+both `continue` and `break` loop exits; the memory profiler remains at zero live
+bytes after the helper returns. The full validation suite passed again: CTest
+1/1 and integration 83/83.
+
 ## GC safety state
 
 GC remains an opt-in, precise, non-moving mark-and-sweep domain. Allocation
