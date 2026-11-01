@@ -83,6 +83,17 @@ TEST(GcTest, ExplicitCollectionStillRunsWhenAutomaticCollectionIsDisabled) {
   nrq_gc_set_threshold(1024 * 1024);
 }
 
+TEST(GcTest, RejectsAllocationSizeOverflowWithoutChangingHeapStatistics) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const nrq_gc_stats before = nrq_gc_get_stats();
+  ASSERT_EQ(nrq_gc_allocate(static_cast<size_t>(-1), nullptr), nullptr);
+  const nrq_gc_stats after = nrq_gc_get_stats();
+  ASSERT_EQ(after.allocated_bytes, before.allocated_bytes);
+  ASSERT_EQ(after.live_objects, before.live_objects);
+  ASSERT_EQ(after.collections, before.collections);
+}
+
 TEST(GcTest, AllocationThresholdTriggersAutomaticCollection) {
   nrq_gc_enable();
   nrq_gc_set_threshold(1);

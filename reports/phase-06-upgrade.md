@@ -90,3 +90,9 @@ Limitations: aggregate/partial moves, closure capture, raw unsafe scopes, except
 Owner transfers now load the current value and clear the source slot in TIR, while generated cleanup remains attached to the slot and safely receives null after a move. This makes implicit drop correct across conditional move paths: if a branch is skipped, the original owner is still released; if it runs, cleanup sees null. Deferred explicit cleanup clears the same slot after running, so the inferred cleanup remains safe. Assignments attach cleanup to the binding's lexical owner scope, and ownership-domain changes on an existing owner binding are rejected.
 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 57/57. The owner cleanup integration case exercises both taken and skipped conditional release branches, manual release, early return, scope exit, and shared cleanup.
+
+## 29. GC allocation and root failure safety — 2026-11-01
+
+GC root registration now fails fast when the root descriptor is invalid, conflicts with an existing slot layout, or cannot be recorded due to metadata allocation failure. Previously those cases silently left a live managed pointer unrooted, allowing later collection to reclaim it. The object index insertion also checks duplicate-address failures before linking the new object into the heap.
+
+Validation: Added a unit case for oversized allocation rejection with unchanged GC statistics. RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 57/57. No GC benchmark was run.
