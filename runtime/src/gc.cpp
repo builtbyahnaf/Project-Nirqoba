@@ -64,6 +64,10 @@ size_t collection_threshold = 1024 * 1024;
 size_t bytes_since_collection = 0;
 nrq_gc_stats statistics{};
 
+uint64_t saturated_add(uint64_t left, uint64_t right) {
+  return right > UINT64_MAX - left ? UINT64_MAX : left + right;
+}
+
 struct MarkContext {
   ObjectHeader* pending = nullptr;
 };
@@ -88,7 +92,7 @@ void count_reference(void* object, void* opaque_context) {
 }
 
 void collect_locked() {
-  ++statistics.collections;
+  statistics.collections = saturated_add(statistics.collections, 1);
   MarkContext context;
   for (const auto& root : roots) {
     auto* bytes = static_cast<const unsigned char*>(root.first);
@@ -134,8 +138,9 @@ void collect_locked() {
     if (!header->marked) {
       *link = header->next;
       object_index.erase(header->object);
-      statistics.collected_bytes += header->size;
-      --statistics.live_objects;
+      statistics.collected_bytes = saturated_add(
+          statistics.collected_bytes, static_cast<uint64_t>(header->size));
+      if (statistics.live_objects != 0) --statistics.live_objects;
       destroy_object_storage(header);
     } else {
       header->marked = false;
@@ -144,7 +149,8 @@ void collect_locked() {
   }
   statistics.allocated_bytes = 0;
   for (ObjectHeader* header = objects; header; header = header->next) {
-    statistics.allocated_bytes += header->size;
+    statistics.allocated_bytes = saturated_add(
+        statistics.allocated_bytes, static_cast<uint64_t>(header->size));
   }
   bytes_since_collection = 0;
 }
@@ -188,9 +194,11 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     return nullptr;
   }
   objects = header;
-  statistics.allocated_bytes += bytes;
-  ++statistics.live_objects;
-  bytes_since_collection += bytes;
+  statistics.allocated_bytes = saturated_add(
+      statistics.allocated_bytes, static_cast<uint64_t>(bytes));
+  statistics.live_objects = saturated_add(statistics.live_objects, 1);
+  bytes_since_collection = bytes > SIZE_MAX - bytes_since_collection
+      ? SIZE_MAX : bytes_since_collection + bytes;
   return object;
 }
 

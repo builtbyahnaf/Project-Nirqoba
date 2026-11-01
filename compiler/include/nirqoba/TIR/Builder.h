@@ -35,6 +35,9 @@ class TirBuilder {
     SourceLocation location;
     std::vector<tir::Value> arguments;
     Type result_type;
+    bool automatic = false;
+    bool active = true;
+    tir::Value owner_slot;
   };
 
   void lower_function(const FunctionDecl& function, const std::string& symbol,

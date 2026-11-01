@@ -74,3 +74,13 @@ Limitations: shared aggregates and compiler-inserted automatic release remain un
 The ownership checker now rejects raw or untracked pointers passed to unique-owner parameters and returned as owned pointers. Borrowed arguments require an explicit borrow parameter; raw/borrowed pointers cannot escape through an owning return contract. This closes a path where the callee could free storage while the caller retained an untracked alias.
 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 55/55, including new negative cases for raw pointer transfer and return.
+
+## 27. Automatic cleanup for tracked owners — 2026-11-01
+
+Added compiler-generated LIFO cleanup for recognized owning pointer/resource bindings at lexical scope exit. Cleanup also runs on return, break, and continue through the existing cleanup lowering. Owned pointer parameters default to `memory.deallocate`; shared parameters default to `memory.shared_release`. The checker carries cleanup identity across local moves and assignments, cancels the source cleanup on transfer, tracks reallocation as consuming the old owner, and rejects transferring resources whose destructor does not match the generic owner contract. An explicit `defer` for a named owner replaces its inferred cleanup.
+
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 57/57. New runtime cases verify local owned/shared cleanup and parameter cleanup; existing defer, file, pin, move, and reallocation cases remain green.
+
+GC correctness hardening: allocation, live-object, collection, and collected-byte counters now saturate instead of wrapping, including the automatic-allocation byte accumulator. This is accounting correctness work; no GC benchmark or speed claim is included.
+
+Limitations: aggregate/partial moves, closure capture, raw unsafe scopes, exception unwinding, and function return contracts for specialized resources still need type-system representation. GC remains stop-the-world and globally synchronized.
