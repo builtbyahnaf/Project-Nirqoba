@@ -106,6 +106,19 @@ A function parameter may declare `shared T* name`, and a function returning a sh
 
 `mutex.create()` returns an owned native mutex. `mutex.lock(handle)` blocks until acquired, and only the owning thread may call `mutex.unlock(handle)`. Mutexes are non-recursive. The compiler destroys the owned mutex at lexical exit; use `defer mutex.unlock(handle)` so unlock runs before automatic destruction. Destroying a locked mutex, recursive acquisition, and unlocking from another thread are runtime errors. Pass a mutex handle through a borrow parameter when a helper only uses it temporarily.
 
+## TCP socket resources
+
+`socket.connect(host, port)` creates an owned Windows TCP socket or returns
+null. Ports must be between 1 and 65535. `socket.send(handle, text)` sends the
+entire UTF-8 byte sequence and returns its byte count, or a negative Winsock
+error. `socket.receive(handle, destination, capacity)` reads up to `capacity`
+bytes and returns the count, zero on peer shutdown, or a negative Winsock
+error. `socket.close(handle)` closes the owned resource and returns zero on
+success. Use `defer socket.close(handle)` when choosing the close point; the
+compiler otherwise closes the owned socket at lexical exit. Socket handles are
+opaque, move with ownership, and cannot be indexed. Borrow parameters can be
+used by helper functions that send or receive without taking ownership.
+
 ## Owned arrays and borrowed views
 
 `memory.owned_array<T>(count)` creates one contiguous, uniquely owned buffer. `memory.owned_array_aligned<T>(count, alignment)` requests stronger power-of-two alignment, clamped to the element type's natural alignment. Allocation uses the selected explicit allocator. The owner exposes `.length` and checked indexing and is released automatically at scope exit. Returning the array or passing it to an `owned_array<T>` parameter transfers the allocation.

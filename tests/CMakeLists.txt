@@ -18,6 +18,7 @@ add_executable(nirqoba_unit_tests
   unit/file_test.cpp
   unit/mapping_test.cpp
   unit/sync_test.cpp
+  unit/socket_test.cpp
   unit/tir_test.cpp
   unit/nrq_dialect_test.cpp
   unit/cli_test.cpp

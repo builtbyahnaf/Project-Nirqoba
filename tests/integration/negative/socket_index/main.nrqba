@@ -1,0 +1,6 @@
+int function main() {
+    var stream = socket.connect("127.0.0.1", 7);
+    print(stream[0] as int);
+    socket.close(stream);
+    return 0;
+}

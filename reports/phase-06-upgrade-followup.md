@@ -320,3 +320,15 @@ managed references. A compiler regression checks the emitted handoff calls,
 and a runtime integration case returns a reference-bearing aggregate, collects,
 and reads the object. RelWithDebInfo validation passed: CTest 1/1 and
 integration 96/96. No GC benchmark was run.
+
+## 36. Owned TCP socket resources - 2026-11-02
+
+Added Windows TCP connect, text send, bounded receive, and deterministic close.
+Socket tokens are monotonic opaque handles with per-resource operation locks;
+close removes the token before waiting for an active operation, and stale
+handles are rejected. The compiler tracks socket ownership, inserts lexical
+close, permits borrowed handles for I/O helpers, rejects use after close, and
+blocks indexing opaque socket handles. A loopback unit test covers data flow
+and stale close; integration regressions cover cleanup and semantic checks.
+RelWithDebInfo validation passed: CTest 1/1 and integration 99/99. No GC
+benchmark was run.

@@ -1,0 +1,6 @@
+int function main() {
+    var stream = socket.connect("127.0.0.1", 7);
+    var destination = socket.connect("127.0.0.1", 8);
+    socket.receive(stream, destination, 16);
+    return 0;
+}

@@ -1670,6 +1670,23 @@ class FunctionTranslator {
           runtime_sym = "nrq_file_exists";
           runtime_ret_ty = builder_.getI32Type();
           runtime_arg_tys = {llvm_ptr_type(ctx_)};
+        } else if (callee == "socket.connect") {
+          runtime_sym = "nrq_socket_connect";
+          runtime_ret_ty = llvm_ptr_type(ctx_);
+          runtime_arg_tys = {llvm_ptr_type(ctx_), builder_.getI32Type()};
+        } else if (callee == "socket.close") {
+          runtime_sym = "nrq_socket_close_handle";
+          runtime_ret_ty = builder_.getI32Type();
+          runtime_arg_tys = {llvm_ptr_type(ctx_)};
+        } else if (callee == "socket.send") {
+          runtime_sym = "nrq_socket_send_text";
+          runtime_ret_ty = builder_.getI64Type();
+          runtime_arg_tys = {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)};
+        } else if (callee == "socket.receive") {
+          runtime_sym = "nrq_socket_receive";
+          runtime_ret_ty = builder_.getI64Type();
+          runtime_arg_tys = {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_),
+                             builder_.getI64Type()};
         } else if (callee == "time.now") {
           runtime_sym = "nrq_time_now_ms";
           runtime_ret_ty = builder_.getI64Type();

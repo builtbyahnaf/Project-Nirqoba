@@ -1,0 +1,11 @@
+{
+  "mode": "build",
+  "args": ["--emit=mlir"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "nrq_socket_connect",
+    "nrq_socket_send_text",
+    "nrq_socket_receive",
+    "nrq_socket_close_handle"
+  ]
+}
