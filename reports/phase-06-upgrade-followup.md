@@ -417,6 +417,21 @@ borrows, wrong-source returns, and aggregate-stored views remain rejected.
 Validation passed: Windows x64 build, CTest 1/1, and integration suite
 129/129. No benchmark was run.
 
+## 43. Conservative owned-array stack placement - 2026-11-02
+
+MLIR lowering now performs a conservative per-function escape analysis for
+small `memory.owned_array<T>` allocations with a constant element count and a
+single local owner slot. It promotes only when all observed uses are local
+indexing, length queries, or scope cleanup; returns, ownership transfers,
+aggregate storage, borrowed-view creation, and unknown uses retain the heap
+allocator path. Stack storage is entry-block allocated, managed-reference
+elements are cleared and registered with the GC root system, and cleanup
+unregisters roots without freeing stack memory. Per-array and per-function
+frame limits prevent unbounded stack growth. An MLIR regression confirms the
+stack path, while an escaping owned-parameter case confirms heap fallback.
+Validation passed: Windows x64 build, CTest 1/1, and integration suite
+132/132. No benchmark was run.
+
 ## 42. Per-thread GC bump-page cache - 2026-11-02
 
 Managed allocation now reuses a thread-local current GC page before scanning

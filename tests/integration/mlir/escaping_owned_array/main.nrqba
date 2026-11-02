@@ -1,0 +1,9 @@
+void function consume(owned_array<int> values) {
+    return;
+}
+
+int function main() {
+    var values = memory.owned_array<int>(4);
+    consume(values);
+    return 0;
+}
