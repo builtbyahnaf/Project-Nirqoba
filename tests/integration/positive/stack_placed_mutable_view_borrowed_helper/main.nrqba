@@ -1,0 +1,10 @@
+void function set_first(borrow mut array_view<int> values) {
+    values[0] = 44;
+}
+
+int function main() {
+    var values = memory.owned_array<int>(2);
+    var view = memory.array_view_mut<int>(values, 0, 2);
+    set_first(view);
+    return view[0];
+}

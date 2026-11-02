@@ -417,6 +417,18 @@ borrows, wrong-source returns, and aggregate-stored views remain rejected.
 Validation passed: Windows x64 build, CTest 1/1, and integration suite
 129/129. No benchmark was run.
 
+## 56. Stack placement through proven borrowed-view callees - 2026-11-02
+
+Escape analysis now builds conservative per-parameter summaries for scalar
+array-view parameters. A local owned array may be stack-placed when its view is
+passed to a known callee that only indexes scalar elements, queries length,
+constructs local views, or writes scalar elements through a mutable view.
+Returning the view, aggregate storage, unsupported element types, and unknown
+or non-borrowed callees keep the owner on the heap. Added execution and MLIR
+coverage for read-only and mutable helper calls, plus heap fallback for a
+returned view. Windows x64 build passed, CTest passed (1/1), and integration
+tests passed (155/155). No benchmark was run.
+
 ## 47. Borrowed subview return provenance - 2026-11-02
 
 Borrowed array-view return validation now follows `memory.array_view` back to

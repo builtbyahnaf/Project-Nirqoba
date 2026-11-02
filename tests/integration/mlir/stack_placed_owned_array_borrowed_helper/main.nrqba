@@ -1,0 +1,9 @@
+int function sum(borrow array_view<int> values) {
+    return values[0] + values[1];
+}
+
+int function main() {
+    var values = memory.owned_array<int>(2);
+    let view = memory.array_view<int>(values, 0, 2);
+    return sum(view);
+}

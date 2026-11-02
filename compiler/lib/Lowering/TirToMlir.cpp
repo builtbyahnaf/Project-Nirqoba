@@ -149,8 +149,123 @@ struct StackOwnedArrayLayout {
   std::size_t alignment = 0;
 };
 
+using BorrowedViewEscapeSummary =
+    std::unordered_map<std::string, std::vector<bool>>;
+
+static bool borrowed_view_parameter_does_not_escape(
+    const tir::Function& function, std::size_t parameter_index) {
+  if (parameter_index >= function.parameters().size()) return false;
+  const tir::Function::Parameter& parameter =
+      function.parameters()[parameter_index];
+  if (!parameter.type.is_array_view() ||
+      (parameter.ownership != ValueOwnership::Borrowed &&
+       parameter.ownership != ValueOwnership::MutableBorrowed))
+    return false;
+  const Type& element_type = parameter.type.element_type();
+  if (!(element_type.is_integer() || element_type.is_float() ||
+        element_type.is_bool() || element_type.is_char()))
+    return false;
+
+  std::unordered_set<int> view_slots;
+  for (const tir::Op& op : function.operations()) {
+    if (op.kind != tir::OpKind::Store || !op.operand.is_valid() ||
+        !op.operand.type.is_array_view())
+      continue;
+    const bool local_slot = std::any_of(
+        function.operations().begin(), function.operations().end(),
+        [&op](const tir::Op& candidate) {
+          return candidate.kind == tir::OpKind::Alloca &&
+                 candidate.result.id == op.lhs.id;
+        });
+    if (local_slot) view_slots.insert(op.lhs.id);
+  }
+
+  std::unordered_set<int> descriptors{parameter.value.id};
+  std::unordered_set<int> data_pointers;
+  for (const tir::Op& op : function.operations()) {
+    if (op.kind == tir::OpKind::Load && view_slots.count(op.lhs.id) &&
+        op.result.is_valid())
+      descriptors.insert(op.result.id);
+
+    auto uses = [&](int id) {
+      if (id < 0) return false;
+      if (op.operand.id == id || op.lhs.id == id || op.rhs.id == id)
+        return true;
+      for (const tir::Value argument : op.arguments)
+        if (argument.id == id) return true;
+      for (const tir::Value value : op.aggregate_elements)
+        if (value.id == id) return true;
+      return false;
+    };
+    bool uses_descriptor = false;
+    for (int id : descriptors) uses_descriptor |= uses(id);
+    bool uses_data = false;
+    for (int id : data_pointers) uses_data |= uses(id);
+    if (!uses_descriptor && !uses_data) continue;
+
+    if (op.kind == tir::OpKind::Store) {
+      const bool local_view_store = view_slots.count(op.lhs.id) &&
+                                    descriptors.count(op.operand.id);
+      if (uses_descriptor && !local_view_store) return false;
+      if (uses_data &&
+          !(data_pointers.count(op.lhs.id) && !uses_descriptor))
+        return false;
+      continue;
+    }
+    if (op.kind == tir::OpKind::Call && uses_descriptor &&
+        (op.callee == "memory.array_view" ||
+         op.callee == "memory.array_view_mut") &&
+        !op.arguments.empty() && descriptors.count(op.arguments[0].id) &&
+        op.result.is_valid()) {
+      descriptors.insert(op.result.id);
+      continue;
+    }
+    if (op.kind == tir::OpKind::AggregateExtract && uses_descriptor &&
+        descriptors.count(op.operand.id) &&
+        (op.field_index == 0 || op.field_index == 1)) {
+      if (op.field_index == 0 && op.result.is_valid())
+        data_pointers.insert(op.result.id);
+      continue;
+    }
+    if (op.kind == tir::OpKind::GetElementPtr && uses_data &&
+        data_pointers.count(op.lhs.id) && op.result.is_valid()) {
+      data_pointers.insert(op.result.id);
+      continue;
+    }
+    if (op.kind == tir::OpKind::Load && uses_data &&
+        data_pointers.count(op.lhs.id) && op.result.is_valid() &&
+        (op.result.type.is_integer() || op.result.type.is_float() ||
+         op.result.type.is_bool() || op.result.type.is_char()))
+      continue;
+    if (op.kind == tir::OpKind::Length && uses_descriptor &&
+        descriptors.count(op.operand.id))
+      continue;
+    if (op.kind == tir::OpKind::DynamicIndex && uses_descriptor &&
+        descriptors.count(op.lhs.id) && op.result.is_valid() &&
+        (op.result.type.is_integer() || op.result.type.is_float() ||
+         op.result.type.is_bool() || op.result.type.is_char()))
+      continue;
+    return false;
+  }
+  return true;
+}
+
+static BorrowedViewEscapeSummary summarize_borrowed_view_parameters(
+    const tir::Module& module) {
+  BorrowedViewEscapeSummary summary;
+  for (const auto& function : module.functions()) {
+    std::vector<bool> parameters(function->parameters().size(), false);
+    for (std::size_t index = 0; index < function->parameters().size(); ++index)
+      parameters[index] =
+          borrowed_view_parameter_does_not_escape(*function, index);
+    summary.emplace(function->name(), std::move(parameters));
+  }
+  return summary;
+}
+
 static std::unordered_map<int, StackOwnedArrayLayout> analyze_stack_owned_arrays(
-    const tir::Function& function) {
+    const tir::Function& function,
+    const BorrowedViewEscapeSummary& borrowed_view_summary) {
   for (const tir::Op& op : function.operations())
     if (op.kind == tir::OpKind::Call && op.callee == "memory.use_allocator")
       return {};
@@ -269,6 +384,19 @@ static std::unordered_map<int, StackOwnedArrayLayout> analyze_stack_owned_arrays
           descriptors.count(op.arguments[0].id) && op.result.is_valid()) {
         descriptors.insert(op.result.id);
         continue;
+      }
+      if (op.kind == tir::OpKind::Call && uses_descriptor) {
+        const auto callee = borrowed_view_summary.find(op.callee);
+        bool all_borrows_are_safe = callee != borrowed_view_summary.end();
+        bool passed_view = false;
+        for (std::size_t index = 0; index < op.arguments.size(); ++index) {
+          if (!descriptors.count(op.arguments[index].id)) continue;
+          passed_view = true;
+          if (callee == borrowed_view_summary.end() ||
+              index >= callee->second.size() || !callee->second[index])
+            all_borrows_are_safe = false;
+        }
+        if (passed_view && all_borrows_are_safe) continue;
       }
       if (op.kind == tir::OpKind::AggregateExtract && uses_descriptor &&
           descriptors.count(op.operand.id) &&
@@ -408,13 +536,15 @@ class FunctionTranslator {
  public:
   FunctionTranslator(mlir::ModuleOp module,
                      const tir::Function& tir_fn,
+                     const BorrowedViewEscapeSummary& borrowed_view_summary,
                      mlir::func::FuncOp func_op,
                      mlir::OpBuilder& builder,
                      mlir::MLIRContext* ctx,
                      DiagnosticEngine& diag)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
         builder_(builder), ctx_(ctx), diag_(diag),
-        stack_owned_arrays_(analyze_stack_owned_arrays(tir_fn)),
+        stack_owned_arrays_(
+            analyze_stack_owned_arrays(tir_fn, borrowed_view_summary)),
         uses_gc_mutator_(function_uses_gc(tir_fn)) {
     const std::vector<tir::Op>& operations = tir_fn_.operations();
     for (std::size_t index = 0; index < operations.size(); ++index)
@@ -2495,6 +2625,8 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
   mlir::OwningOpRef<mlir::ModuleOp> module =
       mlir::ModuleOp::create(builder.getUnknownLoc());
   builder.setInsertionPointToStart(module->getBody());
+  const BorrowedViewEscapeSummary borrowed_view_summary =
+      summarize_borrowed_view_parameters(tir_module);
 
   for (const auto& tir_fn : tir_module.functions()) {
     mlir::Type ret_type;
@@ -2562,7 +2694,8 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
       func_op.setArgAttrsAttr(builder.getArrayAttr(argument_attrs));
     }
 
-    FunctionTranslator translator(*module, *tir_fn, func_op, builder, &context, diagnostics);
+    FunctionTranslator translator(*module, *tir_fn, borrowed_view_summary,
+                                  func_op, builder, &context, diagnostics);
     if (!translator.translate()) return nullptr;
 
     builder.setInsertionPointAfter(func_op);
