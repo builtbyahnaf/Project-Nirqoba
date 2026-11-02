@@ -24,3 +24,7 @@ TEST(SyncTest, MutexSerializesConcurrentNativeCallers) {
   ASSERT_EQ(counter, uint64_t{4000});
   nrq_mutex_destroy(mutex);
 }
+
+TEST(SyncTest, DestroyNullOwnerIsNoop) {
+  nrq_mutex_destroy(nullptr);
+}

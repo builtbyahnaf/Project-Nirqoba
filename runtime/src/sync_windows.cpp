@@ -75,6 +75,10 @@ void nrq_mutex_unlock(void* handle) {
 }
 
 void nrq_mutex_destroy(void* handle) {
+  // Compiler-generated cleanup runs after moves and explicit destruction with
+  // the owning slot cleared. Treat that null sentinel as an already-released
+  // owner while continuing to diagnose stale non-null tokens.
+  if (!handle) return;
   std::shared_ptr<MutexResource> resource;
   {
     std::lock_guard<std::mutex> registry_lock(registry_mutex);

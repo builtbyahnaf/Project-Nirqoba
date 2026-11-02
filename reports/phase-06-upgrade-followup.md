@@ -179,7 +179,8 @@ because those runtime subsystems do not yet exist.
   `owned <resource> T*` contracts. File, socket, mutex, mapping, and secure
   domains are preserved through signatures and MLIR metadata, so resources can transfer
   through multiple function boundaries. Mismatched call arguments and returns
-  are rejected.
+  are rejected. TIR emits each owner parameter's matching destructor, and
+  null owner sentinels make cleanup safe after explicit release.
 - The C++/Rust benchmark matrix and runner exist, but comparative runs require
   a Rust toolchain and controlled release configuration. No comparative
   performance claim is made. Phase 6U:G remains a later measurement task; GC
