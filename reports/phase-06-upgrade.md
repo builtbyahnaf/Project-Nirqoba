@@ -2,25 +2,25 @@
 
 ## Phase 6.9
 
-The repository already implements optional reference diagnostics, profiler counters and histograms, Windows file mappings with checked typed access, GC pinning with scoped `defer`, secure allocation/zeroization, memory and runtime introspection, and deterministic lexical `defer` cleanup. Existing implementations are described in `docs/memory/management.md`, `runtime/src`, and the earlier sections of this report.
+The runtime implements optional reference diagnostics, profiler counters and histograms, Windows file mappings with checked typed access, GC pinning with scoped `defer`, secure allocation/zeroization, memory and runtime introspection, deterministic lexical cleanup, and owned file/mutex resources. Secure/shared release, file operations, mapping operations, and allocator statistics run without holding their global registries across allocator or I/O work. Detailed current evidence is in `reports/phase-06.9.md` and `reports/phase-06.9-followup.md`.
 
-Remaining work: native resource wrapper types and unwind cleanup require a specified error/unwind model; task/device introspection depends on later runtime subsystems; profiler enabled/disabled overhead has not been measured. These are not considered complete by the presence of adjacent APIs.
+Remaining work: socket/graphics/GPU resource wrappers and task/device introspection depend on runtime subsystems that do not exist; cleanup during exception unwinding needs a language unwind model. Profiler overhead has a 30-run host baseline, but there is no controlled cross-machine regression threshold. The runtime remains Windows-only.
 
 ## Phase 6 Upgrade
 
-The governing decision is ownership-based memory as the language default, with opt-in shared and tracing-GC domains and an unsafe raw boundary. See `project_context/PHASE6_MEMORY_MODEL.md` for the decision record. Existing automatic GC default remains a compatibility behavior until owned values, borrowing, deterministic drop, and migration semantics are implemented together.
+The governing decision is ownership-based memory as the language default, with opt-in shared and tracing-GC domains and a restricted raw-pointer boundary. Automatic GC starts disabled. The compiler implements move checking, parameter/return transfer contracts, borrowed pointer parameters, array-view lifetime restrictions, branch/loop ownership checks, aggregate whole-value moves, and deterministic cleanup on supported exits. The decision record is `project_context/PHASE6_MEMORY_MODEL.md`.
 
-Compiler ownership analysis, lifetime checking, ownership preservation through TIR/MLIR, thread-local allocator fast paths, GC TLAB/safepoints, contiguous tensor/view storage, and comparative benchmark results remain incomplete. No C++/Rust competitiveness claim is made.
+General returned-reference lifetimes, closure captures, field-level resource moves, escape analysis and stack placement, thread-local allocator fast paths, GC TLAB/safepoints, concurrent mutation, tensors/GPU buffers, and executable comparative C++/Rust results remain incomplete. Ownership metadata is preserved through TIR/MLIR. The C++/Rust runner is implemented, but this environment has no Rust compiler. No GC benchmark or C++/Rust competitiveness claim is made.
 
 Status: **FAIL / incomplete**. This report does not claim phase acceptance.
 
-## 17. Move tracking for explicit allocations — 2026-11-01
+## 17. Move tracking for explicit allocations - 2026-11-01
 
 Extended unique ownership tracking from file resources to `memory.allocate`, `memory.secure_allocate`, `memory.reallocate`, and `memory.map_file` results. Binding an owned allocation to another name transfers the allocation identity and invalidates prior aliases. GC-managed arrays and pins are intentionally excluded because they have distinct lifetime rules. Deferred cleanup now recognizes an allocation as already consumed only when a still-tracked alias exists and all aliases are invalid, avoiding false positives for an allocation whose original name was rebound.
 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 37/37, including explicit allocation transfer and use-after-move rejection. The analysis remains lexical and pointer-based; aggregate fields, closure capture, interprocedural ownership contracts, and borrowing are not yet implemented.
 
-## 18. Automatic collection default — 2026-11-01
+## 18. Automatic collection default - 2026-11-01
 
 Changed the tracing collector's initial automatic-collection state to disabled, consistent with the Phase 6 Upgrade decision. GC allocations remain supported in their explicit managed domain; programs may call `gc.enable()` to enable automatic triggers, while explicit `gc.collect()` remains available. Updated the superseded Phase 6.5 roadmap wording and memory documentation.
 
@@ -30,13 +30,13 @@ Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tes
 
 Phase 6U:G now has a repeatable source and runner matrix for scalar, contiguous-array, small allocation, pointer-rich graph, and multithreaded allocation workloads in C++ and Rust. The runner records warmups, repeated measurements, p50/p95/p99, environment/compiler metadata, and checksums, and isolates artifacts in a temp directory. The current machine has no `rustc.exe`; the runner parsed successfully but the comparative matrix could not be executed. No comparative performance claim or G acceptance pass is made.
 
-## 21. GC object storage co-allocation — 2026-11-01
+## 21. GC object storage co-allocation - 2026-11-01
 
 The collector now stores each aligned object header and payload in one allocation rather than separate header and payload allocations. Precise reference-offset metadata remains in the header, object payload remains zero-initialized, and collection still uses the existing global stop-the-world mutex and pointer index. This removes one allocator call per GC object; it does not add TLABs, generational collection, or concurrent collection.
 
-Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 38/38, including cycle tracing, pinning, roots, and managed arrays. A five-process smoke sample of the existing 20,000-object benchmark measured 3,117, 3,029, 3,243, 2,988, and 3,055 µs (median 3,055 µs, about 153 ns/object). An earlier single run before the storage change was 4,999 µs, but that is too weak a baseline for a speedup claim. Repeat paired runs with controlled machine load before quantifying the improvement.
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 38/38, including cycle tracing, pinning, roots, and managed arrays. A five-process smoke sample of the existing 20,000-object benchmark measured 3,117, 3,029, 3,243, 2,988, and 3,055 microseconds (median 3,055 microseconds, about 153 ns/object). An earlier single run before the storage change was 4,999 microseconds, but that is too weak a baseline for a speedup claim. Repeat paired runs with controlled machine load before quantifying the improvement.
 
-## 22. Function-boundary ownership and borrowing — 2026-11-01
+## 22. Function-boundary ownership and borrowing - 2026-11-01
 
 Implemented pointer ownership transfer through declarations, pointer parameters, and pointer returns. Added `borrow T* name` and `borrow mut T* name` parameter modifiers. The checker rejects use after move, borrowed pointer escape through returns, deallocation/close of borrows, transfer of borrowed values into owners, immutable sources for mutable borrows, and conflicting call-site aliases. Explicit memory/resource producers are tagged as owning in semantic symbols.
 
