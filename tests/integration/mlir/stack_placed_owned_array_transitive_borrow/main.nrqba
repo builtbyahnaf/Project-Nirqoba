@@ -1,0 +1,13 @@
+int function sum_inner(borrow array_view<int> values) {
+    return values[0] + values[1];
+}
+
+int function sum_outer(borrow array_view<int> values) {
+    return sum_inner(values);
+}
+
+int function main() {
+    var values = memory.owned_array<int>(2);
+    let view = memory.array_view<int>(values, 0, 2);
+    return sum_outer(view);
+}

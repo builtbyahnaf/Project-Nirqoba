@@ -4,13 +4,13 @@
 
 The runtime implements optional reference diagnostics, profiler counters and histograms, Windows file mappings with checked typed access, GC pinning with scoped `defer`, secure allocation/zeroization, memory and runtime introspection, deterministic lexical cleanup, and owned file/mutex/mapping/socket resources. Resource owner domains survive typed function returns. Secure/shared release, file operations, mapping operations, and allocator statistics run without holding their global registries across allocator or I/O work. Detailed current evidence is in `reports/phase-06.9.md` and `reports/phase-06.9-followup.md`.
 
-Remaining work: graphics/GPU resource wrappers and task/device introspection depend on runtime subsystems that do not exist; cleanup during exception unwinding needs a language unwind model. Profiler overhead has a 30-run host baseline, but there is no controlled cross-machine regression threshold. The runtime remains Windows-only.
+Remaining work: GPU resource ownership and task counts depend on runtime subsystems that do not exist; cleanup during exception unwinding needs a language unwind model. Device-memory introspection now reports DXGI estimates, but it does not provide GPU buffers or allocation. Profiler overhead has a 30-run host baseline, but there is no controlled cross-machine regression threshold. The runtime remains Windows-only.
 
 ## Phase 6 Upgrade
 
 The governing decision is ownership-based memory as the language default, with opt-in shared and tracing-GC domains and a restricted raw-pointer boundary. Automatic GC starts disabled. The compiler implements move checking, parameter/return transfer contracts, borrowed pointer parameters, array-view lifetime restrictions, branch/loop ownership checks, aggregate whole-value moves, and deterministic cleanup on supported exits. The decision record is `project_context/PHASE6_MEMORY_MODEL.md`.
 
-General returned-reference lifetimes, closure captures, field-level resource moves, escape analysis and stack placement, thread-local allocator fast paths, GC TLAB/safepoints, concurrent mutation, tensors/GPU buffers, and executable comparative C++/Rust results remain incomplete. Ownership metadata is preserved through TIR/MLIR. The C++/Rust runner is implemented, but this environment has no Rust compiler. No GC benchmark or C++/Rust competitiveness claim is made.
+The compiler now checks source-bound borrowed pointer and array-view returns, tracks partial moves/reinitialization for supported owned aggregate field paths, and stack-places small fixed owned arrays after conservative escape analysis. Escape summaries now propagate through chains of borrowed-view helper calls. GC TLABs and cooperative safepoints are implemented; concurrent mutation and concurrent collection are not claimed. Remaining ownership and performance work includes broader arbitrary pointer/resource fields and more general interprocedural lifetime/alias analysis. CPU tensor layouts and GPU buffer owners are not implemented; contiguous owned arrays and validated views provide the current storage foundation. Comparative C++/Rust work is excluded from this upgrade pass, and no GC benchmark is made.
 
 Status: **FAIL / incomplete**. This report does not claim phase acceptance.
 
@@ -102,3 +102,14 @@ Validation: Added a unit case for oversized allocation rejection with unchanged 
 Added the Windows native mutex wrapper as a first non-file resource integration. `mutex.create()` produces an owned handle, generated cleanup calls `mutex.destroy`, transfers clear the old binding, and borrow parameters remain the path for non-owning helper access. A deferred unlock executes before automatic destroy due to LIFO cleanup ordering.
 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 with concurrent counter serialization, and integration tests passed 59/59. No GC benchmark was run.
+
+## 31. Transitive borrowed-view escape summaries - 2026-11-02
+
+Borrowed-view no-escape summaries now reach a fixed point across function calls,
+including helper chains and recursive call groups. A small fixed owned array
+passed through multiple helpers that only inspect or mutate elements can stay
+stack placed; unknown calls and view retention remain conservative heap
+fallbacks. Added an MLIR regression for a two-helper chain.
+
+Validation: the Windows MSVC development build succeeded, CTest passed 1/1,
+and the RelWithDebInfo integration suite passed 158/158. No benchmark was run.

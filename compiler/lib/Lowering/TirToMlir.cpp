@@ -153,7 +153,8 @@ using BorrowedViewEscapeSummary =
     std::unordered_map<std::string, std::vector<bool>>;
 
 static bool borrowed_view_parameter_does_not_escape(
-    const tir::Function& function, std::size_t parameter_index) {
+    const tir::Function& function, std::size_t parameter_index,
+    const BorrowedViewEscapeSummary& summary) {
   if (parameter_index >= function.parameters().size()) return false;
   const tir::Function::Parameter& parameter =
       function.parameters()[parameter_index];
@@ -220,6 +221,19 @@ static bool borrowed_view_parameter_does_not_escape(
       descriptors.insert(op.result.id);
       continue;
     }
+    if (op.kind == tir::OpKind::Call && uses_descriptor) {
+      const auto callee = summary.find(op.callee);
+      bool passed_view = false;
+      bool all_borrows_are_safe = callee != summary.end();
+      for (std::size_t index = 0; index < op.arguments.size(); ++index) {
+        if (!descriptors.count(op.arguments[index].id)) continue;
+        passed_view = true;
+        if (callee == summary.end() || index >= callee->second.size() ||
+            !callee->second[index])
+          all_borrows_are_safe = false;
+      }
+      if (passed_view && all_borrows_are_safe) continue;
+    }
     if (op.kind == tir::OpKind::AggregateExtract && uses_descriptor &&
         descriptors.count(op.operand.id) &&
         (op.field_index == 0 || op.field_index == 1)) {
@@ -254,11 +268,26 @@ static BorrowedViewEscapeSummary summarize_borrowed_view_parameters(
     const tir::Module& module) {
   BorrowedViewEscapeSummary summary;
   for (const auto& function : module.functions()) {
-    std::vector<bool> parameters(function->parameters().size(), false);
-    for (std::size_t index = 0; index < function->parameters().size(); ++index)
-      parameters[index] =
-          borrowed_view_parameter_does_not_escape(*function, index);
+    std::vector<bool> parameters(function->parameters().size(), true);
     summary.emplace(function->name(), std::move(parameters));
+  }
+  // Start with the optimistic no-escape assumption and monotonically remove
+  // parameters whose bodies may retain or otherwise expose the borrowed view.
+  // This reaches a fixed point across helper chains and recursive call groups.
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (const auto& function : module.functions()) {
+      auto entry = summary.find(function->name());
+      if (entry == summary.end()) continue;
+      for (std::size_t index = 0; index < entry->second.size(); ++index) {
+        if (entry->second[index] &&
+            !borrowed_view_parameter_does_not_escape(*function, index, summary)) {
+          entry->second[index] = false;
+          changed = true;
+        }
+      }
+    }
   }
   return summary;
 }
