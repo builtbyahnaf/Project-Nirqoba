@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <functional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -139,6 +140,122 @@ static uint64_t type_size(const Type& type) {
   return 0;
 }
 
+// Promote only small, fixed-size owned arrays whose descriptor and data
+// pointer are proven not to leave the current function. This intentionally
+// rejects unknown uses instead of guessing at alias behavior.
+static std::unordered_map<int, std::size_t> analyze_stack_owned_arrays(
+    const tir::Function& function) {
+  std::unordered_map<int, int64_t> integer_constants;
+  for (const tir::Op& op : function.operations())
+    if (op.kind == tir::OpKind::ConstantInt && op.result.is_valid())
+      integer_constants.emplace(op.result.id, op.integer_value);
+
+  std::unordered_map<int, std::size_t> candidates;
+  std::size_t promoted_bytes = 0;
+  constexpr std::size_t kMaxArrayBytes = 4096;
+  constexpr std::size_t kMaxFunctionFrameBytes = 16384;
+  for (const tir::Op& allocation : function.operations()) {
+    if (allocation.kind != tir::OpKind::Call ||
+        allocation.callee != "memory.owned_array" ||
+        !allocation.result.is_valid() || !allocation.result.type.is_owned_array() ||
+        allocation.arguments.size() != 1)
+      continue;
+    const auto count_value = integer_constants.find(allocation.arguments[0].id);
+    const uint64_t element_bytes = type_size(allocation.result.type.element_type());
+    if (count_value == integer_constants.end() || count_value->second <= 0 ||
+        element_bytes == 0 ||
+        static_cast<uint64_t>(count_value->second) > kMaxArrayBytes / element_bytes)
+      continue;
+    const std::size_t count = static_cast<std::size_t>(count_value->second);
+    const std::size_t bytes = count * static_cast<std::size_t>(element_bytes);
+    if (bytes > kMaxFunctionFrameBytes - promoted_bytes) continue;
+
+    int owner_slot = -1;
+    std::size_t initial_stores = 0;
+    for (const tir::Op& op : function.operations()) {
+      if (op.kind == tir::OpKind::Store && op.operand.id == allocation.result.id) {
+        ++initial_stores;
+        owner_slot = op.lhs.id;
+      }
+    }
+    if (initial_stores != 1 || owner_slot < 0) continue;
+    const bool is_local_slot = std::any_of(
+        function.operations().begin(), function.operations().end(),
+        [owner_slot](const tir::Op& op) {
+          return op.kind == tir::OpKind::Alloca && op.result.id == owner_slot;
+        });
+    if (!is_local_slot) continue;
+
+    std::unordered_set<int> descriptors{allocation.result.id};
+    for (const tir::Op& op : function.operations())
+      if (op.kind == tir::OpKind::Load && op.lhs.id == owner_slot &&
+          op.result.is_valid())
+        descriptors.insert(op.result.id);
+    std::unordered_set<int> data_pointers;
+    bool escapes = false;
+    for (const tir::Op& op : function.operations()) {
+      auto uses = [&](int id) {
+        if (id < 0) return false;
+        if (op.operand.id == id || op.lhs.id == id || op.rhs.id == id)
+          return true;
+        for (const tir::Value argument : op.arguments)
+          if (argument.id == id) return true;
+        for (const tir::Value element : op.aggregate_elements)
+          if (element.id == id) return true;
+        return false;
+      };
+      bool uses_descriptor = false;
+      for (int id : descriptors) uses_descriptor |= uses(id);
+      bool uses_data = false;
+      for (int id : data_pointers) uses_data |= uses(id);
+      if (!uses_descriptor && !uses_data) continue;
+
+      if (op.kind == tir::OpKind::Store) {
+        const bool initialization = op.lhs.id == owner_slot &&
+                                   op.operand.id == allocation.result.id;
+        if ((uses_descriptor && !initialization) ||
+            (uses_data && op.operand.id >= 0 && data_pointers.count(op.operand.id)))
+          escapes = true;
+        continue;
+      }
+      if (op.kind == tir::OpKind::AggregateExtract && uses_descriptor &&
+          descriptors.count(op.operand.id) &&
+          (op.field_index == 0 || op.field_index == 1)) {
+        if (op.field_index == 0 && op.result.is_valid())
+          data_pointers.insert(op.result.id);
+        continue;
+      }
+      if (op.kind == tir::OpKind::Length && uses_descriptor &&
+          descriptors.count(op.operand.id))
+        continue;
+      if (op.kind == tir::OpKind::DynamicIndex && uses_descriptor &&
+          descriptors.count(op.lhs.id))
+        continue;
+      if (op.kind == tir::OpKind::GetElementPtr && uses_data &&
+          data_pointers.count(op.lhs.id) && op.result.is_valid()) {
+        data_pointers.insert(op.result.id);
+        continue;
+      }
+      if (op.kind == tir::OpKind::Load && uses_data &&
+          data_pointers.count(op.lhs.id))
+        continue;
+      if (op.kind == tir::OpKind::Call && uses_descriptor &&
+          op.callee == "array.owned_release" && op.arguments.size() == 1 &&
+          descriptors.count(op.arguments[0].id))
+        continue;
+      if (op.kind == tir::OpKind::Store && uses_data &&
+          data_pointers.count(op.lhs.id) && !uses_descriptor)
+        continue;
+      escapes = true;
+    }
+    if (escapes) continue;
+    candidates.emplace(allocation.result.id, count);
+    for (int id : descriptors) candidates.emplace(id, count);
+    promoted_bytes += bytes;
+  }
+  return candidates;
+}
+
 static void collect_managed_reference_offsets(const Type& type, uint64_t base,
                                               std::vector<uint64_t>& offsets) {
   if (type.is_managed_pointer()) {
@@ -217,7 +334,8 @@ class FunctionTranslator {
                      mlir::MLIRContext* ctx,
                      DiagnosticEngine& diag)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
-        builder_(builder), ctx_(ctx), diag_(diag) {
+        builder_(builder), ctx_(ctx), diag_(diag),
+        stack_owned_arrays_(analyze_stack_owned_arrays(tir_fn)) {
     entry_block_ = func_op.addEntryBlock();
     builder_.setInsertionPointToStart(entry_block_);
     values_.resize(tir_fn.value_count());
@@ -377,10 +495,7 @@ class FunctionTranslator {
     const mlir::Type i64 = builder_.getI64Type();
     auto offsets_type = mlir::LLVM::LLVMArrayType::get(
         i64, static_cast<unsigned>(offsets.size()));
-    mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
-        loc, i64, builder_.getI64IntegerAttr(1)).getResult();
-    mlir::Value offsets_slot = builder_.create<mlir::LLVM::AllocaOp>(
-        loc, llvm_ptr_type(ctx_), offsets_type, one).getResult();
+    mlir::Value offsets_slot = alloca_at_entry(offsets_type, loc);
     mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
         loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
     for (std::size_t index = 0; index < offsets.size(); ++index) {
@@ -919,6 +1034,73 @@ class FunctionTranslator {
                 ? builder_.create<mlir::LLVM::ZExtOp>(loc, i64, count).getResult()
                 : builder_.create<mlir::LLVM::TruncOp>(loc, i64, count).getResult();
           }
+          const auto stack_array = stack_owned_arrays_.find(op.result.id);
+          if (stack_array != stack_owned_arrays_.end()) {
+            const std::size_t count_value = stack_array->second;
+            mlir::Type element_type = tir_type_to_mlir(
+                op.result.type.element_type(), ctx_, builder_);
+            mlir::Type storage_type = mlir::LLVM::LLVMArrayType::get(
+                element_type, static_cast<unsigned>(count_value));
+            mlir::Value storage = alloca_at_entry(storage_type, loc);
+            if (!storage) {
+              diag_.error("NRQ4005", op.location,
+                          "internal: failed to allocate stack storage for owned array");
+              return false;
+            }
+            if (mlir::Operation* storage_op = storage.getDefiningOp())
+              storage_op->setAttr("nirqoba.stack_placed", builder_.getUnitAttr());
+            mlir::Value zero_index = builder_.create<mlir::LLVM::ConstantOp>(
+                loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
+            mlir::Value data = builder_.create<mlir::LLVM::GEPOp>(
+                loc, llvm_ptr_type(ctx_), storage_type, storage,
+                mlir::ValueRange{zero_index, zero_index}).getResult();
+            std::vector<uint64_t> reference_offsets;
+            collect_managed_reference_offsets(
+                op.result.type.element_type(), 0, reference_offsets);
+            if (!reference_offsets.empty()) {
+              auto offsets_type = mlir::LLVM::LLVMArrayType::get(
+                  i64, static_cast<unsigned>(reference_offsets.size()));
+              mlir::Value offsets_slot = alloca_at_entry(offsets_type, loc);
+              for (std::size_t index = 0; index < reference_offsets.size(); ++index) {
+                mlir::Value index_value = builder_.create<mlir::LLVM::ConstantOp>(
+                    loc, i64, builder_.getI64IntegerAttr(
+                                  static_cast<int64_t>(index))).getResult();
+                mlir::Value slot = builder_.create<mlir::LLVM::GEPOp>(
+                    loc, llvm_ptr_type(ctx_), offsets_type, offsets_slot,
+                    mlir::ValueRange{zero_index, index_value}).getResult();
+                mlir::Value offset = builder_.create<mlir::LLVM::ConstantOp>(
+                    loc, i64, builder_.getI64IntegerAttr(
+                                  static_cast<int64_t>(reference_offsets[index]))).getResult();
+                builder_.create<mlir::LLVM::StoreOp>(loc, offset, slot);
+              }
+              auto clear_references = ensure_runtime_fn(
+                  module_, builder_, "nrq_gc_root_clear_array_references",
+                  mlir::LLVM::LLVMVoidType::get(ctx_),
+                  {llvm_ptr_type(ctx_), i64, i64, llvm_ptr_type(ctx_), i64});
+              mlir::Value element_bytes = builder_.create<mlir::LLVM::ConstantOp>(
+                  loc, i64, builder_.getI64IntegerAttr(element_size)).getResult();
+              mlir::Value reference_count = builder_.create<mlir::LLVM::ConstantOp>(
+                  loc, i64, builder_.getI64IntegerAttr(
+                                static_cast<int64_t>(reference_offsets.size()))).getResult();
+              builder_.create<mlir::LLVM::CallOp>(
+                  loc, clear_references,
+                  mlir::ValueRange{data, count, element_bytes, offsets_slot,
+                                   reference_count});
+            }
+            emit_gc_array_root_registration(
+                data, count, op.result.type.element_type(), loc);
+            mlir::Type descriptor_type = tir_type_to_mlir(op.result.type, ctx_, builder_);
+            mlir::Value descriptor = builder_.create<mlir::LLVM::UndefOp>(
+                loc, descriptor_type).getResult();
+            descriptor = builder_.create<mlir::LLVM::InsertValueOp>(
+                loc, descriptor, data,
+                builder_.getDenseI64ArrayAttr({0})).getResult();
+            descriptor = builder_.create<mlir::LLVM::InsertValueOp>(
+                loc, descriptor, count,
+                builder_.getDenseI64ArrayAttr({1})).getResult();
+            set(op.result, descriptor);
+            return true;
+          }
           auto allocate = ensure_runtime_fn(
               module_, builder_, "nrq_memory_allocate_array", llvm_ptr_type(ctx_),
               {i64, i64, i64});
@@ -953,10 +1135,7 @@ class FunctionTranslator {
                 {llvm_ptr_type(ctx_), i64, i64, llvm_ptr_type(ctx_), i64});
             auto offsets_type = mlir::LLVM::LLVMArrayType::get(
                 i64, static_cast<unsigned>(root_offsets.size()));
-            mlir::Value offsets_slot = builder_.create<mlir::LLVM::AllocaOp>(
-                loc, llvm_ptr_type(ctx_), offsets_type,
-                builder_.create<mlir::LLVM::ConstantOp>(
-                    loc, i64, builder_.getI64IntegerAttr(1)).getResult()).getResult();
+            mlir::Value offsets_slot = alloca_at_entry(offsets_type, loc);
             mlir::Value zero_index = builder_.create<mlir::LLVM::ConstantOp>(
                 loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
             for (std::size_t index = 0; index < root_offsets.size(); ++index) {
@@ -1047,6 +1226,10 @@ class FunctionTranslator {
               mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
           builder_.create<mlir::LLVM::CallOp>(
               loc, unregister, mlir::ValueRange{data});
+          if (op.arguments.size() == 1 &&
+              stack_owned_arrays_.find(op.arguments[0].id) !=
+                  stack_owned_arrays_.end())
+            return true;
           auto release = ensure_runtime_fn(
               module_, builder_, "nrq_memory_deallocate_checked",
               mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
@@ -2092,6 +2275,7 @@ class FunctionTranslator {
   mlir::OpBuilder& builder_;
   mlir::MLIRContext* ctx_;
   DiagnosticEngine& diag_;
+  std::unordered_map<int, std::size_t> stack_owned_arrays_;
   mlir::Block* entry_block_;
   struct PendingGcRoot {
     mlir::Value slot;

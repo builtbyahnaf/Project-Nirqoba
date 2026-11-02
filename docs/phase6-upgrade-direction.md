@@ -41,9 +41,10 @@ silently counted as complete:
   synchronization and production bookkeeping; a controlled comparison against
   platform and mature general-purpose allocators.
 - **Ownership:** native-resource pointer field moves; returned-reference
-  lifetime rules beyond pointers and immutable array views; interprocedural
-  escape analysis and stack placement; closure capture ownership; cleanup
-  semantics for a future error or exception unwinding model.
+  lifetime rules beyond pointers and immutable array views; interprocedural and
+  alias-rich escape analysis beyond the conservative local-array promotion now
+  implemented; closure capture ownership; cleanup semantics for a future error
+  or exception unwinding model.
 - **Collector:** the runtime now caches each thread's current bump page, but
   allocation remains serialized by the collector mutex. True TLAB fast paths,
   safepoints and mutator coordination, size classes and free-slot reuse,
