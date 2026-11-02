@@ -113,3 +113,14 @@ fallbacks. Added an MLIR regression for a two-helper chain.
 
 Validation: the Windows MSVC development build succeeded, CTest passed 1/1,
 and the RelWithDebInfo integration suite passed 158/158. No benchmark was run.
+
+## 32. Nested owned-field move coverage - 2026-11-02
+
+Added an end-to-end regression that extracts an owned array from a nested
+struct field, replaces that field, then reads the extracted allocation, the
+replacement, and untouched sibling fields. This verifies that partial moves
+preserve sibling ownership and that nested reinitialization leaves cleanup
+valid for the aggregate at scope exit.
+
+Validation: the RelWithDebInfo integration suite passed 159/159. No benchmark
+was run.

@@ -1,0 +1,26 @@
+struct Inner {
+    owned_array<int> values;
+    int marker;
+}
+
+struct Outer {
+    Inner inner;
+    owned_array<int> tail;
+}
+
+int function main() {
+    var initial = memory.owned_array<int>(1);
+    var replacement = memory.owned_array<int>(1);
+    var tail = memory.owned_array<int>(1);
+    initial[0] = 17;
+    replacement[0] = 31;
+    tail[0] = 5;
+    var outer = Outer {
+        inner: Inner { values: initial, marker: 2 },
+        tail: tail
+    };
+
+    let extracted = outer.inner.values;
+    outer.inner.values = replacement;
+    return extracted[0] + outer.inner.values[0] + outer.inner.marker + outer.tail[0];
+}
