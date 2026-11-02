@@ -1492,48 +1492,86 @@ void nrq_memory_profiler_stop(void) {
 }
 
 NrqMemoryProfile nrq_memory_profiler_capture(void) {
-  std::lock_guard<std::mutex> lock(allocator_mutex);
-  NrqMemoryProfile profile = memory_profile;
-  profile.gc_allocated_bytes = nrq_gc_get_allocated_bytes();
-  profile.gc_collected_bytes = nrq_gc_get_collected_bytes();
-  profile.gc_collections = nrq_gc_get_collection_count();
-  profile.gc_live_objects = nrq_gc_get_live_objects();
+  NrqMemoryProfile profile{};
+  std::vector<Allocator*> pinned_allocators;
+  bool sample_allocator_space = true;
+  {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    profile = memory_profile;
 
-  // Occupancy is sampled rather than accumulated: allocators extend and reset
-  // their regions behind the profiler's back, so a running counter would drift.
+    // Live bytes per allocator kind describe the registry at this snapshot.
+    for (const auto& allocation : live_allocations) {
+      const uint64_t bytes = allocation.second.bytes;
+      switch (allocation.second.allocator->kind()) {
+        case NRQ_ALLOCATOR_GENERAL: profile.general_bytes += bytes; break;
+        case NRQ_ALLOCATOR_POOL: profile.pool_bytes += bytes; break;
+        case NRQ_ALLOCATOR_ARENA: profile.arena_bytes += bytes; break;
+        case NRQ_ALLOCATOR_STACK: profile.stack_bytes += bytes; break;
+        case NRQ_ALLOCATOR_SLAB: profile.slab_bytes += bytes; break;
+        case NRQ_ALLOCATOR_BUDDY: profile.buddy_bytes += bytes; break;
+        case NRQ_ALLOCATOR_FREE_LIST: profile.free_list_bytes += bytes; break;
+        case NRQ_ALLOCATOR_TLSF: profile.tlsf_bytes += bytes; break;
+        case NRQ_ALLOCATOR_CUSTOM: profile.custom_bytes += bytes; break;
+      }
+    }
+
+    try {
+      pinned_allocators.reserve(allocator_handles.size());
+    } catch (...) {
+      sample_allocator_space = false;
+    }
+    if (sample_allocator_space) {
+      for (const auto& handle : allocator_handles) {
+        Allocator* allocator = handle.second.get();
+        if (!increment_operation_pin_locked(allocator)) {
+          sample_allocator_space = false;
+          break;
+        }
+        pinned_allocators.push_back(allocator);
+      }
+    }
+    if (!sample_allocator_space) {
+      for (Allocator* allocator : pinned_allocators)
+        release_operation_pin_locked(allocator);
+      pinned_allocators.clear();
+    }
+  }
+
+  const nrq_gc_stats gc = nrq_gc_get_stats();
+  profile.gc_allocated_bytes = gc.allocated_bytes;
+  profile.gc_collected_bytes = gc.collected_bytes;
+  profile.gc_collections = gc.collections;
+  profile.gc_live_objects = gc.live_objects;
+
+  // Occupancy is sampled rather than accumulated: allocator regions change
+  // independently of the registry snapshot. Pins keep handles alive while
+  // the per-allocator operation locks are taken outside the global lock.
   size_t free_bytes = 0;
   size_t largest_free_block = 0;
   auto sample = [&](const Allocator* allocator) {
     size_t allocator_free = 0;
     size_t allocator_largest = 0;
-    allocator->free_statistics_serialized(allocator_free, allocator_largest);
-    free_bytes += allocator_free;
-    largest_free_block = std::max(largest_free_block, allocator_largest);
+    try {
+      allocator->free_statistics_serialized(allocator_free, allocator_largest);
+      free_bytes += allocator_free;
+      largest_free_block = std::max(largest_free_block, allocator_largest);
+    } catch (...) {
+      // Occupancy is optional diagnostic data; retain the remaining snapshot.
+    }
   };
   sample(&default_allocator);
-  for (const auto& handle : allocator_handles) sample(handle.second.get());
+  if (sample_allocator_space)
+    for (Allocator* allocator : pinned_allocators) sample(allocator);
   profile.free_bytes = free_bytes;
   profile.largest_free_block = largest_free_block;
   profile.fragmentation_bytes = free_bytes > largest_free_block
       ? free_bytes - largest_free_block
       : 0;
 
-  // Live bytes per allocator kind, so a report can attribute memory to the
-  // strategy that owns it. This is sampled from the registry and therefore
-  // describes the current state, not an accumulated total.
-  for (const auto& allocation : live_allocations) {
-    const uint64_t bytes = allocation.second.bytes;
-    switch (allocation.second.allocator->kind()) {
-      case NRQ_ALLOCATOR_GENERAL: profile.general_bytes += bytes; break;
-      case NRQ_ALLOCATOR_POOL: profile.pool_bytes += bytes; break;
-      case NRQ_ALLOCATOR_ARENA: profile.arena_bytes += bytes; break;
-      case NRQ_ALLOCATOR_STACK: profile.stack_bytes += bytes; break;
-      case NRQ_ALLOCATOR_SLAB: profile.slab_bytes += bytes; break;
-      case NRQ_ALLOCATOR_BUDDY: profile.buddy_bytes += bytes; break;
-      case NRQ_ALLOCATOR_FREE_LIST: profile.free_list_bytes += bytes; break;
-      case NRQ_ALLOCATOR_TLSF: profile.tlsf_bytes += bytes; break;
-      case NRQ_ALLOCATOR_CUSTOM: profile.custom_bytes += bytes; break;
-    }
+  if (!pinned_allocators.empty()) {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    for (Allocator* allocator : pinned_allocators)
+      release_operation_pin_locked(allocator);
   }
   return profile;
 }

@@ -314,6 +314,7 @@ TEST(AllocatorTest, AllocatorStatisticsDoNotHoldTheGlobalRegistryLock) {
     query_started = true;
     (void)nrq_memory_allocator_free_bytes(
         static_cast<uint64_t>(reinterpret_cast<uintptr_t>(allocator)));
+    (void)nrq_memory_profiler_capture();
   });
   while (!query_started.load()) std::this_thread::yield();
   std::this_thread::sleep_for(std::chrono::milliseconds(50));

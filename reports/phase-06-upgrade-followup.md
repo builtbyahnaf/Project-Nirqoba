@@ -155,8 +155,10 @@ because those runtime subsystems do not yet exist.
   tensor/GPU buffer types remain open.
 - The explicit allocator still uses global registry/profile synchronization and
   live-allocation bookkeeping. Allocate, deallocate, reallocate, secure release,
-  and final shared release callbacks run outside the registry lock with pinned
-  owner records. Thread-local fast paths are not implemented.
+  final shared release, and free-space queries run outside the registry lock
+  with allocator pins and in-flight owner records where applicable. Profiler
+  counters and ownership snapshots still use the registry lock. Thread-local
+  fast paths are not implemented.
 - Specialized pointer resources such as files, mutexes, secure buffers, and
   mappings cannot yet cross function returns because pointer signatures do not
   preserve their cleanup function. The checker rejects those returns rather
@@ -186,7 +188,7 @@ completes. Different allocator instances can perform allocation work in
 parallel; calls through the same allocator remain serialized.
 
 The live-allocation registry, shared reference counts, selection state, and
-profiler snapshot still use global synchronization. Generic checked deallocation
+profiler counter snapshots still use global synchronization. Generic checked deallocation
 marks the owner record and pins the allocator, invokes the allocator outside
 the registry lock, then removes the record under the lock. Reallocation uses an
 in-flight owner marker and keeps its existing registry node while resizing
@@ -198,6 +200,11 @@ outside the lock. Same-allocator operations remain serialized, and address reuse
 Blocking custom deallocator and reallocator tests verify unrelated allocator
 creation proceeds during each callback. The existing allocator benchmark matrix
 remains the measurement path; no GC benchmark was run.
+
+Allocator free-space queries and profiler occupancy sampling pin allocator
+handles and run outside the global registry lock. Profiler counters and
+per-kind live-byte attribution are copied under the registry lock; GC counters
+and allocator free-space metrics are collected after releasing it.
 
 Follow-up correctness fixes keep null-pointer reallocation outside the registry
 lock and pin the selected allocator until its allocation has been recorded,
@@ -242,5 +249,7 @@ Allocator free-space and fragmentation queries now pin their target allocator,
 release the global registry lock, query under only that allocator's operation
 mutex, and then release the pin. A blocking custom allocation regression checks
 that unrelated allocator creation completes while a same-allocator statistics
-query waits. RelWithDebInfo validation passed: CTest 1/1 and integration 87/87.
-No GC benchmark was run.
+query and full profiler capture wait. Profiler capture snapshots counters and
+allocator attribution under the registry lock, then gathers GC statistics and
+allocator occupancy after unlocking. RelWithDebInfo validation passed: CTest
+1/1 and integration 87/87. No GC benchmark was run.
