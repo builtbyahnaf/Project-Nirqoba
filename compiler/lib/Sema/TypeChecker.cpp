@@ -534,6 +534,7 @@ void TypeChecker::check_function(FunctionDecl& function) {
   }
   loop_depth_ = 0;
   loop_break_states_.clear();
+  loop_continue_states_.clear();
 
   for (const Parameter& parameter : function.parameters()) {
     // Parameters are assignable inside the body. Nothing in the specification
@@ -1141,11 +1142,14 @@ void TypeChecker::check_while(WhileStmt& statement) {
   }
   const SymbolTable condition_state = symbols_;
   loop_break_states_.emplace_back();
+  loop_continue_states_.emplace_back();
   ++loop_depth_;
   check_block(const_cast<BlockStmt&>(statement.body()));
   --loop_depth_;
   std::vector<SymbolTable> break_states = std::move(loop_break_states_.back());
   loop_break_states_.pop_back();
+  std::vector<SymbolTable> continue_states = std::move(loop_continue_states_.back());
+  loop_continue_states_.pop_back();
   const SymbolTable body_state = symbols_;
   const bool body_falls_through = block_falls_through(statement.body());
   if (body_falls_through) {
@@ -1158,9 +1162,19 @@ void TypeChecker::check_while(WhileStmt& statement) {
                        "owner '" + name +
                            "' cannot remain moved at a loop back-edge; reinitialize it before the next iteration");
   }
+  for (const SymbolTable& continue_state : continue_states) {
+    for (const string& name : continue_state.owners_moved_since(condition_state))
+      diagnostics_.error(diag::kTypeMismatch, statement.location(),
+                         "owner '" + name +
+                             "' cannot remain moved at a loop back-edge; reinitialize it before the next iteration");
+  }
   symbols_ = condition_state;
   if (body_falls_through)
     symbols_.merge_conditional_ownership(body_state, condition_state);
+  for (const SymbolTable& continue_state : continue_states) {
+    const SymbolTable merged = symbols_;
+    symbols_.merge_conditional_ownership(merged, continue_state);
+  }
   for (const SymbolTable& break_state : break_states) {
     const SymbolTable merged = symbols_;
     symbols_.merge_conditional_ownership(merged, break_state);
@@ -1182,21 +1196,29 @@ void TypeChecker::check_for(ForStmt& statement) {
   }
   const SymbolTable condition_state = symbols_;
   loop_break_states_.emplace_back();
+  loop_continue_states_.emplace_back();
   ++loop_depth_;
   check_block(const_cast<BlockStmt&>(statement.body()));
   --loop_depth_;
-  std::vector<SymbolTable> break_states = std::move(loop_break_states_.back());
-  loop_break_states_.pop_back();
+  std::vector<SymbolTable> continue_states = std::move(loop_continue_states_.back());
+  loop_continue_states_.back().clear();
   const SymbolTable body_state = symbols_;
   const bool body_falls_through = block_falls_through(statement.body());
+  const bool has_iteration_path = body_falls_through || !continue_states.empty();
+  symbols_ = body_falls_through ? body_state :
+      continue_states.empty() ? condition_state : continue_states.front();
+  for (size_t index = body_falls_through ? 0 : 1;
+       index < continue_states.size(); ++index) {
+    const SymbolTable merged = symbols_;
+    symbols_.merge_conditional_ownership(merged, continue_states[index]);
+  }
   if (statement.has_step()) {
-    if (!body_falls_through) symbols_ = condition_state;
     check_statement(const_cast<Stmt&>(*statement.step()));
   }
   const SymbolTable loop_back_state = symbols_;
   const bool step_falls_through = !statement.has_step() ||
       statement_can_fall_through(*statement.step());
-  if (body_falls_through && step_falls_through) {
+  if (has_iteration_path && step_falls_through) {
     for (const string& name : condition_state.owners_moved_since(before_condition))
       diagnostics_.error(diag::kTypeMismatch, statement.condition()->location(),
                          "owner '" + name +
@@ -1209,6 +1231,19 @@ void TypeChecker::check_for(ForStmt& statement) {
     symbols_.merge_conditional_ownership(loop_back_state, condition_state);
   } else {
     symbols_ = condition_state;
+  }
+  std::vector<SymbolTable> break_states = std::move(loop_break_states_.back());
+  loop_break_states_.pop_back();
+  std::vector<SymbolTable> step_continue_states =
+      std::move(loop_continue_states_.back());
+  loop_continue_states_.pop_back();
+  for (const SymbolTable& continue_state : step_continue_states) {
+    for (const string& name : continue_state.owners_moved_since(condition_state))
+      diagnostics_.error(diag::kTypeMismatch, statement.location(),
+                         "owner '" + name +
+                             "' cannot remain moved at a loop back-edge; reinitialize it before the next iteration");
+    const SymbolTable merged = symbols_;
+    symbols_.merge_conditional_ownership(merged, continue_state);
   }
   for (const SymbolTable& break_state : break_states) {
     const SymbolTable merged = symbols_;
@@ -1230,6 +1265,8 @@ void TypeChecker::check_continue(ContinueStmt& statement) {
   if (loop_depth_ <= 0) {
     diagnostics_.error(diag::kContinueOutsideLoop, statement.location(),
                        "'continue' is only allowed inside an enclosing loop");
+  } else if (!loop_continue_states_.empty()) {
+    loop_continue_states_.back().push_back(symbols_);
   }
 }
 

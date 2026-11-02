@@ -280,3 +280,12 @@ released on one break path from appearing live after the loop, while preserving
 owners on break paths that do not consume them. Added negative and positive
 integration regressions for both cases. RelWithDebInfo validation passed:
 CTest 1/1 and integration 89/89.
+
+## 32. Ownership state across loop continues - 2026-11-02
+
+Loop analysis now records `continue` states as well as `break` states. A while
+continue is checked as a back-edge; a for continue flows through the loop step
+before its back-edge check. This closes paths where a moved owner could be lost
+from the state merge or where the for step was skipped during analysis. Added
+negative while/for move regressions and a positive for-continue execution case.
+RelWithDebInfo validation passed: CTest 1/1 and integration 92/92.
