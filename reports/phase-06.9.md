@@ -22,9 +22,16 @@ The profiler does not report allocation hotspots; allocator free-space and fragm
 ## Validation
 
 - Unit tests verify explicit totals and the GC snapshot fields against the GC's own counters.
+- Reference-count diagnostics scan both callback-traced objects and typed
+  reference layouts; a unit regression checks a typed aggregate reference.
 - Integration tests cover profiler fields, secure memory, mapping, reference diagnostics, pinning, deferred cleanup order and exit paths, deferred frees, and scoped allocator restoration.
 - Release and RelWithDebInfo builds succeeded; CTest passed 1/1 and all 23 integration tests passed in each configuration. The latest RelWithDebInfo run, including scoped pinning, passed CTest 1/1 and all 24 integration tests.
 - Profiler overhead, resource pressure, and fragmentation benchmarks have not been measured.
+
+Typed-layout diagnostic fix validation: `cmake --build --preset
+windows-msvc-dev` passed, `ctest --preset windows-msvc-dev
+--output-on-failure` passed (1/1), and the RelWithDebInfo integration suite passed
+(113/113).
 
 ## Acceptance snapshot
 
