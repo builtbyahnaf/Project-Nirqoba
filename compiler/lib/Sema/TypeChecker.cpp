@@ -735,13 +735,14 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
     binding_type = annotation;
   }
 
+  consume_field_move(const_cast<Expr&>(declaration.initializer()), binding_type);
+
   Symbol symbol{declaration.name(), binding_type, declaration.binding(),
                 declaration.location()};
   if ((binding_type.is_owned_array() || contains_owned_array(binding_type)) &&
-      (declaration.initializer().kind() == Expr::Kind::MemberAccess ||
-       declaration.initializer().kind() == Expr::Kind::Index)) {
+      declaration.initializer().kind() == Expr::Kind::Index) {
     diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
-                       "owned fields cannot be moved out of an aggregate individually");
+                       "owned array elements cannot be moved out individually");
   }
   const Symbol* transferred_owner = nullptr;
   if (binding_type.is_pointer() || binding_type.is_owned_array() ||
@@ -931,6 +932,53 @@ static const Symbol* find_root_symbol(const Expr& expr, const SymbolTable& symbo
   return nullptr;
 }
 
+bool TypeChecker::field_path(const Expr& expression, string& root,
+                             string& path) const {
+  if (expression.kind() == Expr::Kind::Name) {
+    root = static_cast<const NameExpr&>(expression).name();
+    return true;
+  }
+  if (expression.kind() != Expr::Kind::MemberAccess) return false;
+  const auto& member = static_cast<const MemberAccessExpr&>(expression);
+  if (!field_path(member.base(), root, path)) return false;
+  path += ".";
+  path += member.is_tuple_access() ? to_string(member.tuple_index())
+                                   : member.member();
+  return true;
+}
+
+void TypeChecker::consume_field_move(Expr& expression, const Type& value_type) {
+  if (!contains_owned_array(value_type) ||
+      expression.kind() != Expr::Kind::MemberAccess) return;
+  string root;
+  string path;
+  if (!field_path(expression, root, path)) return;
+  const Symbol* owner = symbols_.lookup(root);
+  if (!owner || !owner->owns_allocation || owner->moved) {
+    diagnostics_.error(diag::kTypeMismatch, expression.location(),
+                       "owned field moves require a live aggregate owner");
+    return;
+  }
+  if (symbols_.field_is_moved(root, path)) {
+    diagnostics_.error(diag::kUseAfterFree, expression.location(),
+                       "use of an aggregate field after it was moved");
+    return;
+  }
+  if (symbols_.field_has_moved_descendant(root, path)) {
+    diagnostics_.error(diag::kTypeMismatch, expression.location(),
+                       "cannot move an aggregate field containing a moved field");
+    return;
+  }
+  if (symbols_.has_live_borrow(owner->allocation_id)) {
+    diagnostics_.error(diag::kTypeMismatch, expression.location(),
+                       "cannot move an owned field while an array view is live");
+    return;
+  }
+  expression.set_ownership(ValueOwnership::Owned);
+  expression.set_transfers_ownership();
+  symbols_.mark_field_moved(root, path);
+}
+
 static bool has_cleanup_domain(const Expr& expr, const SymbolTable& symbols,
                               const std::string& expected,
                               bool allow_borrow = false) {
@@ -1004,6 +1052,12 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                            " and cannot be mutated; declare it with 'var' to mutate it");
     return;
   }
+  if (assignment.target().kind() == Expr::Kind::MemberAccess &&
+      contains_owned_array(target_type)) {
+    diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
+                       "assignment to an owned aggregate field is not supported yet");
+    return;
+  }
   if (symbol != nullptr && symbol->borrowed && assignment.is_simple_name()) {
     diagnostics_.error(diag::kImmutableAssignment, assignment.target().location(),
                        "a borrowed binding cannot be rebound");
@@ -1014,6 +1068,7 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                        "cannot assign a value of type '" + value_type.to_string() +
                            "' to target of type '" + target_type.to_string() + "'");
   }
+  consume_field_move(const_cast<Expr&>(assignment.value()), target_type);
   if (assignment.is_simple_name() && symbol && symbol->is_mutable() &&
       (target_type.is_pointer() || target_type.is_owned_array() ||
        contains_owned_array(target_type))) {
@@ -1354,6 +1409,7 @@ void TypeChecker::check_return(ReturnStmt& statement) {
   }
 
   const Type value_type = check_expression(const_cast<Expr&>(*statement.value()));
+  consume_field_move(const_cast<Expr&>(*statement.value()), current_return_type_);
   if (current_return_type_.is_void()) {
     diagnostics_.error(diag::kVoidReturnsValue, statement.location(),
                        "function returns 'void' but 'return' has a value of type '" +
@@ -1831,6 +1887,7 @@ Type TypeChecker::check_array_literal(ArrayLiteralExpr& expr) {
   if (contains_owned_array(elem_type)) {
     for (const ExprPtr& element : elements) {
       Expr& value = const_cast<Expr&>(*element);
+      consume_field_move(value, elem_type);
       const Symbol* source = value.kind() == Expr::Kind::Name
                                  ? find_root_symbol(value, symbols_) : nullptr;
       if (source && source->owns_allocation && !source->moved) {
@@ -1866,6 +1923,7 @@ Type TypeChecker::check_tuple_literal(TupleLiteralExpr& expr) {
                          "owned, shared, and borrowed pointers cannot be embedded in tuples");
     if (contains_owned_array(t)) {
       Expr& value = const_cast<Expr&>(*elem);
+      consume_field_move(value, t);
       const Symbol* source = value.kind() == Expr::Kind::Name
                                  ? find_root_symbol(value, symbols_) : nullptr;
       if (source && source->owns_allocation && !source->moved) {
@@ -1980,7 +2038,15 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
                              "-element tuple");
       return Type::error();
     }
-    return elems[static_cast<size_t>(idx)];
+    const Type field_type = elems[static_cast<size_t>(idx)];
+    string root;
+    string path;
+    if (field_path(expr, root, path) && symbols_.field_is_moved(root, path))
+      diagnostics_.error(diag::kUseAfterFree, expr.location(),
+                         "use of an aggregate field after it was moved");
+    if (contains_owned_array(field_type))
+      expr.set_ownership(ValueOwnership::Owned);
+    return field_type;
   }
 
   // Struct field access: obj.field
@@ -2003,7 +2069,19 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
       return Type::error();
     }
     for (const Parameter& field : info->fields) {
-      if (field.name == expr.member()) return resolve_aggregate_type(field.type);
+      if (field.name == expr.member()) {
+        const Type field_type = resolve_aggregate_type(field.type);
+        string root;
+        string path;
+        if (field_path(expr, root, path) &&
+            symbols_.field_is_moved(root, path)) {
+          diagnostics_.error(diag::kUseAfterFree, expr.location(),
+                             "use of an aggregate field after it was moved");
+        }
+        if (contains_owned_array(field_type))
+          expr.set_ownership(ValueOwnership::Owned);
+        return field_type;
+      }
     }
     diagnostics_.error(diag::kUnknownField, expr.location(),
                        "struct '" + sname + "' has no field '" + expr.member() + "'");
@@ -2058,6 +2136,7 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
     for (size_t i = 0; i < count; ++i) {
       const Type init_type = check_expression(const_cast<Expr&>(*expr.positional_inits()[i]));
       const Type field_type = resolve_aggregate_type(fields[i].type);
+      consume_field_move(const_cast<Expr&>(*expr.positional_inits()[i]), field_type);
       if (init_type.is_valid() && init_type != field_type) {
         diagnostics_.error(diag::kTypeMismatch, expr.positional_inits()[i]->location(),
                            "field '" + fields[i].name + "' of struct '" +
@@ -2111,6 +2190,9 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
                            "' has type '" + resolve_aggregate_type(field_def->type).to_string() +
                                "', but was given '" + init_type.to_string() + "'");
       }
+      if (field_def)
+        consume_field_move(const_cast<Expr&>(*kv.second),
+                           resolve_aggregate_type(field_def->type));
       if (field_def && has_untracked_pointer_ownership(field_def->type,
                                                        kv.second->ownership()))
         diagnostics_.error(diag::kTypeMismatch, kv.second->location(),
@@ -3353,6 +3435,8 @@ Type TypeChecker::check_call(CallExpr& call) {
     }
     if (sig.parameter_types[i].is_owned_array() ||
         contains_owned_array(sig.parameter_types[i])) {
+      consume_field_move(const_cast<Expr&>(*call.arguments()[i]),
+                         sig.parameter_types[i]);
       const Symbol* source = call.arguments()[i]->kind() == Expr::Kind::Name
                                  ? find_root_symbol(*call.arguments()[i], symbols_) : nullptr;
       if (source && source->type != sig.parameter_types[i]) source = nullptr;

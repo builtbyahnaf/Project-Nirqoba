@@ -1,0 +1,23 @@
+struct Pair {
+    owned_array<int> first;
+    owned_array<int> second;
+}
+
+owned_array<int> function take_first(Pair pair) {
+    return pair.first;
+}
+
+int function main() {
+    var first = memory.owned_array<int>(1);
+    var second = memory.owned_array<int>(1);
+    var returned_value = memory.owned_array<int>(1);
+    var unused_value = memory.owned_array<int>(1);
+    first[0] = 17;
+    second[0] = 25;
+    returned_value[0] = 3;
+    let pair = Pair { first: first, second: second };
+    let returned_pair = Pair { first: returned_value, second: unused_value };
+    let extracted = pair.first;
+    let returned = take_first(returned_pair);
+    return extracted[0] + pair.second[0] + returned[0];
+}

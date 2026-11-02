@@ -92,6 +92,37 @@ void SymbolTable::set_borrowed_resource_domain(const string& name,
   }
 }
 
+bool SymbolTable::field_is_moved(const string& name, const string& path) const {
+  const Symbol* symbol = lookup(name);
+  if (!symbol) return false;
+  if (symbol->moved_fields.find(path) != symbol->moved_fields.end()) return true;
+  // Moving a whole nested field also invalidates all descendant projections.
+  for (const string& moved : symbol->moved_fields)
+    if (path.size() > moved.size() && path.compare(0, moved.size(), moved) == 0 &&
+        path[moved.size()] == '.') return true;
+  return false;
+}
+
+bool SymbolTable::field_has_moved_descendant(const string& name,
+                                             const string& path) const {
+  const Symbol* symbol = lookup(name);
+  if (!symbol) return false;
+  for (const string& moved : symbol->moved_fields)
+    if (moved.size() > path.size() && moved.compare(0, path.size(), path) == 0 &&
+        moved[path.size()] == '.') return true;
+  return false;
+}
+
+void SymbolTable::mark_field_moved(const string& name, const string& path) {
+  for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+    auto found = scope->find(name);
+    if (found != scope->end()) {
+      found->second.moved_fields.insert(path);
+      return;
+    }
+  }
+}
+
 void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
                                                const SymbolTable& else_state) {
   for (auto& scope : scopes_) {
@@ -117,6 +148,9 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
                                    else_symbol->mutable_borrow;
       destination.shared_allocation = then_symbol->shared_allocation ||
                                       else_symbol->shared_allocation;
+      destination.moved_fields = then_symbol->moved_fields;
+      destination.moved_fields.insert(else_symbol->moved_fields.begin(),
+                                      else_symbol->moved_fields.end());
     }
   }
 }
