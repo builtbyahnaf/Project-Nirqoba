@@ -113,8 +113,10 @@ null. Ports must be between 1 and 65535. `socket.send(handle, text)` sends the
 entire UTF-8 byte sequence and returns its byte count, or a negative Winsock
 error. `socket.receive(handle, destination, capacity)` reads up to `capacity`
 bytes and returns the count, zero on peer shutdown, or a negative Winsock
-error. `socket.close(handle)` closes the owned resource and returns zero on
-success. Use `defer socket.close(handle)` when choosing the close point; the
+error. Send and receive can proceed concurrently on one connection. Closing
+shuts down both directions and waits for active operations to finish.
+`socket.close(handle)` closes the owned resource and returns zero on success.
+Use `defer socket.close(handle)` when choosing the close point; the
 compiler otherwise closes the owned socket at lexical exit. Socket handles are
 opaque, move with ownership, and cannot be indexed. Borrow parameters can be
 used by helper functions that send or receive without taking ownership.

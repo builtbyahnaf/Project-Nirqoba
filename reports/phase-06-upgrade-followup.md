@@ -180,8 +180,8 @@ alternating mixed-size allocation workloads, in addition to its 64-byte,
 scalar, contiguous-array, graph, and four-thread workloads. The C++/Rust runner
 checks checksums for each workload and records repeated percentile samples and
 environment metadata. This runner was not executed in this follow-up because
-the current environment has neither `cl.exe` in the active shell nor
-`rustc.exe`; no GC workload was run.
+the active shell did not expose the installed MSVC tools and no `rustc.exe`
+was present; no GC workload was run.
 
 ## Explicit allocator synchronization
 
@@ -324,11 +324,24 @@ integration 96/96. No GC benchmark was run.
 ## 36. Owned TCP socket resources - 2026-11-02
 
 Added Windows TCP connect, text send, bounded receive, and deterministic close.
-Socket tokens are monotonic opaque handles with per-resource operation locks;
-close removes the token before waiting for an active operation, and stale
-handles are rejected. The compiler tracks socket ownership, inserts lexical
+Socket tokens are monotonic opaque handles with independent send and receive
+locks. Close removes the token before waiting for an active operation, and
+stale handles are rejected. The compiler tracks socket ownership, inserts lexical
 close, permits borrowed handles for I/O helpers, rejects use after close, and
 blocks indexing opaque socket handles. A loopback unit test covers data flow
 and stale close; integration regressions cover cleanup and semantic checks.
 RelWithDebInfo validation passed: CTest 1/1 and integration 99/99. No GC
 benchmark was run.
+
+## 37. Full-duplex socket operations and G toolchain check - 2026-11-02
+
+Socket send and receive now use separate per-direction locks, allowing a
+blocked receive to coexist with a send. Close shuts down both directions
+before waiting for the locks, so it wakes a blocked receive instead of waiting
+indefinitely. A loopback regression sends while another thread is blocked in
+receive. Validation passed: CTest 1/1 and integration 101/101.
+
+The Phase 6U:G runner was invoked through the installed Visual Studio x64
+developer environment. MSVC was available, but the runner stopped before
+sampling because `rustc.exe` is not installed; it intentionally emits no
+one-language partial comparison. No GC benchmark was run.
