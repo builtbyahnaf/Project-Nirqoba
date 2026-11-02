@@ -1,0 +1,10 @@
+void function set_first(borrow mut array_view<int> values) {
+    values[0] = 31;
+}
+
+int function main() {
+    var values = memory.owned_array<int>(2);
+    let view = memory.array_view<int>(values, 0, 2);
+    set_first(view);
+    return 0;
+}

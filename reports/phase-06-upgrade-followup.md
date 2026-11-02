@@ -472,6 +472,17 @@ the frame budget includes alignment padding. Added MLIR checks for the aligned
 stack path and dynamic fallback. Windows x64 build passed, CTest passed
 (1/1), and integration tests passed (142/142). No benchmark was run.
 
+## 53. Exclusive mutable array views - 2026-11-02
+
+Added `memory.array_view_mut<T>` for exclusive, contiguous mutable slices and
+enabled `borrow mut array_view<T>` parameters. Mutable views must be named with
+`var`; immutable views cannot be upgraded; the owner cannot be indexed while
+the exclusive view is live; and indexed writes through a named mutable view
+are lowered through its data pointer and checked length. Added positive
+execution and negative exclusivity/read/write tests, and documented the
+current view contract. Windows x64 build passed, CTest passed (1/1), and
+integration tests passed (147/147). No benchmark was run.
+
 ## 43. Conservative owned-array stack placement - 2026-11-02
 
 MLIR lowering now performs a conservative per-function escape analysis for

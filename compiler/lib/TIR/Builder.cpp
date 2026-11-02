@@ -1241,7 +1241,8 @@ tir::Value TirBuilder::resolve_lvalue_ptr(const Expr& target, tir::Function& fun
     const auto& idx_expr = static_cast<const IndexExpr&>(target);
     tir::Value base_ptr;
     tir::Value owned_array_value;
-    if (idx_expr.base().type().is_owned_array()) {
+    if (idx_expr.base().type().is_owned_array() ||
+        idx_expr.base().type().is_array_view()) {
       owned_array_value = lower_expression(idx_expr.base(), function);
       base_ptr = function.allocate_value(
           Type::pointer_type(idx_expr.base().type().element_type()));
@@ -1260,7 +1261,8 @@ tir::Value TirBuilder::resolve_lvalue_ptr(const Expr& target, tir::Function& fun
     }
     if (!base_ptr.is_valid()) return tir::Value{};
     tir::Value idx_val = lower_expression(idx_expr.index(), function);
-    if (idx_expr.base().type().is_owned_array()) {
+    if (idx_expr.base().type().is_owned_array() ||
+        idx_expr.base().type().is_array_view()) {
       tir::Value length = function.allocate_value(Type::u64_type());
       tir::Op length_extract;
       length_extract.kind = tir::OpKind::AggregateExtract;

@@ -1,0 +1,4 @@
+{
+  "expect_exit": 1,
+  "expect_stderr_contains": ["cannot read an owned array while a mutable view is live"]
+}

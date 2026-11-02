@@ -1,0 +1,6 @@
+int function main() {
+    var values = memory.owned_array<int>(2);
+    let view = memory.array_view<int>(values, 0, 2);
+    var mutable_view = memory.array_view_mut<int>(values, 0, 2);
+    return mutable_view[0];
+}
