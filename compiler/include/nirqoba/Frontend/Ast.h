@@ -583,6 +583,7 @@ struct Parameter {
   bool borrowed = false;
   bool mutable_borrow = false;
   bool shared = false;
+  std::string resource_domain;
 };
 
 class StructDecl {

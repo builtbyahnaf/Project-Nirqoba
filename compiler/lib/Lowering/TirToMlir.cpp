@@ -2197,6 +2197,9 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
         if (param.ownership != ValueOwnership::Trivial)
           attrs.set("nirqoba.ownership",
                     builder.getStringAttr(ownership_spelling(param.ownership)));
+        if (!param.resource_domain.empty())
+          attrs.set("nirqoba.resource_domain",
+                    builder.getStringAttr(param.resource_domain));
         argument_attrs.push_back(attrs.getDictionary(&context));
       }
       func_op.setArgAttrsAttr(builder.getArrayAttr(argument_attrs));

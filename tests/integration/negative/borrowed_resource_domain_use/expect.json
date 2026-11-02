@@ -1,0 +1,5 @@
+{
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": "socket.send requires a socket or borrowed socket handle"
+}

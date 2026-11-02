@@ -135,6 +135,7 @@ class Function {
     Type type;
     Value value;
     ValueOwnership ownership = ValueOwnership::Trivial;
+    std::string resource_domain;
   };
 
   Function(std::string name, Type return_type) : name_(std::move(name)), return_type_(return_type) {}
@@ -149,8 +150,10 @@ class Function {
 
   const std::vector<Parameter>& parameters() const { return parameters_; }
   void add_parameter(std::string name, Type type, Value value,
-                     ValueOwnership ownership = ValueOwnership::Trivial) {
-    parameters_.push_back(Parameter{std::move(name), type, value, ownership});
+                     ValueOwnership ownership = ValueOwnership::Trivial,
+                     std::string resource_domain = {}) {
+    parameters_.push_back(Parameter{std::move(name), type, value, ownership,
+                                    std::move(resource_domain)});
   }
 
   // Reserves the next value number. Types are recorded so the verifier can

@@ -1,4 +1,4 @@
-i32 function write_text(borrow byte* handle, string content) {
+i32 function write_text(borrow file byte* handle, string content) {
     return file.write(handle, content);
 }
 int function main() {

@@ -131,6 +131,14 @@ static std::string cleanup_for_owner_producer(const std::string& callee,
   return {};
 }
 
+static std::string cleanup_for_borrow_domain(const std::string& domain) {
+  if (domain == "file") return "file.close";
+  if (domain == "socket") return "socket.close";
+  if (domain == "mutex") return "mutex.destroy";
+  if (domain == "mapping") return "memory.unmap_file";
+  return {};
+}
+
 static bool block_falls_through(const BlockStmt& block) {
   if (block.statements().empty()) return true;
   for (const StmtPtr& statement : block.statements()) {
@@ -240,6 +248,7 @@ bool TypeChecker::check(Program& program) {
       sig.parameter_borrowed.push_back(param.borrowed);
       sig.parameter_mutable_borrow.push_back(param.mutable_borrow);
       sig.parameter_shared.push_back(param.shared);
+      sig.parameter_resource_domains.push_back(param.resource_domain);
     }
 
     if (!functions_.emplace(function->name(), move(sig)).second) {
@@ -395,6 +404,7 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
         sig.parameter_borrowed.push_back(param.borrowed);
         sig.parameter_mutable_borrow.push_back(param.mutable_borrow);
         sig.parameter_shared.push_back(param.shared);
+        sig.parameter_resource_domains.push_back(param.resource_domain);
       }
 
       // Every module is reachable by its qualified name, including the entry
@@ -551,6 +561,14 @@ void TypeChecker::check_function(FunctionDecl& function) {
       diagnostics_.error(diag::kTypeMismatch, parameter.location,
                          "'mut' requires a borrowed parameter");
     }
+    if (!parameter.resource_domain.empty() && !parameter.borrowed) {
+      diagnostics_.error(diag::kTypeMismatch, parameter.location,
+                         "resource domains are only valid on borrow parameters");
+    }
+    if (!parameter.resource_domain.empty() && !parameter.type.is_pointer()) {
+      diagnostics_.error(diag::kTypeMismatch, parameter.location,
+                         "resource-qualified borrow parameters must have pointer type");
+    }
     if (parameter.shared && (parameter.borrowed || !parameter.type.is_pointer())) {
       diagnostics_.error(diag::kTypeMismatch, parameter.location,
                          "shared parameters must have pointer type and cannot be borrowed");
@@ -564,6 +582,7 @@ void TypeChecker::check_function(FunctionDecl& function) {
       symbol.allocation_id = next_allocation_id_++;
       symbol.borrowed = parameter.borrowed || parameter.type.is_array_view();
       symbol.mutable_borrow = parameter.mutable_borrow;
+    symbol.cleanup_callee = cleanup_for_borrow_domain(parameter.resource_domain);
       symbol.owns_allocation = !symbol.borrowed;
       symbol.shared_allocation = parameter.shared;
     }
@@ -906,7 +925,8 @@ static bool has_cleanup_domain(const Expr& expr, const SymbolTable& symbols,
   }
   const Symbol* source = find_root_symbol(expr, symbols);
   if (!source) return false;
-  if (source->borrowed) return allow_borrow;
+  if (source->borrowed)
+    return allow_borrow && source->cleanup_callee == expected;
   if (source->shared_allocation) return false;
   const std::string actual = source->cleanup_callee.empty() &&
                                      source->owns_allocation
@@ -3333,6 +3353,27 @@ Type TypeChecker::check_call(CallExpr& call) {
       }
       const bool mutable_borrow = i < sig.parameter_mutable_borrow.size() &&
                                   sig.parameter_mutable_borrow[i];
+      const std::string expected_resource =
+          i < sig.parameter_resource_domains.size()
+              ? cleanup_for_borrow_domain(sig.parameter_resource_domains[i])
+              : std::string{};
+      const std::string actual_resource = source->cleanup_callee.empty() &&
+                                                  source->owns_allocation
+                                              ? "memory.deallocate"
+                                              : source->cleanup_callee;
+      if (!expected_resource.empty() && actual_resource != expected_resource) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                           "borrow parameter requires a '" +
+                               sig.parameter_resource_domains[i] +
+                               "' resource handle");
+        continue;
+      }
+      if (expected_resource.empty() && !actual_resource.empty() &&
+          actual_resource != "memory.deallocate") {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                           "opaque resources require a resource-qualified borrow parameter");
+        continue;
+      }
       if (std::find(ownership_transfers.begin(), ownership_transfers.end(),
                     source->allocation_id) != ownership_transfers.end()) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),

@@ -56,6 +56,8 @@ class SymbolTable {
                              bool borrowed, bool mutable_borrow,
                              bool shared_allocation = false,
                              std::string cleanup_callee = {});
+  void set_borrowed_resource_domain(const std::string& name,
+                                    std::string cleanup_callee);
   void merge_conditional_ownership(const SymbolTable& then_state,
                                    const SymbolTable& else_state);
   std::vector<std::string> owners_moved_since(const SymbolTable& previous) const;

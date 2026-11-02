@@ -1,0 +1,10 @@
+i64 function send_text(borrow socket byte* handle, string content) {
+    return socket.send(handle, content);
+}
+
+int function main() {
+    var stream = socket.connect("127.0.0.1", 7);
+    send_text(stream, "text");
+    socket.close(stream);
+    return 0;
+}
