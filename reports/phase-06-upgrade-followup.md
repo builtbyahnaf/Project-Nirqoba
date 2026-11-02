@@ -428,6 +428,15 @@ continue to apply. Added positive execution and wrong-source compile-failure
 regressions. Windows x64 build passed, CTest passed (1/1), and integration
 tests passed (136/136). No benchmark was run.
 
+## 48. Returned subview owner lifetime regression - 2026-11-02
+
+Added a compile-failure case that passes a temporary slice of a named owned
+array into a source-bound subview function, binds the returned slice, and then
+attempts to move the original owner. The checker correctly retains the source
+allocation identity across both view construction and function return, and
+rejects the move while the returned slice is live. Integration tests passed
+(137/137). No benchmark was run.
+
 ## 43. Conservative owned-array stack placement - 2026-11-02
 
 MLIR lowering now performs a conservative per-function escape analysis for
