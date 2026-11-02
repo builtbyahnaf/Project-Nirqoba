@@ -296,11 +296,12 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
     advance();
     if (check(TokenKind::Identifier) &&
         (peek().text == "file" || peek().text == "socket" ||
-         peek().text == "mutex" || peek().text == "mapping")) {
+         peek().text == "mutex" || peek().text == "mapping" ||
+         peek().text == "secure")) {
       return_resource_domain = advance().text;
     } else {
       error_at(peek(), diag::kExpectedToken,
-               "expected file, socket, mutex, or mapping after 'owned'");
+               "expected file, socket, mutex, mapping, or secure after 'owned'");
     }
   }
   const Type return_type = parse_type_annotation();
@@ -332,7 +333,8 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
           }
           if (check(TokenKind::Identifier) &&
               (peek().text == "file" || peek().text == "socket" ||
-               peek().text == "mutex" || peek().text == "mapping")) {
+               peek().text == "mutex" || peek().text == "mapping" ||
+               peek().text == "secure")) {
             resource_domain = advance().text;
           }
         } else if (check(TokenKind::Identifier) && peek().text == "shared") {
@@ -342,11 +344,12 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
           advance();
           if (check(TokenKind::Identifier) &&
               (peek().text == "file" || peek().text == "socket" ||
-               peek().text == "mutex" || peek().text == "mapping")) {
+               peek().text == "mutex" || peek().text == "mapping" ||
+               peek().text == "secure")) {
             resource_domain = advance().text;
           } else {
             error_at(peek(), diag::kExpectedToken,
-                     "expected file, socket, mutex, or mapping after 'owned'");
+                     "expected file, socket, mutex, mapping, or secure after 'owned'");
           }
         }
         const Type parameter_type = parse_type_annotation();

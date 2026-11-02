@@ -176,7 +176,7 @@ because those runtime subsystems do not yet exist.
   counters and ownership snapshots still use the registry lock. Thread-local
   fast paths are not implemented.
 - Specialized resource returns and owning parameters use typed
-  `owned <resource> T*` contracts. File, socket, mutex, and mapping domains are
+  `owned <resource> T*` contracts. File, socket, mutex, mapping, and secure domains are
   preserved through signatures and MLIR metadata, so resources can transfer
   through multiple function boundaries. Mismatched call arguments and returns
   are rejected.

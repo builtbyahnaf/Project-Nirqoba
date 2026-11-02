@@ -2,16 +2,23 @@ struct Node {
     int value;
 }
 
+owned secure byte* function make_secret() {
+    return memory.secure_allocate<byte>(16);
+}
+
+void function erase_secret(owned secure byte* secret) {
+    memory.secure_zero(secret, 16);
+}
+
 int function main() {
     memory.profiler.start();
-    var secret = memory.secure_allocate<byte>(16);
+    var secret = make_secret();
     secret[0] = 42 as byte;
     var profile = memory.profiler.capture();
     print(profile.current_bytes);
     print(profile.total_bytes);
     var available = memory.available_bytes();
-    memory.secure_zero(secret, 16);
-    memory.secure_release(secret);
+    erase_secret(secret);
 
     var mapped = memory.map_file("tests/integration/positive/memory_advanced/expect.json", false);
     print(memory.mapped_read<byte>(mapped, 0) as int);

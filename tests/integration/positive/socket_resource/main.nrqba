@@ -6,12 +6,14 @@ owned socket byte* function forward_stream(owned socket byte* stream) {
     return stream;
 }
 
+void function drop_stream(owned socket byte* stream) { }
+
 int function main() {
     var stream = forward_stream(connect_stream());
     var buffer = memory.allocate<byte>(64);
     socket.send(stream, "ping");
     socket.receive(stream, buffer, 64);
-    defer socket.close(stream);
+    drop_stream(stream);
     memory.deallocate(buffer);
     return 0;
 }
