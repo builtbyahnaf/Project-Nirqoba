@@ -1898,8 +1898,14 @@ Type TypeChecker::check_index_expr(IndexExpr& expr) {
     if (owner) {
       cleanup_callee = owner->cleanup_callee;
     } else if (expr.base().kind() == Expr::Kind::Call) {
-      cleanup_callee = cleanup_for_owner_producer(
-          static_cast<const CallExpr&>(expr.base()).callee());
+      const auto& call = static_cast<const CallExpr&>(expr.base());
+      cleanup_callee = cleanup_for_owner_producer(call.callee());
+      if (cleanup_callee.empty()) {
+        const FunctionSignature* signature = find_function(call.callee());
+        if (signature && !signature->return_resource_domain.empty())
+          cleanup_callee = cleanup_for_return_domain(
+              signature->return_resource_domain);
+      }
     }
     if (!cleanup_callee.empty() && cleanup_callee != "memory.deallocate" &&
         cleanup_callee != "memory.secure_release") {
