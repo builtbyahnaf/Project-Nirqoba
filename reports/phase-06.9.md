@@ -169,9 +169,10 @@ passed: CTest 1/1 and integration 87/87.
 ## 29. Owned TCP socket resources - 2026-11-02
 
 Added Windows TCP connect, text send, bounded receive, and deterministic close.
-Socket tokens are monotonic opaque handles with per-resource operation locks;
-close removes the token before waking a blocked operation and waiting for its
-completion. Stale handles are rejected. The compiler tracks socket ownership,
+Socket tokens are monotonic opaque handles with independent send and receive
+locks; full-duplex operations can progress concurrently. Close removes the
+token, shuts down both directions to wake blocked operations, then waits for
+both locks before releasing the socket. Stale handles are rejected. The compiler tracks socket ownership,
 inserts lexical close, permits borrowed handles for I/O helpers, rejects use
 after close, and blocks indexing opaque socket handles. Loopback tests cover
 data flow, close during a blocked receive, and stale close; integration tests

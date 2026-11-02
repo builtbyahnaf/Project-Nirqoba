@@ -24,7 +24,8 @@ namespace {
 struct SocketResource {
   explicit SocketResource(SOCKET value) : handle(value) {}
   SOCKET handle = INVALID_SOCKET;
-  std::mutex operation_mutex;
+  std::mutex send_mutex;
+  std::mutex receive_mutex;
 };
 
 std::mutex registry_mutex;
@@ -105,7 +106,7 @@ int64_t nrq_socket_send(void* token, const void* data, size_t length) {
       length > static_cast<size_t>(INT64_MAX)) return -WSAEINVAL;
   std::shared_ptr<SocketResource> resource = find_socket(token);
   if (!resource) return -WSAENOTSOCK;
-  std::lock_guard<std::mutex> lock(resource->operation_mutex);
+  std::lock_guard<std::mutex> lock(resource->send_mutex);
   if (resource->handle == INVALID_SOCKET) return -WSAENOTSOCK;
   size_t sent = 0;
   const auto* bytes = static_cast<const char*>(data);
@@ -130,7 +131,7 @@ int64_t nrq_socket_receive(void* token, void* destination, size_t capacity) {
   if (capacity == 0) return 0;
   std::shared_ptr<SocketResource> resource = find_socket(token);
   if (!resource) return -WSAENOTSOCK;
-  std::lock_guard<std::mutex> lock(resource->operation_mutex);
+  std::lock_guard<std::mutex> lock(resource->receive_mutex);
   if (resource->handle == INVALID_SOCKET) return -WSAENOTSOCK;
   const int request = static_cast<int>(std::min<size_t>(
       capacity, static_cast<size_t>(INT_MAX)));
@@ -153,7 +154,7 @@ int32_t nrq_socket_close_handle(void* token) {
   // Shutdown before waiting for the operation mutex so a blocked receive is
   // woken and close cannot wait forever for an I/O operation on this socket.
   shutdown(resource->handle, SD_BOTH);
-  std::lock_guard<std::mutex> lock(resource->operation_mutex);
+  std::scoped_lock lock(resource->send_mutex, resource->receive_mutex);
   if (resource->handle == INVALID_SOCKET) return WSAENOTSOCK;
   const int status = closesocket(resource->handle) == 0 ? 0 : WSAGetLastError();
   resource->handle = INVALID_SOCKET;

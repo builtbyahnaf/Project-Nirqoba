@@ -28,7 +28,7 @@ Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tes
 
 ## Benchmark harness scope
 
-Phase 6U:G now has a repeatable source and runner matrix for scalar, contiguous-array, small allocation, pointer-rich graph, and multithreaded allocation workloads in C++ and Rust. The runner records warmups, repeated measurements, p50/p95/p99, environment/compiler metadata, and checksums, and isolates artifacts in a temp directory. The current machine has no `rustc.exe`; the runner parsed successfully but the comparative matrix could not be executed. No comparative performance claim or G acceptance pass is made.
+Phase 6U:G now has a repeatable source and runner matrix for scalar, contiguous-array, small allocation, pointer-rich graph, and multithreaded allocation workloads in C++ and Rust. The runner records warmups, repeated measurements, p50/p95/p99, environment/compiler metadata, and checksums, and isolates artifacts in a temp directory. It was invoked through the installed Visual Studio x64 developer environment and stopped before sampling because `rustc.exe` is absent. No comparative performance claim or G acceptance pass is made.
 
 ## 21. GC object storage co-allocation - 2026-11-01
 
