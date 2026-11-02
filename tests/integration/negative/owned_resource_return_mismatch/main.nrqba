@@ -1,0 +1,7 @@
+owned socket byte* function invalid_socket() {
+    return memory.allocate<byte>(8);
+}
+
+int function main() {
+    return 0;
+}

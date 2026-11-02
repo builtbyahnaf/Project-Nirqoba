@@ -139,6 +139,10 @@ static std::string cleanup_for_borrow_domain(const std::string& domain) {
   return {};
 }
 
+static std::string cleanup_for_return_domain(const std::string& domain) {
+  return cleanup_for_borrow_domain(domain);
+}
+
 static bool block_falls_through(const BlockStmt& block) {
   if (block.statements().empty()) return true;
   for (const StmtPtr& statement : block.statements()) {
@@ -244,6 +248,7 @@ bool TypeChecker::check(Program& program) {
         function->name()  // single-module compilation links symbols by name
     };
     sig.returns_shared = function->returns_shared();
+    sig.return_resource_domain = function->return_resource_domain();
     for (const Parameter& param : function->parameters()) {
       sig.parameter_borrowed.push_back(param.borrowed);
       sig.parameter_mutable_borrow.push_back(param.mutable_borrow);
@@ -400,6 +405,7 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
           is_entry ? function->name() : qualified
       };
       sig.returns_shared = function->returns_shared();
+      sig.return_resource_domain = function->return_resource_domain();
       for (const Parameter& param : function->parameters()) {
         sig.parameter_borrowed.push_back(param.borrowed);
         sig.parameter_mutable_borrow.push_back(param.mutable_borrow);
@@ -539,9 +545,15 @@ void TypeChecker::check_function(FunctionDecl& function) {
   symbols_.push_scope();
   current_return_type_ = function.return_type();
   current_return_shared_ = function.returns_shared();
+  current_return_resource_domain_ = function.return_resource_domain();
   if (current_return_shared_ && !current_return_type_.is_pointer()) {
     diagnostics_.error(diag::kTypeMismatch, function.location(),
                        "shared return types must be pointers");
+  }
+  if (!current_return_resource_domain_.empty() &&
+      (!current_return_type_.is_pointer() || current_return_shared_)) {
+    diagnostics_.error(diag::kTypeMismatch, function.location(),
+                       "owned resource return types must be non-shared pointers");
   }
   loop_depth_ = 0;
   loop_break_states_.clear();
@@ -604,6 +616,7 @@ void TypeChecker::check_function(FunctionDecl& function) {
   symbols_.pop_scope();
   current_return_type_ = Type::error();
   current_return_shared_ = false;
+  current_return_resource_domain_.clear();
 }
 
 void TypeChecker::check_block(BlockStmt& block) {
@@ -746,8 +759,9 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
         symbol.shared_allocation = symbol.shared_allocation || signature->returns_shared;
         if (signature->return_type.is_pointer() || signature->return_type.is_owned_array() ||
             contains_owned_array(signature->return_type)) {
-          symbol.cleanup_callee = cleanup_for_owner_producer(
-              call.callee(), signature->returns_shared);
+          symbol.cleanup_callee = !signature->return_resource_domain.empty()
+              ? cleanup_for_return_domain(signature->return_resource_domain)
+              : cleanup_for_owner_producer(call.callee(), signature->returns_shared);
           if (symbol.cleanup_callee.empty())
             symbol.cleanup_callee = cleanup_for_type(signature->return_type);
         }
@@ -1035,8 +1049,10 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                           call.callee() == "memory.shared_retain" ||
                           (signature && signature->returns_shared);
       if (owns_allocation)
-        cleanup_callee = cleanup_for_owner_producer(
-            call.callee(), signature && signature->returns_shared);
+        cleanup_callee = signature && !signature->return_resource_domain.empty()
+            ? cleanup_for_return_domain(signature->return_resource_domain)
+            : cleanup_for_owner_producer(
+                  call.callee(), signature && signature->returns_shared);
       if (owns_allocation && cleanup_callee.empty())
         cleanup_callee = signature
                              ? cleanup_for_type(signature->return_type)
@@ -1358,13 +1374,26 @@ void TypeChecker::check_return(ReturnStmt& statement) {
       const Symbol* source = find_root_symbol(*statement.value(), symbols_);
       if (source) cleanup_callee = source->cleanup_callee;
     } else if (statement.value()->kind() == Expr::Kind::Call) {
-      cleanup_callee = cleanup_for_owner_producer(
-          static_cast<const CallExpr&>(*statement.value()).callee());
+      const auto& call = static_cast<const CallExpr&>(*statement.value());
+      const FunctionSignature* signature = find_function(call.callee());
+      cleanup_callee = signature && !signature->return_resource_domain.empty()
+          ? cleanup_for_return_domain(signature->return_resource_domain)
+          : cleanup_for_owner_producer(call.callee());
     }
-    if (!cleanup_callee.empty() && cleanup_callee != "memory.deallocate") {
+    const std::string expected_cleanup =
+        cleanup_for_return_domain(current_return_resource_domain_);
+    if (!cleanup_callee.empty() && cleanup_callee != "memory.deallocate" &&
+        cleanup_callee != expected_cleanup) {
       diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
-                         "specialized owned resources cannot be returned until "
-                         "the function signature preserves their cleanup type");
+                         "returned resource does not match the function's owned resource domain");
+    } else if (!cleanup_callee.empty() && cleanup_callee != "memory.deallocate" &&
+               current_return_resource_domain_.empty()) {
+      diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                         "specialized owned resources require an 'owned <resource>' return type");
+    } else if (!current_return_resource_domain_.empty() &&
+               cleanup_callee != expected_cleanup) {
+      diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                         "owned resource return requires a value from the declared resource domain");
     }
   }
   bool value_is_shared = statement.value()->ownership() == ValueOwnership::Shared;

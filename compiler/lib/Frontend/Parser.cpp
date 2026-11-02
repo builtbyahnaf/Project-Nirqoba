@@ -184,6 +184,9 @@ unique_ptr<Program> Parser::parse_program() {
     }
     if ((check(TokenKind::Identifier) && peek().text == "shared" &&
          (is_type_keyword(peek(1).kind) || peek(1).kind == TokenKind::Identifier)) ||
+        (check(TokenKind::Identifier) && peek().text == "owned" &&
+         peek(1).kind == TokenKind::Identifier &&
+         (is_type_keyword(peek(2).kind) || peek(2).kind == TokenKind::Identifier)) ||
         (check(TokenKind::Identifier) && peek().text == "owned_array" &&
          peek(1).kind == TokenKind::Less) ||
         (check(TokenKind::Identifier) && peek().text == "array_view" &&
@@ -285,9 +288,20 @@ unique_ptr<StructDecl> Parser::parse_struct(Visibility visibility) {
 unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
   const Token& type_token = peek();
   bool returns_shared = false;
+  std::string return_resource_domain;
   if (check(TokenKind::Identifier) && peek().text == "shared") {
     advance();
     returns_shared = true;
+  } else if (check(TokenKind::Identifier) && peek().text == "owned") {
+    advance();
+    if (check(TokenKind::Identifier) &&
+        (peek().text == "file" || peek().text == "socket" ||
+         peek().text == "mutex" || peek().text == "mapping")) {
+      return_resource_domain = advance().text;
+    } else {
+      error_at(peek(), diag::kExpectedToken,
+               "expected file, socket, mutex, or mapping after 'owned'");
+    }
   }
   const Type return_type = parse_type_annotation();
   expect(TokenKind::KwFunction, "after the return type");
@@ -353,7 +367,7 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
                                    move(body),
                                    type_token.location.is_valid() ? type_token.location
                                                                   : name_token.location,
-                                   visibility, returns_shared);
+                                   visibility, returns_shared, return_resource_domain);
 }
 
 Type Parser::parse_type_annotation() {

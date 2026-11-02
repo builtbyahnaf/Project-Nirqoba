@@ -32,6 +32,7 @@ struct FunctionSignature {
   std::vector<bool> parameter_shared;
   std::vector<std::string> parameter_resource_domains;
   bool returns_shared = false;
+  std::string return_resource_domain;
 };
 
 // Lightweight catalog entry for a registered struct type.
@@ -107,6 +108,7 @@ class TypeChecker {
   SymbolTable symbols_;
   Type current_return_type_;
   bool current_return_shared_ = false;
+  std::string current_return_resource_domain_;
   int loop_depth_ = 0;
   std::vector<std::vector<SymbolTable>> loop_break_states_;
   std::vector<std::vector<SymbolTable>> loop_continue_states_;
