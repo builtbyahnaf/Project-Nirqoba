@@ -1,0 +1,10 @@
+borrow values array_view<int> function identity(borrow array_view<int> values) {
+    return values;
+}
+
+int function main() {
+    var values = memory.owned_array<int>(2);
+    let view = memory.array_view<int>(values, 0, 2);
+    let returned = identity(view);
+    return returned[0];
+}
