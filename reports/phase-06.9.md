@@ -148,3 +148,13 @@ token before waiting for an active operation, preventing new work from entering
 while allowing an operation that already acquired the resource lock to finish.
 A four-thread write/close regression checks the race and stale-token rejection.
 RelWithDebInfo validation passed: CTest 1/1 and integration 87/87.
+
+## 27. Per-mapping operation ownership - 2026-11-02
+
+Mapping registry lookup now retains a shared mapping record and releases the
+global registry mutex before size queries, checked copies, and unmapping. A
+per-mapping mutex serializes access with close, so a large operation on one
+mapping does not block unrelated mapping handles. Unmap removes the registry
+entry only after active access has completed; concurrent later operations see
+the mapping as closed. RelWithDebInfo validation passed: CTest 1/1 and
+integration 87/87.

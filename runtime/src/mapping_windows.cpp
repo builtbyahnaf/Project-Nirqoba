@@ -11,6 +11,7 @@
 
 #include <mutex>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <unordered_map>
 
@@ -20,11 +21,20 @@ namespace {
 struct Mapping {
   HANDLE file = INVALID_HANDLE_VALUE;
   HANDLE section = nullptr;
+  void* view = nullptr;
   size_t bytes = 0;
   bool writable = false;
+  bool closed = false;
+  std::mutex operation_mutex;
 };
 std::mutex mapping_mutex;
-std::unordered_map<void*, Mapping> mappings;
+std::unordered_map<void*, std::shared_ptr<Mapping>> mappings;
+
+std::shared_ptr<Mapping> find_mapping(void* address) {
+  std::lock_guard<std::mutex> lock(mapping_mutex);
+  auto found = mappings.find(address);
+  return found == mappings.end() ? nullptr : found->second;
+}
 
 std::wstring utf8_to_wide(const char* path) {
   if (!path || !*path) return {};
@@ -70,9 +80,19 @@ void* nrq_memory_map_file(const char* path, int32_t writable) {
       return nullptr;
     }
     try {
+      auto mapping = std::make_shared<Mapping>();
+      mapping->file = file;
+      mapping->section = section;
+      mapping->view = address;
+      mapping->bytes = static_cast<size_t>(file_size.QuadPart);
+      mapping->writable = writable != 0;
       std::lock_guard<std::mutex> lock(mapping_mutex);
-      mappings.emplace(address, Mapping{file, section,
-          static_cast<size_t>(file_size.QuadPart), writable != 0});
+      if (!mappings.emplace(address, std::move(mapping)).second) {
+        UnmapViewOfFile(address);
+        CloseHandle(section);
+        CloseHandle(file);
+        return nullptr;
+      }
     } catch (...) {
       UnmapViewOfFile(address);
       CloseHandle(section);
@@ -87,48 +107,65 @@ void* nrq_memory_map_file(const char* path, int32_t writable) {
 
 int32_t nrq_memory_unmap_file(void* address) {
   if (!address) return 0;
+  std::shared_ptr<Mapping> mapping = find_mapping(address);
+  if (!mapping) return 0;
+  {
+    std::lock_guard<std::mutex> operation_lock(mapping->operation_mutex);
+    if (mapping->closed || !UnmapViewOfFile(mapping->view)) return 0;
+    mapping->view = nullptr;
+    mapping->closed = true;
+    CloseHandle(mapping->section);
+    CloseHandle(mapping->file);
+    mapping->section = nullptr;
+    mapping->file = INVALID_HANDLE_VALUE;
+  }
   std::lock_guard<std::mutex> lock(mapping_mutex);
   auto found = mappings.find(address);
-  if (found == mappings.end()) return 0;
-  const Mapping mapping = found->second;
-  if (!UnmapViewOfFile(address)) return 0;
-  mappings.erase(found);
-  CloseHandle(mapping.section);
-  CloseHandle(mapping.file);
+  if (found != mappings.end() && found->second == mapping) mappings.erase(found);
   return 1;
 }
 
 uint64_t nrq_memory_mapping_size(void* address) {
-  std::lock_guard<std::mutex> lock(mapping_mutex);
-  auto found = mappings.find(address);
-  return found == mappings.end() ? 0 : static_cast<uint64_t>(found->second.bytes);
+  std::shared_ptr<Mapping> mapping = find_mapping(address);
+  if (!mapping) return 0;
+  std::lock_guard<std::mutex> operation_lock(mapping->operation_mutex);
+  return mapping->closed ? 0 : static_cast<uint64_t>(mapping->bytes);
 }
 
 int32_t nrq_memory_mapping_read(void* address, size_t offset, size_t bytes,
                                 void* output) {
   if (!output) return 0;
-  std::lock_guard<std::mutex> lock(mapping_mutex);
-  auto found = mappings.find(address);
-  if (found == mappings.end() || offset > found->second.bytes ||
-      bytes > found->second.bytes - offset) {
+  std::shared_ptr<Mapping> mapping = find_mapping(address);
+  if (!mapping) {
     nrq_runtime_fatal("mapped file read is outside a live mapping");
     return 0;
   }
-  std::memcpy(output, static_cast<const unsigned char*>(address) + offset, bytes);
+  std::lock_guard<std::mutex> operation_lock(mapping->operation_mutex);
+  if (mapping->closed || offset > mapping->bytes ||
+      bytes > mapping->bytes - offset) {
+    nrq_runtime_fatal("mapped file read is outside a live mapping");
+    return 0;
+  }
+  std::memcpy(output, static_cast<const unsigned char*>(mapping->view) + offset,
+              bytes);
   return 1;
 }
 
 int32_t nrq_memory_mapping_write(void* address, size_t offset, size_t bytes,
                                  const void* input) {
   if (!input) return 0;
-  std::lock_guard<std::mutex> lock(mapping_mutex);
-  auto found = mappings.find(address);
-  if (found == mappings.end() || !found->second.writable ||
-      offset > found->second.bytes || bytes > found->second.bytes - offset) {
+  std::shared_ptr<Mapping> mapping = find_mapping(address);
+  if (!mapping) {
     nrq_runtime_fatal("mapped file write is invalid or outside a writable mapping");
     return 0;
   }
-  std::memcpy(static_cast<unsigned char*>(address) + offset, input, bytes);
+  std::lock_guard<std::mutex> operation_lock(mapping->operation_mutex);
+  if (mapping->closed || !mapping->writable || offset > mapping->bytes ||
+      bytes > mapping->bytes - offset) {
+    nrq_runtime_fatal("mapped file write is invalid or outside a writable mapping");
+    return 0;
+  }
+  std::memcpy(static_cast<unsigned char*>(mapping->view) + offset, input, bytes);
   return 1;
 }
 

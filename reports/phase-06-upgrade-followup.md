@@ -253,3 +253,10 @@ query and full profiler capture wait. Profiler capture snapshots counters and
 allocator attribution under the registry lock, then gathers GC statistics and
 allocator occupancy after unlocking. RelWithDebInfo validation passed: CTest
 1/1 and integration 87/87. No GC benchmark was run.
+
+Memory-mapping operations now use shared mapping records and a per-mapping
+mutex. Registry lookup ends before checked reads/writes and unmapping, so the
+global mapping lock is not held during bulk copies or operating-system unmap.
+Unmap waits for an operation that already acquired the mapping, then removes
+the registry entry; stale API calls are rejected. RelWithDebInfo validation
+passed: CTest 1/1 and integration 87/87. No GC benchmark was run.
