@@ -82,6 +82,9 @@ class TypeChecker {
   void require_type(const Expr& expr, Type expected, const char* context);
   bool block_can_fall_through(const BlockStmt& block) const;
   SymbolTable loop_exit_state_after_defer() const;
+  bool field_path(const Expr& expression, std::string& root,
+                  std::string& path) const;
+  void consume_field_move(Expr& expression, const Type& value_type);
 
   // Struct catalog lookup helpers. `name` may be module-qualified; a bare name
   // first resolves against the module currently being checked, then against the

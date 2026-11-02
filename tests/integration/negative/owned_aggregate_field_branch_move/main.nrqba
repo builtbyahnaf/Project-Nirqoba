@@ -1,0 +1,12 @@
+struct Holder {
+    owned_array<int> values;
+}
+
+int function main() {
+    var values = memory.owned_array<int>(1);
+    let holder = Holder { values: values };
+    if (true) {
+        let moved = holder.values;
+    }
+    return holder.values[0];
+}

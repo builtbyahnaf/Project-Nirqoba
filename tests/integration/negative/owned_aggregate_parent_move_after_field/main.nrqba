@@ -1,0 +1,15 @@
+struct Inner {
+    owned_array<int> values;
+}
+
+struct Outer {
+    Inner inner;
+}
+
+int function main() {
+    var values = memory.owned_array<int>(1);
+    let outer = Outer { inner: Inner { values: values } };
+    let extracted = outer.inner.values;
+    let remaining = outer.inner;
+    return extracted[0];
+}

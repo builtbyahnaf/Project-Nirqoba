@@ -1166,6 +1166,24 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       extract.string_value = mem.member();  // carry field name for struct lowering
       extract.result = result;
       function.add_operation(std::move(extract));
+      if (expr.transfers_ownership()) {
+        const tir::Value field_ptr = resolve_lvalue_ptr(mem, function);
+        if (field_ptr.is_valid()) {
+          tir::Value empty = function.allocate_value(result_type);
+          tir::Op clear_value;
+          clear_value.kind = tir::OpKind::ConstantNull;
+          clear_value.location = mem.location();
+          clear_value.result = empty;
+          function.add_operation(std::move(clear_value));
+          tir::Op clear_field;
+          clear_field.kind = tir::OpKind::Store;
+          clear_field.location = mem.location();
+          clear_field.lhs = field_ptr;
+          clear_field.operand = empty;
+          clear_field.result = field_ptr;
+          function.add_operation(std::move(clear_field));
+        }
+      }
       return result;
     }
     case Expr::Kind::StructInit: {
