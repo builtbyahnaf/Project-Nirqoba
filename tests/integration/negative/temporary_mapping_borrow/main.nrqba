@@ -1,0 +1,4 @@
+int function main() {
+    return memory.mapped_read<byte>(
+        memory.map_file("tests/integration/positive/hello/expect.json", false), 0) as int;
+}

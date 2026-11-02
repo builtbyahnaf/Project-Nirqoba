@@ -2266,6 +2266,9 @@ Type TypeChecker::check_call(CallExpr& call) {
                                  "mutex.destroy", true))
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "mutex operation requires a mutex resource or borrowed mutex handle");
+    else if (call.callee() != "mutex.destroy" && !mutex)
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "mutex operations require a named owner or borrowed handle");
     if (call.callee() == "mutex.destroy") {
       if (!mutex || mutex->cleanup_callee != "mutex.destroy") {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
@@ -2333,6 +2336,9 @@ Type TypeChecker::check_call(CallExpr& call) {
                                    "socket.close", true))
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                            "socket.send requires a socket or borrowed socket handle");
+      else if (!find_root_symbol(*call.arguments()[0], symbols_))
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "socket operations require a named owner or borrowed handle");
     }
     if (call.arguments().size() > 1) {
       const Type text = check_expression(const_cast<Expr&>(*call.arguments()[1]));
@@ -2355,6 +2361,9 @@ Type TypeChecker::check_call(CallExpr& call) {
                                    "socket.close", true))
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                            "socket.receive requires a socket or borrowed socket handle");
+      else if (!find_root_symbol(*call.arguments()[0], symbols_))
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "socket operations require a named owner or borrowed handle");
     }
     if (call.arguments().size() > 1) {
       const Expr& destination_expr = *call.arguments()[1];
@@ -2592,6 +2601,15 @@ Type TypeChecker::check_call(CallExpr& call) {
       if (index == 0 && type.is_valid() && !type.is_pointer())
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[index]->location(),
                            "mapped access requires a mapping pointer");
+      if (index == 0 && type.is_valid() && type.is_pointer() &&
+          !has_cleanup_domain(*call.arguments()[index], symbols_,
+                              "memory.unmap_file", true))
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[index]->location(),
+                           "mapped access requires a mapping handle");
+      else if (index == 0 && type.is_valid() && type.is_pointer() &&
+               !find_root_symbol(*call.arguments()[index], symbols_))
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[index]->location(),
+                           "mapped access requires a named owner or borrowed handle");
       if (index == 1 && type.is_valid() && !type.is_integer())
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[index]->location(),
                            "mapped access offset must be an integer");
@@ -2806,6 +2824,9 @@ Type TypeChecker::check_call(CallExpr& call) {
       if (!has_cleanup_domain(*argument, symbols_, "memory.unmap_file", true))
         diagnostics_.error(diag::kTypeMismatch, argument->location(),
                            "memory.mapping_size requires a mapping or borrowed mapping handle");
+      else if (!find_root_symbol(*argument, symbols_))
+        diagnostics_.error(diag::kTypeMismatch, argument->location(),
+                           "mapping queries require a named owner or borrowed handle");
     }
     return Type::u64_type();
   }
@@ -3204,6 +3225,9 @@ Type TypeChecker::check_call(CallExpr& call) {
       else if (!has_cleanup_domain(*call.arguments()[0], symbols_, "file.close", true))
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                            "file.write requires a file resource or borrowed file handle");
+      else if (!find_root_symbol(*call.arguments()[0], symbols_))
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "file operations require a named owner or borrowed handle");
     }
     if (call.arguments().size() > 1) {
       const Type text = check_expression(const_cast<Expr&>(*call.arguments()[1]));
@@ -3220,6 +3244,9 @@ Type TypeChecker::check_call(CallExpr& call) {
       else if (!has_cleanup_domain(*call.arguments()[0], symbols_, "file.close", true))
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                            "file.read requires a file resource or borrowed file handle");
+      else if (!find_root_symbol(*call.arguments()[0], symbols_))
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "file operations require a named owner or borrowed handle");
     }
     if (call.arguments().size() > 1) {
       const Type destination = check_expression(const_cast<Expr&>(*call.arguments()[1]));

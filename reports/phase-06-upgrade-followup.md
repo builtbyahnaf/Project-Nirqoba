@@ -224,6 +224,19 @@ handles and run outside the global registry lock. Profiler counters and
 per-kind live-byte attribution are copied under the registry lock; GC counters
 and allocator free-space metrics are collected after releasing it.
 
+Allocator operation pins are now atomic fields on each allocator instead of
+entries in a second registry map. The pin is acquired while holding the
+allocator registry lock, so destroy/reset cannot race handle lookup, and it is
+released without reacquiring that global lock after allocation callbacks. The
+existing in-flight allocation/reset and destroy tests, full CTest suite, and
+integration suite passed (1/1 and 113/113). Five diagnostic runs of the shared
+general allocator workload reported median times of 2,021, 4,323, and 12,634
+microseconds for 10,000, 20,000, and 40,000 allocate/free pairs at 1, 2, and 4
+threads. The earlier single-run readings were 3,779, 6,676, and 13,860
+microseconds. These runs used the existing unit benchmark and uncontrolled
+host conditions; they are not a controlled before/after result or a performance
+claim. No GC benchmark was run.
+
 Follow-up correctness fixes keep null-pointer reallocation outside the registry
 lock and pin the selected allocator until its allocation has been recorded,
 avoiding a reentrant-lock deadlock. Allocator reset now rejects an in-flight
