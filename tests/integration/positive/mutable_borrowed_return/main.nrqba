@@ -1,0 +1,10 @@
+borrow mut source byte* function writable(borrow mut byte* source) {
+    return source;
+}
+
+byte function main() {
+    var owner = memory.allocate<byte>(1);
+    var view = writable(owner);
+    view[0] = 42u8;
+    return view[0];
+}

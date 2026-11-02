@@ -249,12 +249,16 @@ bool TypeChecker::check(Program& program) {
         function->name()  // single-module compilation links symbols by name
     };
     sig.returns_shared = function->returns_shared();
+    sig.returns_borrowed = !function->return_borrow_parameter().empty();
     sig.return_resource_domain = function->return_resource_domain();
+    sig.return_borrow_parameter = function->return_borrow_parameter();
+    sig.returns_mutable_borrow = function->returns_mutable_borrow();
     for (const Parameter& param : function->parameters()) {
       sig.parameter_borrowed.push_back(param.borrowed);
       sig.parameter_mutable_borrow.push_back(param.mutable_borrow);
       sig.parameter_shared.push_back(param.shared);
       sig.parameter_resource_domains.push_back(param.resource_domain);
+      sig.parameter_names.push_back(param.name);
     }
 
     if (!functions_.emplace(function->name(), move(sig)).second) {
@@ -406,12 +410,16 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
           is_entry ? function->name() : qualified
       };
       sig.returns_shared = function->returns_shared();
+      sig.returns_borrowed = !function->return_borrow_parameter().empty();
       sig.return_resource_domain = function->return_resource_domain();
+      sig.return_borrow_parameter = function->return_borrow_parameter();
+      sig.returns_mutable_borrow = function->returns_mutable_borrow();
       for (const Parameter& param : function->parameters()) {
         sig.parameter_borrowed.push_back(param.borrowed);
         sig.parameter_mutable_borrow.push_back(param.mutable_borrow);
         sig.parameter_shared.push_back(param.shared);
         sig.parameter_resource_domains.push_back(param.resource_domain);
+        sig.parameter_names.push_back(param.name);
       }
 
       // Every module is reachable by its qualified name, including the entry
@@ -547,6 +555,9 @@ void TypeChecker::check_function(FunctionDecl& function) {
   current_return_type_ = function.return_type();
   current_return_shared_ = function.returns_shared();
   current_return_resource_domain_ = function.return_resource_domain();
+  current_return_borrow_parameter_ = function.return_borrow_parameter();
+  current_return_mutable_borrow_ = function.returns_mutable_borrow();
+  current_return_borrow_allocation_id_ = 0;
   if (current_return_shared_ && !current_return_type_.is_pointer()) {
     diagnostics_.error(diag::kTypeMismatch, function.location(),
                        "shared return types must be pointers");
@@ -555,6 +566,12 @@ void TypeChecker::check_function(FunctionDecl& function) {
       (!current_return_type_.is_pointer() || current_return_shared_)) {
     diagnostics_.error(diag::kTypeMismatch, function.location(),
                        "owned resource return types must be non-shared pointers");
+  }
+  if (!current_return_borrow_parameter_.empty() &&
+      (!current_return_type_.is_pointer() || current_return_shared_ ||
+       !current_return_resource_domain_.empty())) {
+    diagnostics_.error(diag::kTypeMismatch, function.location(),
+                       "borrow returns require an unqualified, non-shared pointer type");
   }
   loop_depth_ = 0;
   loop_break_states_.clear();
@@ -602,6 +619,10 @@ void TypeChecker::check_function(FunctionDecl& function) {
     if (!symbols_.declare(move(symbol))) {
       diagnostics_.error(diag::kDuplicateName, parameter.location,
                          "parameter '" + parameter.name + "' is already declared");
+    } else if (parameter.name == current_return_borrow_parameter_) {
+      const Symbol* source = symbols_.lookup(parameter.name);
+      if (source && source->borrowed)
+        current_return_borrow_allocation_id_ = source->allocation_id;
     }
   }
 
@@ -618,6 +639,9 @@ void TypeChecker::check_function(FunctionDecl& function) {
   current_return_type_ = Type::error();
   current_return_shared_ = false;
   current_return_resource_domain_.clear();
+  current_return_borrow_parameter_.clear();
+  current_return_borrow_allocation_id_ = 0;
+  current_return_mutable_borrow_ = false;
 }
 
 void TypeChecker::check_block(BlockStmt& block) {
@@ -759,8 +783,9 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
                                  call.callee() == "memory.shared_retain";
       if (const FunctionSignature* signature = find_function(call.callee())) {
         symbol.shared_allocation = symbol.shared_allocation || signature->returns_shared;
-        if (signature->return_type.is_pointer() || signature->return_type.is_owned_array() ||
-            contains_owned_array(signature->return_type)) {
+        if (!signature->returns_borrowed &&
+            (signature->return_type.is_pointer() || signature->return_type.is_owned_array() ||
+             contains_owned_array(signature->return_type))) {
           symbol.cleanup_callee = !signature->return_resource_domain.empty()
               ? cleanup_for_return_domain(signature->return_resource_domain)
               : cleanup_for_owner_producer(call.callee(), signature->returns_shared);
@@ -774,13 +799,46 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
     if (!symbol.owns_allocation && declaration.initializer().kind() == Expr::Kind::Call) {
       const auto& call = static_cast<const CallExpr&>(declaration.initializer());
       const FunctionSignature* signature = find_function(call.callee());
-      symbol.owns_allocation = signature &&
+      symbol.owns_allocation = signature && !signature->returns_borrowed &&
           (signature->return_type.is_pointer() || signature->return_type.is_owned_array() ||
            contains_owned_array(signature->return_type));
       if (symbol.owns_allocation && symbol.cleanup_callee.empty() &&
           !signature->returns_shared)
         symbol.cleanup_callee = cleanup_for_type(signature->return_type);
         if (symbol.cleanup_callee.empty()) symbol.cleanup_callee = "memory.deallocate";
+      if (signature && signature->returns_borrowed) {
+        const auto source_parameter = std::find(
+            signature->parameter_names.begin(), signature->parameter_names.end(),
+            signature->return_borrow_parameter);
+        if (source_parameter == signature->parameter_names.end()) {
+          diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
+                             "borrow return refers to an unknown source parameter");
+        } else {
+          const size_t source_index = static_cast<size_t>(
+              source_parameter - signature->parameter_names.begin());
+          const Symbol* source = source_index < call.arguments().size()
+              ? find_borrow_origin(*call.arguments()[source_index]) : nullptr;
+          if (!source || source->moved || !source->allocation_id) {
+            diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
+                               "borrow return requires a named live source argument");
+          } else {
+            symbol.borrowed = true;
+            symbol.mutable_borrow = signature->returns_mutable_borrow;
+            symbol.owns_allocation = false;
+            symbol.allocation_id = source->allocation_id;
+            symbol.cleanup_callee = source->cleanup_callee;
+            if (symbols_.has_conflicting_borrow(
+                    source->allocation_id, signature->returns_mutable_borrow,
+                    source->name))
+              diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
+                                 "returned borrow conflicts with an existing live borrow");
+            if (signature->returns_mutable_borrow &&
+                declaration.binding() != BindingKind::Var)
+              diagnostics_.error(diag::kImmutableAssignment, declaration.location(),
+                                 "a mutable returned borrow must be bound with 'var'");
+          }
+        }
+      }
     }
     if (declaration.initializer().kind() == Expr::Kind::Name) {
       const auto& source_name = static_cast<const NameExpr&>(declaration.initializer());
@@ -835,7 +893,8 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
     symbols_.rebind_pointer(new_name, allocation_id);
   }
   if (const Symbol* declared = symbols_.lookup(new_name))
-    declaration.set_cleanup_callee(declared->cleanup_callee);
+    declaration.set_cleanup_callee(declared->borrowed ? string{}
+                                                      : declared->cleanup_callee);
 }
 
 void TypeChecker::check_destructuring(DestructuringStmt& statement) {
@@ -945,6 +1004,22 @@ bool TypeChecker::field_path(const Expr& expression, string& root,
   path += member.is_tuple_access() ? to_string(member.tuple_index())
                                    : member.member();
   return true;
+}
+
+const Symbol* TypeChecker::find_borrow_origin(const Expr& expression) const {
+  if (expression.kind() != Expr::Kind::Call)
+    return find_root_symbol(expression, symbols_);
+  const auto& call = static_cast<const CallExpr&>(expression);
+  const FunctionSignature* signature = find_function(call.callee());
+  if (!signature || !signature->returns_borrowed) return nullptr;
+  const auto source_parameter = std::find(
+      signature->parameter_names.begin(), signature->parameter_names.end(),
+      signature->return_borrow_parameter);
+  if (source_parameter == signature->parameter_names.end()) return nullptr;
+  const size_t source_index = static_cast<size_t>(
+      source_parameter - signature->parameter_names.begin());
+  if (source_index >= call.arguments().size()) return nullptr;
+  return find_borrow_origin(*call.arguments()[source_index]);
 }
 
 void TypeChecker::consume_field_move(Expr& expression, const Type& value_type) {
@@ -1421,11 +1496,31 @@ void TypeChecker::check_return(ReturnStmt& statement) {
                        "function returns '" + current_return_type_.to_string() +
                            "' but this 'return' yields '" + value_type.to_string() + "'");
   }
+  const bool returns_borrowed = !current_return_borrow_parameter_.empty();
+  if (returns_borrowed) {
+    const Symbol* source = find_borrow_origin(*statement.value());
+    if (!current_return_borrow_allocation_id_ || !source || !source->borrowed ||
+        source->allocation_id != current_return_borrow_allocation_id_) {
+      diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                         "returned borrow must come from the declared source parameter '" +
+                             current_return_borrow_parameter_ + "'");
+    } else if (current_return_mutable_borrow_ &&
+               (statement.value()->ownership() != ValueOwnership::MutableBorrowed ||
+                !source->mutable_borrow)) {
+      diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                         "mutable borrow return requires the declared mutable source");
+    } else {
+      const_cast<Expr&>(*statement.value()).set_ownership(
+          current_return_mutable_borrow_ ? ValueOwnership::MutableBorrowed
+                                         : ValueOwnership::Borrowed);
+    }
+  }
   if (contains_array_view(value_type)) {
     diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                        "borrowed array views cannot escape through a return value");
   }
-  if (current_return_type_.is_pointer() && !current_return_shared_) {
+  if (current_return_type_.is_pointer() && !current_return_shared_ &&
+      !returns_borrowed) {
     std::string cleanup_callee;
     if (statement.value()->kind() == Expr::Kind::Name) {
       const Symbol* source = find_root_symbol(*statement.value(), symbols_);
@@ -1467,13 +1562,14 @@ void TypeChecker::check_return(ReturnStmt& statement) {
   } else if ((current_return_type_.is_pointer() || current_return_type_.is_owned_array() ||
               contains_owned_array(current_return_type_)) &&
              !current_return_shared_ &&
+             !returns_borrowed &&
              statement.value()->ownership() != ValueOwnership::Owned) {
     diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                        "owned pointer return requires an owned pointer; borrowed or raw pointers cannot escape");
   }
   if ((current_return_type_.is_pointer() || current_return_type_.is_owned_array() ||
        contains_owned_array(current_return_type_)) &&
-      statement.value()->kind() == Expr::Kind::Name) {
+      statement.value()->kind() == Expr::Kind::Name && !returns_borrowed) {
     const Symbol* source = find_root_symbol(*statement.value(), symbols_);
     if (source && source->type != current_return_type_) {
       diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
@@ -1580,6 +1676,10 @@ Type TypeChecker::check_expression(Expr& expr) {
         if (call.callee() == "memory.shared_allocate" ||
             call.callee() == "memory.shared_retain")
           expr.set_ownership(ValueOwnership::Shared);
+        else if (signature && signature->returns_borrowed)
+          expr.set_ownership(signature->returns_mutable_borrow
+                                 ? ValueOwnership::MutableBorrowed
+                                 : ValueOwnership::Borrowed);
         else if (signature && signature->returns_shared)
           expr.set_ownership(ValueOwnership::Shared);
         else
@@ -2358,6 +2458,9 @@ Type TypeChecker::check_call(CallExpr& call) {
       } else if (mutex->borrowed) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                            "borrowed mutex handles cannot be destroyed");
+      } else if (symbols_.has_live_borrow(mutex->allocation_id)) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "cannot destroy a mutex while a borrow is live");
       } else if (!checking_deferred_cleanup_) {
         const_cast<Expr&>(*call.arguments()[0]).set_transfers_ownership();
         symbols_.mark_allocation_moved(mutex->allocation_id);
@@ -2399,6 +2502,9 @@ Type TypeChecker::check_call(CallExpr& call) {
     else if (socket->borrowed)
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "borrowed sockets cannot be closed");
+    else if (symbols_.has_live_borrow(socket->allocation_id))
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "cannot close a socket while a borrow is live");
     else if (!checking_deferred_cleanup_) {
       const_cast<Expr&>(*call.arguments()[0]).set_transfers_ownership();
       symbols_.mark_allocation_moved(socket->allocation_id);
@@ -2859,6 +2965,10 @@ Type TypeChecker::check_call(CallExpr& call) {
       if (pointer_symbol && pointer_symbol->borrowed)
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                            "borrowed pointers cannot be released or unmapped");
+      else if (pointer_symbol &&
+               symbols_.has_live_borrow(pointer_symbol->allocation_id))
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "cannot release a resource while a borrow is live");
       else if (call.callee() == "memory.unmap_file" &&
                !has_cleanup_domain(*call.arguments()[0], symbols_,
                                    "memory.unmap_file"))
@@ -3140,6 +3250,10 @@ Type TypeChecker::check_call(CallExpr& call) {
     } else if (pointer_symbol && pointer_symbol->borrowed) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "borrowed pointers cannot be deallocated");
+    } else if (pointer_symbol &&
+               symbols_.has_live_borrow(pointer_symbol->allocation_id)) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "cannot deallocate an owner while a borrow is live");
     } else if (!has_cleanup_domain(*call.arguments()[0], symbols_,
                                    "memory.deallocate")) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
@@ -3294,6 +3408,9 @@ Type TypeChecker::check_call(CallExpr& call) {
       if (resource && resource->borrowed)
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                            "borrowed file resources cannot be closed");
+      else if (resource && symbols_.has_live_borrow(resource->allocation_id))
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "cannot close a file while a borrow is live");
       else if (resource && resource->type.is_pointer())
         symbols_.mark_allocation_moved(resource->allocation_id);
     }
@@ -3466,8 +3583,7 @@ Type TypeChecker::check_call(CallExpr& call) {
       continue;
     }
     if (!sig.parameter_types[i].is_pointer()) continue;
-    const Symbol* source = call.arguments()[i]->kind() == Expr::Kind::Name
-                               ? find_root_symbol(*call.arguments()[i], symbols_) : nullptr;
+    const Symbol* source = find_borrow_origin(*call.arguments()[i]);
     if (source && source->type != sig.parameter_types[i]) source = nullptr;
     const bool expects_shared = i < sig.parameter_shared.size() && sig.parameter_shared[i];
     const bool argument_is_shared =
@@ -3561,6 +3677,17 @@ Type TypeChecker::check_call(CallExpr& call) {
       if (mutable_borrow && !source->is_mutable()) {
         diagnostics_.error(diag::kImmutableAssignment, call.arguments()[i]->location(),
                            "mutable borrowing requires a mutable binding");
+      }
+      string borrowed_source_name = source->name;
+      string borrowed_field_path;
+      string argument_root;
+      if (field_path(*call.arguments()[i], argument_root, borrowed_field_path))
+        borrowed_source_name = argument_root;
+      if (symbols_.has_conflicting_borrow(source->allocation_id, mutable_borrow,
+                                          borrowed_source_name)) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                           "borrow argument conflicts with an existing live borrow");
+        continue;
       }
       auto found = active_borrows.find(source->allocation_id);
       if (found != active_borrows.end() && (found->second || mutable_borrow)) {

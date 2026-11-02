@@ -1,0 +1,11 @@
+borrow source byte* function readonly(borrow byte* source) {
+    return source;
+}
+
+borrow mut source byte* function invalid(borrow mut byte* source) {
+    return readonly(source);
+}
+
+int function main() {
+    return 0;
+}

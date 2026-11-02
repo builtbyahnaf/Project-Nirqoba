@@ -52,6 +52,21 @@ bool SymbolTable::has_live_borrow(uint64_t allocation_id) const {
   return false;
 }
 
+bool SymbolTable::has_conflicting_borrow(uint64_t allocation_id,
+                                         bool requested_mutable,
+                                         const string& except_name) const {
+  if (allocation_id == 0) return false;
+  for (const auto& scope : scopes_)
+    for (const auto& entry : scope) {
+      const Symbol& symbol = entry.second;
+      if (symbol.name != except_name && symbol.allocation_id == allocation_id &&
+          symbol.borrowed &&
+          !symbol.moved && (requested_mutable || symbol.mutable_borrow))
+        return true;
+    }
+  return false;
+}
+
 void SymbolTable::rebind_pointer(const string& name, uint64_t allocation_id) {
   for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
     auto found = scope->find(name);

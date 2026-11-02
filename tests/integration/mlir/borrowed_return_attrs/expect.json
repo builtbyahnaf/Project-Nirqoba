@@ -1,0 +1,9 @@
+{
+  "mode": "build",
+  "args": ["--emit=mlir"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "nirqoba.return_ownership = \"borrowed\"",
+    "nirqoba.return_borrow_parameter = \"source\""
+  ]
+}

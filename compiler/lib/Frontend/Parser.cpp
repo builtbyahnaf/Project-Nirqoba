@@ -1,5 +1,6 @@
 #include "nirqoba/Frontend/Parser.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace nirq {
@@ -184,6 +185,11 @@ unique_ptr<Program> Parser::parse_program() {
     }
     if ((check(TokenKind::Identifier) && peek().text == "shared" &&
          (is_type_keyword(peek(1).kind) || peek(1).kind == TokenKind::Identifier)) ||
+        (check(TokenKind::Identifier) && peek().text == "borrow" &&
+         ((peek(1).kind == TokenKind::Identifier &&
+           (is_type_keyword(peek(2).kind) || peek(2).kind == TokenKind::Identifier)) ||
+          (peek(1).text == "mut" && peek(2).kind == TokenKind::Identifier &&
+           (is_type_keyword(peek(3).kind) || peek(3).kind == TokenKind::Identifier)))) ||
         (check(TokenKind::Identifier) && peek().text == "owned" &&
          peek(1).kind == TokenKind::Identifier &&
          (is_type_keyword(peek(2).kind) || peek(2).kind == TokenKind::Identifier)) ||
@@ -288,10 +294,23 @@ unique_ptr<StructDecl> Parser::parse_struct(Visibility visibility) {
 unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
   const Token& type_token = peek();
   bool returns_shared = false;
+  bool returns_mutable_borrow = false;
   std::string return_resource_domain;
+  std::string return_borrow_parameter;
   if (check(TokenKind::Identifier) && peek().text == "shared") {
     advance();
     returns_shared = true;
+  } else if (check(TokenKind::Identifier) && peek().text == "borrow") {
+    advance();
+    if (check(TokenKind::Identifier) && peek().text == "mut") {
+      advance();
+      returns_mutable_borrow = true;
+    }
+    if (check(TokenKind::Identifier))
+      return_borrow_parameter = advance().text;
+    else
+      error_at(peek(), diag::kExpectedToken,
+               "expected the source parameter name after 'borrow'");
   } else if (check(TokenKind::Identifier) && peek().text == "owned") {
     advance();
     if (check(TokenKind::Identifier) &&
@@ -376,11 +395,28 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
   }
   auto body = parse_block();
   if (!body) return nullptr;
+  if (!return_borrow_parameter.empty()) {
+    const auto source = std::find_if(
+        parameters.begin(), parameters.end(), [&](const Parameter& parameter) {
+          return parameter.name == return_borrow_parameter;
+        });
+    if (source == parameters.end()) {
+      error_at(name_token, diag::kTypeMismatch,
+               "borrow return source must name a function parameter");
+    } else if (!source->borrowed) {
+      error_at(name_token, diag::kTypeMismatch,
+               "borrow return source parameter must be declared borrowed");
+    } else if (returns_mutable_borrow && !source->mutable_borrow) {
+      error_at(name_token, diag::kTypeMismatch,
+               "mutable borrow return requires a mutable borrowed source parameter");
+    }
+  }
   return make_unique<FunctionDecl>(return_type, name_token.text, move(parameters),
                                    move(body),
                                    type_token.location.is_valid() ? type_token.location
                                                                   : name_token.location,
-                                   visibility, returns_shared, return_resource_domain);
+                                   visibility, returns_shared, return_resource_domain,
+                                   return_borrow_parameter, returns_mutable_borrow);
 }
 
 Type Parser::parse_type_annotation() {
