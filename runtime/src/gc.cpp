@@ -10,12 +10,14 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
 #include <new>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -197,6 +199,16 @@ void destroy_object_storage(ObjectHeader* header) {
 }
 
 std::mutex gc_mutex;
+struct MutatorState {
+  size_t depth = 0;
+  bool parked = false;
+};
+std::mutex mutator_mutex;
+std::condition_variable mutator_condition;
+std::vector<MutatorState*> mutators;
+bool collection_requested = false;
+std::thread::id collector_thread;
+thread_local MutatorState thread_mutator;
 ObjectHeader* objects = nullptr;
 ObjectIndex object_index;
 std::vector<std::unique_ptr<GcPage>> gc_pages;
@@ -242,6 +254,45 @@ nrq_gc_stats statistics{};
 
 uint64_t saturated_add(uint64_t left, uint64_t right) {
   return right > UINT64_MAX - left ? UINT64_MAX : left + right;
+}
+
+void stop_mutators() {
+  std::unique_lock<std::mutex> lock(mutator_mutex);
+  while (collection_requested) {
+    if (thread_mutator.depth != 0) {
+      thread_mutator.parked = true;
+      mutator_condition.notify_all();
+      mutator_condition.wait(lock, [] { return !collection_requested; });
+      thread_mutator.parked = false;
+    } else {
+      mutator_condition.wait(lock, [] { return !collection_requested; });
+    }
+  }
+  collection_requested = true;
+  collector_thread = std::this_thread::get_id();
+  mutator_condition.notify_all();
+  mutator_condition.wait(lock, [] {
+    for (const MutatorState* mutator : mutators)
+      if (mutator != &thread_mutator && !mutator->parked) return false;
+    return true;
+  });
+}
+
+void resume_mutators() {
+  std::lock_guard<std::mutex> lock(mutator_mutex);
+  collection_requested = false;
+  collector_thread = std::thread::id{};
+  mutator_condition.notify_all();
+}
+
+void maybe_collect_automatically() {
+  bool should_collect = false;
+  {
+    std::lock_guard<std::mutex> lock(gc_mutex);
+    should_collect = automatic_collection_enabled &&
+                     bytes_since_collection >= collection_threshold;
+  }
+  if (should_collect) nrq_gc_collect();
 }
 
 struct MarkContext {
@@ -364,8 +415,6 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
                       const size_t* reference_offsets, size_t reference_count) {
   if (bytes == 0 || bytes > SIZE_MAX - sizeof(ObjectHeader) || element_size == 0)
     return nullptr;
-  if (automatic_collection_enabled && bytes_since_collection >= collection_threshold)
-    collect_locked();
   constexpr size_t alignment = alignof(std::max_align_t);
   const size_t raw_span = sizeof(ObjectHeader) + bytes;
   if (raw_span > SIZE_MAX - (alignment - 1)) return nullptr;
@@ -459,6 +508,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
 extern "C" {
 
 void* nrq_gc_allocate(size_t bytes, nrq_gc_trace_fn trace) {
+  maybe_collect_automatically();
   std::lock_guard<std::mutex> lock(gc_mutex);
   return allocate_locked(bytes, bytes, trace, nullptr, 0);
 }
@@ -467,6 +517,7 @@ void* nrq_gc_allocate_array(size_t count, size_t element_size,
                             nrq_gc_trace_fn trace) {
   if (count == 0 || element_size == 0 || count > SIZE_MAX / element_size)
     return nullptr;
+  maybe_collect_automatically();
   std::lock_guard<std::mutex> lock(gc_mutex);
   return allocate_locked(count * element_size, element_size, trace, nullptr, 0);
 }
@@ -476,6 +527,7 @@ void* nrq_gc_allocate_array_typed(size_t count, size_t element_size,
                                   size_t reference_count) {
   if (count == 0 || element_size == 0 || count > SIZE_MAX / element_size)
     return nullptr;
+  maybe_collect_automatically();
   std::lock_guard<std::mutex> lock(gc_mutex);
   return allocate_locked(count * element_size, element_size, nullptr,
                          reference_offsets, reference_count);
@@ -487,6 +539,7 @@ void* nrq_gc_allocate_array_typed_rooted(
   if (!root_slot || count == 0 || element_size == 0 ||
       count > SIZE_MAX / element_size)
     return nullptr;
+  maybe_collect_automatically();
   std::lock_guard<std::mutex> lock(gc_mutex);
   const auto root = roots.find(root_slot);
   if (root == roots.end() || root->second.repeated_count != 0 ||
@@ -689,8 +742,61 @@ void nrq_gc_disable(void) {
 }
 
 void nrq_gc_collect(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
-  collect_locked();
+  stop_mutators();
+  {
+    std::lock_guard<std::mutex> lock(gc_mutex);
+    collect_locked();
+  }
+  resume_mutators();
+}
+
+void nrq_gc_mutator_enter(void) {
+  std::unique_lock<std::mutex> lock(mutator_mutex);
+  while (collection_requested) {
+    if (thread_mutator.depth != 0) {
+      thread_mutator.parked = true;
+      mutator_condition.notify_all();
+      mutator_condition.wait(lock, [] { return !collection_requested; });
+      thread_mutator.parked = false;
+    } else {
+      mutator_condition.wait(lock, [] { return !collection_requested; });
+    }
+  }
+  if (thread_mutator.depth == SIZE_MAX)
+    nrq_runtime_fatal("GC mutator nesting depth overflow");
+  if (thread_mutator.depth++ == 0) {
+    try {
+      mutators.push_back(&thread_mutator);
+    } catch (...) {
+      thread_mutator.depth = 0;
+      nrq_runtime_fatal("GC mutator registration failed");
+    }
+  }
+}
+
+void nrq_gc_mutator_leave(void) {
+  std::lock_guard<std::mutex> lock(mutator_mutex);
+  if (thread_mutator.depth == 0)
+    nrq_runtime_fatal("GC mutator leave without matching enter");
+  if (--thread_mutator.depth == 0) {
+    thread_mutator.parked = false;
+    auto found = std::find(mutators.begin(), mutators.end(), &thread_mutator);
+    if (found == mutators.end())
+      nrq_runtime_fatal("GC mutator registry lost an active thread");
+    mutators.erase(found);
+    mutator_condition.notify_all();
+  }
+}
+
+void nrq_gc_safepoint(void) {
+  std::unique_lock<std::mutex> lock(mutator_mutex);
+  if (!collection_requested || collector_thread == std::this_thread::get_id() ||
+      thread_mutator.depth == 0)
+    return;
+  thread_mutator.parked = true;
+  mutator_condition.notify_all();
+  mutator_condition.wait(lock, [] { return !collection_requested; });
+  thread_mutator.parked = false;
 }
 
 void nrq_gc_set_threshold(size_t bytes) {

@@ -1,0 +1,6 @@
+{
+  "mode": "build",
+  "args": ["--emit=mlir"],
+  "expect_exit": 0,
+  "expect_stdout_contains": ["nrq_gc_mutator_enter", "nrq_gc_safepoint", "nrq_gc_mutator_leave"]
+}

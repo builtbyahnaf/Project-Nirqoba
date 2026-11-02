@@ -441,6 +441,22 @@ slot. Added an MLIR fallback regression for an owned array allocated inside a
 selected arena scope. Validation passed: CTest 1/1 and integration suite
 133/133. No benchmark was run.
 
+## 45. Cooperative GC safepoints and mutator coordination - 2026-11-02
+
+GC-aware generated functions register nested mutator activations and leave the
+registry on every normal return. Compiler lowering emits polls at GC-aware
+function entry and loop backedges; ordinary non-GC functions do not pay this
+runtime cost. Collection requests stop the current mutator set and wait until
+other active mutators park at a poll or leave before tracing and sweeping.
+Automatic collection now enters this same protocol before taking the heap
+mutex. The existing heap mutex remains around metadata changes and managed
+reference stores, and native code must use the documented mutator protocol for
+long-running managed-reference access. A runtime regression verifies mutation
+does not progress between two trace callbacks during collection; an MLIR test
+checks generated entry, loop poll, and leave calls.
+Validation passed: Windows x64 build, CTest 1/1, and integration suite
+134/134. No benchmark was run. Lock-free TLAB allocation remains incomplete.
+
 ## 42. Per-thread GC bump-page cache - 2026-11-02
 
 Managed allocation now reuses a thread-local current GC page before scanning

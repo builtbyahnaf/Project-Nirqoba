@@ -1,0 +1,13 @@
+managed<byte> function make_value() {
+    return array.allocate<byte>(8);
+}
+
+int function main() {
+    var value = make_value();
+    var count = 0;
+    while (count < 2) {
+        count += 1;
+    }
+    gc.collect();
+    return count;
+}

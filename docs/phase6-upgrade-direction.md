@@ -45,12 +45,13 @@ silently counted as complete:
   alias-rich escape analysis beyond the conservative local-array promotion now
   implemented; closure capture ownership; cleanup semantics for a future error
   or exception unwinding model.
-- **Collector:** the runtime now caches each thread's current bump page, but
-  allocation remains serialized by the collector mutex. True TLAB fast paths,
-  safepoints and mutator coordination, size classes and free-slot reuse,
-  generational or incremental collection, and write barriers remain open. These
-  depend on a correct safepoint and mutation protocol. GC benchmarking is
-  deliberately deferred for this work.
+- **Collector:** the runtime caches each thread's current bump page and now has
+  cooperative function-entry and loop-backedge safepoints with stop-the-world
+  mutator coordination for GC-aware functions. Allocation, object metadata,
+  and managed-reference stores still use the collector mutex. True lock-free
+  TLAB fast paths, size classes and free-slot reuse, generational or incremental
+  collection, and write barriers remain open. GC benchmarking is deliberately
+  deferred for this work.
 - **Numerical memory:** allocator-aware containers, mutable views, tensor and
   CPU/GPU buffer ownership, and SIMD-oriented container APIs.
 - **Benchmarking through 6U:G:** equivalent optimized Nirqoba, C++, and Rust
