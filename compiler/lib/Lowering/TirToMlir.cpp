@@ -194,6 +194,19 @@ static std::unordered_map<int, std::size_t> analyze_stack_owned_arrays(
       if (op.kind == tir::OpKind::Load && op.lhs.id == owner_slot &&
           op.result.is_valid())
         descriptors.insert(op.result.id);
+    std::unordered_set<int> view_slots;
+    for (const tir::Op& op : function.operations()) {
+      if (op.kind != tir::OpKind::Store || !op.operand.is_valid() ||
+          !op.operand.type.is_array_view())
+        continue;
+      const bool is_local_slot = std::any_of(
+          function.operations().begin(), function.operations().end(),
+          [&op](const tir::Op& candidate) {
+            return candidate.kind == tir::OpKind::Alloca &&
+                   candidate.result.id == op.lhs.id;
+          });
+      if (is_local_slot) view_slots.insert(op.lhs.id);
+    }
     std::unordered_set<int> data_pointers;
     bool escapes = false;
     for (const tir::Op& op : function.operations()) {
@@ -207,6 +220,9 @@ static std::unordered_map<int, std::size_t> analyze_stack_owned_arrays(
           if (element.id == id) return true;
         return false;
       };
+      if (op.kind == tir::OpKind::Load && view_slots.count(op.lhs.id) &&
+          op.result.is_valid())
+        descriptors.insert(op.result.id);
       bool uses_descriptor = false;
       for (int id : descriptors) uses_descriptor |= uses(id);
       bool uses_data = false;
@@ -216,9 +232,17 @@ static std::unordered_map<int, std::size_t> analyze_stack_owned_arrays(
       if (op.kind == tir::OpKind::Store) {
         const bool initialization = op.lhs.id == owner_slot &&
                                    op.operand.id == allocation.result.id;
-        if ((uses_descriptor && !initialization) ||
+        const bool local_view_store = uses_descriptor &&
+            view_slots.count(op.lhs.id) && descriptors.count(op.operand.id);
+        if ((uses_descriptor && !initialization && !local_view_store) ||
             (uses_data && op.operand.id >= 0 && data_pointers.count(op.operand.id)))
           escapes = true;
+        continue;
+      }
+      if (op.kind == tir::OpKind::Call && uses_descriptor &&
+          op.callee == "memory.array_view" && !op.arguments.empty() &&
+          descriptors.count(op.arguments[0].id) && op.result.is_valid()) {
+        descriptors.insert(op.result.id);
         continue;
       }
       if (op.kind == tir::OpKind::AggregateExtract && uses_descriptor &&
