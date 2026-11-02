@@ -134,6 +134,13 @@ allocation, uses tombstones during sweep, and performs lookup without per-object
 hash-node allocation. The existing allocation-pressure and cycle/root tests
 exercise growth, lookup, sweep, and subsequent reuse; no timings were collected.
 
+Managed object headers now store the common one- and two-reference layouts
+inline. Only objects with wider explicit layouts allocate overflow offset
+metadata, reducing metadata heap allocations for common traced objects. Unit
+coverage exercises both inline and overflow layouts through reachability and
+sweep. RelWithDebInfo validation passed: CTest 1/1 and integration 87/87. No GC
+benchmark was run.
+
 ## Phase 6.9 native resources
 
 File resources and native mutex handles now have explicit close/destroy behavior

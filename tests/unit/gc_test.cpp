@@ -17,6 +17,17 @@ struct Node {
   uint64_t value;
 };
 
+struct PairReferences {
+  void* first;
+  void* second;
+};
+
+struct TripleReferences {
+  void* first;
+  void* second;
+  void* third;
+};
+
 void trace_node(void* object, size_t object_bytes, nrq_gc_visit_fn visit,
                 void* context) {
   (void)object_bytes;
@@ -121,6 +132,50 @@ TEST(GcTest, RejectsInvalidTypedLayoutsWithoutPublishingAnObject) {
   const nrq_gc_stats after = nrq_gc_get_stats();
   ASSERT_EQ(after.allocated_bytes, before.allocated_bytes);
   ASSERT_EQ(after.live_objects, before.live_objects);
+}
+
+TEST(GcTest, TracesInlineAndOverflowReferenceLayouts) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+  const size_t pair_offsets[] = {0, sizeof(void*)};
+  const size_t triple_offsets[] = {0, sizeof(void*), 2 * sizeof(void*)};
+  auto* pair = static_cast<PairReferences*>(nrq_gc_allocate_array_typed(
+      1, sizeof(PairReferences), pair_offsets, 2));
+  auto* triple = static_cast<TripleReferences*>(nrq_gc_allocate_array_typed(
+      1, sizeof(TripleReferences), triple_offsets, 3));
+  ASSERT_NE(pair, nullptr);
+  ASSERT_NE(triple, nullptr);
+  pair->first = nrq_gc_allocate(16, nullptr);
+  pair->second = nrq_gc_allocate(16, nullptr);
+  triple->first = nrq_gc_allocate(16, nullptr);
+  triple->second = nrq_gc_allocate(16, nullptr);
+  triple->third = nrq_gc_allocate(16, nullptr);
+  ASSERT_NE(pair->first, nullptr);
+  ASSERT_NE(pair->second, nullptr);
+  ASSERT_NE(triple->first, nullptr);
+  ASSERT_NE(triple->second, nullptr);
+  ASSERT_NE(triple->third, nullptr);
+  nrq_gc_root_register(reinterpret_cast<void**>(&pair));
+  nrq_gc_root_register(reinterpret_cast<void**>(&triple));
+
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 7);
+
+  pair->first = nullptr;
+  pair->second = nullptr;
+  triple->first = nullptr;
+  triple->second = nullptr;
+  triple->third = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 2);
+
+  nrq_gc_root_unregister(reinterpret_cast<void**>(&pair));
+  nrq_gc_root_unregister(reinterpret_cast<void**>(&triple));
+  pair = nullptr;
+  triple = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
 }
 
 TEST(GcTest, RootFramesUnregisterOnlyTheirOwnNestedRoots) {

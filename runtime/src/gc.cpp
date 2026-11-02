@@ -8,6 +8,7 @@
 #include "nirqoba/runtime/fatal.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdlib>
@@ -28,6 +29,37 @@ struct GcPage {
   size_t live_objects = 0;
 };
 
+// Most managed records contain only one or two GC references. Store those
+// offsets in the object header itself so traced objects do not need a separate
+// heap allocation for layout metadata. Unusually wide records keep an overflow
+// vector without changing the exact tracing representation.
+class ReferenceLayout {
+ public:
+  void assign(const size_t* offsets, size_t count) {
+    if (count <= inline_offsets_.size()) {
+      for (size_t index = 0; index < count; ++index)
+        inline_offsets_[index] = offsets[index];
+      overflow_offsets_.clear();
+      size_ = count;
+      return;
+    }
+    overflow_offsets_.assign(offsets, offsets + count);
+    size_ = count;
+  }
+
+  bool empty() const { return size_ == 0; }
+  size_t size() const { return size_; }
+  size_t operator[](size_t index) const {
+    return size_ <= inline_offsets_.size()
+        ? inline_offsets_[index] : overflow_offsets_[index];
+  }
+
+ private:
+  std::array<size_t, 2> inline_offsets_{};
+  std::vector<size_t> overflow_offsets_;
+  size_t size_ = 0;
+};
+
 struct alignas(std::max_align_t) ObjectHeader {
   ObjectHeader* next = nullptr;
   ObjectHeader* mark_next = nullptr;
@@ -37,7 +69,7 @@ struct alignas(std::max_align_t) ObjectHeader {
   size_t element_size = 0;
   nrq_gc_trace_fn trace = nullptr;
   bool marked = false;
-  std::vector<size_t> reference_offsets;
+  ReferenceLayout reference_offsets;
 };
 
 // The collector needs exact-address lookup while marking, but only allocation
@@ -272,7 +304,9 @@ void collect_locked() {
       const auto* bytes = static_cast<const unsigned char*>(object);
       for (size_t base = 0; base + header->element_size <= header->size;
            base += header->element_size) {
-        for (size_t offset : header->reference_offsets) {
+        for (size_t offset_index = 0;
+             offset_index < header->reference_offsets.size(); ++offset_index) {
+          const size_t offset = header->reference_offsets[offset_index];
           if (offset > header->element_size ||
               sizeof(void*) > header->element_size - offset) continue;
           void* child = nullptr;
@@ -366,9 +400,9 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
         rollback_reservation();
         return nullptr;
       }
-      header->reference_offsets.assign(reference_offsets,
-                                       reference_offsets + reference_count);
-      for (size_t offset : header->reference_offsets) {
+      header->reference_offsets.assign(reference_offsets, reference_count);
+      for (size_t index = 0; index < header->reference_offsets.size(); ++index) {
+        const size_t offset = header->reference_offsets[index];
         if (offset > element_size || sizeof(void*) > element_size - offset) {
           rollback_reservation();
           return nullptr;
