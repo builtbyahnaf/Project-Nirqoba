@@ -1,0 +1,9 @@
+managed<byte> function make_managed() {
+    return array.allocate<byte>(8);
+}
+
+int function main() {
+    var buffer = make_managed();
+    gc.collect();
+    return 0;
+}

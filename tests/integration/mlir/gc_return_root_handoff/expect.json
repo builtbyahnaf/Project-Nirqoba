@@ -1,0 +1,11 @@
+{
+  "mode": "build",
+  "args": ["--emit=mlir"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "nrq_gc_pin_transfer",
+    "nrq_gc_root_store",
+    "nrq_gc_unpin",
+    "nrq_gc_allocate_array_typed_rooted"
+  ]
+}

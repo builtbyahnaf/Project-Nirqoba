@@ -70,6 +70,9 @@ uint64_t nrq_gc_get_collection_count(void);
 uint64_t nrq_gc_get_live_objects(void);
 void* nrq_gc_pin(void* object);
 void nrq_gc_unpin(void* object);
+// Balanced compiler handoff pin for managed-pointer returns. Unlike the
+// diagnostic user pin API, this has no small per-object nesting limit.
+void* nrq_gc_pin_transfer(void* object);
 // Pinning diagnostics. `nrq_gc_pin_count` reports how many distinct objects are
 // pinned right now. A pin request that would exceed the documented per-object
 // pin limit is rejected (returns null) and counted by `nrq_gc_pin_violations`,
