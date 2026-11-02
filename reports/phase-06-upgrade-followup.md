@@ -416,3 +416,15 @@ the returned view is live is rejected. Unqualified view returns, mutable view
 borrows, wrong-source returns, and aggregate-stored views remain rejected.
 Validation passed: Windows x64 build, CTest 1/1, and integration suite
 129/129. No benchmark was run.
+
+## 42. Per-thread GC bump-page cache - 2026-11-02
+
+Managed allocation now reuses a thread-local current GC page before scanning
+the collector's page list. Collection increments a generation while holding
+the collector mutex; allocating threads compare it before touching the cached
+page, preventing use of a page reclaimed by another thread. Allocation,
+registry publication, stores, and collection remain synchronized by the
+existing mutex. This reduces page search work but is not a lock-free TLAB or a
+safepoint protocol. A regression covers cache invalidation after reclamation.
+Validation passed: Windows x64 build, CTest 1/1, and integration suite
+129/129. No benchmark was run.

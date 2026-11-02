@@ -44,9 +44,11 @@ silently counted as complete:
   lifetime rules beyond pointers and immutable array views; interprocedural
   escape analysis and stack placement; closure capture ownership; cleanup
   semantics for a future error or exception unwinding model.
-- **Collector:** TLABs, safepoints and mutator coordination, size classes and
-  free-slot reuse, generational or incremental collection, and write barriers.
-  These depend on a correct safepoint and mutation protocol. GC benchmarking is
+- **Collector:** the runtime now caches each thread's current bump page, but
+  allocation remains serialized by the collector mutex. True TLAB fast paths,
+  safepoints and mutator coordination, size classes and free-slot reuse,
+  generational or incremental collection, and write barriers remain open. These
+  depend on a correct safepoint and mutation protocol. GC benchmarking is
   deliberately deferred for this work.
 - **Numerical memory:** allocator-aware containers, mutable views, tensor and
   CPU/GPU buffer ownership, and SIMD-oriented container APIs.
