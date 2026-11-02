@@ -1,0 +1,10 @@
+borrow source array_view<int> function invalid(
+    borrow array_view<int> source,
+    borrow array_view<int> other
+) {
+    return memory.array_view<int>(other, 0, 1);
+}
+
+int function main() {
+    return 0;
+}
