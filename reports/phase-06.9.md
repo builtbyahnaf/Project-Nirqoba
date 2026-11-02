@@ -119,3 +119,12 @@ Profiler capture now reports allocation-size buckets, largest allocation, alloca
 Secure release zeroes the full tracked allocation before invoking its owning allocator. The allocator callback runs outside the global registry lock while the allocation owner is marked in flight and the allocator is pinned. A custom allocator regression verifies the bytes are zero at the callback boundary. Final shared release uses the same in-flight protocol and reserves its reference count at zero until the callback completes; concurrent retains and releases cannot claim the allocation during that interval.
 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration passed 85/85. The profiler-on/off allocation workload has a 30-run host baseline in `phase-06.9-profiler-overhead.md`. No GC benchmark was run. Phase 6.9 remains partial because task/device introspection depends on absent subsystems, exception-unwind cleanup has no language semantics, profiler thresholds need controlled hardware, and the runtime supports Windows only.
+
+## 24. Stable file-resource tokens - 2026-11-02
+
+Owned file handles now use monotonically issued opaque tokens instead of
+metadata addresses that the system allocator could reuse. This prevents a
+stale closed handle from accidentally resolving to a later file resource.
+Runtime coverage verifies reopening does not reuse the old token and that stale
+write/close operations fail. RelWithDebInfo validation passed: CTest 1/1 and
+integration 85/85.
