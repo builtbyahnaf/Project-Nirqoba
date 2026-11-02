@@ -158,3 +158,10 @@ mapping does not block unrelated mapping handles. Unmap removes the registry
 entry only after active access has completed; concurrent later operations see
 the mapping as closed. RelWithDebInfo validation passed: CTest 1/1 and
 integration 87/87.
+
+## 28. Mapping query/unmap race coverage - 2026-11-02
+
+A temporary-file runtime test races four threads calling `mapping_size` against
+unmap. Each call observes either the original mapping length or zero, and calls
+after unmap return zero or an invalid-unmap result. RelWithDebInfo validation
+passed: CTest 1/1 and integration 87/87.
