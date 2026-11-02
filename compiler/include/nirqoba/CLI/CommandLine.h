@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "nirqoba/Backend/Optimization.h"
 #include "nirqoba/Driver/CompilationPipeline.h"
 
 namespace nirq {
@@ -30,6 +31,12 @@ struct CommandLineOptions {
   EmitKind emit = EmitKind::Exe;
   bool emit_specified = false;
   bool verbose = false;
+  // Compiler optimization and target selection. The defaults preserve a
+  // portable release build while allowing debug builds and host tuning.
+  OptimizationLevel optimization_level = OptimizationLevel::O2;
+  std::string target_cpu = "generic";
+  std::string target_features;
+  bool host_cpu = false;
   std::vector<std::string> trailing_args;  // For `nirqoba run ... -- args`
 };
 

@@ -1,0 +1,11 @@
+int function main() {
+    // The array must be allocated from the arena selected at the call site,
+    // not from whatever allocator happens to be active. Cleanup runs in LIFO
+    // order, so the array is released before the arena is destroyed.
+    var arena = memory.arena_allocator(4096);
+    defer memory.destroy_allocator(arena);
+    var values = memory.owned_array<int>(4, arena);
+    values[1] = 9;
+    print(values[1]);
+    return 0;
+}

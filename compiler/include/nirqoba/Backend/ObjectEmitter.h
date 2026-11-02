@@ -1,27 +1,43 @@
 // Backend/ObjectEmitter.h — emits a COFF object file from an LLVM module.
 //
-// Phase 1 target: x86_64-pc-windows-msvc, CodeGenOpt::Default, Reloc::PIC_.
-//
-// The triple and data layout are taken from LLVMDialect rather than hard-coded
-// here so the MLIR module and the TargetMachine always agree.
+// The target machine is created separately from code generation so the driver
+// can run target-aware LLVM optimization passes and inspect the optimized IR
+// before object emission.
 #pragma once
 
+#include <memory>
 #include <string>
 
 #include "llvm/IR/Module.h"
+#include "nirqoba/Backend/Optimization.h"
 #include "nirqoba/Diagnostics/DiagnosticEngine.h"
+
+namespace llvm {
+class TargetMachine;
+}  // namespace llvm
 
 namespace nirq {
 
-// Writes the object file for `llvm_module` to `output_path`.
-// Returns true on success; records NRQ5xxx diagnostics and returns false on
-// any TargetMachine or code-generation failure.
+// Creates the target machine described by `options` and configures
+// `llvm_module` with the matching target triple and data layout.
+//
+// Initializes the LLVM target registry on first use. Returns nullptr and
+// records an NRQ5xxx diagnostic when the triple or CPU model cannot be
+// resolved.
+std::unique_ptr<llvm::TargetMachine> create_target_machine(
+    llvm::Module& llvm_module,
+    const OptimizationOptions& options,
+    DiagnosticEngine& diagnostics);
+
+// Writes the object file for `llvm_module` to `output_path` using the code
+// generation options embedded in `target_machine`.
 //
 // Preconditions:
-//   - `llvm_module` was produced by mlir::translateModuleToLLVMIR.
+//   - `target_machine` was created by create_target_machine() for this module.
 //   - `output_path` is a writable filesystem path.
 bool emit_object_file(llvm::Module& llvm_module,
                       const std::string& output_path,
+                      llvm::TargetMachine& target_machine,
                       DiagnosticEngine& diagnostics);
 
 }  // namespace nirq

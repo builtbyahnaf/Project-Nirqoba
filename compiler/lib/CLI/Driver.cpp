@@ -46,13 +46,23 @@ static void print_command_help(string_view cmd) {
               << "  --out-dir <dir>      Directory to place output artifacts\n"
               << "  --module-path <dir>  Extra directory searched for imported modules\n"
               << "  --emit=<kind>        Emit intermediate stage and stop\n"
-              << "                       Kinds: ast, tir, mlir, llvm, obj\n"
+              << "                       Kinds: ast, tir, mlir, llvm, llvm-raw, obj\n"
+              << "  -O<level>            Optimization level: -O0, -O1, -O2, -O3,\n"
+              << "                       -Os, -Oz (default: -O2)\n"
+              << "  --opt-level=<level>  Long form of -O<level> (0-3, s, z)\n"
+              << "  --target-cpu <cpu>   Target CPU model, or 'native' for the host\n"
+              << "  --target-features <f> LLVM target feature string (e.g. +avx2)\n"
+              << "  --native             Tune for the host CPU and its features\n"
               << "  --verbose            Enable verbose output\n";
   } else if (cmd == "run") {
     cout << "Usage: nirqoba run <file.nrqba>... [options] [-- <args>...]\n\n"
               << "Options:\n"
               << "  --out-dir <dir>      Directory for temporary build artifacts\n"
               << "  --module-path <dir>  Extra directory searched for imported modules\n"
+              << "  -O<level>            Optimization level (default: -O2)\n"
+              << "  --target-cpu <cpu>   Target CPU model, or 'native'\n"
+              << "  --target-features <f> LLVM target feature string\n"
+              << "  --native             Tune for the host CPU\n"
               << "  --verbose            Enable verbose output\n";
   } else if (cmd == "check") {
     cout << "Usage: nirqoba check <file.nrqba>... [options]\n\n"
@@ -73,6 +83,7 @@ static bool parse_emit_kind(string_view str, EmitKind& kind) {
   if (str == "tir")  { kind = EmitKind::Tir; return true; }
   if (str == "mlir") { kind = EmitKind::Mlir; return true; }
   if (str == "llvm") { kind = EmitKind::Llvm; return true; }
+  if (str == "llvm-raw") { kind = EmitKind::LlvmRaw; return true; }
   if (str == "obj")  { kind = EmitKind::Obj; return true; }
   return false;
 }
@@ -273,6 +284,67 @@ bool parse_command_line(int argc, const char* const* argv,
       options.verbose = true;
       continue;
     }
+    if (arg.rfind("-O", 0) == 0) {
+      OptimizationLevel level = options.optimization_level;
+      if (!parse_optimization_level(string_view(arg).substr(2), level)) {
+        error_message = "invalid optimization level '" + arg +
+                        "'; expected -O0, -O1, -O2, -O3, -Os, or -Oz";
+        return false;
+      }
+      options.optimization_level = level;
+      continue;
+    }
+    if (arg == "--opt-level") {
+      if (idx >= argc) {
+        error_message = "missing level after '--opt-level'";
+        return false;
+      }
+      OptimizationLevel level = options.optimization_level;
+      if (!parse_optimization_level(argv[idx++], level)) {
+        error_message = "invalid optimization level; expected 0, 1, 2, 3, s, or z";
+        return false;
+      }
+      options.optimization_level = level;
+      continue;
+    }
+    if (arg.rfind("--opt-level=", 0) == 0) {
+      OptimizationLevel level = options.optimization_level;
+      if (!parse_optimization_level(string_view(arg).substr(12), level)) {
+        error_message = "invalid optimization level '" +
+                        arg.substr(12) + "'; expected 0, 1, 2, 3, s, or z";
+        return false;
+      }
+      options.optimization_level = level;
+      continue;
+    }
+    if (arg == "--native") {
+      options.host_cpu = true;
+      continue;
+    }
+    if (arg == "--target-cpu") {
+      if (idx >= argc) {
+        error_message = "missing CPU model after '--target-cpu'";
+        return false;
+      }
+      options.target_cpu = argv[idx++];
+      continue;
+    }
+    if (arg.rfind("--target-cpu=", 0) == 0) {
+      options.target_cpu = arg.substr(13);
+      continue;
+    }
+    if (arg == "--target-features") {
+      if (idx >= argc) {
+        error_message = "missing feature string after '--target-features'";
+        return false;
+      }
+      options.target_features = argv[idx++];
+      continue;
+    }
+    if (arg.rfind("--target-features=", 0) == 0) {
+      options.target_features = arg.substr(18);
+      continue;
+    }
     if (arg == "-o") {
       if (idx >= argc) {
         error_message = "missing path after '-o'";
@@ -395,6 +467,10 @@ int run_driver(int argc, const char* const* argv) {
   pipe_opts.output_path = output_file;
   pipe_opts.obj_path = obj_file;
   pipe_opts.verbose = options.verbose;
+  pipe_opts.optimization_level = options.optimization_level;
+  pipe_opts.target_cpu = options.target_cpu;
+  pipe_opts.target_features = options.target_features;
+  pipe_opts.host_cpu = options.host_cpu;
 
   if (options.command == CommandKind::Check) {
     pipe_opts.emit = options.emit_specified ? options.emit : EmitKind::Tir;

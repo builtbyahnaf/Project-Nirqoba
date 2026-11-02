@@ -12,9 +12,12 @@ namespace {
 
 constexpr const char* kPrintBuiltin = "print";
 
+static const Symbol* find_root_symbol(const Expr& expr,
+                                      const SymbolTable& symbols);
+
 static bool contains_owned_array(const Type& type,
                                  unordered_set<string>& active_structs) {
-  if (type.is_owned_array()) return true;
+  if (type.is_owned_array() || type.is_owned_pointer()) return true;
   if (type.is_array() || type.is_tuple()) {
     if (type.is_array()) return contains_owned_array(type.element_type(), active_structs);
     for (const Type& element : type.tuple_elements())
@@ -39,6 +42,7 @@ static bool contains_owned_array(const Type& type) {
 
 static bool contains_nested_owned_array(const Type& type,
                                         unordered_set<string>& active_structs) {
+  if (type.is_owned_pointer()) return true;
   if (type.is_owned_array()) return contains_owned_array(type.element_type());
   if (type.is_array()) return contains_nested_owned_array(type.element_type(), active_structs);
   if (type.is_tuple()) {
@@ -90,12 +94,14 @@ static bool contains_array_view(const Type& type) {
 
 static string cleanup_for_type(const Type& type) {
   if (type.is_owned_array()) return "array.owned_release";
+  if (type.is_owned_pointer()) return "memory.deallocate";
   return contains_owned_array(type) ? "aggregate.owned_drop" : string{};
 }
 
 static bool has_untracked_pointer_ownership(const Type& type,
                                             ValueOwnership ownership) {
   if (!type.is_pointer()) return false;
+  if (type.is_owned_pointer()) return ownership != ValueOwnership::Owned;
   return ownership == ValueOwnership::Owned ||
          ownership == ValueOwnership::Shared ||
          ownership == ValueOwnership::Borrowed ||
@@ -129,6 +135,18 @@ static std::string cleanup_for_owner_producer(const std::string& callee,
   if (callee == "memory.owned_array" ||
       callee == "memory.owned_array_aligned") return "array.owned_release";
   return {};
+}
+
+static std::string cleanup_for_owned_expression(const Expr& expression,
+                                               const SymbolTable& symbols) {
+  if (expression.kind() == Expr::Kind::Call) {
+    const auto& call = static_cast<const CallExpr&>(expression);
+    return cleanup_for_owner_producer(call.callee());
+  }
+  const Symbol* source = find_root_symbol(expression, symbols);
+  if (!source || source->borrowed || source->shared_allocation) return {};
+  return source->cleanup_callee.empty() && source->owns_allocation
+             ? "memory.deallocate" : source->cleanup_callee;
 }
 
 static std::string cleanup_for_borrow_domain(const std::string& domain) {
@@ -573,10 +591,9 @@ void TypeChecker::check_function(FunctionDecl& function) {
   }
   if (!current_return_borrow_parameter_.empty() &&
       ((!current_return_type_.is_pointer() && !current_return_type_.is_array_view()) ||
-       current_return_shared_ || !current_return_resource_domain_.empty() ||
-       (current_return_type_.is_array_view() && current_return_mutable_borrow_))) {
+       current_return_shared_ || !current_return_resource_domain_.empty())) {
     diagnostics_.error(diag::kTypeMismatch, function.location(),
-                       "borrow returns require an unqualified pointer or immutable array view");
+                       "borrow returns require an unqualified pointer or array view");
   }
   loop_depth_ = 0;
   loop_break_states_.clear();
@@ -890,7 +907,8 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
         const Symbol* source = find_borrow_origin(declaration.initializer());
         if (source && source->allocation_id != 0 && !source->moved) {
           symbol.allocation_id = source->allocation_id;
-          if (symbols_.has_conflicting_borrow(source->allocation_id, false,
+          if (symbols_.has_conflicting_borrow(source->allocation_id,
+                                              signature->returns_mutable_borrow,
                                               source->name))
             diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
                                "returned array view conflicts with a live mutable borrow");
@@ -1796,10 +1814,20 @@ Type TypeChecker::check_expression(Expr& expr) {
             expr.kind() == Expr::Kind::TupleLiteral || expr.kind() == Expr::Kind::Name)
           expr.set_ownership(ValueOwnership::Owned);
       } else if (type.is_array_view()) {
+        bool mutable_view = false;
+        if (expr.kind() == Expr::Kind::Call) {
+          const auto& call = static_cast<const CallExpr&>(expr);
+          const FunctionSignature* signature = find_function(call.callee());
+          mutable_view = call.callee() == "memory.array_view_mut" ||
+                         (signature && signature->returns_mutable_borrow);
+        } else if (expr.kind() == Expr::Kind::Name) {
+          const Symbol* symbol = symbols_.lookup(
+              static_cast<const NameExpr&>(expr).name());
+          mutable_view = symbol && symbol->mutable_borrow;
+        }
         expr.set_ownership(
-            static_cast<const CallExpr&>(expr).callee() == "memory.array_view_mut"
-                ? ValueOwnership::MutableBorrowed
-                : ValueOwnership::Borrowed);
+            mutable_view ? ValueOwnership::MutableBorrowed
+                         : ValueOwnership::Borrowed);
       }
       break;
     case Expr::Kind::Unary: {
@@ -2012,6 +2040,8 @@ Type TypeChecker::resolve_aggregate_type(const Type& type,
   }
   if (type.is_owned_array())
     return Type::owned_array_type(resolve_aggregate_type(type.element_type(), active));
+  if (type.is_owned_pointer())
+    return Type::owned_pointer_type(resolve_aggregate_type(type.element_type(), active));
   if (type.is_array_view())
     return Type::array_view_type(resolve_aggregate_type(type.element_type(), active));
   // Pointer elements are deliberately left shallow: layout of a pointee is
@@ -2351,7 +2381,10 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
       const Type init_type = check_expression(const_cast<Expr&>(*expr.positional_inits()[i]));
       const Type field_type = resolve_aggregate_type(fields[i].type);
       consume_field_move(const_cast<Expr&>(*expr.positional_inits()[i]), field_type);
-      if (init_type.is_valid() && init_type != field_type) {
+      if (init_type.is_valid() && init_type != field_type &&
+          !(field_type.is_owned_pointer() && init_type.is_pointer() &&
+            !init_type.is_owned_pointer() &&
+            init_type.element_type() == field_type.element_type())) {
         diagnostics_.error(diag::kTypeMismatch, expr.positional_inits()[i]->location(),
                            "field '" + fields[i].name + "' of struct '" +
                                expr.struct_name() + "' has type '" +
@@ -2398,7 +2431,11 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
                            "struct '" + expr.struct_name() + "' has no field '" +
                                field_name + "'");
       } else if (init_type.is_valid() &&
-                 init_type != resolve_aggregate_type(field_def->type)) {
+                 init_type != resolve_aggregate_type(field_def->type) &&
+                 !(resolve_aggregate_type(field_def->type).is_owned_pointer() &&
+                   init_type.is_pointer() && !init_type.is_owned_pointer() &&
+                   init_type.element_type() ==
+                       resolve_aggregate_type(field_def->type).element_type())) {
         diagnostics_.error(diag::kTypeMismatch, kv.second->location(),
                            "field '" + field_name + "' of struct '" + expr.struct_name() +
                            "' has type '" + resolve_aggregate_type(field_def->type).to_string() +
@@ -2500,12 +2537,14 @@ Type TypeChecker::check_call(CallExpr& call) {
        call.callee() == "memory.owned_array_aligned") &&
       call.has_generic_argument()) {
     const bool aligned = call.callee() == "memory.owned_array_aligned";
-    const size_t expected_arguments = aligned ? 2 : 1;
-    if (call.arguments().size() != expected_arguments) {
+    const size_t minimum_arguments = aligned ? 2 : 1;
+    const size_t maximum_arguments = minimum_arguments + 1;
+    if (call.arguments().size() < minimum_arguments ||
+        call.arguments().size() > maximum_arguments) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          aligned
-                             ? "'memory.owned_array_aligned<T>' takes an element count and alignment"
-                             : "'memory.owned_array<T>' takes one element count");
+                             ? "'memory.owned_array_aligned<T>' takes an element count, an alignment, and an optional allocator handle"
+                             : "'memory.owned_array<T>' takes an element count and an optional allocator handle");
       for (const ExprPtr& argument : call.arguments())
         check_expression(const_cast<Expr&>(*argument));
     } else {
@@ -2518,6 +2557,15 @@ Type TypeChecker::check_call(CallExpr& call) {
         if (alignment.is_valid() && !alignment.is_integer())
           diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
                              "owned array alignment must be an integer");
+      }
+      if (call.arguments().size() == maximum_arguments) {
+        const size_t allocator_index = maximum_arguments - 1;
+        const Type allocator = check_expression(
+            const_cast<Expr&>(*call.arguments()[allocator_index]));
+        if (allocator.is_valid() && !allocator.is_integer())
+          diagnostics_.error(diag::kTypeMismatch,
+                             call.arguments()[allocator_index]->location(),
+                             "owned array allocator handle must be an integer");
       }
     }
     const Type element_type = resolve_aggregate_type(call.generic_argument());

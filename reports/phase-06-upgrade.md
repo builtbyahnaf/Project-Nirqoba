@@ -156,3 +156,25 @@ owners exactly once.
 
 Validation: the RelWithDebInfo integration suite passed 163/163. No benchmark
 was run.
+
+## 36. Allocator-aware arrays and returned mutable views - 2026-11-02
+
+Owned-array construction now accepts an optional explicit allocator handle:
+`memory.owned_array<T>(count, allocator)` and
+`memory.owned_array_aligned<T>(count, alignment, allocator)`. The runtime
+registers the buffer with that allocator through
+`nrq_memory_allocate_array_from`, so the normal `array.owned_release` path
+returns storage to the correct allocator domain. Allocator-aware arrays are
+deliberately excluded from stack promotion because the caller selected heap
+ownership explicitly.
+
+Returned mutable array views are now allowed when the function declares a
+mutable borrowed source (`borrow mut source array_view<T> function ...`). The
+caller inherits the source allocation identity, the result must be bound with
+`var`, and an immutable alias cannot be silently upgraded. Sema classifies
+function-returned views from the signature instead of only recognizing the
+`memory.array_view_mut` constructor.
+
+Added integration coverage in `tests/integration/positive/allocator_owned_array_arg`
+and `tests/integration/positive/mutable_view_return`. Validation is pending in
+this pass because the build was intentionally not run; no benchmark was run.

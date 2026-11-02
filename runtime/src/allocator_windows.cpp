@@ -1200,6 +1200,13 @@ void* nrq_memory_allocate_array(size_t count, size_t element_size,
   return nrq_memory_allocate(count * element_size, alignment);
 }
 
+void* nrq_memory_allocate_array_from(void* allocator, size_t count,
+                                     size_t element_size, size_t alignment) {
+  if (count == 0 || element_size == 0 || count > SIZE_MAX / element_size)
+    return nullptr;
+  return nrq_memory_allocate_from(allocator, count * element_size, alignment);
+}
+
 void nrq_memory_array_bounds_check(uint64_t index, uint64_t length) {
   if (index >= length)
     nrq_runtime_fatal("owned array index is outside the array bounds");

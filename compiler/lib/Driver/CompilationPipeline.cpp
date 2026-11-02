@@ -19,6 +19,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetMachine.h"
 
 #include "nirqoba/Backend/ObjectEmitter.h"
 #include "nirqoba/Diagnostics/Diagnostic.h"
@@ -219,7 +220,7 @@ int run_pipeline(const PipelineOptions& options,
     llvm::outs() << "\n\n";
 
     mlir::PassManager pm(&mlir_context);
-    build_lowering_pipeline(pm);
+    build_lowering_pipeline(pm, options.optimization_level != OptimizationLevel::O0);
     if (mlir::failed(pm.run(*mlir_module))) {
       diagnostics.error(diag::kInternalError, SourceLocation{}, "MLIR pass pipeline failed");
       return fail_with(diagnostics, sources);
@@ -233,7 +234,7 @@ int run_pipeline(const PipelineOptions& options,
 
   // Step 6: lower MLIR to the LLVM dialect.
   mlir::PassManager pm(&mlir_context);
-  build_lowering_pipeline(pm);
+  build_lowering_pipeline(pm, options.optimization_level != OptimizationLevel::O0);
   if (mlir::failed(pm.run(*mlir_module))) {
     diagnostics.error(diag::kInternalError, SourceLocation{}, "MLIR lowering failed");
     return fail_with(diagnostics, sources);
@@ -249,6 +250,34 @@ int run_pipeline(const PipelineOptions& options,
     return fail_with(diagnostics, sources);
   }
 
+  if (options.emit == EmitKind::LlvmRaw) {
+    llvm_module->print(llvm::outs(), nullptr);
+    return 0;
+  }
+
+  // Configure the target before optimizing: target IR analyses drive inline
+  // costs, vector-width selection, and ABI lowering.
+  OptimizationOptions backend_options;
+  backend_options.level = options.optimization_level;
+  backend_options.target_cpu = options.target_cpu;
+  backend_options.target_features = options.target_features;
+  backend_options.host_cpu = options.host_cpu;
+
+  unique_ptr<llvm::TargetMachine> target_machine =
+      create_target_machine(*llvm_module, backend_options, diagnostics);
+  if (!target_machine) return fail_with(diagnostics, sources);
+
+  if (options.verbose) {
+    cerr << "optimization: " << optimization_level_name(options.optimization_level)
+         << " (target " << target_machine->getTargetTriple().str()
+         << ", cpu " << target_machine->getTargetCPU().str() << ")\n";
+  }
+
+  if (!optimize_llvm_module(*llvm_module, *target_machine,
+                            options.optimization_level, diagnostics)) {
+    return fail_with(diagnostics, sources);
+  }
+
   if (options.emit == EmitKind::Llvm) {
     llvm_module->print(llvm::outs(), nullptr);
     return 0;
@@ -256,7 +285,8 @@ int run_pipeline(const PipelineOptions& options,
 
   // Step 8: emit the object file.
   if (options.emit == EmitKind::Obj) {
-    if (!emit_object_file(*llvm_module, options.output_path, diagnostics)) {
+    if (!emit_object_file(*llvm_module, options.output_path, *target_machine,
+                          diagnostics)) {
       return fail_with(diagnostics, sources);
     }
     render_diagnostics(diagnostics, sources);
@@ -268,7 +298,7 @@ int run_pipeline(const PipelineOptions& options,
     obj_file = options.output_path + ".obj";
   }
 
-  if (!emit_object_file(*llvm_module, obj_file, diagnostics)) {
+  if (!emit_object_file(*llvm_module, obj_file, *target_machine, diagnostics)) {
     return fail_with(diagnostics, sources);
   }
 
