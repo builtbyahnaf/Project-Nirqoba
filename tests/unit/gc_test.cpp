@@ -256,6 +256,21 @@ TEST(GcTest, PinnedObjectSurvivesUntilItIsUnpinned) {
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
 }
 
+TEST(GcTest, TransferPinsSupportBalancedManagedReturnHandoffs) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  void* object = nrq_gc_allocate(24, nullptr);
+  ASSERT_NE(object, nullptr);
+  constexpr int kHandoffs = 32;
+  for (int index = 0; index < kHandoffs; ++index)
+    ASSERT_TRUE(nrq_gc_pin_transfer(object) == object);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{1});
+  for (int index = 0; index < kHandoffs; ++index) nrq_gc_unpin(object);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
 TEST(GcTest, ReferenceDiagnosticsCountHeapAndRootReferencesWhenEnabled) {
   nrq_gc_enable();
   nrq_gc_collect();

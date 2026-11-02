@@ -1,0 +1,19 @@
+struct Node {
+    int value;
+}
+
+struct Holder {
+    managed<Node> node;
+}
+
+Holder function make_holder() {
+    var node = array.allocate<Node>(1);
+    node[0].value = 73;
+    return Holder { node: node };
+}
+
+int function main() {
+    var holder = make_holder();
+    gc.collect();
+    return holder.node[0].value;
+}

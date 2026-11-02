@@ -309,3 +309,14 @@ reclaiming a new object between allocation return and root publication. A
 unit regression races rooted allocation against explicit collection. The
 collector remains stop-the-world and synchronized. RelWithDebInfo validation
 passed: CTest 1/1 and integration 94/94. No GC benchmark was run.
+
+## 35. GC managed-reference return handoff - 2026-11-02
+
+Managed-reference function returns now use balanced transit pins. The callee
+pins each returned reference before ending its root frame; the caller copies
+the result into a registered root under the collector lock, then releases the
+transit pins. This covers managed-pointer and aggregate returns containing
+managed references. A compiler regression checks the emitted handoff calls,
+and a runtime integration case returns a reference-bearing aggregate, collects,
+and reads the object. RelWithDebInfo validation passed: CTest 1/1 and
+integration 96/96. No GC benchmark was run.

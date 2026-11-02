@@ -715,6 +715,21 @@ void nrq_gc_unpin(void* object) {
   if (--found->second == 0) pinned_objects.erase(found);
 }
 
+void* nrq_gc_pin_transfer(void* object) {
+  if (!object) return nullptr;
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  if (!object_index.find(object)) return nullptr;
+  try {
+    size_t& count = pinned_objects[object];
+    if (count == SIZE_MAX)
+      nrq_runtime_fatal("GC transfer pin count overflow");
+    ++count;
+    return object;
+  } catch (...) {
+    nrq_runtime_fatal("GC transfer pin registration failed");
+  }
+}
+
 void nrq_gc_ref_count_start(void) {
   std::lock_guard<std::mutex> lock(gc_mutex);
   reference_diagnostics_enabled = true;

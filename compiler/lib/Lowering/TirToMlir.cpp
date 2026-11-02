@@ -407,6 +407,70 @@ class FunctionTranslator {
         mlir::ValueRange{data, count, element_size, offsets_slot, offset_count});
   }
 
+  mlir::Value pin_managed_references_for_return(
+      mlir::Value value, const Type& type, mlir::Location loc) {
+    std::vector<uint64_t> offsets;
+    collect_managed_reference_offsets(type, 0, offsets);
+    if (offsets.empty() || !value) return value;
+    mlir::Type value_type = tir_type_to_mlir(type, ctx_, builder_);
+    if (!value_type) return value;
+    mlir::Value slot = alloca_at_entry(value_type, loc);
+    builder_.create<mlir::LLVM::StoreOp>(loc, value, slot);
+    auto pin = ensure_runtime_fn(
+        module_, builder_, "nrq_gc_pin_transfer", llvm_ptr_type(ctx_),
+        {llvm_ptr_type(ctx_)});
+    for (uint64_t offset : offsets) {
+      mlir::Value byte_offset = builder_.create<mlir::LLVM::ConstantOp>(
+          loc, builder_.getI64Type(),
+          builder_.getI64IntegerAttr(static_cast<int64_t>(offset))).getResult();
+      mlir::Value field = builder_.create<mlir::LLVM::GEPOp>(
+          loc, llvm_ptr_type(ctx_), builder_.getI8Type(), slot,
+          mlir::ValueRange{byte_offset}).getResult();
+      mlir::Value reference = builder_.create<mlir::LLVM::LoadOp>(
+          loc, llvm_ptr_type(ctx_), field).getResult();
+      builder_.create<mlir::LLVM::CallOp>(
+          loc, pin, mlir::ValueRange{reference});
+    }
+    return builder_.create<mlir::LLVM::LoadOp>(loc, value_type, slot).getResult();
+  }
+
+  void root_managed_references_and_release_handoffs(
+      mlir::Value value, const Type& type, mlir::Location loc) {
+    std::vector<uint64_t> offsets;
+    collect_managed_reference_offsets(type, 0, offsets);
+    if (offsets.empty() || !value) return;
+    mlir::Type value_type = tir_type_to_mlir(type, ctx_, builder_);
+    if (!value_type) return;
+    mlir::Value root_slot = alloca_at_entry(value_type, loc);
+    register_gc_root(root_slot, type, loc);
+    mlir::Value source_slot = alloca_at_entry(value_type, loc);
+    builder_.create<mlir::LLVM::StoreOp>(loc, value, source_slot);
+    auto copy = ensure_runtime_fn(
+        module_, builder_, "nrq_gc_root_copy",
+        mlir::LLVM::LLVMVoidType::get(ctx_),
+        {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_), builder_.getI64Type()});
+    mlir::Value byte_count = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI64Type(),
+        builder_.getI64IntegerAttr(static_cast<int64_t>(type_size(type)))).getResult();
+    builder_.create<mlir::LLVM::CallOp>(
+        loc, copy, mlir::ValueRange{root_slot, source_slot, byte_count});
+    auto unpin = ensure_runtime_fn(
+        module_, builder_, "nrq_gc_unpin",
+        mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
+    for (uint64_t offset : offsets) {
+      mlir::Value byte_offset = builder_.create<mlir::LLVM::ConstantOp>(
+          loc, builder_.getI64Type(),
+          builder_.getI64IntegerAttr(static_cast<int64_t>(offset))).getResult();
+      mlir::Value field = builder_.create<mlir::LLVM::GEPOp>(
+          loc, llvm_ptr_type(ctx_), builder_.getI8Type(), root_slot,
+          mlir::ValueRange{byte_offset}).getResult();
+      mlir::Value reference = builder_.create<mlir::LLVM::LoadOp>(
+          loc, llvm_ptr_type(ctx_), field).getResult();
+      builder_.create<mlir::LLVM::CallOp>(
+          loc, unpin, mlir::ValueRange{reference});
+    }
+  }
+
   // Converts a runtime call's ABI result to the type the language assigned to
   // the call, e.g. an i32 status code to a 64-bit `int` or a 0/1 code to
   // `bool`. A no-op when the types already match.
@@ -1699,7 +1763,10 @@ class FunctionTranslator {
           mlir::Type ret_ty = tir_type_to_mlir(op.result.type, ctx_, builder_);
           auto call_op = builder_.create<mlir::func::CallOp>(
               loc, op.callee, mlir::TypeRange{ret_ty}, args);
-          set(op.result, call_op.getResult(0));
+          mlir::Value result = call_op.getResult(0);
+          root_managed_references_and_release_handoffs(
+              result, op.result.type, loc);
+          set(op.result, result);
         } else {
           builder_.create<mlir::func::CallOp>(
               loc, op.callee, mlir::TypeRange{}, args);
@@ -1749,13 +1816,18 @@ class FunctionTranslator {
       }
 
       case tir::OpKind::Return: {
+        mlir::Value val;
+        if (op.operand.is_valid()) {
+          val = get(op.operand);
+          val = pin_managed_references_for_return(
+              val, op.operand.type, loc);
+        }
         auto end_frame = ensure_runtime_fn(module_, builder_, "nrq_gc_root_frame_end",
                                            mlir::LLVM::LLVMVoidType::get(ctx_),
                                            {builder_.getI64Type()});
         builder_.create<mlir::LLVM::CallOp>(loc, end_frame,
                                             mlir::ValueRange{gc_root_frame_marker_});
         if (op.operand.is_valid()) {
-          mlir::Value val = get(op.operand);
           if (val) {
             builder_.create<mlir::func::ReturnOp>(loc, mlir::ValueRange{val});
           } else {
