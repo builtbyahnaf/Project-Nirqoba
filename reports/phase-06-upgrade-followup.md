@@ -271,3 +271,12 @@ passed: CTest 1/1 and integration 87/87. No GC benchmark was run.
 A temporary-file unit regression races four mapping-size readers against unmap
 and confirms every result is either the live mapping length or zero, followed
 by stale-handle rejection. CTest passed 1/1 and integration passed 87/87.
+
+## 31. Ownership state across loop breaks - 2026-11-02
+
+The semantic analyzer now records ownership state at each `break` and merges
+those exits with the loop's condition-false exit. This prevents a resource
+released on one break path from appearing live after the loop, while preserving
+owners on break paths that do not consume them. Added negative and positive
+integration regressions for both cases. RelWithDebInfo validation passed:
+CTest 1/1 and integration 89/89.

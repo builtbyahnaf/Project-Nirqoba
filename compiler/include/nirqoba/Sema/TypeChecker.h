@@ -106,6 +106,7 @@ class TypeChecker {
   Type current_return_type_;
   bool current_return_shared_ = false;
   int loop_depth_ = 0;
+  std::vector<std::vector<SymbolTable>> loop_break_states_;
   std::string current_module_;
   uint64_t next_allocation_id_ = 1;
   bool checking_deferred_cleanup_ = false;
