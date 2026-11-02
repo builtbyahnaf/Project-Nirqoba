@@ -20,6 +20,7 @@ add_library(nrqoba_runtime STATIC
   src/math.cpp
   src/file_windows.cpp
   src/sync_windows.cpp
+  src/socket_windows.cpp
   src/gc.cpp
   src/system_windows.cpp
   src/args_windows.cpp
@@ -36,6 +37,7 @@ target_include_directories(nrqoba_runtime
 )
 
 nirqoba_set_target_warnings(nrqoba_runtime)
+target_link_libraries(nrqoba_runtime PUBLIC ws2_32)
 
 set_target_properties(nrqoba_runtime PROPERTIES
   ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"

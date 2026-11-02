@@ -4,7 +4,7 @@
 
 The runtime implements optional reference diagnostics, profiler counters and histograms, Windows file mappings with checked typed access, GC pinning with scoped `defer`, secure allocation/zeroization, memory and runtime introspection, deterministic lexical cleanup, and owned file/mutex resources. Secure/shared release, file operations, mapping operations, and allocator statistics run without holding their global registries across allocator or I/O work. Detailed current evidence is in `reports/phase-06.9.md` and `reports/phase-06.9-followup.md`.
 
-Remaining work: socket/graphics/GPU resource wrappers and task/device introspection depend on runtime subsystems that do not exist; cleanup during exception unwinding needs a language unwind model. Profiler overhead has a 30-run host baseline, but there is no controlled cross-machine regression threshold. The runtime remains Windows-only.
+Remaining work: graphics/GPU resource wrappers and task/device introspection depend on runtime subsystems that do not exist; cleanup during exception unwinding needs a language unwind model. Profiler overhead has a 30-run host baseline, but there is no controlled cross-machine regression threshold. The runtime remains Windows-only.
 
 ## Phase 6 Upgrade
 

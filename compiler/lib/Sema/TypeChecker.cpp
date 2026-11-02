@@ -112,7 +112,7 @@ static bool expression_creates_owned_pointer(const Expr& expr) {
          callee == "memory.map_file" || callee == "memory.shared_allocate" ||
          callee == "memory.shared_retain" || callee == "mutex.create" ||
          callee == "memory.owned_array" ||
-         callee == "memory.owned_array_aligned";
+         callee == "memory.owned_array_aligned" || callee == "socket.connect";
 }
 
 static std::string cleanup_for_owner_producer(const std::string& callee,
@@ -125,6 +125,7 @@ static std::string cleanup_for_owner_producer(const std::string& callee,
   if (callee == "memory.allocate" || callee == "memory.reallocate")
     return "memory.deallocate";
   if (callee == "mutex.create") return "mutex.destroy";
+  if (callee == "socket.connect") return "socket.close";
   if (callee == "memory.owned_array" ||
       callee == "memory.owned_array_aligned") return "array.owned_release";
   return {};
@@ -597,7 +598,8 @@ void TypeChecker::check_block(BlockStmt& block) {
     const CallExpr* call = cleanup->call;
     const string& callee = call->callee();
     if ((callee == "memory.deallocate" || callee == "memory.shared_release" || callee == "array.owned_release" || callee == "file.close" || callee == "mutex.destroy" || callee == "memory.secure_release" ||
-         callee == "memory.unmap_file") && cleanup->allocation_id != 0) {
+         callee == "memory.unmap_file" || callee == "socket.close") &&
+        cleanup->allocation_id != 0) {
       if (symbols_.allocation_is_moved(cleanup->allocation_id)) {
           diagnostics_.error(diag::kUseAfterFree, call->location(),
                              "deferred cleanup releases an allocation that was already released");
@@ -673,7 +675,8 @@ void TypeChecker::check_deferred_cleanup(DeferredCleanupStmt& statement) {
   uint64_t allocation_id = 0;
   if ((call->callee() == "memory.deallocate" || call->callee() == "memory.shared_release" || call->callee() == "array.owned_release" || call->callee() == "file.close" || call->callee() == "mutex.destroy" ||
        call->callee() == "memory.secure_release" ||
-       call->callee() == "memory.unmap_file") && !call->arguments().empty()) {
+       call->callee() == "memory.unmap_file" ||
+       call->callee() == "socket.close") && !call->arguments().empty()) {
     const Symbol* pointer = find_root_symbol(*call->arguments()[0], symbols_);
     if (pointer && (pointer->type.is_pointer() || pointer->type.is_owned_array()))
       allocation_id = pointer->allocation_id;
@@ -1288,7 +1291,8 @@ SymbolTable TypeChecker::loop_exit_state_after_defer() const {
       const bool releases_owner = callee == "memory.deallocate" ||
           callee == "memory.shared_release" || callee == "array.owned_release" ||
           callee == "file.close" || callee == "mutex.destroy" ||
-          callee == "memory.secure_release" || callee == "memory.unmap_file";
+          callee == "memory.secure_release" || callee == "memory.unmap_file" ||
+          callee == "socket.close";
       if (!releases_owner || state.allocation_is_moved(cleanup->allocation_id))
         continue;
       if (callee == "array.owned_release" &&
@@ -2219,6 +2223,120 @@ Type TypeChecker::check_call(CallExpr& call) {
       }
     }
     return Type::void_type();
+  }
+  if (call.callee() == "socket.connect") {
+    if (call.arguments().size() != 2)
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'socket.connect' takes a host and port");
+    if (!call.arguments().empty()) {
+      const Type host = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+      if (host.is_valid() && !host.is_string())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "socket.connect host must be a string");
+    }
+    if (call.arguments().size() > 1) {
+      const Type port = check_expression(const_cast<Expr&>(*call.arguments()[1]));
+      if (port.is_valid() && !port.is_integer())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
+                           "socket.connect port must be an integer");
+    }
+    return Type::pointer_type(Type::byte_type());
+  }
+  if (call.callee() == "socket.close") {
+    if (call.arguments().size() != 1)
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'socket.close' takes one socket handle");
+    if (call.arguments().empty()) return Type::i32_type();
+    const Type type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    const Symbol* socket = find_root_symbol(*call.arguments()[0], symbols_);
+    if (type.is_valid() && !type.is_pointer())
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "socket.close requires a socket handle");
+    else if (!socket || socket->cleanup_callee != "socket.close")
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "socket.close requires an owned socket resource");
+    else if (socket->borrowed)
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "borrowed sockets cannot be closed");
+    else if (!checking_deferred_cleanup_) {
+      const_cast<Expr&>(*call.arguments()[0]).set_transfers_ownership();
+      symbols_.mark_allocation_moved(socket->allocation_id);
+    }
+    return Type::i32_type();
+  }
+  if (call.callee() == "socket.send") {
+    if (call.arguments().size() != 2)
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'socket.send' takes a socket handle and text");
+    if (!call.arguments().empty()) {
+      const Type handle = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+      if (handle.is_valid() && !handle.is_pointer())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "socket.send requires a socket handle");
+      else if (!has_cleanup_domain(*call.arguments()[0], symbols_,
+                                   "socket.close", true))
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "socket.send requires a socket or borrowed socket handle");
+    }
+    if (call.arguments().size() > 1) {
+      const Type text = check_expression(const_cast<Expr&>(*call.arguments()[1]));
+      if (text.is_valid() && !text.is_string())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
+                           "socket.send content must be a string");
+    }
+    return Type::i64_type();
+  }
+  if (call.callee() == "socket.receive") {
+    if (call.arguments().size() != 3)
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'socket.receive' takes a socket, destination, and capacity");
+    if (!call.arguments().empty()) {
+      const Type handle = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+      if (handle.is_valid() && !handle.is_pointer())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "socket.receive requires a socket handle");
+      else if (!has_cleanup_domain(*call.arguments()[0], symbols_,
+                                   "socket.close", true))
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "socket.receive requires a socket or borrowed socket handle");
+    }
+    if (call.arguments().size() > 1) {
+      const Expr& destination_expr = *call.arguments()[1];
+      const Type destination = check_expression(
+          const_cast<Expr&>(destination_expr));
+      if (destination.is_valid() && !destination.is_pointer())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
+                           "socket.receive destination must be a pointer");
+      const Symbol* destination_symbol =
+          find_root_symbol(destination_expr, symbols_);
+      std::string destination_cleanup;
+      if (destination_symbol) {
+        destination_cleanup = destination_symbol->cleanup_callee;
+        if (destination_symbol->borrowed && !destination_symbol->mutable_borrow)
+          diagnostics_.error(diag::kTypeMismatch, destination_expr.location(),
+                             "socket.receive destination requires a mutable borrow");
+        else if (!destination_symbol->borrowed &&
+                 !destination_symbol->is_mutable())
+          diagnostics_.error(diag::kImmutableAssignment,
+                             destination_expr.location(),
+                             "socket.receive destination must be mutable");
+      } else if (destination_expr.kind() == Expr::Kind::Call) {
+        destination_cleanup = cleanup_for_owner_producer(
+            static_cast<const CallExpr&>(destination_expr).callee());
+      }
+      if (!destination_cleanup.empty() &&
+          destination_cleanup != "memory.deallocate" &&
+          destination_cleanup != "memory.secure_release")
+        diagnostics_.error(diag::kTypeMismatch, destination_expr.location(),
+                           "socket.receive destination cannot be an opaque resource handle");
+    }
+    if (call.arguments().size() > 2) {
+      const Type capacity = check_expression(const_cast<Expr&>(*call.arguments()[2]));
+      if (capacity.is_valid() && !capacity.is_integer())
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[2]->location(),
+                           "socket.receive capacity must be an integer");
+    }
+    return Type::i64_type();
   }
 
   unordered_set<string> active_structs;

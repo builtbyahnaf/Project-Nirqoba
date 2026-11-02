@@ -16,7 +16,7 @@ Partial implementation. Windows x64, MSVC, LLVM/MLIR 23.1.4.
 
 ## Known limits
 
-The profiler does not report allocation hotspots; allocator free-space and fragmentation values are unavailable for general and custom allocators. GC counters are snapshots; explicit allocation current/peak/total counters do not include the GC heap. Mapping access must use checked typed accessors. Pin scopes use `defer memory.unpin`. Introspection includes physical-memory estimates, runtime version, CPU capabilities, process thread count, allocator kind, process working set, and automatic-GC state; task and device details are unavailable. File and mutex wrappers exist, but sockets and GPU resources do not; exception-unwind cleanup and non-Windows support are also absent.
+The profiler does not report allocation hotspots; allocator free-space and fragmentation values are unavailable for general and custom allocators. GC counters are snapshots; explicit allocation current/peak/total counters do not include the GC heap. Mapping access must use checked typed accessors. Pin scopes use `defer memory.unpin`. Introspection includes physical-memory estimates, runtime version, CPU capabilities, process thread count, allocator kind, process working set, and automatic-GC state; task and device details are unavailable. File, mutex, and TCP socket wrappers exist, but GPU resources do not; exception-unwind cleanup and non-Windows support are also absent.
 
 ## Validation
 
@@ -165,3 +165,15 @@ A temporary-file runtime test races four threads calling `mapping_size` against
 unmap. Each call observes either the original mapping length or zero, and calls
 after unmap return zero or an invalid-unmap result. RelWithDebInfo validation
 passed: CTest 1/1 and integration 87/87.
+
+## 29. Owned TCP socket resources - 2026-11-02
+
+Added Windows TCP connect, text send, bounded receive, and deterministic close.
+Socket tokens are monotonic opaque handles with per-resource operation locks;
+close removes the token before waking a blocked operation and waiting for its
+completion. Stale handles are rejected. The compiler tracks socket ownership,
+inserts lexical close, permits borrowed handles for I/O helpers, rejects use
+after close, and blocks indexing opaque socket handles. Loopback tests cover
+data flow, close during a blocked receive, and stale close; integration tests
+cover lowering, cleanup, and ownership diagnostics. RelWithDebInfo validation
+passed: CTest 1/1 and integration 100/100.

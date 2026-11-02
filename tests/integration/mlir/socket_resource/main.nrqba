@@ -1,0 +1,9 @@
+int function main() {
+    var stream = socket.connect("127.0.0.1", 7);
+    var buffer = memory.allocate<byte>(16);
+    socket.send(stream, "ping");
+    socket.receive(stream, buffer, 16);
+    defer socket.close(stream);
+    memory.deallocate(buffer);
+    return 0;
+}
