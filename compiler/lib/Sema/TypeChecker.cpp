@@ -533,6 +533,7 @@ void TypeChecker::check_function(FunctionDecl& function) {
                        "shared return types must be pointers");
   }
   loop_depth_ = 0;
+  loop_break_states_.clear();
 
   for (const Parameter& parameter : function.parameters()) {
     // Parameters are assignable inside the body. Nothing in the specification
@@ -1139,9 +1140,12 @@ void TypeChecker::check_while(WhileStmt& statement) {
                        "'while' condition must be 'bool', not '" + cond_type.to_string() + "'");
   }
   const SymbolTable condition_state = symbols_;
+  loop_break_states_.emplace_back();
   ++loop_depth_;
   check_block(const_cast<BlockStmt&>(statement.body()));
   --loop_depth_;
+  std::vector<SymbolTable> break_states = std::move(loop_break_states_.back());
+  loop_break_states_.pop_back();
   const SymbolTable body_state = symbols_;
   const bool body_falls_through = block_falls_through(statement.body());
   if (body_falls_through) {
@@ -1157,6 +1161,10 @@ void TypeChecker::check_while(WhileStmt& statement) {
   symbols_ = condition_state;
   if (body_falls_through)
     symbols_.merge_conditional_ownership(body_state, condition_state);
+  for (const SymbolTable& break_state : break_states) {
+    const SymbolTable merged = symbols_;
+    symbols_.merge_conditional_ownership(merged, break_state);
+  }
 }
 
 void TypeChecker::check_for(ForStmt& statement) {
@@ -1173,9 +1181,12 @@ void TypeChecker::check_for(ForStmt& statement) {
     }
   }
   const SymbolTable condition_state = symbols_;
+  loop_break_states_.emplace_back();
   ++loop_depth_;
   check_block(const_cast<BlockStmt&>(statement.body()));
   --loop_depth_;
+  std::vector<SymbolTable> break_states = std::move(loop_break_states_.back());
+  loop_break_states_.pop_back();
   const SymbolTable body_state = symbols_;
   const bool body_falls_through = block_falls_through(statement.body());
   if (statement.has_step()) {
@@ -1199,6 +1210,10 @@ void TypeChecker::check_for(ForStmt& statement) {
   } else {
     symbols_ = condition_state;
   }
+  for (const SymbolTable& break_state : break_states) {
+    const SymbolTable merged = symbols_;
+    symbols_.merge_conditional_ownership(merged, break_state);
+  }
   symbols_.pop_scope();
 }
 
@@ -1206,6 +1221,8 @@ void TypeChecker::check_break(BreakStmt& statement) {
   if (loop_depth_ <= 0) {
     diagnostics_.error(diag::kBreakOutsideLoop, statement.location(),
                        "'break' is only allowed inside an enclosing loop");
+  } else if (!loop_break_states_.empty()) {
+    loop_break_states_.back().push_back(symbols_);
   }
 }
 
