@@ -229,3 +229,11 @@ through the explicit allocator, forces collection, confirms the explicit
 allocation remains readable, and verifies GC heap statistics did not include
 it. RelWithDebInfo validation passed: CTest 1/1 and integration 85/85. No GC
 benchmark was run.
+
+Semantic analysis now rejects indexing file, mutex, and mapped-file handles.
+This prevents treating opaque resource tokens as addresses and requires mapped
+data access to go through checked accessors. Explicit allocation and secure
+buffers remain indexable; the existing secure-buffer integration case confirms
+the exception. New negative integration cases cover file and mapping handles.
+RelWithDebInfo validation passed: CTest 1/1 and integration 87/87. No GC
+benchmark was run.

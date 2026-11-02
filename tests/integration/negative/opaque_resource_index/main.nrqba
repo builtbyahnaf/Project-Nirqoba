@@ -1,0 +1,5 @@
+int function main() {
+    let file_handle = file.open("NUL", false);
+    print(file_handle[0]);
+    return 0;
+}
