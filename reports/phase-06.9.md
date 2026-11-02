@@ -47,11 +47,12 @@ Owned factory functions now preserve the cleanup domain in their signature with
 `owned mapping byte*`. The checker rejects a resource returned through an
 unqualified pointer contract and rejects a value whose destructor does not
 match the declared domain. The return domain is retained in TIR and emitted as
-`nirqoba.return_resource_domain` in MLIR. Socket integration now exercises
-factory transfer into a caller-owned binding; negative coverage checks a
-socket contract returning a generic allocation.
+`nirqoba.return_resource_domain` in MLIR, and owning resource parameters carry
+their domain in argument metadata. Socket integration transfers an owner
+through an owning helper and back to the caller; negative coverage checks
+mismatched parameter and return resources.
 
-RelWithDebInfo validation passed: CTest 1/1 and integration 106/106. The
+RelWithDebInfo validation passed: CTest 1/1 and integration 108/108. The
 remaining Phase 6.9 limits above still apply.
 
 ## 13. Completion pass - 2026-11-01

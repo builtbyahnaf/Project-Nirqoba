@@ -573,13 +573,13 @@ void TypeChecker::check_function(FunctionDecl& function) {
       diagnostics_.error(diag::kTypeMismatch, parameter.location,
                          "'mut' requires a borrowed parameter");
     }
-    if (!parameter.resource_domain.empty() && !parameter.borrowed) {
+    if (!parameter.resource_domain.empty() && parameter.shared) {
       diagnostics_.error(diag::kTypeMismatch, parameter.location,
-                         "resource domains are only valid on borrow parameters");
+                         "resource-qualified parameters cannot be shared");
     }
     if (!parameter.resource_domain.empty() && !parameter.type.is_pointer()) {
       diagnostics_.error(diag::kTypeMismatch, parameter.location,
-                         "resource-qualified borrow parameters must have pointer type");
+                         "resource-qualified parameters must have pointer type");
     }
     if (parameter.shared && (parameter.borrowed || !parameter.type.is_pointer())) {
       diagnostics_.error(diag::kTypeMismatch, parameter.location,
@@ -3365,13 +3365,45 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "shared references can only be transferred to a shared parameter");
       continue;
     }
-    if (!expects_shared &&
+    const std::string expected_owned_resource =
+        i < sig.parameter_resource_domains.size() &&
+                !(i < sig.parameter_borrowed.size() && sig.parameter_borrowed[i])
+            ? cleanup_for_borrow_domain(sig.parameter_resource_domains[i])
+            : std::string{};
+    std::string actual_resource = source
+        ? (source->cleanup_callee.empty() && source->owns_allocation
+               ? "memory.deallocate" : source->cleanup_callee)
+        : call.arguments()[i]->kind() == Expr::Kind::Call
+              ? cleanup_for_owner_producer(
+                    static_cast<const CallExpr&>(*call.arguments()[i]).callee())
+              : std::string{};
+    if (actual_resource.empty() &&
+        call.arguments()[i]->kind() == Expr::Kind::Call) {
+      const auto& argument_call = static_cast<const CallExpr&>(*call.arguments()[i]);
+      if (const FunctionSignature* argument_signature =
+              find_function(argument_call.callee())) {
+        actual_resource = !argument_signature->return_resource_domain.empty()
+            ? cleanup_for_return_domain(argument_signature->return_resource_domain)
+            : argument_signature->return_type.is_pointer()
+                  ? "memory.deallocate" : std::string{};
+      }
+    }
+    if (!expected_owned_resource.empty() &&
+        actual_resource != expected_owned_resource) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                         "owning parameter requires a '" +
+                             sig.parameter_resource_domains[i] +
+                             "' resource handle");
+      continue;
+    }
+    if (!expects_shared && expected_owned_resource.empty() &&
         !(i < sig.parameter_borrowed.size() && sig.parameter_borrowed[i]) &&
         source && !source->cleanup_callee.empty() &&
         source->cleanup_callee != "memory.deallocate") {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "owned resource requires cleanup with '" +
-                             source->cleanup_callee + "'; pass it through a borrow parameter");
+                             source->cleanup_callee +
+                             "'; use a matching owned parameter or a borrow parameter");
       continue;
     }
     if (i < sig.parameter_borrowed.size() && sig.parameter_borrowed[i]) {

@@ -175,9 +175,11 @@ because those runtime subsystems do not yet exist.
   with allocator pins and in-flight owner records where applicable. Profiler
   counters and ownership snapshots still use the registry lock. Thread-local
   fast paths are not implemented.
-- Specialized resource factory returns use typed `owned <resource> T*`
-  contracts. File, socket, mutex, and mapping domains are preserved through
-  signatures and MLIR return metadata; mismatched resource returns are rejected.
+- Specialized resource returns and owning parameters use typed
+  `owned <resource> T*` contracts. File, socket, mutex, and mapping domains are
+  preserved through signatures and MLIR metadata, so resources can transfer
+  through multiple function boundaries. Mismatched call arguments and returns
+  are rejected.
 - The C++/Rust benchmark matrix and runner exist, but comparative runs require
   a Rust toolchain and controlled release configuration. No comparative
   performance claim is made. Phase 6U:G remains a later measurement task; GC

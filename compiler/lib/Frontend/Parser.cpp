@@ -338,6 +338,16 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
         } else if (check(TokenKind::Identifier) && peek().text == "shared") {
           advance();
           shared = true;
+        } else if (check(TokenKind::Identifier) && peek().text == "owned") {
+          advance();
+          if (check(TokenKind::Identifier) &&
+              (peek().text == "file" || peek().text == "socket" ||
+               peek().text == "mutex" || peek().text == "mapping")) {
+            resource_domain = advance().text;
+          } else {
+            error_at(peek(), diag::kExpectedToken,
+                     "expected file, socket, mutex, or mapping after 'owned'");
+          }
         }
         const Type parameter_type = parse_type_annotation();
         if (!check(TokenKind::Identifier)) {

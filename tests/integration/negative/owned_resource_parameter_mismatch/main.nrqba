@@ -1,0 +1,9 @@
+void function take_socket(owned socket byte* stream) {
+    socket.send(stream, "text");
+}
+
+int function main() {
+    var pointer = memory.allocate<byte>(8);
+    take_socket(pointer);
+    return 0;
+}
