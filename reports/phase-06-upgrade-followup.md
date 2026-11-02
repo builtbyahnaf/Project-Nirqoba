@@ -437,6 +437,16 @@ allocation identity across both view construction and function return, and
 rejects the move while the returned slice is live. Integration tests passed
 (137/137). No benchmark was run.
 
+## 49. Stack placement through local array views - 2026-11-02
+
+Conservative escape analysis now tracks `memory.array_view` results derived
+from a candidate owned array through local view slots, length/index operations,
+and further local slices. The owner remains heap allocated if a view is
+returned, stored outside a local slot, or passed to an unknown call. Added an
+execution regression plus MLIR evidence for the stack path. Windows x64 build
+passed, CTest passed (1/1), and integration tests passed (139/139). No
+benchmark was run.
+
 ## 43. Conservative owned-array stack placement - 2026-11-02
 
 MLIR lowering now performs a conservative per-function escape analysis for
