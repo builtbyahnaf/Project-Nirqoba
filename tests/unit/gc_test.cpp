@@ -294,6 +294,28 @@ TEST(GcTest, ReferenceDiagnosticsCountHeapAndRootReferencesWhenEnabled) {
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
 }
 
+TEST(GcTest, ReferenceDiagnosticsCountTypedLayoutReferences) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+  auto* child = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  size_t pointer_offset = offsetof(PairReferences, first);
+  auto* parent = static_cast<PairReferences*>(nrq_gc_allocate_array_typed(
+      1, sizeof(PairReferences), &pointer_offset, 1));
+  ASSERT_NE(child, nullptr);
+  ASSERT_NE(parent, nullptr);
+  parent->first = child;
+  nrq_gc_root_register(reinterpret_cast<void**>(&parent));
+  nrq_gc_ref_count_start();
+  ASSERT_EQ(nrq_gc_get_ref_count(parent), int64_t{1});
+  ASSERT_EQ(nrq_gc_get_ref_count(child), int64_t{1});
+  nrq_gc_ref_count_stop();
+  nrq_gc_root_unregister(reinterpret_cast<void**>(&parent));
+  parent = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+}
+
 TEST(GcTest, ReferenceDiagnosticsCountPinnedRoots) {
   nrq_gc_disable();
   nrq_gc_collect();

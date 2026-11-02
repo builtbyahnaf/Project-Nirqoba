@@ -770,9 +770,23 @@ int64_t nrq_gc_get_ref_count(void* object) {
   if (!object || !object_index.find(object)) return 0;
   try {
     std::unordered_map<void*, uint64_t> counts;
-    for (ObjectHeader* header = objects; header; header = header->next)
+    for (ObjectHeader* header = objects; header; header = header->next) {
       if (header->trace)
         header->trace(header->object, header->size, count_reference, &counts);
+      if (!header->reference_offsets.empty() && header->element_size != 0) {
+        const auto* bytes = static_cast<const unsigned char*>(header->object);
+        for (size_t base = 0; base + header->element_size <= header->size;
+             base += header->element_size) {
+          for (size_t offset_index = 0;
+               offset_index < header->reference_offsets.size(); ++offset_index) {
+            const size_t offset = header->reference_offsets[offset_index];
+            void* reference = nullptr;
+            std::memcpy(&reference, bytes + base + offset, sizeof(reference));
+            count_reference(reference, &counts);
+          }
+        }
+      }
+    }
     for (const auto& root : roots) {
       auto* bytes = static_cast<const unsigned char*>(root.first);
       if (root.second.repeated_count != 0) {

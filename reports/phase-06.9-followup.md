@@ -34,3 +34,9 @@ records. The global registry lock only covers token lookup/removal, so slow I/O
 on one file does not hold up other resource operations. Concurrent close waits
 for any operation that already acquired that file and rejects later operations.
 A four-thread write/close regression is included.
+
+Typed managed-reference layouts are now included in optional reference-count
+diagnostics, matching the collector's tracing behavior for typed aggregates and
+arrays. A unit regression verifies counts from both a typed-layout parent and
+its registered root. RelWithDebInfo validation passed: CTest 1/1 and integration
+113/113.
