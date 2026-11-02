@@ -1,0 +1,19 @@
+struct Node {
+    int value;
+    managed<Node> child;
+}
+
+int function main() {
+    gc.set_threshold(1);
+    gc.enable();
+    var nodes = memory.owned_array<Node>(1);
+    var child = array.allocate<Node>(1);
+    child[0].value = 17;
+    nodes[0].child = child;
+    var pressure = array.allocate<Node>(1);
+    pressure[0].value = 23;
+    gc.collect();
+    print(nodes[0].child[0].value);
+    gc.disable();
+    return 42;
+}

@@ -454,6 +454,14 @@ a second slice from the first slice before indexing. This verifies the escape
 analysis follows nested view descriptors while retaining the original stack
 owner. Integration tests passed (139/139). No benchmark was run.
 
+## 51. Stack-owned managed-reference root regression - 2026-11-02
+
+Strengthened the root-initialization MLIR case to require stack placement, and
+added an execution test that stores a managed object in a stack-placed owned
+array, triggers collection through an allocation threshold, and verifies the
+object remains reachable. Both regressions passed in the integration suite
+(140/140). No benchmark was run.
+
 ## 43. Conservative owned-array stack placement - 2026-11-02
 
 MLIR lowering now performs a conservative per-function escape analysis for
