@@ -21,6 +21,10 @@ uint64_t nrq_system_cpu_features(void);
 
 // Installed physical memory in bytes, as reported by the operating system.
 uint64_t nrq_system_total_bytes(void);
+// DXGI estimates of local device-memory total and current use. Return zero
+// when no supported hardware adapter or query interface is available.
+uint64_t nrq_system_device_memory_total_bytes(void);
+uint64_t nrq_system_device_memory_used_bytes(void);
 // Working-set size of the current process in bytes. This is a reported
 // estimate of resident memory, not a guarantee about total process footprint.
 uint64_t nrq_system_used_bytes(void);

@@ -10,6 +10,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <tlhelp32.h>
+#include <dxgi1_4.h>
 // K32GetProcessMemoryInfo is exported by kernel32 on supported Windows
 // versions, so process working-set reporting needs no extra import library.
 #include <psapi.h>
@@ -75,6 +76,57 @@ uint64_t nrq_system_total_bytes(void) {
     status.dwLength = sizeof(status);
     if (!GlobalMemoryStatusEx(&status)) return 0;
     return static_cast<uint64_t>(status.ullTotalPhys);
+}
+
+static uint64_t query_device_memory(bool query_usage) {
+    IDXGIFactory1* factory = nullptr;
+    if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1),
+                                  reinterpret_cast<void**>(&factory))))
+        return 0;
+
+    uint64_t total = 0;
+    for (UINT index = 0;; ++index) {
+        IDXGIAdapter1* adapter = nullptr;
+        const HRESULT enumeration = factory->EnumAdapters1(index, &adapter);
+        if (enumeration == DXGI_ERROR_NOT_FOUND) break;
+        if (FAILED(enumeration)) continue;
+
+        DXGI_ADAPTER_DESC1 description{};
+        if (SUCCEEDED(adapter->GetDesc1(&description)) &&
+            !(description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+            if (query_usage) {
+                IDXGIAdapter3* adapter3 = nullptr;
+                if (SUCCEEDED(adapter->QueryInterface(
+                        __uuidof(IDXGIAdapter3),
+                        reinterpret_cast<void**>(&adapter3)))) {
+                    DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+                    if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(
+                            0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info))) {
+                        const uint64_t usage = info.CurrentUsage;
+                        total = usage > UINT64_MAX - total
+                                    ? UINT64_MAX : total + usage;
+                    }
+                    adapter3->Release();
+                }
+            } else {
+                const uint64_t dedicated =
+                    static_cast<uint64_t>(description.DedicatedVideoMemory);
+                total = dedicated > UINT64_MAX - total
+                            ? UINT64_MAX : total + dedicated;
+            }
+        }
+        adapter->Release();
+    }
+    factory->Release();
+    return total;
+}
+
+uint64_t nrq_system_device_memory_total_bytes(void) {
+    return query_device_memory(false);
+}
+
+uint64_t nrq_system_device_memory_used_bytes(void) {
+    return query_device_memory(true);
 }
 
 uint64_t nrq_system_used_bytes(void) {

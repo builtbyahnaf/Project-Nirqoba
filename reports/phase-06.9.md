@@ -17,7 +17,7 @@ Partial implementation. Windows x64, MSVC, LLVM/MLIR 23.1.4.
 
 ## Known limits
 
-The profiler does not report allocation hotspots; allocator free-space and fragmentation values are unavailable for general and custom allocators. GC counters are snapshots; explicit allocation current/peak/total counters do not include the GC heap. Mapping access must use checked typed accessors. Pin scopes use `defer memory.unpin`. Introspection includes physical-memory estimates, runtime version, CPU capabilities, process thread count, allocator kind, process working set, and automatic-GC state; task and device details are unavailable. File, mutex, and TCP socket wrappers exist, but GPU resources do not; exception-unwind cleanup and non-Windows support are also absent.
+The profiler does not report allocation hotspots; allocator free-space and fragmentation values are unavailable for general and custom allocators. GC counters are snapshots; explicit allocation current/peak/total counters do not include the GC heap. Mapping access must use checked typed accessors. Pin scopes use `defer memory.unpin`. Introspection includes physical-memory estimates, runtime version, CPU capabilities, process thread count, allocator kind, process working set, automatic-GC state, and DXGI estimates of dedicated device memory and local segment usage. Task counts remain unavailable. File, mutex, and TCP socket wrappers exist, but GPU resource owners and GPU allocation/cleanup do not; exception-unwind cleanup and non-Windows support are also absent.
 
 ## Validation
 
@@ -43,9 +43,21 @@ windows-msvc-dev` passed, `ctest --preset windows-msvc-dev
 | Memory pinning | Partial; explicit pin/unpin and scoped cleanup with `defer`; repeated-pin limit and violation counters are available |
 | Deterministic resource destruction | Partial; file, mutex, mapping, and TCP socket wrappers use owned handles and lexical cleanup; unwind support has no language model |
 | Secure memory | Implemented; Windows zeroization |
-| Runtime introspection | Partial; available memory, version, CPU count, and allocator kind |
+| Runtime introspection | Partial; available memory, version, CPU features, process threads, allocator kind, working set, GC state, and DXGI device-memory estimates |
 
-**Verdict:** Phase 6.9 remains incomplete. Graphics/GPU resources and task/device introspection depend on absent runtime systems; exception unwinding lacks language semantics, and profiler attribution and portability remain bounded as described above.
+**Verdict:** Phase 6.9 remains incomplete. GPU resource ownership and task counts depend on absent runtime systems; DXGI device-memory estimates are introspection only, not GPU allocation support. Exception unwinding lacks language semantics, and profiler attribution and portability remain bounded as described above.
+
+## 31. DXGI device-memory introspection - 2026-11-02
+
+Added `memory.device_memory_total_bytes()` and
+`memory.device_memory_used_bytes()` for non-software DXGI adapters. The runtime
+reports dedicated video memory and the local-segment current usage available
+from DXGI, saturates aggregate results on overflow, and returns zero when the
+query is unavailable. These are device-memory estimates; this change adds no
+GPU allocator, buffer owner, transfer API, or execution backend.
+
+RelWithDebInfo validation passed: CTest 1/1 and integration 157/157. The
+remaining Phase 6.9 limits above still apply.
 
 ## 30. Typed resource returns - 2026-11-02
 

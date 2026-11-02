@@ -1,0 +1,5 @@
+int function main() {
+    let total = memory.device_memory_total_bytes();
+    let used = memory.device_memory_used_bytes();
+    return 42;
+}

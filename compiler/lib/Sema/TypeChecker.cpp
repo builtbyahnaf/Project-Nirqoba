@@ -2984,7 +2984,9 @@ Type TypeChecker::check_call(CallExpr& call) {
         {"custom_bytes", Type::u64_type()}});
   }
   if (call.callee() == "memory.used_bytes" ||
-      call.callee() == "memory.total_bytes") {
+      call.callee() == "memory.total_bytes" ||
+      call.callee() == "memory.device_memory_total_bytes" ||
+      call.callee() == "memory.device_memory_used_bytes") {
     if (!call.arguments().empty())
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "'" + call.callee() + "' takes no arguments");

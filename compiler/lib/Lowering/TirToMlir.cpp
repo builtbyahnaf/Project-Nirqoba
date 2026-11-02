@@ -2169,6 +2169,14 @@ class FunctionTranslator {
           runtime_sym = "nrq_system_total_bytes";
           runtime_ret_ty = builder_.getI64Type();
           runtime_arg_tys = {};
+        } else if (callee == "memory.device_memory_total_bytes") {
+          runtime_sym = "nrq_system_device_memory_total_bytes";
+          runtime_ret_ty = builder_.getI64Type();
+          runtime_arg_tys = {};
+        } else if (callee == "memory.device_memory_used_bytes") {
+          runtime_sym = "nrq_system_device_memory_used_bytes";
+          runtime_ret_ty = builder_.getI64Type();
+          runtime_arg_tys = {};
         } else if (callee == "memory.pin_count") {
           runtime_sym = "nrq_gc_pin_count";
           runtime_ret_ty = builder_.getI64Type();
