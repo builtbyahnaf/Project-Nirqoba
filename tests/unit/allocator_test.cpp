@@ -499,6 +499,18 @@ TEST(AllocatorTest, ContiguousArrayAllocationHonorsExplicitAlignment) {
   ASSERT_EQ(nrq_memory_allocate_array(SIZE_MAX, 2, 64), nullptr);
 }
 
+TEST(AllocatorTest, ContiguousArrayAllocationFromExplicitAllocatorHonorsAlignmentAndHandlesFailures) {
+  void* arena = nrq_allocator_create(NRQ_ALLOCATOR_ARENA, 4096);
+  ASSERT_NE(arena, nullptr);
+  void* values = nrq_memory_allocate_array_from(arena, 32, sizeof(uint64_t), 64);
+  ASSERT_NE(values, nullptr);
+  ASSERT_EQ(reinterpret_cast<uintptr_t>(values) % uintptr_t{64}, uintptr_t{0});
+  ASSERT_EQ(nrq_memory_allocate_array_from(arena, SIZE_MAX, 2, 64), nullptr);
+  ASSERT_EQ(nrq_memory_allocate_array_from(arena, 0, sizeof(uint64_t), 64), nullptr);
+  nrq_memory_deallocate_checked(values);
+  ASSERT_EQ(nrq_allocator_destroy(arena), int32_t{1});
+}
+
 TEST(AllocatorTest, ConcurrentUsersKeepAllocatorAliveUntilThreadExit) {
   void* allocator = nrq_allocator_create(NRQ_ALLOCATOR_GENERAL, 0);
   ASSERT_NE(allocator, nullptr);

@@ -1,0 +1,11 @@
+int function main() {
+    var arena = memory.arena_allocator(4096);
+    defer memory.destroy_allocator(arena);
+    var values = memory.owned_array_aligned<int>(4, 64, arena);
+    values[0] = 10;
+    values[1] = 20;
+    values[2] = 30;
+    values[3] = 40;
+    print(values[1] + values[3]);
+    return 0;
+}

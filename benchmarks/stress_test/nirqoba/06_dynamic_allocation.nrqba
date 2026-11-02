@@ -1,0 +1,12 @@
+int function main() {
+    var count = 0;
+    var i = 0;
+    while (i < 1000000) {
+        var ptr = memory.allocate<byte>(64);
+        memory.deallocate(ptr);
+        count += 1;
+        i += 1;
+    }
+    print(count);
+    return 0;
+}

@@ -1,0 +1,28 @@
+int function main() {
+    var n = 512;
+    var size = n * n;
+    var A = memory.owned_array<f64>(size);
+    var B = memory.owned_array<f64>(size);
+    var C = memory.owned_array<f64>(size);
+
+    for (var i = 0; i < n; i += 1) {
+        for (var j = 0; j < n; j += 1) {
+            A[i * n + j] = ((i + j) as f64) * 0.001;
+            B[i * n + j] = ((i - j) as f64) * 0.001;
+            C[i * n + j] = 0.0;
+        }
+    }
+
+    for (var r = 0; r < n; r += 1) {
+        for (var k = 0; k < n; k += 1) {
+            var aik = A[r * n + k];
+            for (var c = 0; c < n; c += 1) {
+                C[r * n + c] = C[r * n + c] + aik * B[k * n + c];
+            }
+        }
+    }
+
+    var check = C[0] + C[n * 256 + 256] + C[n * 511 + 511];
+    print(check);
+    return 0;
+}

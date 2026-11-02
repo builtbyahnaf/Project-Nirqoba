@@ -128,7 +128,7 @@ unique_ptr<llvm::TargetMachine> create_target_machine(
 
   // Optimization passes and code generation must agree on layout and triple.
   llvm_module.setDataLayout(target_machine->createDataLayout());
-  llvm_module.setTargetTriple(triple);
+  llvm_module.setTargetTriple(target_machine->getTargetTriple());
   return target_machine;
 }
 

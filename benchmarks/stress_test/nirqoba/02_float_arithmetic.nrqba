@@ -1,0 +1,13 @@
+int function main() {
+    var sum = 0.0;
+    var sign = 1.0;
+    var i = 0;
+    while (i < 100000000) {
+        sum = sum + sign / (2.0 * (i as f64) + 1.0);
+        sign = 0.0 - sign;
+        i += 1;
+    }
+    var pi = sum * 4.0;
+    print(pi);
+    return 0;
+}
