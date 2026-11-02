@@ -1,0 +1,9 @@
+borrow source array_view<int> function make_read_alias(
+    borrow mut array_view<int> source
+) {
+    return source;
+}
+
+int function main() {
+    return 0;
+}
