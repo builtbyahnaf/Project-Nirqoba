@@ -1,0 +1,6 @@
+int function main() {
+    var arena = memory.arena_allocator(4096);
+    defer memory.destroy_allocator(arena);
+    var values = memory.owned_array<int>(4, arena, 123);
+    return 0;
+}

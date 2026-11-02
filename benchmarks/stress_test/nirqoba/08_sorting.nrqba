@@ -1,0 +1,50 @@
+void function swap(borrow mut array_view<int> arr, int i, int j) {
+    var temp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = temp;
+}
+
+void function qsort(borrow mut array_view<int> arr, int low, int high) {
+    var l = low;
+    var h = high;
+    while (l < h) {
+        var mid = l + (h - l) / 2;
+        var pivot = arr[mid];
+        var i = l;
+        var j = h;
+        while (i <= j) {
+            while (arr[i] < pivot) { i += 1; }
+            while (arr[j] > pivot) { j -= 1; }
+            if (i <= j) {
+                swap(arr, i, j);
+                i += 1;
+                j -= 1;
+            }
+        }
+        if (j - l < h - i) {
+            if (l < j) { qsort(arr, l, j); }
+            l = i;
+        } else {
+            if (i < h) { qsort(arr, i, h); }
+            h = j;
+        }
+    }
+}
+
+int function main() {
+    var size = 1000000;
+    var arr = memory.owned_array<int>(size);
+    var seed = 123456789;
+    for (var i = 0; i < size; i += 1) {
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        arr[i] = seed;
+    }
+    {
+        var view = memory.array_view_mut<int>(arr, 0, size);
+        qsort(view, 0, size - 1);
+    }
+    print(arr[0]);
+    print(arr[size / 2]);
+    print(arr[size - 1]);
+    return 0;
+}

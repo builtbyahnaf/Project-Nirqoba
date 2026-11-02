@@ -8,12 +8,13 @@
 
 namespace nirq {
 using namespace std;
-namespace {
-
-constexpr const char* kPrintBuiltin = "print";
 
 static const Symbol* find_root_symbol(const Expr& expr,
                                       const SymbolTable& symbols);
+
+namespace {
+
+constexpr const char* kPrintBuiltin = "print";
 
 static bool contains_owned_array(const Type& type,
                                  unordered_set<string>& active_structs) {
@@ -191,8 +192,6 @@ static bool statement_can_fall_through(const Stmt& stmt) {
 }
 
 }  // namespace
-
-static const Symbol* find_root_symbol(const Expr& expr, const SymbolTable& symbols);
 
 bool TypeChecker::check(Program& program) {
   functions_.clear();
@@ -2510,16 +2509,19 @@ Type TypeChecker::check_call(CallExpr& call) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[2]->location(),
                          "array view length must be an integer");
     const Symbol* source = find_root_symbol(*call.arguments()[0], symbols_);
+    const bool valid_mutable_source =
+        source && source->is_mutable() &&
+        (source->owns_allocation || (source->borrowed && source->mutable_borrow));
     if (!source || source->allocation_id == 0 || source->moved ||
         (!source->owns_allocation && !source->borrowed)) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "array views require a live tracked owner");
-    } else if (mutable_view &&
-               (!source->owns_allocation || !source->is_mutable())) {
+    } else if (mutable_view && !valid_mutable_source) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "mutable array views require a mutable owned array");
     } else if (mutable_view &&
-               symbols_.has_conflicting_borrow(source->allocation_id, true)) {
+               symbols_.has_conflicting_borrow(source->allocation_id, true,
+                                               source->borrowed ? source->name : std::string{})) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "mutable array view conflicts with another live borrow");
     } else if (!mutable_view && source->mutable_borrow && source->borrowed) {

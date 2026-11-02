@@ -1,0 +1,18 @@
+int function main() {
+    var size = 10000000;
+    var arr = memory.owned_array<int>(size);
+    for (var i = 0; i < size; i += 1) {
+        arr[i] = i;
+    }
+    for (var p = 0; p < 5; p += 1) {
+        for (var j = 0; j < size; j += 1) {
+            arr[j] = (arr[j] * 3 + 7) ^ 1431655765;
+        }
+    }
+    var sum = 0;
+    for (var k = 0; k < size; k += 1) {
+        sum += arr[k];
+    }
+    print(sum);
+    return 0;
+}

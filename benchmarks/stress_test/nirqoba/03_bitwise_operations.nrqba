@@ -1,0 +1,13 @@
+int function main() {
+    var state = 123456789;
+    var i = 0;
+    while (i < 100000000) {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state += i;
+        i += 1;
+    }
+    print(state);
+    return 0;
+}

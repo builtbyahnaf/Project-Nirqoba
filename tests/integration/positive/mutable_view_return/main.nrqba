@@ -2,7 +2,7 @@ borrow mut source array_view<int> function tail(
     borrow mut array_view<int> source,
     int start
 ) {
-    return memory.array_view_mut<int>(source, start, source.length - (start as u64));
+    return memory.array_view_mut<int>(source, start, source.length - start);
 }
 
 int function main() {
@@ -12,8 +12,10 @@ int function main() {
     owner[2] = 3;
     owner[3] = 4;
 
-    var rest = tail(memory.array_view_mut<int>(owner, 0, owner.length), 1);
-    rest[0] = 9;
+    {
+        var rest = tail(memory.array_view_mut<int>(owner, 0, owner.length), 1);
+        rest[0] = 9;
+    }
     print(owner[1]);
     return 0;
 }

@@ -1,6 +1,19 @@
 // Regression: struct-typed annotations lost their field layout, so a struct
 // local was an "unsized type" that could not be allocated or indexed, and a
 // member read on a struct value crashed the compiler.
+
+
+/*
+
+  Expected output:  
+  25
+  8
+  6
+  33
+  0
+  true
+
+*/
 struct Point {
     int x;
     int y;
