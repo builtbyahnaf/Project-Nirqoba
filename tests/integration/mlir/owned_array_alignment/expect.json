@@ -2,5 +2,5 @@
   "mode": "build",
   "args": ["--emit=mlir"],
   "expect_exit": 0,
-  "expect_stdout_contains": ["nrq_memory_allocate_array", "llvm.mlir.constant(64 : i64)"]
+  "expect_stdout_contains": ["nirqoba.stack_placed", "alignment = 64", "llvm.mlir.constant(64 : i64)"]
 }

@@ -1,0 +1,6 @@
+{
+  "mode": "build",
+  "args": ["--emit=mlir"],
+  "expect_exit": 0,
+  "expect_stdout_contains": ["nirqoba.stack_placed", "alignment = 64"]
+}

@@ -1,0 +1,8 @@
+int function get_alignment() {
+    return 64;
+}
+
+int function main() {
+    var values = memory.owned_array_aligned<int>(4, get_alignment());
+    return values.length;
+}
