@@ -435,6 +435,13 @@ Type Parser::parse_type_annotation() {
     Type element_type = parse_type_annotation();
     expect(TokenKind::Greater, "after the owned array element type");
     base_type = Type::owned_array_type(element_type);
+  } else if (check(TokenKind::Identifier) && peek().text == "owned_ptr" &&
+             peek(1).kind == TokenKind::Less) {
+    advance();
+    advance();
+    Type element_type = parse_type_annotation();
+    expect(TokenKind::Greater, "after the owned pointer element type");
+    base_type = Type::owned_pointer_type(element_type);
   } else if (check(TokenKind::Identifier) && peek().text == "array_view" &&
              peek(1).kind == TokenKind::Less) {
     advance();

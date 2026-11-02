@@ -1,0 +1,22 @@
+struct Holder {
+    owned_array<int> values;
+    int tag;
+}
+
+int function main() {
+    var first = memory.owned_array<int>(1);
+    var second = memory.owned_array<int>(1);
+    var replacement = memory.owned_array<int>(1);
+    first[0] = 13;
+    second[0] = 17;
+    replacement[0] = 29;
+    var holder = Holder { values: first, tag: 3 };
+
+    if (second[0] == 17) {
+        let moved = holder.values;
+    } else {
+        let moved = holder.values;
+    }
+    holder.values = replacement;
+    return holder.values[0] + holder.tag;
+}

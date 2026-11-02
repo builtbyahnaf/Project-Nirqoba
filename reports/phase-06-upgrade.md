@@ -146,3 +146,13 @@ transitive no-escape fixed point.
 
 Validation: the RelWithDebInfo integration suite passed 162/162. No benchmark
 was run.
+
+## 35. Field move merge across all branches - 2026-11-02
+
+Added a positive branch-merge case where the same owned aggregate field is
+moved in both branches, then reinitialized after the merge. The test reads the
+replacement and an untouched sibling field while scope cleanup releases all
+owners exactly once.
+
+Validation: the RelWithDebInfo integration suite passed 163/163. No benchmark
+was run.
