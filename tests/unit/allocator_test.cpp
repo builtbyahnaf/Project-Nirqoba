@@ -294,6 +294,57 @@ TEST(AllocatorTest, ReallocationDoesNotHoldTheGlobalAllocatorRegistryLock) {
   ASSERT_EQ(nrq_allocator_destroy(unrelated), int32_t{1});
 }
 
+TEST(AllocatorTest, AllocatorStatisticsDoNotHoldTheGlobalRegistryLock) {
+  BlockingAllocatorState state;
+  const NrqCustomAllocatorVTable callbacks{
+      &state, blocking_allocate, blocking_deallocate, nullptr};
+  void* allocator = nrq_allocator_create_custom(&callbacks);
+  ASSERT_NE(allocator, nullptr);
+  std::atomic<void*> allocation = nullptr;
+  std::thread allocator_worker([&] {
+    allocation = nrq_memory_allocate_from(allocator, 128, 64);
+  });
+  {
+    std::unique_lock<std::mutex> lock(state.mutex);
+    state.condition.wait(lock, [&] { return state.entered; });
+  }
+
+  std::atomic<bool> query_started = false;
+  std::thread query_worker([&] {
+    query_started = true;
+    (void)nrq_memory_allocator_free_bytes(
+        static_cast<uint64_t>(reinterpret_cast<uintptr_t>(allocator)));
+  });
+  while (!query_started.load()) std::this_thread::yield();
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  std::atomic<bool> creator_finished = false;
+  std::atomic<void*> unrelated = nullptr;
+  std::thread creator_worker([&] {
+    unrelated = nrq_allocator_create(NRQ_ALLOCATOR_GENERAL, 0);
+    creator_finished = true;
+  });
+  for (int attempt = 0; attempt < 100 && !creator_finished.load(); ++attempt)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  const bool created_before_allocator_callback = creator_finished.load();
+
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.release = true;
+  }
+  state.condition.notify_all();
+  allocator_worker.join();
+  query_worker.join();
+  creator_worker.join();
+  void* pointer = allocation.load();
+  ASSERT_NE(pointer, nullptr);
+  nrq_memory_deallocate_checked(pointer);
+  ASSERT_NE(unrelated.load(), nullptr);
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
+  ASSERT_EQ(nrq_allocator_destroy(unrelated.load()), int32_t{1});
+  ASSERT_TRUE(created_before_allocator_callback);
+}
+
 TEST(AllocatorTest, InFlightAllocationPreventsAllocatorReset) {
   BlockingAllocatorState state;
   const NrqCustomAllocatorVTable callbacks{
