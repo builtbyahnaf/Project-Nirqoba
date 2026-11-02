@@ -457,6 +457,21 @@ checks generated entry, loop poll, and leave calls.
 Validation passed: Windows x64 build, CTest 1/1, and integration suite
 134/134. No benchmark was run. Lock-free TLAB allocation remains incomplete.
 
+## 46. Safepoint-published GC TLABs - 2026-11-02
+
+Registered GC mutators now allocate objects up to 4 KiB from reserved
+thread-local bump regions without taking the collector mutex on each
+allocation. Their headers remain in a per-mutator pending chain and are
+published into the precise object index when the mutator leaves, pins an
+object, queries refcounts, or parks for collection. Stop-the-world collection
+flushes every parked mutator before tracing and sweeping. Collection generation
+checks invalidate stale region pointers after empty pages are reclaimed.
+Allocation statistics include pending TLAB objects. Unregistered native
+callers and objects larger than a TLAB keep the locked path. Added a runtime
+test spanning multiple TLAB refills and verifying rooted survival and garbage
+reclamation. Validation passed: Windows x64 build, CTest 1/1, and integration
+suite 134/134. No GC benchmark was run.
+
 ## 42. Per-thread GC bump-page cache - 2026-11-02
 
 Managed allocation now reuses a thread-local current GC page before scanning
