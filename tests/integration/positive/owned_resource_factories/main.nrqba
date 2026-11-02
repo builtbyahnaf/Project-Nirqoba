@@ -1,0 +1,36 @@
+owned file byte* function open_readonly_file(string path) {
+    return file.open(path, false);
+}
+
+owned file byte* function forward_file(owned file byte* handle) {
+    return handle;
+}
+
+owned mutex byte* function create_lock() {
+    return mutex.create();
+}
+
+owned mutex byte* function forward_lock(owned mutex byte* handle) {
+    return handle;
+}
+
+owned mapping byte* function map_readonly_file(string path) {
+    return memory.map_file(path, false);
+}
+
+owned mapping byte* function forward_mapping(owned mapping byte* handle) {
+    return handle;
+}
+
+int function main() {
+    var file_handle = forward_file(
+        open_readonly_file("tests/integration/positive/hello/expect.json"));
+    var lock_handle = forward_lock(create_lock());
+    var mapping_handle = forward_mapping(
+        map_readonly_file("tests/integration/positive/hello/expect.json"));
+
+    file.close(file_handle);
+    mutex.destroy(lock_handle);
+    memory.unmap_file(mapping_handle);
+    return 0;
+}

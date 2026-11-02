@@ -48,10 +48,12 @@ Owned factory functions now preserve the cleanup domain in their signature with
 unqualified pointer contract and rejects values or direct factory arguments
 whose destructor does not match the declared domain. Return and parameter
 domains are retained in TIR/MLIR metadata, and parameter cleanup uses that
-domain. Integration coverage transfers socket and secure owners through
-helpers and rejects mismatched parameter and return resources.
+domain. Integration coverage transfers file, mutex, mapping, socket, and secure
+owners through helpers, exercises automatic and explicit cleanup, and rejects
+mismatched parameter and return resources. Native mutex destruction accepts
+the null owner sentinel used after an explicit release.
 
-RelWithDebInfo validation passed: CTest 1/1 and integration 109/109. The
+RelWithDebInfo validation passed: CTest 1/1 and integration 110/110. The
 remaining Phase 6.9 limits above still apply.
 
 ## 13. Completion pass - 2026-11-01
