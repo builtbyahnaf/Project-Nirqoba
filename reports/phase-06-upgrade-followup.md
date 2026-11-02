@@ -298,3 +298,14 @@ state with the compiler's LIFO cleanup lowering and catches use-after-release
 after a deferred cleanup on break, plus owner loss at a continue back-edge.
 Added negative coverage for both paths. RelWithDebInfo validation passed:
 CTest 1/1 and integration 94/94.
+
+## 34. Atomic rooted GC allocation - 2026-11-02
+
+Added a runtime entry point that allocates a typed managed array and publishes
+the result to a registered pointer root while holding the collector mutex.
+Compiler lowering now gives each managed allocation site a registered root
+slot and uses this entry point, preventing a concurrent collection from
+reclaiming a new object between allocation return and root publication. A
+unit regression races rooted allocation against explicit collection. The
+collector remains stop-the-world and synchronized. RelWithDebInfo validation
+passed: CTest 1/1 and integration 94/94. No GC benchmark was run.
