@@ -22,3 +22,9 @@ Limits: wrappers are Windows-only. Socket, graphics, and GPU resources are not
 available because their runtime subsystems do not exist. Cleanup on exception
 unwinding is not supported. Task count and device-memory introspection are also
 unavailable until a scheduler and device runtime are implemented.
+
+File resources now use monotonically issued opaque tokens instead of heap
+addresses. A closed token can never become valid again if the system allocator
+reuses its former metadata address. A runtime regression closes one file,
+reopens another, and verifies the stale token cannot write or close the new
+resource. RelWithDebInfo validation passed: CTest 1/1 and integration 85/85.
