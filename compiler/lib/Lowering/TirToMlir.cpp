@@ -145,6 +145,9 @@ static uint64_t type_size(const Type& type) {
 // rejects unknown uses instead of guessing at alias behavior.
 static std::unordered_map<int, std::size_t> analyze_stack_owned_arrays(
     const tir::Function& function) {
+  for (const tir::Op& op : function.operations())
+    if (op.kind == tir::OpKind::Call && op.callee == "memory.use_allocator")
+      return {};
   std::unordered_map<int, int64_t> integer_constants;
   for (const tir::Op& op : function.operations())
     if (op.kind == tir::OpKind::ConstantInt && op.result.is_valid())

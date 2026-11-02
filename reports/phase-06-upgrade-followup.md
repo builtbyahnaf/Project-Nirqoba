@@ -432,6 +432,15 @@ stack path, while an escaping owned-parameter case confirms heap fallback.
 Validation passed: Windows x64 build, CTest 1/1, and integration suite
 132/132. No benchmark was run.
 
+## 44. Preserve allocator selection during stack analysis - 2026-11-02
+
+Stack promotion is disabled for a function that changes the thread-local
+allocator with `memory.use_allocator`. This preserves the selected allocator's
+allocation and deallocation semantics rather than bypassing them with a stack
+slot. Added an MLIR fallback regression for an owned array allocated inside a
+selected arena scope. Validation passed: CTest 1/1 and integration suite
+133/133. No benchmark was run.
+
 ## 42. Per-thread GC bump-page cache - 2026-11-02
 
 Managed allocation now reuses a thread-local current GC page before scanning
