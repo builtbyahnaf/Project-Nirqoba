@@ -943,6 +943,42 @@ class FunctionTranslator {
           }
           mlir::Value data = builder_.create<mlir::LLVM::CallOp>(
               loc, allocate, mlir::ValueRange{count, element_bytes, alignment}).getResult();
+          std::vector<uint64_t> root_offsets;
+          collect_managed_reference_offsets(
+              op.result.type.element_type(), 0, root_offsets);
+          if (!root_offsets.empty()) {
+            auto clear_roots = ensure_runtime_fn(
+                module_, builder_, "nrq_gc_root_clear_array_references",
+                mlir::LLVM::LLVMVoidType::get(ctx_),
+                {llvm_ptr_type(ctx_), i64, i64, llvm_ptr_type(ctx_), i64});
+            auto offsets_type = mlir::LLVM::LLVMArrayType::get(
+                i64, static_cast<unsigned>(root_offsets.size()));
+            mlir::Value offsets_slot = builder_.create<mlir::LLVM::AllocaOp>(
+                loc, llvm_ptr_type(ctx_), offsets_type,
+                builder_.create<mlir::LLVM::ConstantOp>(
+                    loc, i64, builder_.getI64IntegerAttr(1)).getResult()).getResult();
+            mlir::Value zero_index = builder_.create<mlir::LLVM::ConstantOp>(
+                loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
+            for (std::size_t index = 0; index < root_offsets.size(); ++index) {
+              mlir::Value index_value = builder_.create<mlir::LLVM::ConstantOp>(
+                  loc, i64,
+                  builder_.getI64IntegerAttr(static_cast<int64_t>(index))).getResult();
+              mlir::Value slot = builder_.create<mlir::LLVM::GEPOp>(
+                  loc, llvm_ptr_type(ctx_), offsets_type, offsets_slot,
+                  mlir::ValueRange{zero_index, index_value}).getResult();
+              mlir::Value offset = builder_.create<mlir::LLVM::ConstantOp>(
+                  loc, i64,
+                  builder_.getI64IntegerAttr(static_cast<int64_t>(root_offsets[index]))).getResult();
+              builder_.create<mlir::LLVM::StoreOp>(loc, offset, slot);
+            }
+            mlir::Value root_count = builder_.create<mlir::LLVM::ConstantOp>(
+                loc, i64,
+                builder_.getI64IntegerAttr(static_cast<int64_t>(root_offsets.size()))).getResult();
+            builder_.create<mlir::LLVM::CallOp>(
+                loc, clear_roots,
+                mlir::ValueRange{data, count, element_bytes, offsets_slot,
+                                 root_count});
+          }
           emit_gc_array_root_registration(
               data, count, op.result.type.element_type(), loc);
           mlir::Value null_pointer = builder_.create<mlir::LLVM::ZeroOp>(

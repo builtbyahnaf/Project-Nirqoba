@@ -1,0 +1,6 @@
+{
+  "mode": "build",
+  "args": ["--emit=mlir"],
+  "expect_exit": 0,
+  "expect_stdout_contains": ["nrq_gc_root_clear_array_references", "nrq_gc_root_register_array"]
+}

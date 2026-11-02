@@ -141,6 +141,15 @@ coverage exercises both inline and overflow layouts through reachability and
 sweep. RelWithDebInfo validation passed: CTest 1/1 and integration 87/87. No GC
 benchmark was run.
 
+Fresh owned arrays containing managed references now clear only their
+reference slots under the collector lock before registering the backing buffer
+as a repeated-layout root. This prevents uninitialized allocator bytes from
+being interpreted as stale managed references while preserving the array's
+non-reference bytes. Runtime unit coverage verifies all described slots are
+cleared, and an MLIR regression checks the generated clear-before-register
+path. RelWithDebInfo validation passed: CTest 1/1 and integration 107/107. No
+GC benchmark was run.
+
 ## Phase 6.9 native resources
 
 File resources and native mutex handles now have explicit close/destroy behavior
