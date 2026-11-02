@@ -1,4 +1,4 @@
-# Phase 6.9 Report â€” Advanced Memory Utilities
+# Phase 6.9 Report - Advanced Memory Utilities
 
 ## Status
 
@@ -38,7 +38,8 @@ The profiler does not provide fragmentation estimates, allocator-specific attrib
 | Runtime introspection | Partial; available memory, version, CPU count, and allocator kind |
 
 **Verdict:** Phase 6.9 remains incomplete. Generalized resource integration, full profiler attribution, scoped pinning, and broader introspection remain required.
-## 13. Completion pass â€” 2026-11-01
+
+## 13. Completion pass - 2026-11-01
 
 Implemented since the first pass:
 
@@ -78,34 +79,44 @@ Still not implemented:
 - Profiler overhead measurement. Allocation benchmarks exist, but the cost of
   running with the profiler enabled versus disabled has not been measured.
 
-## 14. CPU capability query — 2026-11-01
+## 14. CPU capability query - 2026-11-01
 
 Added `memory.cpu_features()` backed by `IsProcessorFeaturePresent` on Windows. The returned `u64` mask currently defines SSE2 (bit 0), AVX (bit 1), and AVX2 (bit 2). The operating system's usable-feature report is queried at runtime; no unsupported capabilities are inferred. Compiler semantic checking and LLVM lowering are wired, and the positive integration case checks the x64 SSE2 baseline.
 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and the full integration suite passed 32/32. The feature set is Windows-only, matching the runtime's current supported platform.
 
-## 15. Deterministic file resources — 2026-11-01
+## 15. Deterministic file resources - 2026-11-01
 
 Added an opaque Windows file resource API exposed as `file.open(path, writable)`, `file.write(resource, text)`, and `file.close(resource)`. Runtime handles are registered, invalid or repeated close/use returns an error status, and `defer file.close(resource)` participates in existing LIFO cleanup. Semantic analysis marks the resource invalid after close and rejects later use.
 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 34/34, including successful deferred close and compile-time use-after-close rejection. The initial file API currently supports text writes; read APIs, wrappers for sockets/locks/GPU objects, and error-unwind cleanup remain open work. No exception unwinding is claimed.
 
-## 16. Owned file-resource transfer — 2026-11-01
+## 16. Owned file-resource transfer - 2026-11-01
 
 File handles returned by `file.open` now carry ownership identity in the semantic symbol table. Initializing another binding from an owned file handle transfers the owner and invalidates the source binding; closing invalidates the current owner. Deferred cleanup checks whether any live owner remains, avoiding false double-release reports after transfer. This ownership tracking is currently limited to file resources; raw pointers and general aggregate ownership are not covered.
 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 35/35. Added positive ownership-transfer/deferred-close coverage and negative use-after-move coverage.
 
-## 20. Process thread-count introspection — 2026-11-01
+## 20. Process thread-count introspection - 2026-11-01
 
 Added `memory.thread_count()` using a Toolhelp thread snapshot filtered by the current process ID. The API returns zero if snapshot acquisition fails and is documented as a race-prone estimate, not a synchronization guarantee. No task scheduler exists yet, so task count remains unavailable.
 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tests passed 38/38, including a positive nonzero process-thread count check.
 
-## 22. Native mutex resource wrapper â€” 2026-11-01
+## 22. Native mutex resource wrapper - 2026-11-01
 
 Added `mutex.create`, `mutex.lock`, `mutex.unlock`, and `mutex.destroy`. Runtime handles are opaque tokens registered to mutex state; lock ownership is tracked by thread ID, recursive acquisition and foreign-thread unlock fail fast, and destroy rejects locked resources. The compiler recognizes creation as owned, inserts deterministic destruction, propagates move/use-after-destroy state, and lets a deferred unlock run before automatic destruction.
 
 Validation: RelWithDebInfo build succeeded; CTest passed 1/1, including a four-thread mutual-exclusion test, and integration tests passed 59/59. Positive coverage verifies deferred unlock and automatic destroy; negative coverage rejects use after destroy.
 
 Limitation: this wrapper is Windows x64 only, matching the current runtime target. Exception-unwind cleanup remains unavailable.
+
+## 23. Completion pass - 2026-11-02
+
+The native resource surface has since expanded: deterministic Windows file resources support bounded reads and writes, and mutex handles support owned creation, lock/unlock validation, automatic destruction, and deferred unlock. Owned resources move between bindings, reject use after move/close/destroy, and cannot be released through a mismatched generic destructor. Cleanup runs in LIFO order on scope exit, return, break, and continue. The language has no exception or error-unwind model, so cleanup during unwinding is still undefined.
+
+Profiler capture now reports allocation-size buckets, largest allocation, allocator-kind attribution, and measurable region free-space and fragmentation values in addition to explicit allocation totals and GC snapshots. General and custom allocator free space is reported as not measurable. Scoped pin cleanup uses `defer`; pin-count diagnostics reject excessive repeated pins. Introspection includes physical-memory estimates, runtime version, CPU features, process thread count, configured allocator kind, process working set, and automatic-GC state. Task and device-memory counts remain unavailable because those subsystems do not exist.
+
+Secure release zeroes the full tracked allocation before invoking its owning allocator. The allocator callback runs outside the global registry lock while the allocation owner is marked in flight and the allocator is pinned. A custom allocator regression verifies the bytes are zero at the callback boundary. Final shared release uses the same in-flight protocol and reserves its reference count at zero until the callback completes; concurrent retains and releases cannot claim the allocation during that interval.
+
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration passed 85/85. No GC benchmark was run. Phase 6.9 remains partial because profiler overhead has not been measured, task/device introspection depends on absent subsystems, exception-unwind cleanup has no language semantics, and the runtime supports Windows only.

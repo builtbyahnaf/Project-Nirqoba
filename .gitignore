@@ -4,11 +4,14 @@ project_context/SYNTAX.md
 
 .freebuff
 .freebuff/*
+.cloud-attachments/*
+.pytest_cache/*
 
 build/
 
 toolchain/*
 !toolchain/versions.lock.json
+
 
 
 out/
