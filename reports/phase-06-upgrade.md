@@ -107,9 +107,10 @@ Validation: RelWithDebInfo build succeeded; CTest passed 1/1 with concurrent cou
 
 Borrowed-view no-escape summaries now reach a fixed point across function calls,
 including helper chains and recursive call groups. A small fixed owned array
-passed through multiple helpers that only inspect or mutate elements can stay
-stack placed; unknown calls and view retention remain conservative heap
-fallbacks. Added an MLIR regression for a two-helper chain.
+passed through multiple immutable or mutable helpers that only inspect or mutate
+elements can stay stack placed; unknown calls and view retention remain
+conservative heap fallbacks. Added MLIR regressions for two-helper immutable
+and mutable chains.
 
 Validation: the Windows MSVC development build succeeded, CTest passed 1/1,
 and the RelWithDebInfo integration suite passed 158/158. No benchmark was run.
@@ -134,4 +135,14 @@ owner can still be released. This exercises parameter-name-to-call-argument
 provenance through a local alias.
 
 Validation: the RelWithDebInfo integration suite passed 161/161. No benchmark
+was run.
+
+## 34. Transitive mutable-view escape coverage - 2026-11-02
+
+Added an MLIR regression that passes an exclusive mutable view through two
+helper functions, mutates an element, and confirms the backing owned array is
+still eligible for stack placement. This covers the mutable-borrow case in the
+transitive no-escape fixed point.
+
+Validation: the RelWithDebInfo integration suite passed 162/162. No benchmark
 was run.

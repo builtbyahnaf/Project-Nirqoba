@@ -1,0 +1,14 @@
+void function set_inner(borrow mut array_view<int> values) {
+    values[0] = 44;
+}
+
+void function set_outer(borrow mut array_view<int> values) {
+    set_inner(values);
+}
+
+int function main() {
+    var values = memory.owned_array<int>(2);
+    var view = memory.array_view_mut<int>(values, 0, 2);
+    set_outer(view);
+    return view[0];
+}
