@@ -137,3 +137,14 @@ secure buffers remain indexable. New negative integration tests exercise file
 and mapped handle indexing; the existing secure-buffer program remains a
 positive regression. RelWithDebInfo validation passed: CTest 1/1 and
 integration 87/87.
+
+## 26. Per-file operation ownership - 2026-11-02
+
+File operations now retain a shared resource record after looking up its unique
+token, then serialize reads, writes, and close with that file's own mutex. The
+global file registry lock covers only lookup and token removal, so a slow I/O
+operation on one file does not block unrelated file handles. Close removes the
+token before waiting for an active operation, preventing new work from entering
+while allowing an operation that already acquired the resource lock to finish.
+A four-thread write/close regression checks the race and stale-token rejection.
+RelWithDebInfo validation passed: CTest 1/1 and integration 87/87.
