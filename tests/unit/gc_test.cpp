@@ -228,6 +228,19 @@ TEST(GcTest, BumpRegionsAlignMixedObjectSizesAndReclaimEmptyPages) {
   nrq_gc_enable();
 }
 
+TEST(GcTest, AllocationPageCacheIsInvalidatedAfterCollection) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+  ASSERT_NE(nrq_gc_allocate(32, nullptr), nullptr);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+  ASSERT_NE(nrq_gc_allocate(32, nullptr), nullptr);
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 1);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+}
+
 TEST(GcTest, AllocationThresholdTriggersAutomaticCollection) {
   nrq_gc_enable();
   nrq_gc_set_threshold(1);

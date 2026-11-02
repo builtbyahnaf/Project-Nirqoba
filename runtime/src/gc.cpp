@@ -201,6 +201,12 @@ ObjectHeader* objects = nullptr;
 ObjectIndex object_index;
 std::vector<std::unique_ptr<GcPage>> gc_pages;
 constexpr size_t kGcPageBytes = 64 * 1024;
+// Cache the current bump page per allocating thread. Collection increments the
+// generation so a thread that resumes after another thread reclaimed its page
+// discards the stale pointer before dereferencing it.
+uint64_t gc_page_generation = 1;
+thread_local GcPage* thread_allocation_page = nullptr;
+thread_local uint64_t thread_allocation_generation = 0;
 struct RootInfo {
   size_t references = 0;
   size_t object_size = 0;
@@ -345,6 +351,7 @@ void collect_locked() {
       ++page;
     }
   }
+  ++gc_page_generation;
   statistics.allocated_bytes = 0;
   for (ObjectHeader* header = objects; header; header = header->next) {
     statistics.allocated_bytes = saturated_add(
@@ -364,11 +371,22 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   if (raw_span > SIZE_MAX - (alignment - 1)) return nullptr;
   const size_t span = (raw_span + alignment - 1) & ~(alignment - 1);
   GcPage* page = nullptr;
-  for (auto candidate = gc_pages.rbegin(); candidate != gc_pages.rend(); ++candidate) {
-    if ((*candidate)->used <= (*candidate)->capacity &&
-        span <= (*candidate)->capacity - (*candidate)->used) {
-      page = candidate->get();
-      break;
+  if (thread_allocation_generation != gc_page_generation) {
+    thread_allocation_page = nullptr;
+    thread_allocation_generation = gc_page_generation;
+  }
+  if (thread_allocation_page &&
+      thread_allocation_page->used <= thread_allocation_page->capacity &&
+      span <= thread_allocation_page->capacity - thread_allocation_page->used) {
+    page = thread_allocation_page;
+  } else {
+    thread_allocation_page = nullptr;
+    for (auto candidate = gc_pages.rbegin(); candidate != gc_pages.rend(); ++candidate) {
+      if ((*candidate)->used <= (*candidate)->capacity &&
+          span <= (*candidate)->capacity - (*candidate)->used) {
+        page = candidate->get();
+        break;
+      }
     }
   }
   if (!page) {
@@ -386,6 +404,8 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
       return nullptr;
     }
   }
+  thread_allocation_page = page;
+  thread_allocation_generation = gc_page_generation;
   void* header_storage = page->storage + page->used;
   page->used += span;
   auto* header = new (header_storage) ObjectHeader();
