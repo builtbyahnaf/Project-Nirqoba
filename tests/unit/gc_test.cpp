@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <thread>
 #include <vector>
@@ -34,6 +35,23 @@ void trace_node(void* object, size_t object_bytes, nrq_gc_visit_fn visit,
   (void)object_bytes;
   auto* node = static_cast<Node*>(object);
   visit(node->next, context);
+}
+
+std::atomic<uint64_t> safepoint_mutator_progress{0};
+std::atomic<uint64_t> safepoint_trace_progress[2]{};
+std::atomic<int> safepoint_trace_count{0};
+
+void trace_safepoint_probe(void* object, size_t object_bytes,
+                           nrq_gc_visit_fn visit, void* context) {
+  (void)object;
+  (void)object_bytes;
+  (void)visit;
+  (void)context;
+  const int index = safepoint_trace_count.fetch_add(1);
+  if (index < 2)
+    safepoint_trace_progress[index].store(
+        safepoint_mutator_progress.load());
+  if (index == 0) std::this_thread::sleep_for(std::chrono::milliseconds(10));
 }
 
 }  // namespace
@@ -435,6 +453,51 @@ TEST(GcTest, RootedAllocationPublishesBeforeConcurrentCollection) {
   root = nullptr;
   nrq_gc_collect();
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
+TEST(GcTest, CollectionWaitsForActiveMutatorsToReachSafepoints) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  safepoint_mutator_progress = 0;
+  safepoint_trace_progress[0] = 0;
+  safepoint_trace_progress[1] = 0;
+  safepoint_trace_count = 0;
+  void* first = nrq_gc_allocate(sizeof(Node), trace_safepoint_probe);
+  void* second = nrq_gc_allocate(sizeof(Node), trace_safepoint_probe);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  nrq_gc_root_register(&first);
+  nrq_gc_root_register(&second);
+
+  std::atomic<bool> mutator_ready = false;
+  std::atomic<bool> stop_mutator = false;
+  std::thread mutator([&] {
+    nrq_gc_mutator_enter();
+    mutator_ready.store(true, std::memory_order_release);
+    while (!stop_mutator.load(std::memory_order_acquire)) {
+      safepoint_mutator_progress.fetch_add(1);
+      nrq_gc_safepoint();
+    }
+    nrq_gc_mutator_leave();
+  });
+  while (!mutator_ready.load(std::memory_order_acquire) ||
+         safepoint_mutator_progress.load() < 100)
+    std::this_thread::yield();
+
+  nrq_gc_collect();
+  const int trace_count = safepoint_trace_count.load();
+  const uint64_t progress_during_first_trace = safepoint_trace_progress[0].load();
+  const uint64_t progress_during_second_trace = safepoint_trace_progress[1].load();
+  stop_mutator.store(true, std::memory_order_release);
+  mutator.join();
+  ASSERT_EQ(trace_count, 2);
+  ASSERT_EQ(progress_during_first_trace, progress_during_second_trace);
+
+  nrq_gc_root_unregister(&second);
+  nrq_gc_root_unregister(&first);
+  first = nullptr;
+  second = nullptr;
+  nrq_gc_collect();
 }
 
 TEST(GcTest, RepeatedRootRegionKeepsContiguousArrayReferencesAlive) {

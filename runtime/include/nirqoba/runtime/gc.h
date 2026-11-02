@@ -68,6 +68,13 @@ void nrq_gc_root_frame_end(uint64_t marker);
 void nrq_gc_enable(void);
 void nrq_gc_disable(void);
 void nrq_gc_collect(void);
+
+// Generated mutators register each function activation and poll at function
+// entry and loop backedges. Native code that accesses managed references over
+// long-running work may use the same enter/safepoint/leave protocol.
+void nrq_gc_mutator_enter(void);
+void nrq_gc_mutator_leave(void);
+void nrq_gc_safepoint(void);
 void nrq_gc_set_threshold(size_t bytes);
 struct nrq_gc_stats nrq_gc_get_stats(void);
 uint64_t nrq_gc_get_allocated_bytes(void);

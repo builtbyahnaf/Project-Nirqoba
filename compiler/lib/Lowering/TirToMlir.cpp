@@ -294,6 +294,32 @@ static bool collect_has_managed_reference(const Type& type) {
   return !offsets.empty();
 }
 
+static bool function_uses_gc(const tir::Function& function) {
+  auto type_uses_gc = [](const Type& type) {
+    if (collect_has_managed_reference(type)) return true;
+    return type.is_owned_array() &&
+           collect_has_managed_reference(type.element_type());
+  };
+  if (type_uses_gc(function.return_type())) return true;
+  for (const tir::Function::Parameter& parameter : function.parameters())
+    if (type_uses_gc(parameter.type)) return true;
+  for (const tir::Op& op : function.operations()) {
+    if (op.kind == tir::OpKind::Call &&
+        (op.callee.rfind("gc.", 0) == 0 || op.callee.rfind("nrq_gc_", 0) == 0))
+      return true;
+    if ((op.result.is_valid() && type_uses_gc(op.result.type)) ||
+        (op.operand.is_valid() && type_uses_gc(op.operand.type)) ||
+        (op.lhs.is_valid() && type_uses_gc(op.lhs.type)) ||
+        (op.rhs.is_valid() && type_uses_gc(op.rhs.type)))
+      return true;
+    for (const tir::Value argument : op.arguments)
+      if (type_uses_gc(argument.type)) return true;
+    for (const tir::Value element : op.aggregate_elements)
+      if (type_uses_gc(element.type)) return true;
+  }
+  return false;
+}
+
 static mlir::Location to_mlir_loc(const SourceLocation& loc, mlir::MLIRContext* ctx) {
   if (!loc.is_valid()) return mlir::UnknownLoc::get(ctx);
   return mlir::FileLineColLoc::get(ctx,
@@ -338,13 +364,26 @@ class FunctionTranslator {
                      DiagnosticEngine& diag)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
         builder_(builder), ctx_(ctx), diag_(diag),
-        stack_owned_arrays_(analyze_stack_owned_arrays(tir_fn)) {
+        stack_owned_arrays_(analyze_stack_owned_arrays(tir_fn)),
+        uses_gc_mutator_(function_uses_gc(tir_fn)) {
+    const std::vector<tir::Op>& operations = tir_fn_.operations();
+    for (std::size_t index = 0; index < operations.size(); ++index)
+      if (operations[index].kind == tir::OpKind::Label)
+        label_positions_.emplace(operations[index].label_id, index);
     entry_block_ = func_op.addEntryBlock();
     builder_.setInsertionPointToStart(entry_block_);
     values_.resize(tir_fn.value_count());
 
     for (std::size_t i = 0; i < tir_fn.parameters().size(); ++i) {
       set(tir_fn.parameters()[i].value, entry_block_->getArgument(i));
+    }
+
+    if (uses_gc_mutator_) {
+      auto mutator_enter = ensure_runtime_fn(
+          module_, builder_, "nrq_gc_mutator_enter",
+          mlir::LLVM::LLVMVoidType::get(ctx_), {});
+      builder_.create<mlir::LLVM::CallOp>(
+          mlir::UnknownLoc::get(ctx_), mutator_enter, mlir::ValueRange{});
     }
 
     auto begin_frame = ensure_runtime_fn(module_, builder_, "nrq_gc_root_frame_begin",
@@ -366,7 +405,10 @@ class FunctionTranslator {
   }
 
   bool translate() {
-    for (const tir::Op& op : tir_fn_.operations()) {
+    const std::vector<tir::Op>& operations = tir_fn_.operations();
+    for (std::size_t index = 0; index < operations.size(); ++index) {
+      current_operation_index_ = index;
+      const tir::Op& op = operations[index];
       if (!translate_op(op)) return false;
     }
     flush_gc_root_registrations();
@@ -386,6 +428,21 @@ class FunctionTranslator {
           "nirqoba.ownership",
           builder_.getStringAttr(ownership_spelling(v.ownership)));
     values_[static_cast<std::size_t>(v.id)] = mlir_val;
+  }
+
+  bool is_backedge(int label_id) const {
+    const auto target = label_positions_.find(label_id);
+    return target != label_positions_.end() &&
+           target->second < current_operation_index_;
+  }
+
+  void emit_gc_safepoint(mlir::Location loc) {
+    if (!uses_gc_mutator_) return;
+    auto safepoint = ensure_runtime_fn(
+        module_, builder_, "nrq_gc_safepoint",
+        mlir::LLVM::LLVMVoidType::get(ctx_), {});
+    builder_.create<mlir::LLVM::CallOp>(
+        loc, safepoint, mlir::ValueRange{});
   }
 
   // Every stack slot is allocated in the function's entry block, never at the
@@ -671,6 +728,7 @@ class FunctionTranslator {
 
       case tir::OpKind::Branch: {
         mlir::Block* target_block = get_or_create_block(op.label_id);
+        if (is_backedge(op.label_id)) emit_gc_safepoint(loc);
         builder_.create<mlir::LLVM::BrOp>(loc, target_block);
         return true;
       }
@@ -679,6 +737,8 @@ class FunctionTranslator {
         mlir::Block* true_block = get_or_create_block(op.true_label);
         mlir::Block* false_block = get_or_create_block(op.false_label);
         mlir::Value cond = get(op.operand);
+        if (is_backedge(op.true_label) || is_backedge(op.false_label))
+          emit_gc_safepoint(loc);
         builder_.create<mlir::LLVM::CondBrOp>(loc, cond, true_block, false_block);
         return true;
       }
@@ -2066,6 +2126,13 @@ class FunctionTranslator {
                                            {builder_.getI64Type()});
         builder_.create<mlir::LLVM::CallOp>(loc, end_frame,
                                             mlir::ValueRange{gc_root_frame_marker_});
+        if (uses_gc_mutator_) {
+          auto mutator_leave = ensure_runtime_fn(
+              module_, builder_, "nrq_gc_mutator_leave",
+              mlir::LLVM::LLVMVoidType::get(ctx_), {});
+          builder_.create<mlir::LLVM::CallOp>(
+              loc, mutator_leave, mlir::ValueRange{});
+        }
         if (op.operand.is_valid()) {
           if (val) {
             builder_.create<mlir::func::ReturnOp>(loc, mlir::ValueRange{val});
@@ -2279,6 +2346,8 @@ class FunctionTranslator {
   mlir::MLIRContext* ctx_;
   DiagnosticEngine& diag_;
   std::unordered_map<int, std::size_t> stack_owned_arrays_;
+  bool uses_gc_mutator_ = false;
+  std::unordered_map<int, std::size_t> label_positions_;
   mlir::Block* entry_block_;
   struct PendingGcRoot {
     mlir::Value slot;
@@ -2291,6 +2360,7 @@ class FunctionTranslator {
   std::unordered_map<int, mlir::Block*> label_blocks_;
   std::unordered_map<std::string, std::string> string_literals_;
   int string_literal_counter_ = 0;
+  std::size_t current_operation_index_ = 0;
   mlir::Value gc_root_frame_marker_;
 };
 
