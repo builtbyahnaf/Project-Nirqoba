@@ -352,6 +352,40 @@ TEST(GcTest, RootStoreSynchronizesConcurrentMutationAndCollection) {
   ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
 }
 
+TEST(GcTest, RootedAllocationPublishesBeforeConcurrentCollection) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  void* root = nullptr;
+  nrq_gc_root_register(&root);
+  std::atomic<bool> done = false;
+  std::atomic<bool> succeeded = true;
+  std::thread collector([&] {
+    while (!done.load(std::memory_order_acquire)) nrq_gc_collect();
+  });
+
+  for (uint64_t value = 1; value <= 5000; ++value) {
+    auto* object = static_cast<uint64_t*>(nrq_gc_allocate_array_typed_rooted(
+        &root, 1, sizeof(uint64_t), nullptr, 0));
+    if (!object) {
+      succeeded = false;
+      break;
+    }
+    *object = value;
+    if (*object != value) succeeded = false;
+  }
+
+  done.store(true, std::memory_order_release);
+  collector.join();
+  ASSERT_TRUE(succeeded.load());
+  ASSERT_NE(root, nullptr);
+  ASSERT_EQ(*static_cast<uint64_t*>(root), uint64_t{5000});
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{1});
+  nrq_gc_root_unregister(&root);
+  root = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
 TEST(GcTest, RepeatedRootRegionKeepsContiguousArrayReferencesAlive) {
   nrq_gc_disable();
   nrq_gc_collect();

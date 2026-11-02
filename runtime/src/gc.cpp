@@ -461,6 +461,25 @@ void* nrq_gc_allocate_array_typed(size_t count, size_t element_size,
                          reference_offsets, reference_count);
 }
 
+void* nrq_gc_allocate_array_typed_rooted(
+    void** root_slot, size_t count, size_t element_size,
+    const size_t* reference_offsets, size_t reference_count) {
+  if (!root_slot || count == 0 || element_size == 0 ||
+      count > SIZE_MAX / element_size)
+    return nullptr;
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  const auto root = roots.find(root_slot);
+  if (root == roots.end() || root->second.repeated_count != 0 ||
+      root->second.object_size != sizeof(void*) ||
+      root->second.reference_offsets.size() != 1 ||
+      root->second.reference_offsets[0] != 0)
+    nrq_runtime_fatal("rooted GC allocation requires a registered pointer root slot");
+  void* object = allocate_locked(count * element_size, element_size, nullptr,
+                                 reference_offsets, reference_count);
+  *root_slot = object;
+  return object;
+}
+
 void nrq_gc_root_register(void** slot) {
   static constexpr size_t pointer_offset = 0;
   nrq_gc_root_register_typed(slot, sizeof(void*), &pointer_offset, 1);

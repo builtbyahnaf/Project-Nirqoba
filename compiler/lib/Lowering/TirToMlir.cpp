@@ -1045,9 +1045,19 @@ class FunctionTranslator {
               builder_.create<mlir::LLVM::StoreOp>(loc, offset_value, slot);
             }
           }
-          auto fn = ensure_runtime_fn(module_, builder_, "nrq_gc_allocate_array_typed",
+          mlir::Value root_slot = alloca_at_entry(
+              llvm_ptr_type(ctx_), loc);
+          if (!root_slot) {
+            diag_.error("NRQ4005", op.location,
+                        "internal: no entry block for a managed allocation root");
+            return false;
+          }
+          register_gc_root(root_slot, op.result.type, loc);
+          auto fn = ensure_runtime_fn(module_, builder_,
+                                     "nrq_gc_allocate_array_typed_rooted",
                                      llvm_ptr_type(ctx_),
-                                     {builder_.getI64Type(), builder_.getI64Type(),
+                                     {llvm_ptr_type(ctx_), builder_.getI64Type(),
+                                      builder_.getI64Type(),
                                       llvm_ptr_type(ctx_), builder_.getI64Type()});
           mlir::Value size = builder_.create<mlir::LLVM::ConstantOp>(
               loc, builder_.getI64Type(),
@@ -1056,7 +1066,8 @@ class FunctionTranslator {
               loc, builder_.getI64Type(),
               builder_.getI64IntegerAttr(static_cast<int64_t>(reference_offsets.size()))).getResult();
           mlir::Value result = builder_.create<mlir::LLVM::CallOp>(
-              loc, fn, mlir::ValueRange{count, size, offsets_pointer, ref_count}).getResult();
+              loc, fn, mlir::ValueRange{root_slot, count, size, offsets_pointer,
+                                        ref_count}).getResult();
           set(op.result, result);
           return true;
         }

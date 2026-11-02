@@ -30,6 +30,12 @@ void* nrq_gc_allocate_array(size_t count, size_t element_size,
 void* nrq_gc_allocate_array_typed(size_t count, size_t element_size,
                                   const size_t* reference_offsets,
                                   size_t reference_count);
+// Allocates and publishes the result into an already registered pointer root
+// in one collector critical section. The root slot must be registered with
+// nrq_gc_root_register before calling this function.
+void* nrq_gc_allocate_array_typed_rooted(
+    void** root_slot, size_t count, size_t element_size,
+    const size_t* reference_offsets, size_t reference_count);
 
 // Root slots are addresses containing managed object pointers. Register the
 // slot before a collection can run and unregister it before its storage ends.
