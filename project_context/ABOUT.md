@@ -117,7 +117,8 @@ Nirqoba should provide reasonable defaults while allowing developers to choose m
 
 Examples include:
 
-- Automatic garbage collection by default.
+- Ownership-based memory management by default.
+- Opt-in tracing GC for managed object graphs.
 - Deterministic ownership for controlled lifetimes.
 - Borrowing for safe temporary access.
 - Explicit memory allocation.
@@ -133,15 +134,19 @@ The developer should understand what the language and runtime are doing.
 
 Memory management is one of Nirqoba's most important architectural considerations.
 
-The language intends to combine automatic memory management with precise control.
+The language combines deterministic ownership with opt-in automatic collection
+and precise low-level control.
 
-### 4.1 Garbage collection by default
+### 4.1 Ownership by default, tracing GC by choice
 
-Ordinary dynamically allocated managed objects should be automatically reclaimed when they become unreachable.
+Supported owned allocations transfer explicitly and are released deterministically
+when their owner leaves scope. Borrowed references provide temporary access,
+and shared allocations opt into reference counting. GC-managed values use a
+separate precise tracing domain for cyclic and dynamic object graphs; automatic
+collection starts disabled and can be enabled explicitly.
 
-This reduces the burden of manually managing object lifetimes and helps prevent common memory-management errors.
-
-The initial collector is intended to use precise tracing and mark-and-sweep collection, with architectural provisions for future improvements.
+The collector uses precise tracing and non-moving mark-and-sweep collection.
+It never implicitly takes ownership of explicit allocations or native resources.
 
 Potential future collector capabilities include:
 

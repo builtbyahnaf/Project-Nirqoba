@@ -82,6 +82,24 @@ TEST(GcTest, ExplicitCollectionStillRunsWhenAutomaticCollectionIsDisabled) {
   nrq_gc_set_threshold(1024 * 1024);
 }
 
+TEST(GcTest, ExplicitAllocatorOwnershipIsOutsideTheTracingHeap) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const nrq_gc_stats before = nrq_gc_get_stats();
+  auto* explicit_bytes = static_cast<unsigned char*>(
+      nrq_memory_allocate(64, alignof(uint64_t)));
+  ASSERT_NE(explicit_bytes, nullptr);
+  explicit_bytes[0] = 0x5A;
+
+  nrq_gc_collect();
+  ASSERT_EQ(explicit_bytes[0], static_cast<unsigned char>(0x5A));
+  const nrq_gc_stats after = nrq_gc_get_stats();
+  ASSERT_EQ(after.allocated_bytes, before.allocated_bytes);
+  ASSERT_EQ(after.live_objects, before.live_objects);
+
+  nrq_memory_deallocate_checked(explicit_bytes);
+}
+
 TEST(GcTest, RejectsAllocationSizeOverflowWithoutChangingHeapStatistics) {
   nrq_gc_disable();
   nrq_gc_collect();
