@@ -70,14 +70,13 @@ Implemented since the first pass:
 
 Still not implemented:
 
-- Native resource wrapper types (files, sockets, locks) and cleanup during
-  exception unwinding. The roadmap leaves the exact shape of these types to the
-  language specification, which still defines none, so only the existing
-  `defer call(...)` mechanism implements deterministic destruction today.
-- Thread/task counts and device-memory reporting in introspection, which depend
-  on the concurrency phases and the GPU runtime.
-- Profiler overhead measurement. Allocation benchmarks exist, but the cost of
-  running with the profiler enabled versus disabled has not been measured.
+- Socket, graphics, and GPU resource wrappers and cleanup during exception
+  unwinding. File and mutex wrappers exist; the language has no unwind model.
+- Task counts and device-memory reporting, which depend on the concurrency
+  phases and GPU runtime. Process thread count is available as an estimate.
+- A controlled profiler-overhead regression threshold. A 30-run comparison is
+  recorded in `phase-06.9-profiler-overhead.md`; it is a host-specific baseline,
+  not a general performance claim.
 
 ## 14. CPU capability query - 2026-11-01
 
@@ -119,4 +118,4 @@ Profiler capture now reports allocation-size buckets, largest allocation, alloca
 
 Secure release zeroes the full tracked allocation before invoking its owning allocator. The allocator callback runs outside the global registry lock while the allocation owner is marked in flight and the allocator is pinned. A custom allocator regression verifies the bytes are zero at the callback boundary. Final shared release uses the same in-flight protocol and reserves its reference count at zero until the callback completes; concurrent retains and releases cannot claim the allocation during that interval.
 
-Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration passed 85/85. No GC benchmark was run. Phase 6.9 remains partial because profiler overhead has not been measured, task/device introspection depends on absent subsystems, exception-unwind cleanup has no language semantics, and the runtime supports Windows only.
+Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration passed 85/85. The profiler-on/off allocation workload has a 30-run host baseline in `phase-06.9-profiler-overhead.md`. No GC benchmark was run. Phase 6.9 remains partial because task/device introspection depends on absent subsystems, exception-unwind cleanup has no language semantics, profiler thresholds need controlled hardware, and the runtime supports Windows only.
