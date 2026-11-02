@@ -24,8 +24,10 @@ diagnostics and platform utilities remain tracked separately in
   synchronized runtime interfaces where required. No claim is made that
   uninstrumented concurrent pointer writes are safe.
 - **Use contiguous owned arrays and checked borrowed views.** Owned arrays
-  preserve contiguous storage, allocator selection, and explicit alignment;
-  views do not own or extend the lifetime of their source.
+  preserve contiguous storage, allocator selection, and explicit alignment.
+  Immutable views and exclusive mutable views do not own or extend the
+  lifetime of their source; locally scoped views can participate in stack
+  placement when escape analysis proves they do not escape.
 - **Measure before making performance claims.** The C++/Rust benchmark runner
   records repeated samples and environment metadata. Comparative results
   require both toolchains and controlled runs; no Rust comparison is claimed
@@ -41,7 +43,7 @@ silently counted as complete:
   synchronization and production bookkeeping; a controlled comparison against
   platform and mature general-purpose allocators.
 - **Ownership:** native-resource pointer field moves; returned-reference
-  lifetime rules beyond pointers and immutable array views; interprocedural and
+  lifetime rules beyond pointers and array views; interprocedural and
   alias-rich escape analysis beyond the conservative local-array promotion now
   implemented; closure capture ownership; cleanup semantics for a future error
   or exception unwinding model.
@@ -53,12 +55,16 @@ silently counted as complete:
   Size classes and free-slot reuse, generational or incremental collection,
   and write barriers remain open. GC benchmarking is deliberately deferred for
   this work.
-- **Numerical memory:** allocator-aware containers, mutable views, tensor and
-  CPU/GPU buffer ownership, and SIMD-oriented container APIs.
+- **Numerical memory:** allocator-aware tensor containers and shape/stride
+  types; GPU device-buffer ownership and backend integration; SIMD-oriented
+  container APIs. Contiguous owned-array storage, alignment, checked immutable
+  views, exclusive mutable views, nested slicing, and conservative local stack
+  placement now provide the CPU storage foundation.
 - **Benchmarking through 6U:G:** equivalent optimized Nirqoba, C++, and Rust
   workloads on the same host, with warmups, repeated latency percentiles,
   memory measurements, and compiler/target metadata. The runner exists, but the
   comparative gate is pending the Rust toolchain and controlled execution.
+  Comparative benchmarking is excluded from the current Phase 6 Upgrade work.
 - **Platform support:** the runtime and explicit allocator remain Windows x64
   implementations. Portability requires separate platform backends and
   platform-specific regression runs.
