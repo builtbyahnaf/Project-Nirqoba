@@ -1,0 +1,8 @@
+owned socket byte* function open_socket() {
+    return socket.connect("127.0.0.1", 7);
+}
+
+int function main() {
+    let invalid = open_socket()[0];
+    return 0;
+}
