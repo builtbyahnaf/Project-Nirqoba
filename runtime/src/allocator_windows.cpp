@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <condition_variable>
 #include <cstring>
@@ -105,6 +106,25 @@ class Allocator {
   virtual NrqAllocatorKind kind() const { return NRQ_ALLOCATOR_GENERAL; }
   size_t capacity() const { return capacity_; }
 
+  bool try_pin_operation() {
+    size_t current = in_flight_operations_.load(std::memory_order_relaxed);
+    while (current != SIZE_MAX) {
+      if (in_flight_operations_.compare_exchange_weak(
+              current, current + 1, std::memory_order_acquire,
+              std::memory_order_relaxed)) return true;
+    }
+    return false;
+  }
+  void unpin_operation() {
+    const size_t previous =
+        in_flight_operations_.fetch_sub(1, std::memory_order_release);
+    if (previous == 0)
+      nrq_runtime_fatal("allocator operation pin count underflow");
+  }
+  size_t in_flight_operations() const {
+    return in_flight_operations_.load(std::memory_order_acquire);
+  }
+
   void* allocate_serialized(size_t bytes, size_t alignment) {
     std::lock_guard<std::mutex> lock(operation_mutex_);
     return allocate(bytes, alignment);
@@ -167,6 +187,7 @@ class Allocator {
 
  private:
   mutable std::mutex operation_mutex_;
+  std::atomic<size_t> in_flight_operations_{0};
 };
 
 class GeneralAllocator final : public Allocator {
@@ -883,7 +904,6 @@ std::mutex allocator_mutex;
 std::condition_variable allocation_registry_changed;
 std::unordered_map<void*, std::unique_ptr<Allocator>> allocator_handles;
 std::unordered_map<Allocator*, size_t> selected_counts;
-std::unordered_map<Allocator*, size_t> in_flight_allocations;
 struct AllocationOwner {
   Allocator* allocator;
   size_t bytes;
@@ -1018,6 +1038,7 @@ int32_t nrq_allocator_destroy(void* handle) {
   // as the process-wide default cannot be destroyed without invalidating
   // pointers the program may still reach.
   if (policy_default_allocator == allocator) return 0;
+  if (allocator->in_flight_operations() != 0) return 0;
   auto selected = selected_counts.find(allocator);
   if (selected != selected_counts.end() && selected->second != 0) return 0;
   for (const auto& allocation : live_allocations)
@@ -1031,9 +1052,7 @@ int32_t nrq_allocator_reset(void* handle) {
   auto found = allocator_handles.find(handle);
   if (found == allocator_handles.end()) return 0;
   Allocator* allocator = found->second.get();
-  auto in_flight = in_flight_allocations.find(allocator);
-  if (in_flight != in_flight_allocations.end() && in_flight->second != 0)
-    return 0;
+  if (allocator->in_flight_operations() != 0) return 0;
   for (const auto& allocation : live_allocations)
     if (allocation.second.allocator == allocator) return 0;
   if (!allocator->reset_serialized()) return 0;
@@ -1090,16 +1109,10 @@ void* nrq_memory_use_allocator(void* handle) {
 }
 
 static void release_operation_pin_locked(Allocator* allocator) {
-  auto selected = selected_counts.find(allocator);
-  if (selected != selected_counts.end() && --selected->second == 0)
-    selected_counts.erase(selected);
-  auto in_flight = in_flight_allocations.find(allocator);
-  if (in_flight != in_flight_allocations.end() && --in_flight->second == 0)
-    in_flight_allocations.erase(in_flight);
+  allocator->unpin_operation();
 }
 
 static void release_operation_pin(Allocator* allocator) {
-  std::lock_guard<std::mutex> lock(allocator_mutex);
   release_operation_pin_locked(allocator);
 }
 
@@ -1139,36 +1152,7 @@ static void* allocate_with_allocator(Allocator* allocator, size_t bytes,
 }
 
 static bool increment_operation_pin_locked(Allocator* allocator) {
-  auto selected = selected_counts.end();
-  bool selected_inserted = false;
-  auto in_flight = in_flight_allocations.end();
-  bool in_flight_inserted = false;
-  try {
-    auto selected_result = selected_counts.try_emplace(allocator, 0);
-    selected = selected_result.first;
-    selected_inserted = selected_result.second;
-    if (selected->second == SIZE_MAX) {
-      if (selected_inserted) selected_counts.erase(selected);
-      return false;
-    }
-    auto in_flight_result = in_flight_allocations.try_emplace(allocator, 0);
-    in_flight = in_flight_result.first;
-    in_flight_inserted = in_flight_result.second;
-    if (in_flight->second == SIZE_MAX) {
-      if (in_flight_inserted) in_flight_allocations.erase(in_flight);
-      if (selected_inserted) selected_counts.erase(selected);
-      return false;
-    }
-    ++selected->second;
-    ++in_flight->second;
-    return true;
-  } catch (...) {
-    if (in_flight_inserted && in_flight != in_flight_allocations.end())
-      in_flight_allocations.erase(in_flight);
-    if (selected_inserted && selected != selected_counts.end())
-      selected_counts.erase(selected);
-    return false;
-  }
+  return allocator && allocator->try_pin_operation();
 }
 
 void* nrq_memory_allocate(size_t bytes, size_t alignment) {

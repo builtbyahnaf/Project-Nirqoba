@@ -1,0 +1,4 @@
+int function main() {
+    socket.send(socket.connect("127.0.0.1", 7), "temporary");
+    return 0;
+}
