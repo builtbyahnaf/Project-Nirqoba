@@ -1602,6 +1602,9 @@ void TypeChecker::check_return(ReturnStmt& statement) {
       diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                          "returned borrow must come from the declared source parameter '" +
                              current_return_borrow_parameter_ + "'");
+    } else if (!current_return_mutable_borrow_ && source->mutable_borrow) {
+      diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                         "an immutable returned borrow cannot alias a mutable borrowed source");
     } else if (current_return_mutable_borrow_ &&
                (statement.value()->ownership() != ValueOwnership::MutableBorrowed ||
                 !source->mutable_borrow)) {

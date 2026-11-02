@@ -483,6 +483,15 @@ execution and negative exclusivity/read/write tests, and documented the
 current view contract. Windows x64 build passed, CTest passed (1/1), and
 integration tests passed (147/147). No benchmark was run.
 
+## 54. Reject immutable escape from mutable view borrows - 2026-11-02
+
+Borrow-return checking now rejects returning an immutable reference sourced
+from a mutable borrowed parameter. The source's mutable alias would otherwise
+remain usable while the returned immutable alias is live. Added a compile
+failure regression for mutable array views and documented the restriction.
+Windows x64 build passed, CTest passed (1/1), and integration tests passed
+(148/148). No benchmark was run.
+
 ## 43. Conservative owned-array stack placement - 2026-11-02
 
 MLIR lowering now performs a conservative per-function escape analysis for

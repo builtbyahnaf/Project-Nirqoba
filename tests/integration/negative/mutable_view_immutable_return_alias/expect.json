@@ -1,0 +1,4 @@
+{
+  "expect_exit": 1,
+  "expect_stderr_contains": ["an immutable returned borrow cannot alias a mutable borrowed source"]
+}
