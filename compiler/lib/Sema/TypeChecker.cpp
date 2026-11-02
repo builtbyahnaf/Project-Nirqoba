@@ -1754,6 +1754,24 @@ Type TypeChecker::check_index_expr(IndexExpr& expr) {
 
   if (!base_type.is_valid() || !index_type.is_valid()) return Type::error();
 
+  if (base_type.is_pointer()) {
+    std::string cleanup_callee;
+    const Symbol* owner = find_root_symbol(expr.base(), symbols_);
+    if (owner) {
+      cleanup_callee = owner->cleanup_callee;
+    } else if (expr.base().kind() == Expr::Kind::Call) {
+      cleanup_callee = cleanup_for_owner_producer(
+          static_cast<const CallExpr&>(expr.base()).callee());
+    }
+    if (!cleanup_callee.empty() && cleanup_callee != "memory.deallocate" &&
+        cleanup_callee != "memory.secure_release") {
+      diagnostics_.error(diag::kTypeMismatch, expr.base().location(),
+                         "opaque resource handles cannot be indexed; use the "
+                         "resource API or checked mapped accessors");
+      return Type::error();
+    }
+  }
+
   if (!index_type.is_integer()) {
     diagnostics_.error(diag::kTypeMismatch, expr.index().location(),
                        "array index must be an integer, not '" + index_type.to_string() + "'");

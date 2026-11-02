@@ -1,0 +1,5 @@
+int function main() {
+    let mapped = memory.map_file("tests/integration/positive/memory_advanced/expect.json", false);
+    print(mapped[0]);
+    return 0;
+}

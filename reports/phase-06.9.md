@@ -16,7 +16,7 @@ Partial implementation. Windows x64, MSVC, LLVM/MLIR 23.1.4.
 
 ## Known limits
 
-The profiler does not provide fragmentation estimates, allocator-specific attribution, allocation-size histograms, or hotspots. GC counters are snapshots; the profiler's explicit allocation current/peak/total counters do not include the GC heap. Raw mapping pointer indexing cannot be checked; use the typed mapped access APIs. Pin scopes use `defer memory.unpin`; excessive-pin diagnostics are absent. Introspection reports available physical memory, runtime version, logical CPU count, and built-in allocator kind; thread/task/device details are absent. The runtime lacks native resource wrapper types, exception-unwind cleanup, and non-Windows support.
+The profiler does not report allocation hotspots; allocator free-space and fragmentation values are unavailable for general and custom allocators. GC counters are snapshots; explicit allocation current/peak/total counters do not include the GC heap. Mapping access must use checked typed accessors. Pin scopes use `defer memory.unpin`. Introspection includes physical-memory estimates, runtime version, CPU capabilities, process thread count, allocator kind, process working set, and automatic-GC state; task and device details are unavailable. File and mutex wrappers exist, but sockets and GPU resources do not; exception-unwind cleanup and non-Windows support are also absent.
 
 ## Validation
 
@@ -114,7 +114,7 @@ Limitation: this wrapper is Windows x64 only, matching the current runtime targe
 
 The native resource surface has since expanded: deterministic Windows file resources support bounded reads and writes, and mutex handles support owned creation, lock/unlock validation, automatic destruction, and deferred unlock. Owned resources move between bindings, reject use after move/close/destroy, and cannot be released through a mismatched generic destructor. Cleanup runs in LIFO order on scope exit, return, break, and continue. The language has no exception or error-unwind model, so cleanup during unwinding is still undefined.
 
-Profiler capture now reports allocation-size buckets, largest allocation, allocator-kind attribution, and measurable region free-space and fragmentation values in addition to explicit allocation totals and GC snapshots. General and custom allocator free space is reported as not measurable. Scoped pin cleanup uses `defer`; pin-count diagnostics reject excessive repeated pins. Introspection includes physical-memory estimates, runtime version, CPU features, process thread count, configured allocator kind, process working set, and automatic-GC state. Task and device-memory counts remain unavailable because those subsystems do not exist.
+Profiler capture now reports allocation-size buckets, largest allocation, allocator-kind attribution, and measurable region free-space and fragmentation values in addition to explicit allocation totals and GC snapshots. General and custom allocator free space is reported as not measurable. Scoped pin cleanup uses `defer`; pin-count diagnostics reject excessive repeated pins. Introspection includes physical-memory estimates, runtime version, CPU features, process thread count, configured allocator kind, process working set, and automatic-GC state. Task and device-memory counts remain unavailable because those subsystems do not exist. Opaque file, mutex, and mapping pointers cannot be indexed; mapped data uses checked accessors.
 
 Secure release zeroes the full tracked allocation before invoking its owning allocator. The allocator callback runs outside the global registry lock while the allocation owner is marked in flight and the allocator is pinned. A custom allocator regression verifies the bytes are zero at the callback boundary. Final shared release uses the same in-flight protocol and reserves its reference count at zero until the callback completes; concurrent retains and releases cannot claim the allocation during that interval.
 
@@ -128,3 +128,12 @@ stale closed handle from accidentally resolving to a later file resource.
 Runtime coverage verifies reopening does not reuse the old token and that stale
 write/close operations fail. RelWithDebInfo validation passed: CTest 1/1 and
 integration 85/85.
+
+## 25. Opaque resource access validation - 2026-11-02
+
+The type checker rejects indexing of file, mutex, and mapping handles. Mapped
+bytes must use the checked mapping accessors, while explicit allocations and
+secure buffers remain indexable. New negative integration tests exercise file
+and mapped handle indexing; the existing secure-buffer program remains a
+positive regression. RelWithDebInfo validation passed: CTest 1/1 and
+integration 87/87.

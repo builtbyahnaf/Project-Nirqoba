@@ -1,0 +1,7 @@
+{
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": [
+    "opaque resource handles cannot be indexed"
+  ]
+}
