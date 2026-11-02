@@ -2,12 +2,12 @@ owned socket byte* function connect_stream() {
     return socket.connect("127.0.0.1", 7);
 }
 
-owned socket byte* function forward_stream() {
-    return connect_stream();
+owned socket byte* function forward_stream(owned socket byte* stream) {
+    return stream;
 }
 
 int function main() {
-    var stream = forward_stream();
+    var stream = forward_stream(connect_stream());
     var buffer = memory.allocate<byte>(64);
     socket.send(stream, "ping");
     socket.receive(stream, buffer, 64);
