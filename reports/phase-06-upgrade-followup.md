@@ -417,6 +417,17 @@ borrows, wrong-source returns, and aggregate-stored views remain rejected.
 Validation passed: Windows x64 build, CTest 1/1, and integration suite
 129/129. No benchmark was run.
 
+## 47. Borrowed subview return provenance - 2026-11-02
+
+Borrowed array-view return validation now follows `memory.array_view` back to
+its underlying source. This allows a function returning `borrow source
+array_view<T>` to return a slice of that borrowed parameter while rejecting a
+slice derived from a different borrowed parameter. The operation retains the
+source allocation identity, so existing owner-move and borrow-conflict checks
+continue to apply. Added positive execution and wrong-source compile-failure
+regressions. Windows x64 build passed, CTest passed (1/1), and integration
+tests passed (136/136). No benchmark was run.
+
 ## 43. Conservative owned-array stack placement - 2026-11-02
 
 MLIR lowering now performs a conservative per-function escape analysis for

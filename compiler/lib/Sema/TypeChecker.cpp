@@ -1029,6 +1029,11 @@ const Symbol* TypeChecker::find_borrow_origin(const Expr& expression) const {
   if (expression.kind() != Expr::Kind::Call)
     return find_root_symbol(expression, symbols_);
   const auto& call = static_cast<const CallExpr&>(expression);
+  // A view constructor does not create a new lifetime. Preserve the origin of
+  // the source through nested slices so a function can safely return a view
+  // derived from its declared borrowed parameter.
+  if (call.callee() == "memory.array_view" && !call.arguments().empty())
+    return find_borrow_origin(*call.arguments().front());
   const FunctionSignature* signature = find_function(call.callee());
   if (!signature || !signature->returns_borrowed) return nullptr;
   const auto source_parameter = std::find(

@@ -1,0 +1,4 @@
+{
+  "expect_exit": 1,
+  "expect_stderr_contains": "returned borrow must come from the declared source parameter 'source'"
+}

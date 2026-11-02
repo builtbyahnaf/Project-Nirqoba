@@ -1,0 +1,13 @@
+borrow source array_view<int> function first_value(borrow array_view<int> source) {
+    return memory.array_view<int>(source, 1, 1);
+}
+
+int function main() {
+    var values = memory.owned_array<int>(3);
+    values[0] = 13;
+    values[1] = 29;
+    values[2] = 47;
+    let view = memory.array_view<int>(values, 0, 3);
+    let selected = first_value(view);
+    return selected[0];
+}
