@@ -296,6 +296,7 @@ int run_pipeline(const PipelineOptions& options,
     "ucrt.lib",
     "vcruntime.lib",
     "kernel32.lib",
+    "dxgi.lib",
   };
 
   for (const auto& lib_dir : linker_env.lib_dirs) {

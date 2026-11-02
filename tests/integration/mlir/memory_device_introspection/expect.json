@@ -1,0 +1,6 @@
+{
+  "mode": "build",
+  "args": ["--emit=mlir"],
+  "expect_exit": 0,
+  "expect_stdout_contains": ["nrq_system_device_memory_total_bytes", "nrq_system_device_memory_used_bytes"]
+}
