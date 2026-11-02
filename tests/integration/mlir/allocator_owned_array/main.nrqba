@@ -1,0 +1,7 @@
+int function main() {
+    var arena = memory.arena_allocator(1024);
+    var previous = memory.use_allocator(arena);
+    var values = memory.owned_array<int>(4);
+    memory.use_allocator(previous);
+    return values.length;
+}
