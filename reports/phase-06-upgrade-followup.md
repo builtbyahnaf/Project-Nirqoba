@@ -462,6 +462,16 @@ array, triggers collection through an allocation threshold, and verifies the
 object remains reachable. Both regressions passed in the integration suite
 (140/140). No benchmark was run.
 
+## 52. Aligned owned-array stack placement - 2026-11-02
+
+Escape analysis now also promotes constant-sized `memory.owned_array_aligned`
+allocations when the alignment is a constant power of two and the array does
+not escape. The LLVM alloca carries the requested effective alignment. Dynamic
+alignment and allocator-selected functions remain on the allocator path, and
+the frame budget includes alignment padding. Added MLIR checks for the aligned
+stack path and dynamic fallback. Windows x64 build passed, CTest passed
+(1/1), and integration tests passed (142/142). No benchmark was run.
+
 ## 43. Conservative owned-array stack placement - 2026-11-02
 
 MLIR lowering now performs a conservative per-function escape analysis for

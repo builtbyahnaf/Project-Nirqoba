@@ -1,0 +1,5 @@
+int function main() {
+    var values = memory.owned_array_aligned<int>(4, 64);
+    values[0] = 42;
+    return values[0];
+}

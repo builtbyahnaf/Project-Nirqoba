@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -143,7 +144,12 @@ static uint64_t type_size(const Type& type) {
 // Promote only small, fixed-size owned arrays whose descriptor and data
 // pointer are proven not to leave the current function. This intentionally
 // rejects unknown uses instead of guessing at alias behavior.
-static std::unordered_map<int, std::size_t> analyze_stack_owned_arrays(
+struct StackOwnedArrayLayout {
+  std::size_t count = 0;
+  std::size_t alignment = 0;
+};
+
+static std::unordered_map<int, StackOwnedArrayLayout> analyze_stack_owned_arrays(
     const tir::Function& function) {
   for (const tir::Op& op : function.operations())
     if (op.kind == tir::OpKind::Call && op.callee == "memory.use_allocator")
@@ -153,15 +159,17 @@ static std::unordered_map<int, std::size_t> analyze_stack_owned_arrays(
     if (op.kind == tir::OpKind::ConstantInt && op.result.is_valid())
       integer_constants.emplace(op.result.id, op.integer_value);
 
-  std::unordered_map<int, std::size_t> candidates;
+  std::unordered_map<int, StackOwnedArrayLayout> candidates;
   std::size_t promoted_bytes = 0;
   constexpr std::size_t kMaxArrayBytes = 4096;
   constexpr std::size_t kMaxFunctionFrameBytes = 16384;
   for (const tir::Op& allocation : function.operations()) {
+    const bool custom_alignment =
+        allocation.callee == "memory.owned_array_aligned";
     if (allocation.kind != tir::OpKind::Call ||
-        allocation.callee != "memory.owned_array" ||
+        (allocation.callee != "memory.owned_array" && !custom_alignment) ||
         !allocation.result.is_valid() || !allocation.result.type.is_owned_array() ||
-        allocation.arguments.size() != 1)
+        allocation.arguments.size() != (custom_alignment ? 2u : 1u))
       continue;
     const auto count_value = integer_constants.find(allocation.arguments[0].id);
     const uint64_t element_bytes = type_size(allocation.result.type.element_type());
@@ -171,7 +179,22 @@ static std::unordered_map<int, std::size_t> analyze_stack_owned_arrays(
       continue;
     const std::size_t count = static_cast<std::size_t>(count_value->second);
     const std::size_t bytes = count * static_cast<std::size_t>(element_bytes);
-    if (bytes > kMaxFunctionFrameBytes - promoted_bytes) continue;
+    std::size_t requested_alignment =
+        type_alignment(allocation.result.type.element_type());
+    if (custom_alignment) {
+      const auto alignment_value = integer_constants.find(allocation.arguments[1].id);
+      if (alignment_value == integer_constants.end() || alignment_value->second <= 0)
+        continue;
+      const uint64_t requested = static_cast<uint64_t>(alignment_value->second);
+      if ((requested & (requested - 1)) != 0 ||
+          requested > std::numeric_limits<std::size_t>::max())
+        continue;
+      requested_alignment = std::max(
+          requested_alignment, static_cast<std::size_t>(requested));
+    }
+    if (requested_alignment > kMaxFunctionFrameBytes) continue;
+    const std::size_t frame_cost = bytes + requested_alignment - 1;
+    if (frame_cost > kMaxFunctionFrameBytes - promoted_bytes) continue;
 
     int owner_slot = -1;
     std::size_t initial_stores = 0;
@@ -276,9 +299,10 @@ static std::unordered_map<int, std::size_t> analyze_stack_owned_arrays(
       escapes = true;
     }
     if (escapes) continue;
-    candidates.emplace(allocation.result.id, count);
-    for (int id : descriptors) candidates.emplace(id, count);
-    promoted_bytes += bytes;
+    const StackOwnedArrayLayout layout{count, requested_alignment};
+    candidates.emplace(allocation.result.id, layout);
+    for (int id : descriptors) candidates.emplace(id, layout);
+    promoted_bytes += frame_cost;
   }
   return candidates;
 }
@@ -1123,7 +1147,7 @@ class FunctionTranslator {
           }
           const auto stack_array = stack_owned_arrays_.find(op.result.id);
           if (stack_array != stack_owned_arrays_.end()) {
-            const std::size_t count_value = stack_array->second;
+            const std::size_t count_value = stack_array->second.count;
             mlir::Type element_type = tir_type_to_mlir(
                 op.result.type.element_type(), ctx_, builder_);
             mlir::Type storage_type = mlir::LLVM::LLVMArrayType::get(
@@ -1136,6 +1160,13 @@ class FunctionTranslator {
             }
             if (mlir::Operation* storage_op = storage.getDefiningOp())
               storage_op->setAttr("nirqoba.stack_placed", builder_.getUnitAttr());
+            if (stack_array->second.alignment > element_alignment) {
+              if (mlir::Operation* storage_op = storage.getDefiningOp())
+                storage_op->setAttr(
+                    "alignment", builder_.getI64IntegerAttr(
+                                     static_cast<int64_t>(
+                                         stack_array->second.alignment)));
+            }
             mlir::Value zero_index = builder_.create<mlir::LLVM::ConstantOp>(
                 loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
             mlir::Value data = builder_.create<mlir::LLVM::GEPOp>(
@@ -2369,7 +2400,7 @@ class FunctionTranslator {
   mlir::OpBuilder& builder_;
   mlir::MLIRContext* ctx_;
   DiagnosticEngine& diag_;
-  std::unordered_map<int, std::size_t> stack_owned_arrays_;
+  std::unordered_map<int, StackOwnedArrayLayout> stack_owned_arrays_;
   bool uses_gc_mutator_ = false;
   std::unordered_map<int, std::size_t> label_positions_;
   mlir::Block* entry_block_;
