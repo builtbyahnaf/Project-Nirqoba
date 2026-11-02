@@ -6,8 +6,12 @@ owned socket byte* function open_stream(string host, int port) {
     return socket.connect(host, port);
 }
 
+owned socket byte* function forward_stream(string host, int port) {
+    return open_stream(host, port);
+}
+
 int function main() {
-    var stream = open_stream("127.0.0.1", 7);
+    var stream = forward_stream("127.0.0.1", 7);
     send_text(stream, "text");
     socket.close(stream);
     return 0;

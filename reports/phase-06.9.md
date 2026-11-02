@@ -13,6 +13,7 @@ Partial implementation. Windows x64, MSVC, LLVM/MLIR 23.1.4.
 - Secure allocation and optimizer-resistant zeroization on Windows.
 - Available physical-memory estimate.
 - Lexical `defer call(...)` cleanup, with argument capture at registration and LIFO execution on block exit, return, break, and continue. `memory.use_allocator` can pair with a deferred restore for block/function scoped selection; pins can pair with deferred `memory.unpin`.
+- Owned file, mutex, mapping, and TCP socket handles with deterministic cleanup; typed resource return contracts preserve destructor identity through helper/factory calls.
 
 ## Known limits
 
@@ -30,14 +31,28 @@ The profiler does not report allocation hotspots; allocator free-space and fragm
 | Requirement | Status |
 |---|---|
 | Reference-count diagnostics | Implemented; on-demand managed reference counts |
-| Memory profiler | Partial; explicit counters plus GC snapshots, without fragmentation or attribution |
+| Memory profiler | Partial; counters, size buckets, largest allocation, allocator attribution, GC snapshots, and measurable region fragmentation; hotspots and general/custom free-space measurement are unavailable |
 | Memory mapping | Partial; Windows mappings and checked typed access |
-| Memory pinning | Partial; explicit pin/unpin and scoped cleanup with `defer`; excessive-pin diagnostics absent |
-| Deterministic resource destruction | Partial; `defer` call cleanup and scoped allocator restoration, no native wrapper types or unwind support |
+| Memory pinning | Partial; explicit pin/unpin and scoped cleanup with `defer`; repeated-pin limit and violation counters are available |
+| Deterministic resource destruction | Partial; file, mutex, mapping, and TCP socket wrappers use owned handles and lexical cleanup; unwind support has no language model |
 | Secure memory | Implemented; Windows zeroization |
 | Runtime introspection | Partial; available memory, version, CPU count, and allocator kind |
 
-**Verdict:** Phase 6.9 remains incomplete. Generalized resource integration, full profiler attribution, scoped pinning, and broader introspection remain required.
+**Verdict:** Phase 6.9 remains incomplete. Graphics/GPU resources and task/device introspection depend on absent runtime systems; exception unwinding lacks language semantics, and profiler attribution and portability remain bounded as described above.
+
+## 30. Typed resource returns - 2026-11-02
+
+Owned factory functions now preserve the cleanup domain in their signature with
+`owned file byte*`, `owned socket byte*`, `owned mutex byte*`, or
+`owned mapping byte*`. The checker rejects a resource returned through an
+unqualified pointer contract and rejects a value whose destructor does not
+match the declared domain. The return domain is retained in TIR and emitted as
+`nirqoba.return_resource_domain` in MLIR. Socket integration now exercises
+factory transfer into a caller-owned binding; negative coverage checks a
+socket contract returning a generic allocation.
+
+RelWithDebInfo validation passed: CTest 1/1 and integration 106/106. The
+remaining Phase 6.9 limits above still apply.
 
 ## 13. Completion pass - 2026-11-01
 
@@ -70,8 +85,8 @@ Implemented since the first pass:
 
 Still not implemented:
 
-- Socket, graphics, and GPU resource wrappers and cleanup during exception
-  unwinding. File and mutex wrappers exist; the language has no unwind model.
+- Graphics and GPU resource wrappers and cleanup during exception unwinding.
+  File, mutex, mapping, and socket wrappers exist; the language has no unwind model.
 - Task counts and device-memory reporting, which depend on the concurrency
   phases and GPU runtime. Process thread count is available as an estimate.
 - A controlled profiler-overhead regression threshold. A 30-run comparison is

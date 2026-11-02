@@ -2,7 +2,7 @@
 
 ## Phase 6.9
 
-The runtime implements optional reference diagnostics, profiler counters and histograms, Windows file mappings with checked typed access, GC pinning with scoped `defer`, secure allocation/zeroization, memory and runtime introspection, deterministic lexical cleanup, and owned file/mutex resources. Secure/shared release, file operations, mapping operations, and allocator statistics run without holding their global registries across allocator or I/O work. Detailed current evidence is in `reports/phase-06.9.md` and `reports/phase-06.9-followup.md`.
+The runtime implements optional reference diagnostics, profiler counters and histograms, Windows file mappings with checked typed access, GC pinning with scoped `defer`, secure allocation/zeroization, memory and runtime introspection, deterministic lexical cleanup, and owned file/mutex/mapping/socket resources. Resource owner domains survive typed function returns. Secure/shared release, file operations, mapping operations, and allocator statistics run without holding their global registries across allocator or I/O work. Detailed current evidence is in `reports/phase-06.9.md` and `reports/phase-06.9-followup.md`.
 
 Remaining work: graphics/GPU resource wrappers and task/device introspection depend on runtime subsystems that do not exist; cleanup during exception unwinding needs a language unwind model. Profiler overhead has a 30-run host baseline, but there is no controlled cross-machine regression threshold. The runtime remains Windows-only.
 
@@ -83,7 +83,7 @@ Validation: RelWithDebInfo build succeeded; CTest passed 1/1 and integration tes
 
 GC correctness hardening: allocation, live-object, collection, and collected-byte counters now saturate instead of wrapping, including the automatic-allocation byte accumulator. This is accounting correctness work; no GC benchmark or speed claim is included.
 
-Limitations: aggregate/partial moves, closure capture, raw unsafe scopes, exception unwinding, and function return contracts for specialized resources still need type-system representation. GC remains stop-the-world and globally synchronized.
+Limitations: partial aggregate moves, closure capture, raw unsafe scopes, and exception unwinding remain unsupported. Specialized resource returns now use typed `owned <resource> T*` contracts. GC remains stop-the-world and globally synchronized.
 
 ## 28. Path-safe owner transfer lowering — 2026-11-01
 
