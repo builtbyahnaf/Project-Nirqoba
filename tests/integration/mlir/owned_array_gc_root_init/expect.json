@@ -2,5 +2,5 @@
   "mode": "build",
   "args": ["--emit=mlir"],
   "expect_exit": 0,
-  "expect_stdout_contains": ["nrq_gc_root_clear_array_references", "nrq_gc_root_register_array"]
+  "expect_stdout_contains": ["nirqoba.stack_placed", "llvm.alloca", "nrq_gc_root_clear_array_references", "nrq_gc_root_register_array"]
 }
