@@ -492,6 +492,14 @@ failure regression for mutable array views and documented the restriction.
 Windows x64 build passed, CTest passed (1/1), and integration tests passed
 (148/148). No benchmark was run.
 
+## 55. Stack placement for local mutable slices - 2026-11-02
+
+Added execution and MLIR regressions confirming a mutable slice can write into
+a small stack-placed owner when both owner and view remain local. The separate
+helper-call case continues to use heap storage because the view crosses an
+unknown call boundary. Integration tests passed (150/150). No benchmark was
+run.
+
 ## 43. Conservative owned-array stack placement - 2026-11-02
 
 MLIR lowering now performs a conservative per-function escape analysis for
