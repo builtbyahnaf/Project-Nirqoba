@@ -535,6 +535,7 @@ void TypeChecker::check_function(FunctionDecl& function) {
   loop_depth_ = 0;
   loop_break_states_.clear();
   loop_continue_states_.clear();
+  loop_deferred_scope_depths_.clear();
 
   for (const Parameter& parameter : function.parameters()) {
     // Parameters are assignable inside the body. Nothing in the specification
@@ -1143,6 +1144,7 @@ void TypeChecker::check_while(WhileStmt& statement) {
   const SymbolTable condition_state = symbols_;
   loop_break_states_.emplace_back();
   loop_continue_states_.emplace_back();
+  loop_deferred_scope_depths_.push_back(deferred_calls_.size());
   ++loop_depth_;
   check_block(const_cast<BlockStmt&>(statement.body()));
   --loop_depth_;
@@ -1150,6 +1152,7 @@ void TypeChecker::check_while(WhileStmt& statement) {
   loop_break_states_.pop_back();
   std::vector<SymbolTable> continue_states = std::move(loop_continue_states_.back());
   loop_continue_states_.pop_back();
+  loop_deferred_scope_depths_.pop_back();
   const SymbolTable body_state = symbols_;
   const bool body_falls_through = block_falls_through(statement.body());
   if (body_falls_through) {
@@ -1197,6 +1200,7 @@ void TypeChecker::check_for(ForStmt& statement) {
   const SymbolTable condition_state = symbols_;
   loop_break_states_.emplace_back();
   loop_continue_states_.emplace_back();
+  loop_deferred_scope_depths_.push_back(deferred_calls_.size());
   ++loop_depth_;
   check_block(const_cast<BlockStmt&>(statement.body()));
   --loop_depth_;
@@ -1237,6 +1241,7 @@ void TypeChecker::check_for(ForStmt& statement) {
   std::vector<SymbolTable> step_continue_states =
       std::move(loop_continue_states_.back());
   loop_continue_states_.pop_back();
+  loop_deferred_scope_depths_.pop_back();
   for (const SymbolTable& continue_state : step_continue_states) {
     for (const string& name : continue_state.owners_moved_since(condition_state))
       diagnostics_.error(diag::kTypeMismatch, statement.location(),
@@ -1257,7 +1262,7 @@ void TypeChecker::check_break(BreakStmt& statement) {
     diagnostics_.error(diag::kBreakOutsideLoop, statement.location(),
                        "'break' is only allowed inside an enclosing loop");
   } else if (!loop_break_states_.empty()) {
-    loop_break_states_.back().push_back(symbols_);
+    loop_break_states_.back().push_back(loop_exit_state_after_defer());
   }
 }
 
@@ -1266,8 +1271,33 @@ void TypeChecker::check_continue(ContinueStmt& statement) {
     diagnostics_.error(diag::kContinueOutsideLoop, statement.location(),
                        "'continue' is only allowed inside an enclosing loop");
   } else if (!loop_continue_states_.empty()) {
-    loop_continue_states_.back().push_back(symbols_);
+    loop_continue_states_.back().push_back(loop_exit_state_after_defer());
   }
+}
+
+SymbolTable TypeChecker::loop_exit_state_after_defer() const {
+  SymbolTable state = symbols_;
+  if (loop_deferred_scope_depths_.empty()) return state;
+  const size_t first_scope = loop_deferred_scope_depths_.back();
+  for (size_t scope_index = deferred_calls_.size();
+       scope_index > first_scope; --scope_index) {
+    const auto& cleanups = deferred_calls_[scope_index - 1];
+    for (auto cleanup = cleanups.rbegin(); cleanup != cleanups.rend(); ++cleanup) {
+      if (cleanup->allocation_id == 0 || !cleanup->call) continue;
+      const string& callee = cleanup->call->callee();
+      const bool releases_owner = callee == "memory.deallocate" ||
+          callee == "memory.shared_release" || callee == "array.owned_release" ||
+          callee == "file.close" || callee == "mutex.destroy" ||
+          callee == "memory.secure_release" || callee == "memory.unmap_file";
+      if (!releases_owner || state.allocation_is_moved(cleanup->allocation_id))
+        continue;
+      if (callee == "array.owned_release" &&
+          state.has_live_borrow(cleanup->allocation_id))
+        continue;
+      state.mark_allocation_moved(cleanup->allocation_id);
+    }
+  }
+  return state;
 }
 
 void TypeChecker::check_return(ReturnStmt& statement) {

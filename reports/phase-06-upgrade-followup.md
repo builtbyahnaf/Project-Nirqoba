@@ -289,3 +289,12 @@ before its back-edge check. This closes paths where a moved owner could be lost
 from the state merge or where the for step was skipped during analysis. Added
 negative while/for move regressions and a positive for-continue execution case.
 RelWithDebInfo validation passed: CTest 1/1 and integration 92/92.
+
+## 33. Deferred ownership cleanup on loop exits - 2026-11-02
+
+Break and continue ownership snapshots now apply deferred releases registered
+in every lexical scope exited by that control transfer. This aligns semantic
+state with the compiler's LIFO cleanup lowering and catches use-after-release
+after a deferred cleanup on break, plus owner loss at a continue back-edge.
+Added negative coverage for both paths. RelWithDebInfo validation passed:
+CTest 1/1 and integration 94/94.
