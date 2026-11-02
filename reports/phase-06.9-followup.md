@@ -28,3 +28,9 @@ addresses. A closed token can never become valid again if the system allocator
 reuses its former metadata address. A runtime regression closes one file,
 reopens another, and verifies the stale token cannot write or close the new
 resource. RelWithDebInfo validation passed: CTest 1/1 and integration 85/85.
+
+File reads, writes, and close now use per-resource locking with shared resource
+records. The global registry lock only covers token lookup/removal, so slow I/O
+on one file does not hold up other resource operations. Concurrent close waits
+for any operation that already acquired that file and rejects later operations.
+A four-thread write/close regression is included.

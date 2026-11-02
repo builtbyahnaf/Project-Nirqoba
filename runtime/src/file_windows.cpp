@@ -11,14 +11,27 @@
 #include <windows.h>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 
 static const char kEmptyString[] = "";
 namespace {
+struct FileResource {
+    explicit FileResource(HANDLE value) : handle(value) {}
+    HANDLE handle = INVALID_HANDLE_VALUE;
+    std::mutex operation_mutex;
+};
+
 std::mutex file_resource_mutex;
-std::unordered_map<void*, HANDLE> file_resources;
+std::unordered_map<void*, std::shared_ptr<FileResource>> file_resources;
 uintptr_t next_file_resource = 1;
+
+std::shared_ptr<FileResource> find_file_resource(void* token) {
+    std::lock_guard<std::mutex> lock(file_resource_mutex);
+    auto found = file_resources.find(token);
+    return found == file_resources.end() ? nullptr : found->second;
+}
 }
 
 extern "C" {
@@ -133,13 +146,14 @@ void* nrq_file_open_handle(const char* path, int32_t writable) {
                                 FILE_ATTRIBUTE_NORMAL, nullptr);
     if (handle == INVALID_HANDLE_VALUE) return nullptr;
     try {
+        auto resource = std::make_shared<FileResource>(handle);
         std::lock_guard<std::mutex> lock(file_resource_mutex);
         if (next_file_resource == 0 || next_file_resource == UINTPTR_MAX) {
             CloseHandle(handle);
             return nullptr;
         }
         void* token = reinterpret_cast<void*>(next_file_resource++);
-        if (!file_resources.emplace(token, handle).second) {
+        if (!file_resources.emplace(token, std::move(resource)).second) {
             CloseHandle(handle);
             return nullptr;
         }
@@ -152,27 +166,35 @@ void* nrq_file_open_handle(const char* path, int32_t writable) {
 
 int32_t nrq_file_close_handle(void* opaque) {
     if (!opaque) return 0;
-    std::lock_guard<std::mutex> lock(file_resource_mutex);
-    auto found = file_resources.find(opaque);
-    if (found == file_resources.end()) return ERROR_INVALID_HANDLE;
-    HANDLE handle = found->second;
-    file_resources.erase(found);
-    const BOOL closed = CloseHandle(handle);
-    return closed ? 0 : static_cast<int32_t>(GetLastError());
+    std::shared_ptr<FileResource> resource;
+    {
+        std::lock_guard<std::mutex> lock(file_resource_mutex);
+        auto found = file_resources.find(opaque);
+        if (found == file_resources.end()) return ERROR_INVALID_HANDLE;
+        resource = std::move(found->second);
+        file_resources.erase(found);
+    }
+    std::lock_guard<std::mutex> operation_lock(resource->operation_mutex);
+    if (resource->handle == INVALID_HANDLE_VALUE) return ERROR_INVALID_HANDLE;
+    const BOOL closed = CloseHandle(resource->handle);
+    const DWORD error = closed ? ERROR_SUCCESS : GetLastError();
+    resource->handle = INVALID_HANDLE_VALUE;
+    return static_cast<int32_t>(error);
 }
 
 int32_t nrq_file_write_handle(void* opaque, const char* text) {
     if (!opaque) return ERROR_INVALID_HANDLE;
-    std::lock_guard<std::mutex> lock(file_resource_mutex);
-    auto found = file_resources.find(opaque);
-    if (found == file_resources.end()) return ERROR_INVALID_HANDLE;
+    std::shared_ptr<FileResource> resource = find_file_resource(opaque);
+    if (!resource) return ERROR_INVALID_HANDLE;
+    std::lock_guard<std::mutex> operation_lock(resource->operation_mutex);
+    if (resource->handle == INVALID_HANDLE_VALUE) return ERROR_INVALID_HANDLE;
     if (!text) text = kEmptyString;
     const size_t length = std::strlen(text);
     size_t offset = 0;
     while (offset < length) {
         const DWORD request = static_cast<DWORD>(std::min<size_t>(length - offset, MAXDWORD));
         DWORD written = 0;
-        if (!WriteFile(found->second, text + offset, request, &written, nullptr))
+        if (!WriteFile(resource->handle, text + offset, request, &written, nullptr))
             return static_cast<int32_t>(GetLastError());
         if (written == 0) return ERROR_WRITE_FAULT;
         offset += written;
@@ -183,12 +205,13 @@ int32_t nrq_file_write_handle(void* opaque, const char* text) {
 int64_t nrq_file_read_handle(void* opaque, void* destination, size_t capacity) {
     if (!opaque || (!destination && capacity != 0)) return -ERROR_INVALID_PARAMETER;
     if (capacity == 0) return 0;
-    std::lock_guard<std::mutex> lock(file_resource_mutex);
-    auto found = file_resources.find(opaque);
-    if (found == file_resources.end()) return -ERROR_INVALID_HANDLE;
+    std::shared_ptr<FileResource> resource = find_file_resource(opaque);
+    if (!resource) return -ERROR_INVALID_HANDLE;
+    std::lock_guard<std::mutex> operation_lock(resource->operation_mutex);
+    if (resource->handle == INVALID_HANDLE_VALUE) return -ERROR_INVALID_HANDLE;
     const DWORD request = static_cast<DWORD>(std::min<size_t>(capacity, MAXDWORD));
     DWORD count = 0;
-    if (!ReadFile(found->second, destination, request, &count, nullptr))
+    if (!ReadFile(resource->handle, destination, request, &count, nullptr))
         return -static_cast<int64_t>(GetLastError());
     return static_cast<int64_t>(count);
 }
