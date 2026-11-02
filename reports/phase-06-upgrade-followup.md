@@ -447,6 +447,13 @@ execution regression plus MLIR evidence for the stack path. Windows x64 build
 passed, CTest passed (1/1), and integration tests passed (139/139). No
 benchmark was run.
 
+## 50. Nested-view stack-promotion regression - 2026-11-02
+
+Expanded the local-view stack-placement execution and MLIR regressions to form
+a second slice from the first slice before indexing. This verifies the escape
+analysis follows nested view descriptors while retaining the original stack
+owner. Integration tests passed (139/139). No benchmark was run.
+
 ## 43. Conservative owned-array stack placement - 2026-11-02
 
 MLIR lowering now performs a conservative per-function escape analysis for

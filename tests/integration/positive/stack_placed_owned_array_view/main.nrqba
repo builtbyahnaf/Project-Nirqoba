@@ -1,6 +1,7 @@
 int function main() {
     var values = memory.owned_array<int>(4);
     values[1] = 37;
-    let view = memory.array_view<int>(values, 1, 2);
+    let outer = memory.array_view<int>(values, 0, 4);
+    let view = memory.array_view<int>(outer, 1, 2);
     return view[0];
 }
