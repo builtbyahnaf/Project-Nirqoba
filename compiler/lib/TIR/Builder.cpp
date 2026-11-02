@@ -23,6 +23,15 @@ bool contains_owned_array(const Type& type) {
   return false;
 }
 
+std::string cleanup_for_resource_domain(const std::string& domain) {
+  if (domain == "file") return "file.close";
+  if (domain == "socket") return "socket.close";
+  if (domain == "mutex") return "mutex.destroy";
+  if (domain == "mapping") return "memory.unmap_file";
+  if (domain == "secure") return "memory.secure_release";
+  return {};
+}
+
 tir::BinaryOp map_binary_op(BinaryOp op) {
   switch (op) {
     case BinaryOp::Add: return tir::BinaryOp::Add;
@@ -151,7 +160,9 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
       cleanup.callee = parameter.shared ? "memory.shared_release"
           : parameter.type.is_owned_array() ? "array.owned_release"
           : contains_owned_array(parameter.type) ? "aggregate.owned_drop"
-                                                 : "memory.deallocate";
+          : !parameter.resource_domain.empty()
+                ? cleanup_for_resource_domain(parameter.resource_domain)
+                : "memory.deallocate";
       cleanup.location = parameter.location;
       cleanup.automatic = true;
       cleanup.owner_slot = slot;

@@ -136,6 +136,7 @@ static std::string cleanup_for_borrow_domain(const std::string& domain) {
   if (domain == "socket") return "socket.close";
   if (domain == "mutex") return "mutex.destroy";
   if (domain == "mapping") return "memory.unmap_file";
+  if (domain == "secure") return "memory.secure_release";
   return {};
 }
 

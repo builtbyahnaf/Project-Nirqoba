@@ -13,7 +13,7 @@ Partial implementation. Windows x64, MSVC, LLVM/MLIR 23.1.4.
 - Secure allocation and optimizer-resistant zeroization on Windows.
 - Available physical-memory estimate.
 - Lexical `defer call(...)` cleanup, with argument capture at registration and LIFO execution on block exit, return, break, and continue. `memory.use_allocator` can pair with a deferred restore for block/function scoped selection; pins can pair with deferred `memory.unpin`.
-- Owned file, mutex, mapping, and TCP socket handles with deterministic cleanup; typed resource return contracts preserve destructor identity through helper/factory calls.
+- Owned file, mutex, mapping, TCP socket, and secure buffer values preserve destructor identity through typed helper/factory parameters and returns.
 
 ## Known limits
 
@@ -43,8 +43,8 @@ The profiler does not report allocation hotspots; allocator free-space and fragm
 ## 30. Typed resource returns - 2026-11-02
 
 Owned factory functions now preserve the cleanup domain in their signature with
-`owned file byte*`, `owned socket byte*`, `owned mutex byte*`, or
-`owned mapping byte*`. The checker rejects a resource returned through an
+`owned file byte*`, `owned socket byte*`, `owned mutex byte*`,
+`owned mapping byte*`, or `owned secure byte*`. The checker rejects a resource returned through an
 unqualified pointer contract and rejects a value whose destructor does not
 match the declared domain. The return domain is retained in TIR and emitted as
 `nirqoba.return_resource_domain` in MLIR, and owning resource parameters carry

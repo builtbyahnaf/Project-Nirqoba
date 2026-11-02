@@ -10,9 +10,11 @@ owned socket byte* function forward_stream(owned socket byte* stream) {
     return stream;
 }
 
+void function drop_stream(owned socket byte* stream) { }
+
 int function main() {
     var stream = forward_stream(open_stream("127.0.0.1", 7));
     send_text(stream, "text");
-    socket.close(stream);
+    drop_stream(stream);
     return 0;
 }
