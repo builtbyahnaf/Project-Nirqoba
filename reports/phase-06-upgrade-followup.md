@@ -166,10 +166,9 @@ because those runtime subsystems do not yet exist.
   with allocator pins and in-flight owner records where applicable. Profiler
   counters and ownership snapshots still use the registry lock. Thread-local
   fast paths are not implemented.
-- Specialized pointer resources such as files, mutexes, secure buffers, and
-  mappings cannot yet cross function returns because pointer signatures do not
-  preserve their cleanup function. The checker rejects those returns rather
-  than letting the caller infer `memory.deallocate`.
+- Specialized resource factory returns use typed `owned <resource> T*`
+  contracts. File, socket, mutex, and mapping domains are preserved through
+  signatures and MLIR return metadata; mismatched resource returns are rejected.
 - The C++/Rust benchmark matrix and runner exist, but comparative runs require
   a Rust toolchain and controlled release configuration. No comparative
   performance claim is made. Phase 6U:G remains a later measurement task; GC
@@ -179,9 +178,8 @@ The benchmark harness now separates 16-byte allocation, 4-KiB allocation, and
 alternating mixed-size allocation workloads, in addition to its 64-byte,
 scalar, contiguous-array, graph, and four-thread workloads. The C++/Rust runner
 checks checksums for each workload and records repeated percentile samples and
-environment metadata. This runner was not executed in this follow-up because
-the active shell did not expose the installed MSVC tools and no `rustc.exe`
-was present; no GC workload was run.
+environment metadata. MSVC is available, but the runner stops before sampling
+because no `rustc.exe` is installed; no GC workload was run.
 
 ## Explicit allocator synchronization
 
