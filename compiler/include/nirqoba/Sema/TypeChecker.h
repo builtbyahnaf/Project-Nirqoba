@@ -30,6 +30,7 @@ struct FunctionSignature {
   std::vector<bool> parameter_borrowed;
   std::vector<bool> parameter_mutable_borrow;
   std::vector<bool> parameter_shared;
+  std::vector<std::string> parameter_resource_domains;
   bool returns_shared = false;
 };
 

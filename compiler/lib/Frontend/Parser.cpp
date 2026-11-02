@@ -308,12 +308,18 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
         bool borrowed = false;
         bool mutable_borrow = false;
         bool shared = false;
+        std::string resource_domain;
         if (check(TokenKind::Identifier) && peek().text == "borrow") {
           advance();
           borrowed = true;
           if (check(TokenKind::Identifier) && peek().text == "mut") {
             advance();
             mutable_borrow = true;
+          }
+          if (check(TokenKind::Identifier) &&
+              (peek().text == "file" || peek().text == "socket" ||
+               peek().text == "mutex" || peek().text == "mapping")) {
+            resource_domain = advance().text;
           }
         } else if (check(TokenKind::Identifier) && peek().text == "shared") {
           advance();
@@ -329,7 +335,7 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
         const Token parameter_name = advance();
         parameters.push_back(
             Parameter{parameter_name.text, parameter_type, parameter_type_token.location,
-                      borrowed, mutable_borrow, shared});
+                      borrowed, mutable_borrow, shared, resource_domain});
       } while (match(TokenKind::Comma));
     }
     expect(TokenKind::RParen, "after the parameter list");

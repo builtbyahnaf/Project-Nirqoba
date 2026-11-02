@@ -81,6 +81,17 @@ void SymbolTable::set_pointer_ownership(const string& name,
   }
 }
 
+void SymbolTable::set_borrowed_resource_domain(const string& name,
+                                                std::string cleanup_callee) {
+  for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+    auto found = scope->find(name);
+    if (found != scope->end()) {
+      found->second.cleanup_callee = std::move(cleanup_callee);
+      return;
+    }
+  }
+}
+
 void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
                                                const SymbolTable& else_state) {
   for (auto& scope : scopes_) {

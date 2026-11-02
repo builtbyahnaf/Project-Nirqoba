@@ -120,7 +120,8 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
                                        ? ValueOwnership::Owned
                                        : ValueOwnership::Trivial);
     tir::Value param_val = function_ir->allocate_value(parameter.type, ownership);
-    function_ir->add_parameter(parameter.name, parameter.type, param_val, ownership);
+    function_ir->add_parameter(parameter.name, parameter.type, param_val, ownership,
+                               parameter.resource_domain);
 
     tir::Value slot = function_ir->allocate_value(parameter.type);
     tir::Op alloca;

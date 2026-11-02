@@ -20,7 +20,7 @@ The compiler/runtime distinguish allocations from the GC heap and the explicit a
 
 Owned, shared, and borrowed raw pointers cannot be embedded in aggregates because fields do not declare an ownership contract; GC-managed and raw pointers remain non-owning.
 
-- Owned pointers from supported allocation/resource producers move through bindings and ordinary pointer function parameters/returns. Borrowed pointer parameters and shared pointer parameter/return contracts are checked.
+- Owned pointers from supported allocation/resource producers move through bindings and ordinary pointer function parameters/returns. Borrowed pointer parameters, resource-qualified file/socket/mutex/mapping borrows, and shared pointer parameter/return contracts are checked.
 - Files, mutexes, secure buffers, mappings, and owned arrays receive deterministic cleanup. Automatic cleanup applies on supported lexical control-flow exits.
 - `owned_array<T>` provides contiguous, checked storage, `.length`, allocator selection, optional stronger alignment, and ownership transfer. Read-only `array_view<T>` supports checked nested ranges, view parameters, and lexical owner-lifetime protection.
 - Shared allocation uses explicit retain/release tokens. GC uses precise roots, pins, per-object trace metadata with inline offsets for common one- and two-reference layouts, aligned bump regions, and an open-addressed object index. Managed-array allocation publishes into a registered root under the collector lock, and returned managed references use balanced transit pins until the caller roots them. It remains stop-the-world under a global mutex; root-slot writes synchronize with collection through the runtime API.
@@ -32,7 +32,7 @@ Owned, shared, and borrowed raw pointers cannot be embedded in aggregates becaus
 ## Acceptance mapping
 
 - **A — Design:** this record defines memory domains, transfer, borrows, cleanup order, GC/owned boundaries, and implementation limits.
-- **B — Ownership analysis:** partial; supported pointer and array moves, whole-value ownership transfer for resource-bearing aggregates, pointer borrowing, shared contracts, use-after-move checks, view lifetime checks, branch merging, and loop break-exit merging are enforced. Field-level moves and general escape/lifetime analysis remain open.
+- **B — Ownership analysis:** partial; supported pointer and array moves, whole-value ownership transfer for resource-bearing aggregates, resource-qualified file/socket/mutex/mapping borrows, shared contracts, use-after-move checks, view lifetime checks, branch merging, and loop break/continue exit merging are enforced. Field-level moves and general escape/lifetime analysis remain open.
 - **C — Deterministic cleanup:** partial; tracked owners/resources are dropped on normal lexical exits and `defer` runs LIFO. Error/exception unwinding has no language model.
 - **D — Explicit allocators:** partial; all built-in strategies remain, allocator identity checks remain, and lock scope is narrowed. Comparative general-purpose allocator evaluation and controlled contention measurements remain.
 - **E — GC:** partial; contiguous regions, precise root validation, array root regions, and the compact object index are implemented. TLABs, safepoints, generational/incremental collection, and concurrent mutation are open.

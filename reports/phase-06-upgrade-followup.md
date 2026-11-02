@@ -345,3 +345,14 @@ The Phase 6U:G runner was invoked through the installed Visual Studio x64
 developer environment. MSVC was available, but the runner stopped before
 sampling because `rustc.exe` is not installed; it intentionally emits no
 one-language partial comparison. No GC benchmark was run.
+
+## 38. Resource-qualified borrow contracts - 2026-11-02
+
+Borrow parameters can now declare `file`, `socket`, `mutex`, or `mapping`
+resource domains. Call sites verify that an owner passed to a helper has the
+matching destructor domain, and resource operations inside the helper require
+the matching borrow contract. Generic pointer borrows no longer accept opaque
+resource handles. The domain is retained in TIR and emitted as the MLIR
+`nirqoba.resource_domain` argument attribute. Positive and negative tests cover
+socket borrow propagation and cross-domain rejection. RelWithDebInfo
+validation passed: CTest 1/1 and integration 105/105.

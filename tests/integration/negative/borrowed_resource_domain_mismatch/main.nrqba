@@ -1,0 +1,8 @@
+void function use_as_socket(borrow socket byte* handle) { }
+
+int function main() {
+    var handle = file.open("NUL", true);
+    use_as_socket(handle);
+    file.close(handle);
+    return 0;
+}

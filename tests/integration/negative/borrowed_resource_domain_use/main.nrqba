@@ -1,0 +1,7 @@
+void function use_file_as_socket(borrow file byte* handle) {
+    socket.send(handle, "wrong domain");
+}
+
+int function main() {
+    return 0;
+}

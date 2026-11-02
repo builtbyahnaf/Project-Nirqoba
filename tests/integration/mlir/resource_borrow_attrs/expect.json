@@ -1,0 +1,9 @@
+{
+  "mode": "build",
+  "args": ["--emit=mlir"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "nirqoba.resource_domain = \"socket\"",
+    "nrq_socket_send_text"
+  ]
+}
