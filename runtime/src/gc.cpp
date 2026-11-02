@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <unordered_map>
@@ -39,11 +40,12 @@ class ReferenceLayout {
     if (count <= inline_offsets_.size()) {
       for (size_t index = 0; index < count; ++index)
         inline_offsets_[index] = offsets[index];
-      overflow_offsets_.clear();
+      overflow_offsets_.reset();
       size_ = count;
       return;
     }
-    overflow_offsets_.assign(offsets, offsets + count);
+    overflow_offsets_ = std::make_unique<std::vector<size_t>>(
+        offsets, offsets + count);
     size_ = count;
   }
 
@@ -51,12 +53,12 @@ class ReferenceLayout {
   size_t size() const { return size_; }
   size_t operator[](size_t index) const {
     return size_ <= inline_offsets_.size()
-        ? inline_offsets_[index] : overflow_offsets_[index];
+        ? inline_offsets_[index] : (*overflow_offsets_)[index];
   }
 
  private:
   std::array<size_t, 2> inline_offsets_{};
-  std::vector<size_t> overflow_offsets_;
+  std::unique_ptr<std::vector<size_t>> overflow_offsets_;
   size_t size_ = 0;
 };
 
