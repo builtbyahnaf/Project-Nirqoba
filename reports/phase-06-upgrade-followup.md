@@ -267,3 +267,7 @@ global mapping lock is not held during bulk copies or operating-system unmap.
 Unmap waits for an operation that already acquired the mapping, then removes
 the registry entry; stale API calls are rejected. RelWithDebInfo validation
 passed: CTest 1/1 and integration 87/87. No GC benchmark was run.
+
+A temporary-file unit regression races four mapping-size readers against unmap
+and confirms every result is either the live mapping length or zero, followed
+by stale-handle rejection. CTest passed 1/1 and integration passed 87/87.
