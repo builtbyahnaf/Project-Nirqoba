@@ -1,0 +1,4 @@
+{
+  "expect_exit": 1,
+  "expect_stderr_contains": ["cannot deallocate an owner while a borrow is live"]
+}
