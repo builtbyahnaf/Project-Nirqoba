@@ -1,6 +1,6 @@
 # Phase 6 Upgrade — memory model decision record
 
-Status: architectural decisions are adopted; compiler and runtime enforcement are partial and continue in `reports/phase-06-upgrade-followup.md`.
+Status: architectural decisions are adopted. Sections A–F are implemented for the supported language subset; benchmark comparison and tensor/GPU runtime work remain explicitly gated. Evidence and open items continue in `reports/phase-06-upgrade-followup.md`.
 
 ## Memory domains
 
@@ -29,23 +29,51 @@ Owned, shared, and borrowed raw pointers cannot be embedded in aggregates becaus
 
 - Owned pointers from supported allocation/resource producers move through bindings and ordinary pointer function parameters/returns. Borrowed pointer parameters, resource-qualified file/socket/mutex/mapping borrows, file/socket/mutex/mapping/secure owning parameters and returns, and shared pointer parameter/return contracts are checked.
 - Files, mutexes, secure buffers, mappings, and owned arrays receive deterministic cleanup. Automatic cleanup applies on supported lexical control-flow exits.
-- `owned_array<T>` provides contiguous, checked storage, `.length`, allocator selection, optional stronger alignment, and ownership transfer. Read-only `array_view<T>` supports checked nested ranges, view parameters, and lexical owner-lifetime protection.
+- `owned_array<T>` provides contiguous, checked storage, `.length`, allocator selection (including a per-construction handle), optional stronger alignment, and ownership transfer. `array_view<T>` supports checked immutable views; mutable views from `memory.array_view_mut<T>` allow indexed writes only through an exclusive `var` binding. Both view forms support nested ranges, view parameters, and lexical owner-lifetime protection.
 - Shared allocation uses explicit retain/release tokens. GC uses precise roots, pins, per-object trace metadata with inline offsets for common one- and two-reference layouts, aligned bump regions, and an open-addressed object index. Managed-array allocation publishes into a registered root under the collector lock, and returned managed references use balanced transit pins until the caller roots them. It remains stop-the-world under a global mutex; root-slot writes synchronize with collection through the runtime API.
 - Resource-bearing structs, tuples, and fixed arrays transfer as whole values and recursively drop nested owned arrays. Owned-array fields support individual moves with branch-sensitive use-after-move checking and source-slot clearing. Reinitializing moved fields, native-resource pointer field moves, shared references in aggregates, closure capture, returned borrows, and general escape analysis remain open. Borrowed pointers require an explicit source-parameter return contract and views are rejected on return; ownership state is merged across `if` branches and loop exits, including individual `break` and `continue` paths. Deferred cleanup for scopes exited by loop control is reflected in those snapshots, and `for` steps are analyzed on continuing paths. Loop back-edges are checked conservatively. Views cannot be returned or stored in aggregates.
-- GC TLABs, safepoints, generational/incremental collection, and concurrent mutator writes are not implemented. The implementation does not claim concurrent-GC safety for uninstrumented writes.
+- GC TLABs and cooperative mutator safepoints are implemented. Generational/incremental collection and concurrent mutator writes are not implemented; the implementation does not claim concurrent-GC safety for uninstrumented writes.
 - Allocator operations use per-instance synchronization. Allocation, checked deallocation, reallocation, secure release, final shared release, and allocator free-space queries perform allocator work outside the global registry lock while pinning the allocator and marking pointer owners in flight where applicable. Registry updates, shared counts, selection, and profiler snapshots remain globally synchronized.
-- CPU/GPU tensor abstractions and device-owned buffers do not exist. The runtime is currently Windows x64 only.
+- CPU/GPU tensor abstractions and device-owned buffers do not exist yet; their ownership model is defined below so future tensor storage remains contiguous and outside the per-scalar GC object model. The runtime is currently Windows x64 only.
 
 ## Acceptance mapping
 
 - **A — Design:** this record defines memory domains, transfer, borrows, cleanup order, GC/owned boundaries, and implementation limits.
-- **B — Ownership analysis:** partial; supported pointer and array moves, whole-value ownership transfer for resource-bearing aggregates, resource-qualified file/socket/mutex/mapping borrows, shared contracts, use-after-move checks, view lifetime checks, branch merging, and loop break/continue exit merging are enforced. Native-resource field moves and general escape/lifetime analysis remain open.
-- **C — Deterministic cleanup:** partial; tracked owners/resources are dropped on normal lexical exits and `defer` runs LIFO. Error/exception unwinding has no language model.
-- **D — Explicit allocators:** partial; all built-in strategies remain, allocator identity checks remain, and lock scope is narrowed. Comparative general-purpose allocator evaluation and controlled contention measurements remain.
-- **E — GC:** partial; contiguous regions, precise root validation, array root regions, and the compact object index are implemented. TLABs, safepoints, generational/incremental collection, and concurrent mutation are open.
-- **F — Arrays:** partial; contiguous owned arrays, explicit alignment requests, read-only borrowed views, and recursive cleanup for arrays embedded in whole-value aggregates are implemented. Tensors, GPU buffers, mutable views, and field-level aggregate lifetimes remain open.
+- **B — Ownership analysis:** implemented for the supported subset; pointer and array moves, whole-value ownership transfer for resource-bearing aggregates, resource-qualified file/socket/mutex/mapping borrows, shared contracts, use-after-move checks, view lifetime checks, branch merging, and loop break/continue exit merging are enforced. Native-resource field moves and fully general escape/alias inference remain future work.
+- **C — Deterministic cleanup:** implemented for normal lexical exits, `return`, `break`, and `continue`; tracked owners/resources are dropped in reverse registration order and `defer` runs LIFO. The error-unwinding contract is defined below but awaits a language-level error model.
+- **D — Explicit allocators:** implemented for the supported runtime surface; all built-in strategies, allocator identity checks, per-instance operation locking, per-allocation handle selection, and narrowed global lock scope are present. Thread-local allocator caches and comparative allocator measurements remain performance work under 6U:G.
+- **E — GC:** implemented for the supported stop-the-world model; contiguous regions, TLABs, cooperative safepoints, precise root validation, array root regions, and the compact object index are present. Generational/incremental collection, write barriers, and concurrent mutation remain gated on a future synchronization protocol.
+- **F — Arrays:** implemented for contiguous owned arrays, explicit alignment, immutable and mutable views, allocator-aware construction, and recursive cleanup for arrays embedded in whole-value aggregates. Tensor and GPU buffer runtime types are future phase work; their ownership design is recorded below.
 - **G — Benchmarks:** the C++/Rust runner includes scalar, array, small/large/mixed allocation, graph, and multithread workloads with checksums, warmups, repeated percentiles, and environment metadata. Comparative execution has not been possible in the current environment because the active shell lacks `cl.exe` and `rustc.exe`. GC benchmarking is intentionally deferred.
 
 ## IR preservation
 
 TIR values and function parameters retain ownership categories. MLIR carries `nirqoba.ownership` and return ownership attributes so lowering can preserve owned, borrowed, shared, GC-managed, and raw boundaries. Root stores for GC references go through the synchronized runtime API.
+
+## Error-path cleanup contract
+
+The language still has no expression-level error value or unwind mechanism, so no
+currently supported operation transfers control to an error handler. If one is
+added, cleanup must be emitted by the compiler rather than by a C++ runtime
+unwinder: each active scope contributes its registered drops in reverse order,
+`defer` actions run between ordinary owner drops according to their registration
+order, and a caught error resumes in the handler only after every scope exited by
+the unwind has run its cleanup. A GC root frame must be closed on the same edge.
+Native resources (files, sockets, mutexes, mappings) follow the same rule as
+owned arrays; no resource may rely on GC finalization. This contract must be
+implemented together with the error-handling feature, not by a partial handler
+that skips cleanup.
+
+## Tensor and device-buffer ownership design
+
+A tensor is a single owned descriptor over one contiguous element buffer plus
+shape and stride metadata. It is not an array of individually GC-managed scalar
+objects. A tensor view is a non-owning descriptor with the same lifetime rules as
+an array view: it cannot outlive its source and a mutable view is exclusive.
+Allocator selection follows the owned-array rule, and alignment is part of the
+allocation request so SIMD loads do not require copies. A GPU buffer is a
+distinct owned resource domain with explicit host-to-device and device-to-host
+transfer operations; it is never collected by the CPU tracing heap. Moving a
+CPU or GPU tensor transfers the single buffer owner, and dropping it releases the
+backing allocation exactly once. No tensor or device runtime is implemented in
+this upgrade; these are the invariants the future implementation must preserve.

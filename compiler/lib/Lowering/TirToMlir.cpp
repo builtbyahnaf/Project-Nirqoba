@@ -1292,12 +1292,15 @@ class FunctionTranslator {
           const uint64_t element_alignment =
               type_alignment(op.result.type.element_type());
           const bool custom_alignment = op.callee == "memory.owned_array_aligned";
-          if (element_size == 0 || args.empty() ||
-              (custom_alignment && args.size() < 2)) {
+          const size_t minimum_arguments = custom_alignment ? 2 : 1;
+          const size_t maximum_arguments = minimum_arguments + 1;
+          if (element_size == 0 || args.size() < minimum_arguments ||
+              args.size() > maximum_arguments) {
             diag_.error("NRQ4005", op.location,
                         "internal: invalid element type or missing count for memory.owned_array<T>");
             return false;
           }
+          const bool has_allocator = args.size() == maximum_arguments;
           mlir::Value count = args[0];
           const mlir::Type i64 = builder_.getI64Type();
           if (count.getType() != i64) {
@@ -1380,9 +1383,15 @@ class FunctionTranslator {
             set(op.result, descriptor);
             return true;
           }
+          const std::string allocate_symbol = has_allocator
+              ? "nrq_memory_allocate_array_from"
+              : "nrq_memory_allocate_array";
+          const std::vector<mlir::Type> allocate_arguments = has_allocator
+              ? std::vector<mlir::Type>{llvm_ptr_type(ctx_), i64, i64, i64}
+              : std::vector<mlir::Type>{i64, i64, i64};
           auto allocate = ensure_runtime_fn(
-              module_, builder_, "nrq_memory_allocate_array", llvm_ptr_type(ctx_),
-              {i64, i64, i64});
+              module_, builder_, allocate_symbol, llvm_ptr_type(ctx_),
+              allocate_arguments);
           mlir::Value element_bytes = builder_.create<mlir::LLVM::ConstantOp>(
               loc, i64, builder_.getI64IntegerAttr(element_size)).getResult();
           mlir::Value alignment = builder_.create<mlir::LLVM::ConstantOp>(
@@ -1402,8 +1411,26 @@ class FunctionTranslator {
             alignment = builder_.create<mlir::LLVM::SelectOp>(
                 loc, below_natural, minimum, requested).getResult();
           }
-          mlir::Value data = builder_.create<mlir::LLVM::CallOp>(
-              loc, allocate, mlir::ValueRange{count, element_bytes, alignment}).getResult();
+          mlir::Value data;
+          if (has_allocator) {
+            mlir::Value allocator = args[custom_alignment ? 2 : 1];
+            if (allocator.getType() != i64) {
+              const unsigned bits = allocator.getType().getIntOrFloatBitWidth();
+              allocator = bits < 64
+                  ? builder_.create<mlir::LLVM::ZExtOp>(loc, i64, allocator).getResult()
+                  : builder_.create<mlir::LLVM::TruncOp>(loc, i64, allocator).getResult();
+            }
+            allocator = builder_.create<mlir::LLVM::IntToPtrOp>(
+                loc, llvm_ptr_type(ctx_), allocator).getResult();
+            data = builder_.create<mlir::LLVM::CallOp>(
+                loc, allocate,
+                mlir::ValueRange{allocator, count, element_bytes, alignment})
+                       .getResult();
+          } else {
+            data = builder_.create<mlir::LLVM::CallOp>(
+                loc, allocate, mlir::ValueRange{count, element_bytes, alignment})
+                       .getResult();
+          }
           std::vector<uint64_t> root_offsets;
           collect_managed_reference_offsets(
               op.result.type.element_type(), 0, root_offsets);

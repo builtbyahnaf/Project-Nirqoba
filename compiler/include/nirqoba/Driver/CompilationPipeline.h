@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "nirqoba/Backend/Optimization.h"
 #include "nirqoba/Diagnostics/DiagnosticEngine.h"
 #include "nirqoba/Frontend/SourceFile.h"
 
@@ -19,7 +20,8 @@ enum class EmitKind {
   Ast,    // print AST text, exit
   Tir,    // print TIR text, exit
   Mlir,   // print MLIR (before and after lowering), exit
-  Llvm,   // print LLVM IR text, exit
+  Llvm,   // print optimized LLVM IR text, exit
+  LlvmRaw,// print LLVM IR before optimization, exit
   Obj,    // write object file, exit
   Exe,    // link to executable (default)
 };
@@ -36,6 +38,10 @@ struct PipelineOptions {
   std::string toolchain_json;   // empty = use default location
   EmitKind emit = EmitKind::Exe;
   bool verbose = false;
+  OptimizationLevel optimization_level = OptimizationLevel::O2;
+  std::string target_cpu = "generic";
+  std::string target_features;
+  bool host_cpu = false;
 };
 
 // Runs the compilation pipeline as directed by `options`. Returns 0 on

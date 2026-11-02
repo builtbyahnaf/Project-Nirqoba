@@ -1,0 +1,127 @@
+#include "nirqoba/Backend/Optimization.h"
+
+#include <algorithm>
+#include <string>
+#include <vector>
+
+#include "llvm/IR/Attributes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/PassManager.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/Passes/OptimizationLevel.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/raw_ostream.h"
+
+#include "nirqoba/Diagnostics/Diagnostic.h"
+#include "nirqoba/Diagnostics/DiagnosticEngine.h"
+
+namespace nirq {
+using namespace std;
+
+string_view optimization_level_name(OptimizationLevel level) {
+  switch (level) {
+    case OptimizationLevel::O0: return "-O0";
+    case OptimizationLevel::O1: return "-O1";
+    case OptimizationLevel::O2: return "-O2";
+    case OptimizationLevel::O3: return "-O3";
+    case OptimizationLevel::Os: return "-Os";
+    case OptimizationLevel::Oz: return "-Oz";
+  }
+  return "-O2";
+}
+
+bool parse_optimization_level(string_view text, OptimizationLevel& level) {
+  // Accept the command-line spelling with or without the "-O" prefix so the
+  // same parser serves `-O2`, `-O 2`-style aliases, and `--opt-level=2`.
+  if (text.size() >= 2 && text[0] == '-' &&
+      (text[1] == 'O' || text[1] == 'o')) {
+    text.remove_prefix(2);
+  } else if (text.size() >= 1 && (text[0] == 'O' || text[0] == 'o')) {
+    text.remove_prefix(1);
+  }
+
+  if (text == "0") { level = OptimizationLevel::O0; return true; }
+  if (text == "1") { level = OptimizationLevel::O1; return true; }
+  if (text == "2") { level = OptimizationLevel::O2; return true; }
+  if (text == "3") { level = OptimizationLevel::O3; return true; }
+  if (text == "s" || text == "S") { level = OptimizationLevel::Os; return true; }
+  if (text == "z" || text == "Z") { level = OptimizationLevel::Oz; return true; }
+  return false;
+}
+
+namespace {
+
+llvm::OptimizationLevel llvm_level_for(OptimizationLevel level) {
+  switch (level) {
+    case OptimizationLevel::O0: return llvm::OptimizationLevel::O0;
+    case OptimizationLevel::O1: return llvm::OptimizationLevel::O1;
+    case OptimizationLevel::O2: return llvm::OptimizationLevel::O2;
+    case OptimizationLevel::O3: return llvm::OptimizationLevel::O3;
+    // LLVM's PassBuilder uses function attributes to choose size-oriented
+    // decisions at the O2 pipeline, which is also how clang represents -Os/-Oz.
+    case OptimizationLevel::Os:
+    case OptimizationLevel::Oz:
+      return llvm::OptimizationLevel::O2;
+  }
+  return llvm::OptimizationLevel::O2;
+}
+
+void apply_size_attributes(llvm::Module& module, OptimizationLevel level) {
+  if (level != OptimizationLevel::Os && level != OptimizationLevel::Oz) return;
+  const llvm::Attribute::AttrKind kind = level == OptimizationLevel::Os
+      ? llvm::Attribute::OptimizeForSize
+      : llvm::Attribute::MinSize;
+  for (llvm::Function& function : module) {
+    if (function.isDeclaration()) continue;
+    function.addFnAttr(kind);
+  }
+}
+
+}  // namespace
+
+bool optimize_llvm_module(llvm::Module& module,
+                          llvm::TargetMachine& target_machine,
+                          OptimizationLevel level,
+                          DiagnosticEngine& diagnostics) {
+  if (level < OptimizationLevel::O0 || level > OptimizationLevel::Oz) {
+    diagnostics.error(diag::kInternalError, SourceLocation{},
+                      "internal: invalid optimization level");
+    return false;
+  }
+
+  apply_size_attributes(module, level);
+
+  llvm::PassBuilder pass_builder(&target_machine);
+  llvm::LoopAnalysisManager loop_analyses;
+  llvm::FunctionAnalysisManager function_analyses;
+  llvm::CGSCCAnalysisManager cgscc_analyses;
+  llvm::ModuleAnalysisManager module_analyses;
+
+  pass_builder.registerModuleAnalyses(module_analyses);
+  pass_builder.registerCGSCCAnalyses(cgscc_analyses);
+  pass_builder.registerFunctionAnalyses(function_analyses);
+  pass_builder.registerLoopAnalyses(loop_analyses);
+  pass_builder.crossRegisterProxies(loop_analyses, function_analyses,
+                                    cgscc_analyses, module_analyses);
+
+  const llvm::OptimizationLevel llvm_level = llvm_level_for(level);
+  llvm::ModulePassManager pipeline = level == OptimizationLevel::O0
+      ? pass_builder.buildO0DefaultPipeline(llvm_level)
+      : pass_builder.buildPerModuleDefaultPipeline(llvm_level);
+
+  // The new pass manager reports analysis preservation, not failure. A
+  // malformed IR that slips through the frontend is still rejected by the
+  // verifier immediately below, so optimization errors surface as diagnostics
+  // rather than as a silently miscompiled object.
+  pipeline.run(module, module_analyses);
+
+  if (llvm::verifyModule(module, &llvm::errs())) {
+    diagnostics.error(diag::kInternalError, SourceLocation{},
+                      "optimized LLVM IR failed verification");
+    return false;
+  }
+  return true;
+}
+
+}  // namespace nirq

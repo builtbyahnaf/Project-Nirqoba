@@ -15,15 +15,16 @@ namespace nirq {
 // MLIRContext before any lowering.
 void register_dialects(mlir::DialectRegistry& registry);
 
-// Populates `pm` with the Phase 1 lowering pipeline:
-//   1. nrq-to-llvm         (our custom pass — lowers nrq.print_string)
-//   2. convert-func-to-llvm
-//   3. reconcile-unrealized-casts
+// Populates `pm` with the MLIR lowering and cleanup pipeline:
+//   1. canonicalize + CSE (when `optimize` is true)
+//   2. nrq-to-llvm         (our custom pass — lowers nrq.print_string)
+//   3. convert-func-to-llvm
+//   4. reconcile-unrealized-casts
+//   5. canonicalize + CSE on the resulting LLVM dialect IR
 //
-// These three passes are the minimum needed to produce an llvm.module that
-// mlir::translateModuleToLLVMIR can consume. The pipeline is intentionally
-// left as a list so Phase 2 can prepend an arithmetic-lowering pass without
-// restructuring this function.
-void build_lowering_pipeline(mlir::PassManager& pm);
+// `optimize` is false for -O0 so debugging sees the direct lowering result.
+// The pipeline is intentionally a list so later passes can be inserted without
+// restructuring the driver.
+void build_lowering_pipeline(mlir::PassManager& pm, bool optimize = true);
 
 }  // namespace nirq

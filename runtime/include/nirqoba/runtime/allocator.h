@@ -101,6 +101,11 @@ void* nrq_memory_use_allocator(void* allocator);
 void* nrq_memory_allocate(size_t bytes, size_t alignment);
 void* nrq_memory_allocate_array(size_t count, size_t element_size,
                                 size_t alignment);
+// Allocates a contiguous array from a specific explicit allocator handle.
+// The returned storage is registered with that allocator, so the normal
+// owned-array release path returns it to the same allocator domain.
+void* nrq_memory_allocate_array_from(void* allocator, size_t count,
+                                     size_t element_size, size_t alignment);
 void nrq_memory_array_bounds_check(uint64_t index, uint64_t length);
 void nrq_memory_array_range_check(uint64_t start, uint64_t count, uint64_t length);
 void* nrq_memory_shared_allocate(size_t bytes, size_t alignment);

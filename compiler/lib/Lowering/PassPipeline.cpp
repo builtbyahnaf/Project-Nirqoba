@@ -9,6 +9,7 @@
 #include "mlir/Pass/Pass.h"  // completes mlir::Pass for the unique_ptr created below
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
+#include "mlir/Transforms/Passes.h"
 
 #include "nirqoba/Lowering/NrqDialect.h"
 
@@ -36,7 +37,15 @@ void register_dialects(mlir::DialectRegistry& registry) {
   register_all_dialects(registry);
 }
 
-void build_lowering_pipeline(mlir::PassManager& pm) {
+void build_lowering_pipeline(mlir::PassManager& pm, bool optimize) {
+  // MLIR-level cleanup catches duplicated constants, unreachable blocks, and
+  // dead alias-forming operations before they reach LLVM. At -O0 the direct
+  // lowering is preserved for inspection and debugging.
+  if (optimize) {
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createCSEPass());
+  }
+
   // Step 1: Lower nrq dialect ops to LLVM dialect calls.
   pm.addPass(createNrqToLLVMPass());
 
@@ -46,6 +55,11 @@ void build_lowering_pipeline(mlir::PassManager& pm) {
   // Step 3: Resolve any remaining unrealized cast ops left by the two
   // conversions above; this is required before LLVM IR export.
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
+
+  if (optimize) {
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createCSEPass());
+  }
 }
 
 }  // namespace nirq
