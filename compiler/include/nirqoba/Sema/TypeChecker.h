@@ -31,8 +31,12 @@ struct FunctionSignature {
   std::vector<bool> parameter_mutable_borrow;
   std::vector<bool> parameter_shared;
   std::vector<std::string> parameter_resource_domains;
+  std::vector<std::string> parameter_names;
   bool returns_shared = false;
+  bool returns_borrowed = false;
   std::string return_resource_domain;
+  std::string return_borrow_parameter;
+  bool returns_mutable_borrow = false;
 };
 
 // Lightweight catalog entry for a registered struct type.
@@ -84,6 +88,7 @@ class TypeChecker {
   SymbolTable loop_exit_state_after_defer() const;
   bool field_path(const Expr& expression, std::string& root,
                   std::string& path) const;
+  const Symbol* find_borrow_origin(const Expr& expression) const;
   void consume_field_move(Expr& expression, const Type& value_type);
 
   // Struct catalog lookup helpers. `name` may be module-qualified; a bare name
@@ -112,6 +117,9 @@ class TypeChecker {
   Type current_return_type_;
   bool current_return_shared_ = false;
   std::string current_return_resource_domain_;
+  std::string current_return_borrow_parameter_;
+  uint64_t current_return_borrow_allocation_id_ = 0;
+  bool current_return_mutable_borrow_ = false;
   int loop_depth_ = 0;
   std::vector<std::vector<SymbolTable>> loop_break_states_;
   std::vector<std::vector<SymbolTable>> loop_continue_states_;

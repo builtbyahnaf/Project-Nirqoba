@@ -108,10 +108,16 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
     body->set_return_resource_domain(function.return_resource_domain());
   }
   if (function.returns_shared()) body->set_return_ownership(ValueOwnership::Shared);
+  else if (!function.return_borrow_parameter().empty())
+    body->set_return_ownership(function.returns_mutable_borrow()
+                                   ? ValueOwnership::MutableBorrowed
+                                   : ValueOwnership::Borrowed);
   else if (function.return_type().is_owned_array())
     body->set_return_ownership(ValueOwnership::Owned);
   else if (contains_owned_array(function.return_type()))
     body->set_return_ownership(ValueOwnership::Owned);
+  if (!function.return_borrow_parameter().empty())
+    body->set_return_borrow_parameter(function.return_borrow_parameter());
   tir::Function* function_ir = module.add_function(move(body));
 
   scopes_.clear();

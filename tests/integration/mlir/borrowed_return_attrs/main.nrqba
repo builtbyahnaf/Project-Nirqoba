@@ -1,0 +1,7 @@
+borrow source byte* function alias(borrow byte* source) {
+    return source;
+}
+
+int function main() {
+    return 0;
+}

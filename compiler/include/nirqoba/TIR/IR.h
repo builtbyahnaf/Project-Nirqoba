@@ -148,6 +148,12 @@ class Function {
   void set_return_resource_domain(std::string domain) {
     return_resource_domain_ = std::move(domain);
   }
+  const std::string& return_borrow_parameter() const {
+    return return_borrow_parameter_;
+  }
+  void set_return_borrow_parameter(std::string parameter) {
+    return_borrow_parameter_ = std::move(parameter);
+  }
 
   std::vector<Op>& operations() { return operations_; }
   const std::vector<Op>& operations() const { return operations_; }
@@ -176,6 +182,7 @@ class Function {
   Type return_type_;
   ValueOwnership return_ownership_ = ValueOwnership::Trivial;
   std::string return_resource_domain_;
+  std::string return_borrow_parameter_;
   std::vector<Parameter> parameters_;
   std::vector<Op> operations_;
   std::vector<Type> types_;

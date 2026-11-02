@@ -1,0 +1,8 @@
+borrow source byte* function invalid(borrow byte* source) {
+    let local = memory.allocate<byte>(1);
+    return local;
+}
+
+int function main() {
+    return 0;
+}

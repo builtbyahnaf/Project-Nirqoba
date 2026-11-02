@@ -611,12 +611,16 @@ class FunctionDecl {
   FunctionDecl(Type return_type, std::string name, std::vector<Parameter> parameters,
                std::unique_ptr<BlockStmt> body, SourceLocation location,
                Visibility visibility = Visibility::Public, bool returns_shared = false,
-               std::string return_resource_domain = {})
+               std::string return_resource_domain = {},
+               std::string return_borrow_parameter = {},
+               bool returns_mutable_borrow = false)
       : return_type_(return_type), name_(std::move(name)),
         parameters_(std::move(parameters)), body_(std::move(body)),
         location_(std::move(location)), visibility_(visibility),
         returns_shared_(returns_shared),
-        return_resource_domain_(std::move(return_resource_domain)) {}
+        return_resource_domain_(std::move(return_resource_domain)),
+        return_borrow_parameter_(std::move(return_borrow_parameter)),
+        returns_mutable_borrow_(returns_mutable_borrow) {}
 
   Type return_type() const { return return_type_; }
   void set_return_type(Type type) { return_type_ = type; }
@@ -631,6 +635,10 @@ class FunctionDecl {
   bool is_public() const { return visibility_ == Visibility::Public; }
   bool returns_shared() const { return returns_shared_; }
   const std::string& return_resource_domain() const { return return_resource_domain_; }
+  const std::string& return_borrow_parameter() const {
+    return return_borrow_parameter_;
+  }
+  bool returns_mutable_borrow() const { return returns_mutable_borrow_; }
 
  private:
   Type return_type_;
@@ -641,6 +649,8 @@ class FunctionDecl {
   Visibility visibility_;
   bool returns_shared_ = false;
   std::string return_resource_domain_;
+  std::string return_borrow_parameter_;
+  bool returns_mutable_borrow_ = false;
 };
 
 class Program {

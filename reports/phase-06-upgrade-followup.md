@@ -380,3 +380,17 @@ resource handles. The domain is retained in TIR and emitted as the MLIR
 `nirqoba.resource_domain` argument attribute. Positive and negative tests cover
 socket borrow propagation and cross-domain rejection. RelWithDebInfo
 validation passed: CTest 1/1 and integration 105/105.
+
+## 39. Source-bound borrowed returns - 2026-11-02
+
+Function signatures can declare an immutable or mutable borrowed pointer return
+bound to a named borrowed parameter. Semantic analysis requires each return to
+preserve that parameter's allocation identity, including forwarding through
+another borrowed-return function. Caller bindings retain the source identity;
+owner deallocation, resource close/release, and mutable-borrow conflicts are
+checked while returned aliases remain live. Borrowed aliases receive no
+automatic destructor. TIR and MLIR preserve the borrowed return category and
+source parameter attribute.
+
+RelWithDebInfo validation passed: build succeeded, CTest 1/1, and integration
+suite 124/124.

@@ -2228,6 +2228,9 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     if (!tir_fn->return_resource_domain().empty())
       func_op->setAttr("nirqoba.return_resource_domain",
                        builder.getStringAttr(tir_fn->return_resource_domain()));
+    if (!tir_fn->return_borrow_parameter().empty())
+      func_op->setAttr("nirqoba.return_borrow_parameter",
+                       builder.getStringAttr(tir_fn->return_borrow_parameter()));
     if (!tir_fn->parameters().empty()) {
       llvm::SmallVector<mlir::Attribute> argument_attrs;
       argument_attrs.reserve(tir_fn->parameters().size());

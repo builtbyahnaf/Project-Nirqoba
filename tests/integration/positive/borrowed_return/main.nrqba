@@ -1,0 +1,14 @@
+borrow source byte* function alias(borrow byte* source) {
+    return source;
+}
+
+borrow source byte* function forward(borrow byte* source) {
+    return alias(source);
+}
+
+byte function main() {
+    var owner = memory.allocate<byte>(1);
+    owner[0] = 42u8;
+    let view = forward(owner);
+    return view[0];
+}
