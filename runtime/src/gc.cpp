@@ -67,6 +67,7 @@ class ReferenceLayout {
 struct alignas(std::max_align_t) ObjectHeader {
   ObjectHeader* next = nullptr;
   ObjectHeader* mark_next = nullptr;
+  ObjectHeader* tlab_next = nullptr;
   GcPage* page = nullptr;
   void* object = nullptr;
   size_t size = 0;
@@ -202,6 +203,13 @@ std::mutex gc_mutex;
 struct MutatorState {
   size_t depth = 0;
   bool parked = false;
+  GcPage* tlab_page = nullptr;
+  unsigned char* tlab_cursor = nullptr;
+  unsigned char* tlab_end = nullptr;
+  uint64_t tlab_generation = 0;
+  ObjectHeader* pending_objects = nullptr;
+  size_t pending_bytes = 0;
+  size_t pending_count = 0;
 };
 std::mutex mutator_mutex;
 std::condition_variable mutator_condition;
@@ -213,6 +221,7 @@ ObjectHeader* objects = nullptr;
 ObjectIndex object_index;
 std::vector<std::unique_ptr<GcPage>> gc_pages;
 constexpr size_t kGcPageBytes = 64 * 1024;
+constexpr size_t kGcTlabBytes = 4 * 1024;
 // Cache the current bump page per allocating thread. Collection increments the
 // generation so a thread that resumes after another thread reclaimed its page
 // discards the stale pointer before dereferencing it.
@@ -247,13 +256,57 @@ std::atomic<uint64_t> next_root_frame_marker{1};
 // Collection is an explicit opt-in policy. Programs using the GC domain may
 // call gc.enable() to request automatic triggers; explicit gc.collect() always
 // works regardless of this state.
-bool automatic_collection_enabled = false;
-size_t collection_threshold = 1024 * 1024;
-size_t bytes_since_collection = 0;
+std::atomic<bool> automatic_collection_enabled{false};
+std::atomic<size_t> collection_threshold{1024 * 1024};
+std::atomic<size_t> bytes_since_collection{0};
+std::atomic<uint64_t> pending_allocation_bytes{0};
+std::atomic<uint64_t> pending_allocation_count{0};
 nrq_gc_stats statistics{};
 
 uint64_t saturated_add(uint64_t left, uint64_t right) {
   return right > UINT64_MAX - left ? UINT64_MAX : left + right;
+}
+
+void atomic_saturating_add_size(std::atomic<size_t>& target, size_t amount) {
+  size_t current = target.load(std::memory_order_relaxed);
+  while (!target.compare_exchange_weak(
+      current, amount > SIZE_MAX - current ? SIZE_MAX : current + amount,
+      std::memory_order_relaxed, std::memory_order_relaxed)) {}
+}
+
+void atomic_saturating_add(std::atomic<uint64_t>& target, uint64_t amount) {
+  uint64_t current = target.load(std::memory_order_relaxed);
+  while (!target.compare_exchange_weak(
+      current, saturated_add(current, amount), std::memory_order_relaxed,
+      std::memory_order_relaxed)) {}
+}
+
+void publish_tlab_locked(MutatorState& mutator) {
+  ObjectHeader* header = mutator.pending_objects;
+  while (header) {
+    ObjectHeader* next = header->tlab_next;
+    if (!object_index.insert(header->object, header))
+      nrq_runtime_fatal("GC failed to publish a thread-local allocation");
+    header->tlab_next = nullptr;
+    header->next = objects;
+    objects = header;
+    if (!header->page || header->page->live_objects == SIZE_MAX)
+      nrq_runtime_fatal("GC page live-object count overflow");
+    ++header->page->live_objects;
+    statistics.allocated_bytes = saturated_add(
+        statistics.allocated_bytes, static_cast<uint64_t>(header->size));
+    statistics.live_objects = saturated_add(statistics.live_objects, 1);
+    header = next;
+  }
+  if (mutator.pending_bytes != 0)
+    pending_allocation_bytes.fetch_sub(mutator.pending_bytes,
+                                       std::memory_order_relaxed);
+  if (mutator.pending_count != 0)
+    pending_allocation_count.fetch_sub(mutator.pending_count,
+                                       std::memory_order_relaxed);
+  mutator.pending_objects = nullptr;
+  mutator.pending_bytes = 0;
+  mutator.pending_count = 0;
 }
 
 void stop_mutators() {
@@ -286,12 +339,10 @@ void resume_mutators() {
 }
 
 void maybe_collect_automatically() {
-  bool should_collect = false;
-  {
-    std::lock_guard<std::mutex> lock(gc_mutex);
-    should_collect = automatic_collection_enabled &&
-                     bytes_since_collection >= collection_threshold;
-  }
+  const bool should_collect = automatic_collection_enabled.load(
+                                  std::memory_order_relaxed) &&
+      bytes_since_collection.load(std::memory_order_relaxed) >=
+          collection_threshold.load(std::memory_order_relaxed);
   if (should_collect) nrq_gc_collect();
 }
 
@@ -322,6 +373,8 @@ void count_reference(void* object, void* opaque_context) {
 }
 
 void collect_locked() {
+  for (MutatorState* mutator : mutators)
+    if (mutator) publish_tlab_locked(*mutator);
   statistics.collections = saturated_add(statistics.collections, 1);
   MarkContext context;
   for (const auto& root : roots) {
@@ -408,7 +461,7 @@ void collect_locked() {
     statistics.allocated_bytes = saturated_add(
         statistics.allocated_bytes, static_cast<uint64_t>(header->size));
   }
-  bytes_since_collection = 0;
+  bytes_since_collection.store(0, std::memory_order_relaxed);
 }
 
 void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
@@ -498,8 +551,136 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   statistics.allocated_bytes = saturated_add(
       statistics.allocated_bytes, static_cast<uint64_t>(bytes));
   statistics.live_objects = saturated_add(statistics.live_objects, 1);
-  bytes_since_collection = bytes > SIZE_MAX - bytes_since_collection
-      ? SIZE_MAX : bytes_since_collection + bytes;
+  atomic_saturating_add_size(bytes_since_collection, bytes);
+  return object;
+}
+
+bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
+  if (mutator.tlab_generation != gc_page_generation) {
+    mutator.tlab_page = nullptr;
+    mutator.tlab_cursor = nullptr;
+    mutator.tlab_end = nullptr;
+    mutator.tlab_generation = gc_page_generation;
+  }
+  GcPage* page = nullptr;
+  size_t available = 0;
+  if (thread_allocation_generation != gc_page_generation) {
+    thread_allocation_page = nullptr;
+    thread_allocation_generation = gc_page_generation;
+  }
+  if (thread_allocation_page &&
+      thread_allocation_page->used <= thread_allocation_page->capacity) {
+    available = thread_allocation_page->capacity - thread_allocation_page->used;
+    if (available >= minimum_span) page = thread_allocation_page;
+  }
+  if (!page) {
+    for (auto candidate = gc_pages.rbegin(); candidate != gc_pages.rend(); ++candidate) {
+      GcPage* possible = candidate->get();
+      if (possible->used > possible->capacity) continue;
+      const size_t remaining = possible->capacity - possible->used;
+      if (remaining >= minimum_span) {
+        page = possible;
+        available = remaining;
+        break;
+      }
+    }
+  }
+  if (!page) {
+    const size_t capacity = std::max(kGcPageBytes, kGcTlabBytes);
+    void* storage = ::operator new(capacity, std::nothrow);
+    if (!storage) return false;
+    try {
+      auto new_page = std::make_unique<GcPage>();
+      new_page->storage = static_cast<unsigned char*>(storage);
+      new_page->capacity = capacity;
+      page = new_page.get();
+      gc_pages.push_back(std::move(new_page));
+      available = capacity;
+    } catch (...) {
+      ::operator delete(storage);
+      return false;
+    }
+  }
+  const size_t reserve = std::min(kGcTlabBytes, available);
+  if (reserve < minimum_span) return false;
+  mutator.tlab_page = page;
+  mutator.tlab_cursor = page->storage + page->used;
+  page->used += reserve;
+  mutator.tlab_end = mutator.tlab_cursor + reserve;
+  mutator.tlab_generation = gc_page_generation;
+  thread_allocation_page = page;
+  thread_allocation_generation = gc_page_generation;
+  return true;
+}
+
+void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
+                    const size_t* reference_offsets, size_t reference_count,
+                    bool& handled) {
+  handled = false;
+  if (thread_mutator.depth == 0 || bytes == 0 || element_size == 0 ||
+      bytes > SIZE_MAX - sizeof(ObjectHeader))
+    return nullptr;
+  constexpr size_t alignment = alignof(std::max_align_t);
+  const size_t raw_span = sizeof(ObjectHeader) + bytes;
+  if (raw_span > SIZE_MAX - (alignment - 1)) return nullptr;
+  const size_t span = (raw_span + alignment - 1) & ~(alignment - 1);
+  if (span > kGcTlabBytes) return nullptr;
+  handled = true;
+
+  if (thread_mutator.tlab_generation != gc_page_generation) {
+    thread_mutator.tlab_page = nullptr;
+    thread_mutator.tlab_cursor = nullptr;
+    thread_mutator.tlab_end = nullptr;
+    thread_mutator.tlab_generation = gc_page_generation;
+  }
+  if (!thread_mutator.tlab_cursor || !thread_mutator.tlab_end ||
+      thread_mutator.tlab_cursor > thread_mutator.tlab_end ||
+      span > static_cast<size_t>(thread_mutator.tlab_end -
+                                 thread_mutator.tlab_cursor)) {
+    std::lock_guard<std::mutex> lock(gc_mutex);
+    if (!reserve_tlab_locked(thread_mutator, span)) return nullptr;
+  }
+
+  unsigned char* header_storage = thread_mutator.tlab_cursor;
+  thread_mutator.tlab_cursor += span;
+  auto* header = new (header_storage) ObjectHeader();
+  header->page = thread_mutator.tlab_page;
+  void* object = header_storage + sizeof(ObjectHeader);
+  std::memset(object, 0, bytes);
+  try {
+    if (reference_count != 0) {
+      if (!reference_offsets || reference_count > SIZE_MAX / sizeof(size_t)) {
+        header->~ObjectHeader();
+        return nullptr;
+      }
+      header->reference_offsets.assign(reference_offsets, reference_count);
+      for (size_t index = 0; index < header->reference_offsets.size(); ++index) {
+        const size_t offset = header->reference_offsets[index];
+        if (offset > element_size || sizeof(void*) > element_size - offset) {
+          header->~ObjectHeader();
+          return nullptr;
+        }
+      }
+    }
+  } catch (...) {
+    header->~ObjectHeader();
+    return nullptr;
+  }
+  header->object = object;
+  header->size = bytes;
+  header->element_size = element_size;
+  header->trace = trace;
+  header->tlab_next = thread_mutator.pending_objects;
+  thread_mutator.pending_objects = header;
+  if (bytes > SIZE_MAX - thread_mutator.pending_bytes ||
+      thread_mutator.pending_count == SIZE_MAX)
+    nrq_runtime_fatal("GC thread-local allocation accounting overflow");
+  thread_mutator.pending_bytes += bytes;
+  ++thread_mutator.pending_count;
+  atomic_saturating_add(pending_allocation_bytes,
+                        static_cast<uint64_t>(bytes));
+  atomic_saturating_add(pending_allocation_count, uint64_t{1});
+  atomic_saturating_add_size(bytes_since_collection, bytes);
   return object;
 }
 
@@ -509,6 +690,9 @@ extern "C" {
 
 void* nrq_gc_allocate(size_t bytes, nrq_gc_trace_fn trace) {
   maybe_collect_automatically();
+  bool handled = false;
+  void* object = allocate_tlab(bytes, bytes, trace, nullptr, 0, handled);
+  if (handled) return object;
   std::lock_guard<std::mutex> lock(gc_mutex);
   return allocate_locked(bytes, bytes, trace, nullptr, 0);
 }
@@ -518,6 +702,10 @@ void* nrq_gc_allocate_array(size_t count, size_t element_size,
   if (count == 0 || element_size == 0 || count > SIZE_MAX / element_size)
     return nullptr;
   maybe_collect_automatically();
+  bool handled = false;
+  void* object = allocate_tlab(count * element_size, element_size, trace,
+                               nullptr, 0, handled);
+  if (handled) return object;
   std::lock_guard<std::mutex> lock(gc_mutex);
   return allocate_locked(count * element_size, element_size, trace, nullptr, 0);
 }
@@ -528,6 +716,10 @@ void* nrq_gc_allocate_array_typed(size_t count, size_t element_size,
   if (count == 0 || element_size == 0 || count > SIZE_MAX / element_size)
     return nullptr;
   maybe_collect_automatically();
+  bool handled = false;
+  void* object = allocate_tlab(count * element_size, element_size, nullptr,
+                               reference_offsets, reference_count, handled);
+  if (handled) return object;
   std::lock_guard<std::mutex> lock(gc_mutex);
   return allocate_locked(count * element_size, element_size, nullptr,
                          reference_offsets, reference_count);
@@ -540,6 +732,32 @@ void* nrq_gc_allocate_array_typed_rooted(
       count > SIZE_MAX / element_size)
     return nullptr;
   maybe_collect_automatically();
+  if (thread_mutator.depth != 0) {
+    {
+      std::lock_guard<std::mutex> lock(gc_mutex);
+      const auto root = roots.find(root_slot);
+      if (root == roots.end() || root->second.repeated_count != 0 ||
+          root->second.object_size != sizeof(void*) ||
+          root->second.reference_offsets.size() != 1 ||
+          root->second.reference_offsets[0] != 0)
+        nrq_runtime_fatal(
+            "rooted GC allocation requires a registered pointer root slot");
+    }
+    bool handled = false;
+    void* object = allocate_tlab(count * element_size, element_size, nullptr,
+                                 reference_offsets, reference_count, handled);
+    if (!handled) {
+      std::lock_guard<std::mutex> lock(gc_mutex);
+      object = allocate_locked(count * element_size, element_size, nullptr,
+                               reference_offsets, reference_count);
+    }
+    std::lock_guard<std::mutex> lock(gc_mutex);
+    const auto root = roots.find(root_slot);
+    if (root == roots.end())
+      nrq_runtime_fatal("rooted GC allocation lost its registered pointer root");
+    *root_slot = object;
+    return object;
+  }
   std::lock_guard<std::mutex> lock(gc_mutex);
   const auto root = roots.find(root_slot);
   if (root == roots.end() || root->second.repeated_count != 0 ||
@@ -732,13 +950,11 @@ void nrq_gc_root_frame_end(uint64_t marker) {
 }
 
 void nrq_gc_enable(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
-  automatic_collection_enabled = true;
+  automatic_collection_enabled.store(true, std::memory_order_relaxed);
 }
 
 void nrq_gc_disable(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
-  automatic_collection_enabled = false;
+  automatic_collection_enabled.store(false, std::memory_order_relaxed);
 }
 
 void nrq_gc_collect(void) {
@@ -779,6 +995,10 @@ void nrq_gc_mutator_leave(void) {
   if (thread_mutator.depth == 0)
     nrq_runtime_fatal("GC mutator leave without matching enter");
   if (--thread_mutator.depth == 0) {
+    {
+      std::lock_guard<std::mutex> heap_lock(gc_mutex);
+      publish_tlab_locked(thread_mutator);
+    }
     thread_mutator.parked = false;
     auto found = std::find(mutators.begin(), mutators.end(), &thread_mutator);
     if (found == mutators.end())
@@ -800,13 +1020,20 @@ void nrq_gc_safepoint(void) {
 }
 
 void nrq_gc_set_threshold(size_t bytes) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
-  collection_threshold = bytes == 0 ? 1 : bytes;
+  collection_threshold.store(bytes == 0 ? 1 : bytes,
+                             std::memory_order_relaxed);
 }
 
 nrq_gc_stats nrq_gc_get_stats(void) {
   std::lock_guard<std::mutex> lock(gc_mutex);
-  return statistics;
+  nrq_gc_stats result = statistics;
+  result.allocated_bytes = saturated_add(
+      result.allocated_bytes,
+      pending_allocation_bytes.load(std::memory_order_relaxed));
+  result.live_objects = saturated_add(
+      result.live_objects,
+      pending_allocation_count.load(std::memory_order_relaxed));
+  return result;
 }
 
 uint64_t nrq_gc_get_allocated_bytes(void) {
@@ -828,6 +1055,7 @@ uint64_t nrq_gc_get_live_objects(void) {
 void* nrq_gc_pin(void* object) {
   if (!object) return nullptr;
   std::lock_guard<std::mutex> lock(gc_mutex);
+  if (thread_mutator.depth != 0) publish_tlab_locked(thread_mutator);
   if (!object_index.find(object)) return nullptr;
   auto existing = pinned_objects.find(object);
   if (existing != pinned_objects.end() && existing->second >= kMaxPinsPerObject) {
@@ -853,8 +1081,7 @@ uint64_t nrq_gc_pin_violations(void) {
 }
 
 int32_t nrq_gc_is_enabled(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
-  return automatic_collection_enabled ? 1 : 0;
+  return automatic_collection_enabled.load(std::memory_order_relaxed) ? 1 : 0;
 }
 
 void nrq_gc_unpin(void* object) {
@@ -868,6 +1095,7 @@ void nrq_gc_unpin(void* object) {
 void* nrq_gc_pin_transfer(void* object) {
   if (!object) return nullptr;
   std::lock_guard<std::mutex> lock(gc_mutex);
+  if (thread_mutator.depth != 0) publish_tlab_locked(thread_mutator);
   if (!object_index.find(object)) return nullptr;
   try {
     size_t& count = pinned_objects[object];
@@ -892,6 +1120,7 @@ void nrq_gc_ref_count_stop(void) {
 
 int64_t nrq_gc_get_ref_count(void* object) {
   std::lock_guard<std::mutex> lock(gc_mutex);
+  if (thread_mutator.depth != 0) publish_tlab_locked(thread_mutator);
   if (!reference_diagnostics_enabled) return -1;
   if (!object || !object_index.find(object)) return 0;
   try {

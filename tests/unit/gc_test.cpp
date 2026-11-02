@@ -370,9 +370,11 @@ TEST(GcTest, ConcurrentAllocationIsSerializedAndReclaimed) {
   std::vector<std::thread> workers;
   for (int worker = 0; worker < 4; ++worker) {
     workers.emplace_back([&succeeded] {
+      nrq_gc_mutator_enter();
       for (int index = 0; index < 128; ++index) {
         if (!nrq_gc_allocate(48, nullptr)) succeeded = false;
       }
+      nrq_gc_mutator_leave();
     });
   }
   for (std::thread& worker : workers) worker.join();
@@ -498,6 +500,39 @@ TEST(GcTest, CollectionWaitsForActiveMutatorsToReachSafepoints) {
   first = nullptr;
   second = nullptr;
   nrq_gc_collect();
+}
+
+TEST(GcTest, ThreadLocalBumpAllocationsPublishAtCollectionSafepoints) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+  Node* survivor = nullptr;
+  nrq_gc_root_register(reinterpret_cast<void**>(&survivor));
+  nrq_gc_mutator_enter();
+  constexpr size_t kAllocationCount = 128;
+  std::vector<Node*> objects;
+  objects.reserve(kAllocationCount);
+  bool allocations_succeeded = true;
+  for (size_t index = 0; index < kAllocationCount; ++index) {
+    auto* object = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+    if (!object) allocations_succeeded = false;
+    objects.push_back(object);
+  }
+  survivor = objects.back();
+  nrq_gc_root_store(reinterpret_cast<void**>(&survivor), survivor);
+  const uint64_t live_before_collection = nrq_gc_get_live_objects();
+
+  nrq_gc_collect();
+  const uint64_t live_after_collection = nrq_gc_get_live_objects();
+  nrq_gc_mutator_leave();
+  ASSERT_TRUE(allocations_succeeded);
+  ASSERT_EQ(live_before_collection, baseline + kAllocationCount);
+  ASSERT_EQ(live_after_collection, baseline + 1);
+
+  nrq_gc_root_unregister(reinterpret_cast<void**>(&survivor));
+  survivor = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
 }
 
 TEST(GcTest, RepeatedRootRegionKeepsContiguousArrayReferencesAlive) {
