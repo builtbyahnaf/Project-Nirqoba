@@ -3399,11 +3399,10 @@ Type TypeChecker::check_call(CallExpr& call) {
     }
     if (!expects_shared && expected_owned_resource.empty() &&
         !(i < sig.parameter_borrowed.size() && sig.parameter_borrowed[i]) &&
-        source && !source->cleanup_callee.empty() &&
-        source->cleanup_callee != "memory.deallocate") {
+        !actual_resource.empty() && actual_resource != "memory.deallocate") {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "owned resource requires cleanup with '" +
-                             source->cleanup_callee +
+                             actual_resource +
                              "'; use a matching owned parameter or a borrow parameter");
       continue;
     }

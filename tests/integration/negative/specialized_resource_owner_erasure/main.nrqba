@@ -1,0 +1,6 @@
+void function take_generic(byte* pointer) { }
+
+int function main() {
+    take_generic(file.open("tests/integration/positive/hello/expect.json", false));
+    return 0;
+}
