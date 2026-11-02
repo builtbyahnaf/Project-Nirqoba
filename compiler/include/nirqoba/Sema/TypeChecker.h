@@ -79,6 +79,7 @@ class TypeChecker {
 
   void require_type(const Expr& expr, Type expected, const char* context);
   bool block_can_fall_through(const BlockStmt& block) const;
+  SymbolTable loop_exit_state_after_defer() const;
 
   // Struct catalog lookup helpers. `name` may be module-qualified; a bare name
   // first resolves against the module currently being checked, then against the
@@ -108,6 +109,7 @@ class TypeChecker {
   int loop_depth_ = 0;
   std::vector<std::vector<SymbolTable>> loop_break_states_;
   std::vector<std::vector<SymbolTable>> loop_continue_states_;
+  std::vector<std::size_t> loop_deferred_scope_depths_;
   std::string current_module_;
   uint64_t next_allocation_id_ = 1;
   bool checking_deferred_cleanup_ = false;
