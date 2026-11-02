@@ -1082,6 +1082,7 @@ ExprPtr Parser::parse_primary() {
            peek(1).text == "owned_array" ||
            peek(1).text == "owned_array_aligned" ||
            peek(1).text == "array_view" ||
+           peek(1).text == "array_view_mut" ||
            peek(1).text == "mapped_read" || peek(1).text == "mapped_write") &&
           peek(2).kind == TokenKind::Less) {
         advance();  // '.'

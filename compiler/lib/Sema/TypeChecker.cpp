@@ -593,9 +593,6 @@ void TypeChecker::check_function(FunctionDecl& function) {
       diagnostics_.error(diag::kTypeMismatch, parameter.location,
                          "borrow parameters must have pointer or array view type");
     }
-    if (parameter.mutable_borrow && parameter.type.is_array_view())
-      diagnostics_.error(diag::kTypeMismatch, parameter.location,
-                         "array views are immutable and cannot be mutably borrowed");
     if (parameter.mutable_borrow && !parameter.borrowed) {
       diagnostics_.error(diag::kTypeMismatch, parameter.location,
                          "'mut' requires a borrowed parameter");
@@ -876,9 +873,16 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
     if (symbol.allocation_id == 0) symbol.allocation_id = next_allocation_id_++;
   } else if (binding_type.is_array_view()) {
     symbol.borrowed = true;
+    symbol.mutable_borrow =
+        declaration.initializer().ownership() == ValueOwnership::MutableBorrowed;
+    if (symbol.mutable_borrow && declaration.binding() != BindingKind::Var)
+      diagnostics_.error(diag::kImmutableAssignment, declaration.location(),
+                         "a mutable array view must be bound with 'var'");
     if (declaration.initializer().kind() == Expr::Kind::Call) {
       const auto& call = static_cast<const CallExpr&>(declaration.initializer());
-      if (call.callee() == "memory.array_view" && !call.arguments().empty()) {
+      if ((call.callee() == "memory.array_view" ||
+           call.callee() == "memory.array_view_mut") &&
+          !call.arguments().empty()) {
         if (const Symbol* source = find_root_symbol(*call.arguments()[0], symbols_))
           symbol.allocation_id = source->allocation_id;
       } else if (const FunctionSignature* signature = find_function(call.callee());
@@ -1032,7 +1036,8 @@ const Symbol* TypeChecker::find_borrow_origin(const Expr& expression) const {
   // A view constructor does not create a new lifetime. Preserve the origin of
   // the source through nested slices so a function can safely return a view
   // derived from its declared borrowed parameter.
-  if (call.callee() == "memory.array_view" && !call.arguments().empty())
+  if ((call.callee() == "memory.array_view" ||
+       call.callee() == "memory.array_view_mut") && !call.arguments().empty())
     return find_borrow_origin(*call.arguments().front());
   const FunctionSignature* signature = find_function(call.callee());
   if (!signature || !signature->returns_borrowed) return nullptr;
@@ -1139,8 +1144,18 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
   const Symbol* symbol = find_root_symbol(assignment.target(), symbols_);
   if (assignment.target().kind() == Expr::Kind::Index &&
       static_cast<const IndexExpr&>(assignment.target()).base().type().is_array_view()) {
+    const Expr& view_expr =
+        static_cast<const IndexExpr&>(assignment.target()).base();
+    const Symbol* view = find_root_symbol(view_expr, symbols_);
+    if (!view || !view->mutable_borrow) {
+      diagnostics_.error(diag::kImmutableAssignment, assignment.target().location(),
+                         "array views are read-only; use a mutable array view for indexed writes");
+      return;
+    }
+  }
+  if (assignment.is_simple_name() && symbol && symbol->type.is_array_view()) {
     diagnostics_.error(diag::kImmutableAssignment, assignment.target().location(),
-                       "array views are read-only; mutate through the owning array");
+                       "borrowed array view bindings cannot be reassigned");
     return;
   }
   if (symbol && symbol->owns_allocation &&
@@ -1778,7 +1793,10 @@ Type TypeChecker::check_expression(Expr& expr) {
             expr.kind() == Expr::Kind::TupleLiteral || expr.kind() == Expr::Kind::Name)
           expr.set_ownership(ValueOwnership::Owned);
       } else if (type.is_array_view()) {
-        expr.set_ownership(ValueOwnership::Borrowed);
+        expr.set_ownership(
+            static_cast<const CallExpr&>(expr).callee() == "memory.array_view_mut"
+                ? ValueOwnership::MutableBorrowed
+                : ValueOwnership::Borrowed);
       }
       break;
     case Expr::Kind::Unary: {
@@ -2133,6 +2151,15 @@ Type TypeChecker::check_index_expr(IndexExpr& expr) {
 
   if (!base_type.is_valid() || !index_type.is_valid()) return Type::error();
 
+  if (!checking_lvalue_ && base_type.is_owned_array()) {
+    const Symbol* owner = find_root_symbol(expr.base(), symbols_);
+    if (owner && symbols_.has_conflicting_borrow(owner->allocation_id, false)) {
+      diagnostics_.error(diag::kTypeMismatch, expr.base().location(),
+                         "cannot read an owned array while a mutable view is live");
+      return Type::error();
+    }
+  }
+
   if (base_type.is_pointer()) {
     std::string cleanup_callee;
     const Symbol* owner = find_root_symbol(expr.base(), symbols_);
@@ -2409,10 +2436,13 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
 }
 
 Type TypeChecker::check_call(CallExpr& call) {
-  if (call.callee() == "memory.array_view" && call.has_generic_argument()) {
+  if ((call.callee() == "memory.array_view" ||
+       call.callee() == "memory.array_view_mut") &&
+      call.has_generic_argument()) {
+    const bool mutable_view = call.callee() == "memory.array_view_mut";
     if (call.arguments().size() != 3) {
       diagnostics_.error(diag::kPrintArity, call.location(),
-                         "'memory.array_view<T>' takes a source, start, and length");
+                         "array view constructor takes a source, start, and length");
       for (const ExprPtr& argument : call.arguments())
         check_expression(const_cast<Expr&>(*argument));
       return Type::error();
@@ -2444,6 +2474,22 @@ Type TypeChecker::check_call(CallExpr& call) {
         (!source->owns_allocation && !source->borrowed)) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "array views require a live tracked owner");
+    } else if (mutable_view &&
+               (!source->owns_allocation || !source->is_mutable())) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "mutable array views require a mutable owned array");
+    } else if (mutable_view &&
+               symbols_.has_conflicting_borrow(source->allocation_id, true)) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "mutable array view conflicts with another live borrow");
+    } else if (!mutable_view && source->mutable_borrow && source->borrowed) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "cannot create an immutable alias from a live mutable array view");
+    } else if (!mutable_view &&
+               symbols_.has_conflicting_borrow(source->allocation_id, false,
+                                               source->name)) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "array view conflicts with a live mutable borrow");
     }
     return Type::array_view_type(element_type);
   }
@@ -3612,25 +3658,42 @@ Type TypeChecker::check_call(CallExpr& call) {
       const Symbol* source = nullptr;
       if (argument.kind() == Expr::Kind::Call) {
         const auto& view_call = static_cast<const CallExpr&>(argument);
-        if (view_call.callee() == "memory.array_view" &&
+        if ((view_call.callee() == "memory.array_view" ||
+             view_call.callee() == "memory.array_view_mut") &&
             !view_call.arguments().empty())
           source = find_root_symbol(*view_call.arguments()[0], symbols_);
       } else {
         source = find_root_symbol(argument, symbols_);
       }
+      const bool expects_mutable =
+          i < sig.parameter_mutable_borrow.size() &&
+          sig.parameter_mutable_borrow[i];
+      const bool argument_is_mutable =
+          argument.ownership() == ValueOwnership::MutableBorrowed ||
+          (source && source->mutable_borrow);
       if (!source || source->allocation_id == 0 || source->moved) {
         diagnostics_.error(diag::kTypeMismatch, argument.location(),
                            "array view arguments must refer to a live tracked owner");
+      } else if (expects_mutable && !argument_is_mutable) {
+        diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                           "mutable array view parameter requires an exclusive mutable view");
       } else if (std::find(ownership_transfers.begin(), ownership_transfers.end(),
                            source->allocation_id) != ownership_transfers.end()) {
         diagnostics_.error(diag::kTypeMismatch, argument.location(),
                            "cannot borrow an owner in a call that also transfers it");
+      } else if (symbols_.has_conflicting_borrow(source->allocation_id,
+                                                 expects_mutable,
+                                                 source->borrowed ? source->name :
+                                                                    std::string{})) {
+        diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                           "array view argument conflicts with another live borrow");
       } else {
         auto found = active_borrows.find(source->allocation_id);
-        if (found != active_borrows.end() && found->second)
+        if (found != active_borrows.end() &&
+            (found->second || expects_mutable))
           diagnostics_.error(diag::kTypeMismatch, argument.location(),
                              "conflicting borrows of the same allocation in one call");
-        active_borrows[source->allocation_id] = false;
+        active_borrows[source->allocation_id] = expects_mutable;
       }
       continue;
     }

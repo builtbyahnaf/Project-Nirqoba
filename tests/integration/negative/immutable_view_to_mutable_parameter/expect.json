@@ -1,0 +1,4 @@
+{
+  "expect_exit": 1,
+  "expect_stderr_contains": ["mutable array view parameter requires an exclusive mutable view"]
+}

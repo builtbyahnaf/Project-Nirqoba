@@ -1,0 +1,6 @@
+int function main() {
+    var values = memory.owned_array<int>(2);
+    var view = memory.array_view_mut<int>(values, 0, 2);
+    values[0] = 5;
+    return view[0];
+}

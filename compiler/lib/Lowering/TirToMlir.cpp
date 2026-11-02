@@ -263,7 +263,9 @@ static std::unordered_map<int, StackOwnedArrayLayout> analyze_stack_owned_arrays
         continue;
       }
       if (op.kind == tir::OpKind::Call && uses_descriptor &&
-          op.callee == "memory.array_view" && !op.arguments.empty() &&
+          (op.callee == "memory.array_view" ||
+           op.callee == "memory.array_view_mut") &&
+          !op.arguments.empty() &&
           descriptors.count(op.arguments[0].id) && op.result.is_valid()) {
         descriptors.insert(op.result.id);
         continue;
@@ -1299,7 +1301,8 @@ class FunctionTranslator {
           return true;
         }
 
-        if (op.callee == "memory.array_view" && op.result.is_valid() &&
+        if ((op.callee == "memory.array_view" ||
+             op.callee == "memory.array_view_mut") && op.result.is_valid() &&
             op.result.type.is_array_view() && args.size() == 3) {
           const mlir::Type i64 = builder_.getI64Type();
           auto as_i64 = [&](mlir::Value value) {
