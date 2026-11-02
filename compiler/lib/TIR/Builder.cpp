@@ -94,6 +94,10 @@ void TirBuilder::lower_module(const string& symbol_prefix, const Program& progra
 void TirBuilder::lower_function(const FunctionDecl& function, const string& symbol,
                                 tir::Module& module) {
   auto body = make_unique<tir::Function>(symbol, function.return_type());
+  if (!function.return_resource_domain().empty()) {
+    body->set_return_ownership(ValueOwnership::Owned);
+    body->set_return_resource_domain(function.return_resource_domain());
+  }
   if (function.returns_shared()) body->set_return_ownership(ValueOwnership::Shared);
   else if (function.return_type().is_owned_array())
     body->set_return_ownership(ValueOwnership::Owned);

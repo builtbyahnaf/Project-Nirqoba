@@ -144,6 +144,10 @@ class Function {
   Type return_type() const { return return_type_; }
   ValueOwnership return_ownership() const { return return_ownership_; }
   void set_return_ownership(ValueOwnership ownership) { return_ownership_ = ownership; }
+  const std::string& return_resource_domain() const { return return_resource_domain_; }
+  void set_return_resource_domain(std::string domain) {
+    return_resource_domain_ = std::move(domain);
+  }
 
   std::vector<Op>& operations() { return operations_; }
   const std::vector<Op>& operations() const { return operations_; }
@@ -171,6 +175,7 @@ class Function {
   std::string name_;
   Type return_type_;
   ValueOwnership return_ownership_ = ValueOwnership::Trivial;
+  std::string return_resource_domain_;
   std::vector<Parameter> parameters_;
   std::vector<Op> operations_;
   std::vector<Type> types_;
