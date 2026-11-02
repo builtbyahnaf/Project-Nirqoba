@@ -1075,16 +1075,26 @@ static bool has_cleanup_domain(const Expr& expr, const SymbolTable& symbols,
 
 void TypeChecker::check_assignment(AssignmentStmt& assignment) {
   const Type value_type = check_expression(const_cast<Expr&>(assignment.value()));
+  const bool was_checking_lvalue = checking_lvalue_;
+  checking_lvalue_ = true;
   const Type target_type = assignment.is_simple_name()
       ? (symbols_.lookup(assignment.name())
              ? symbols_.lookup(assignment.name())->type : Type::error())
       : check_expression(const_cast<Expr&>(assignment.target()));
+  checking_lvalue_ = was_checking_lvalue;
 
+  string field_owner;
+  string field_name;
+  const bool assigning_owned_field =
+      assignment.target().kind() == Expr::Kind::MemberAccess &&
+      contains_owned_array(target_type) &&
+      field_path(assignment.target(), field_owner, field_name);
   if ((assignment.target().kind() == Expr::Kind::MemberAccess ||
        assignment.target().kind() == Expr::Kind::Index) &&
-      (target_type.is_owned_array() || contains_owned_array(target_type))) {
+      (target_type.is_owned_array() || contains_owned_array(target_type)) &&
+      !assigning_owned_field) {
     diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
-                       "owned fields cannot be replaced individually; move the whole aggregate");
+                       "owned fields can only be reinitialized by assigning to a moved field path");
     return;
   }
   if ((assignment.target().kind() == Expr::Kind::MemberAccess ||
@@ -1129,8 +1139,57 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
   }
   if (assignment.target().kind() == Expr::Kind::MemberAccess &&
       contains_owned_array(target_type)) {
-    diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
-                       "assignment to an owned aggregate field is not supported yet");
+    const Symbol* owner = symbols_.lookup(field_owner);
+    if (!owner || !owner->owns_allocation || owner->moved ||
+        !owner->is_mutable()) {
+      diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
+                         "owned field reinitialization requires a live mutable aggregate owner");
+      return;
+    }
+    if (!symbols_.field_is_definitely_moved(field_owner, field_name)) {
+      diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
+                         "owned field reinitialization requires the field to be moved on every control-flow path");
+      return;
+    }
+    if (symbols_.field_has_moved_descendant(field_owner, field_name)) {
+      diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
+                         "cannot reinitialize an aggregate field containing a moved field");
+      return;
+    }
+    if (symbols_.has_live_borrow(owner->allocation_id)) {
+      diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
+                         "cannot reinitialize an owned field while an array view is live");
+      return;
+    }
+    if (value_type != target_type ||
+        (assignment.value().ownership() != ValueOwnership::Owned &&
+         assignment.value().kind() != Expr::Kind::MemberAccess &&
+         assignment.value().kind() != Expr::Kind::Name)) {
+      diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                         "owned field reinitialization requires an owned value of the same type");
+      return;
+    }
+    const Symbol* source = find_root_symbol(assignment.value(), symbols_);
+    if (assignment.value().kind() == Expr::Kind::Name &&
+        (!source || !source->owns_allocation || source->moved ||
+         source->borrowed || source->shared_allocation)) {
+      diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                         "owned field reinitialization requires a live owned source value");
+      return;
+    }
+    if (source && source->owns_allocation &&
+        symbols_.has_live_borrow(source->allocation_id)) {
+      diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                         "cannot move an owner while an array view is live");
+      return;
+    }
+    consume_field_move(const_cast<Expr&>(assignment.value()), target_type);
+    if (assignment.value().kind() == Expr::Kind::Name && source &&
+        source->owns_allocation && !source->moved) {
+      const_cast<Expr&>(assignment.value()).set_transfers_ownership();
+      symbols_.mark_allocation_moved(source->allocation_id);
+    }
+    symbols_.clear_field_moved(field_owner, field_name);
     return;
   }
   if (symbol != nullptr && symbol->borrowed && assignment.is_simple_name()) {
@@ -2141,7 +2200,8 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
     const Type field_type = elems[static_cast<size_t>(idx)];
     string root;
     string path;
-    if (field_path(expr, root, path) && symbols_.field_is_moved(root, path))
+    if (!checking_lvalue_ && field_path(expr, root, path) &&
+        symbols_.field_is_moved(root, path))
       diagnostics_.error(diag::kUseAfterFree, expr.location(),
                          "use of an aggregate field after it was moved");
     if (contains_owned_array(field_type))
@@ -2173,7 +2233,7 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
         const Type field_type = resolve_aggregate_type(field.type);
         string root;
         string path;
-        if (field_path(expr, root, path) &&
+        if (!checking_lvalue_ && field_path(expr, root, path) &&
             symbols_.field_is_moved(root, path)) {
           diagnostics_.error(diag::kUseAfterFree, expr.location(),
                              "use of an aggregate field after it was moved");

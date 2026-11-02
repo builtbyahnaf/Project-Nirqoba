@@ -1,0 +1,17 @@
+struct Pair {
+    owned_array<int> first;
+    owned_array<int> second;
+}
+
+int function main() {
+    var first = memory.owned_array<int>(1);
+    var second = memory.owned_array<int>(1);
+    var replacement = memory.owned_array<int>(1);
+    first[0] = 17;
+    second[0] = 25;
+    replacement[0] = 31;
+    var pair = Pair { first: first, second: second };
+    let extracted = pair.first;
+    pair.first = replacement;
+    return extracted[0] + pair.first[0] + pair.second[0];
+}

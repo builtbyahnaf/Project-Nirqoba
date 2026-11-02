@@ -36,6 +36,7 @@ struct Symbol {
   // A partial aggregate move clears the corresponding runtime field. Keep the
   // path in semantic state so later reads and branch merges cannot resurrect it.
   std::unordered_set<std::string> moved_fields;
+  std::unordered_set<std::string> definitely_moved_fields;
 
   bool is_mutable() const { return binding == BindingKind::Var; }
 };
@@ -66,9 +67,12 @@ class SymbolTable {
   void set_borrowed_resource_domain(const std::string& name,
                                     std::string cleanup_callee);
   bool field_is_moved(const std::string& name, const std::string& path) const;
+  bool field_is_definitely_moved(const std::string& name,
+                                 const std::string& path) const;
   bool field_has_moved_descendant(const std::string& name,
                                   const std::string& path) const;
   void mark_field_moved(const std::string& name, const std::string& path);
+  void clear_field_moved(const std::string& name, const std::string& path);
   void merge_conditional_ownership(const SymbolTable& then_state,
                                    const SymbolTable& else_state);
   std::vector<std::string> owners_moved_since(const SymbolTable& previous) const;

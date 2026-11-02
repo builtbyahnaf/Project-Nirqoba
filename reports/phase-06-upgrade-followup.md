@@ -394,3 +394,14 @@ source parameter attribute.
 
 RelWithDebInfo validation passed: build succeeded, CTest 1/1, and integration
 suite 124/124.
+
+## 40. Reinitialize moved owned fields - 2026-11-02
+
+An owned aggregate field can now be assigned a replacement only after that
+field path has been moved on every control-flow path. The owner must remain
+mutable and live, and the source must be an owned value; existing borrow
+conflicts remain enforced. Branch merging tracks possibly-moved and
+definitely-moved paths separately, so a conditional move still rejects
+reinitialization. Added positive runtime and negative branch-merge coverage.
+Validation passed: Windows x64 build, CTest 1/1, and integration suite
+126/126. No benchmark was run.

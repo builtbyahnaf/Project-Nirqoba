@@ -40,8 +40,8 @@ silently counted as complete:
   allocation caches; reducing remaining global `allocator_mutex` registry
   synchronization and production bookkeeping; a controlled comparison against
   platform and mature general-purpose allocators.
-- **Ownership:** reinitializing moved fields and native-resource pointer field moves; general
-  returned-reference lifetime checking; interprocedural escape analysis and
+- **Ownership:** native-resource pointer field moves; general returned-reference
+  lifetime checking; interprocedural escape analysis and
   stack placement; closure capture ownership; cleanup semantics for a future
   error or exception unwinding model.
 - **Collector:** TLABs, safepoints and mutator coordination, size classes and
