@@ -45,14 +45,13 @@ The profiler does not report allocation hotspots; allocator free-space and fragm
 Owned factory functions now preserve the cleanup domain in their signature with
 `owned file byte*`, `owned socket byte*`, `owned mutex byte*`,
 `owned mapping byte*`, or `owned secure byte*`. The checker rejects a resource returned through an
-unqualified pointer contract and rejects a value whose destructor does not
-match the declared domain. The return domain is retained in TIR and emitted as
-`nirqoba.return_resource_domain` in MLIR, and owning resource parameters carry
-their domain in argument metadata. Socket integration transfers an owner
-through an owning helper and back to the caller; negative coverage checks
-mismatched parameter and return resources.
+unqualified pointer contract and rejects values or direct factory arguments
+whose destructor does not match the declared domain. Return and parameter
+domains are retained in TIR/MLIR metadata, and parameter cleanup uses that
+domain. Integration coverage transfers socket and secure owners through
+helpers and rejects mismatched parameter and return resources.
 
-RelWithDebInfo validation passed: CTest 1/1 and integration 108/108. The
+RelWithDebInfo validation passed: CTest 1/1 and integration 109/109. The
 remaining Phase 6.9 limits above still apply.
 
 ## 13. Completion pass - 2026-11-01
