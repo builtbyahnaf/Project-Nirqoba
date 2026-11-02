@@ -848,3 +848,33 @@ TEST(AllocatorTest, BenchmarksSharedAllocatorContentionAcrossThreads) {
   }
   ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
 }
+
+TEST(AllocatorTest, GeneralHeapSupportsConcurrentAllocateWriteAndRelease) {
+  void* allocator = nrq_allocator_create(NRQ_ALLOCATOR_GENERAL, 0);
+  ASSERT_NE(allocator, nullptr);
+  constexpr int kWorkers = 8;
+  constexpr int kIterations = 2000;
+  std::atomic<int> failures{0};
+  std::vector<std::thread> workers;
+  workers.reserve(kWorkers);
+  for (int worker = 0; worker < kWorkers; ++worker) {
+    workers.emplace_back([&, worker] {
+      for (int iteration = 0; iteration < kIterations; ++iteration) {
+        auto* bytes = static_cast<uint64_t*>(
+            nrq_memory_allocate_from(allocator, sizeof(uint64_t), alignof(uint64_t)));
+        if (!bytes) {
+          ++failures;
+          continue;
+        }
+        *bytes = (static_cast<uint64_t>(worker) << 32) |
+                 static_cast<uint32_t>(iteration);
+        if (*bytes != ((static_cast<uint64_t>(worker) << 32) |
+                       static_cast<uint32_t>(iteration))) ++failures;
+        nrq_memory_deallocate_checked(bytes);
+      }
+    });
+  }
+  for (std::thread& worker : workers) worker.join();
+  ASSERT_EQ(failures.load(), 0);
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
+}

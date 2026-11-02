@@ -103,6 +103,12 @@ class Allocator {
   virtual bool can_deallocate(void*) const { return true; }
   virtual bool reset() = 0;
   virtual bool can_destroy() const { return true; }
+  /**
+   * Stateful region allocators and user callbacks are serialized by default.
+   * Implementations may opt out only when their underlying allocation API is
+   * safe for concurrent calls and they keep no mutable per-instance state.
+   */
+  virtual bool requires_operation_serialization() const { return true; }
   virtual NrqAllocatorKind kind() const { return NRQ_ALLOCATOR_GENERAL; }
   size_t capacity() const { return capacity_; }
 
@@ -126,25 +132,38 @@ class Allocator {
   }
 
   void* allocate_serialized(size_t bytes, size_t alignment) {
+    if (!requires_operation_serialization()) return allocate(bytes, alignment);
     std::lock_guard<std::mutex> lock(operation_mutex_);
     return allocate(bytes, alignment);
   }
   void deallocate_serialized(void* pointer) {
+    if (!requires_operation_serialization()) {
+      deallocate(pointer);
+      return;
+    }
     std::lock_guard<std::mutex> lock(operation_mutex_);
     deallocate(pointer);
   }
   bool try_deallocate_serialized(void* pointer) {
+    if (!requires_operation_serialization()) {
+      if (!can_deallocate(pointer)) return false;
+      deallocate(pointer);
+      return true;
+    }
     std::lock_guard<std::mutex> lock(operation_mutex_);
     if (!can_deallocate(pointer)) return false;
     deallocate(pointer);
     return true;
   }
   bool reset_serialized() {
+    if (!requires_operation_serialization()) return reset();
     std::lock_guard<std::mutex> lock(operation_mutex_);
     return reset();
   }
   void* reallocate_serialized(void* pointer, size_t old_bytes, size_t bytes,
                               size_t alignment) {
+    if (!requires_operation_serialization())
+      return reallocate(pointer, old_bytes, bytes, alignment);
     std::lock_guard<std::mutex> lock(operation_mutex_);
     return reallocate(pointer, old_bytes, bytes, alignment);
   }
@@ -193,6 +212,15 @@ class Allocator {
 class GeneralAllocator final : public Allocator {
  public:
   GeneralAllocator() : Allocator(0) {}
+  /**
+   * This implementation intentionally uses the Windows process heap. HeapAlloc
+   * and HeapFree provide their own synchronization, so adding this runtime's
+   * per-allocator mutex would serialize independent callers unnecessarily.
+   * The allocation registry still validates ownership and allocator identity.
+   * Platform abstraction or replacement is future work, not part of this
+   * Phase 6 Upgrade change.
+   */
+  bool requires_operation_serialization() const override { return false; }
   void* allocate(size_t bytes, size_t alignment) override {
     return heap_alloc_aligned(bytes, alignment);
   }
