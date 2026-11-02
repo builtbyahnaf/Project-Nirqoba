@@ -40,10 +40,10 @@ silently counted as complete:
   allocation caches; reducing remaining global `allocator_mutex` registry
   synchronization and production bookkeeping; a controlled comparison against
   platform and mature general-purpose allocators.
-- **Ownership:** native-resource pointer field moves; general returned-reference
-  lifetime checking; interprocedural escape analysis and
-  stack placement; closure capture ownership; cleanup semantics for a future
-  error or exception unwinding model.
+- **Ownership:** native-resource pointer field moves; returned-reference
+  lifetime rules beyond pointers and immutable array views; interprocedural
+  escape analysis and stack placement; closure capture ownership; cleanup
+  semantics for a future error or exception unwinding model.
 - **Collector:** TLABs, safepoints and mutator coordination, size classes and
   free-slot reuse, generational or incremental collection, and write barriers.
   These depend on a correct safepoint and mutation protocol. GC benchmarking is

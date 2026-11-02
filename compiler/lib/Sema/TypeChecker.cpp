@@ -224,9 +224,11 @@ bool TypeChecker::check(Program& program) {
     if (contains_nested_owned_array(function->return_type()))
       diagnostics_.error(diag::kTypeMismatch, function->location(),
                          "owned arrays cannot contain elements that own nested allocations yet");
-    if (contains_array_view(function->return_type()))
+    if (contains_array_view(function->return_type()) &&
+        !(function->return_type().is_array_view() &&
+          !function->return_borrow_parameter().empty()))
       diagnostics_.error(diag::kTypeMismatch, function->location(),
-                         "borrowed array views cannot escape through a return value");
+                         "borrowed array views can only escape through a source-bound borrow return");
     vector<Type> param_types;
     param_types.reserve(function->parameters().size());
     for (const Parameter& param : function->parameters()) {
@@ -382,9 +384,11 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
       if (contains_nested_owned_array(function->return_type()))
         diagnostics_.error(diag::kTypeMismatch, function->location(),
                            "owned arrays cannot contain elements that own nested allocations yet");
-      if (contains_array_view(function->return_type()))
+      if (contains_array_view(function->return_type()) &&
+          !(function->return_type().is_array_view() &&
+            !function->return_borrow_parameter().empty()))
         diagnostics_.error(diag::kTypeMismatch, function->location(),
-                           "borrowed array views cannot escape through a return value");
+                           "borrowed array views can only escape through a source-bound borrow return");
       vector<Type> param_types;
       param_types.reserve(function->parameters().size());
       for (const Parameter& param : function->parameters()) {
@@ -568,10 +572,11 @@ void TypeChecker::check_function(FunctionDecl& function) {
                        "owned resource return types must be non-shared pointers");
   }
   if (!current_return_borrow_parameter_.empty() &&
-      (!current_return_type_.is_pointer() || current_return_shared_ ||
-       !current_return_resource_domain_.empty())) {
+      ((!current_return_type_.is_pointer() && !current_return_type_.is_array_view()) ||
+       current_return_shared_ || !current_return_resource_domain_.empty() ||
+       (current_return_type_.is_array_view() && current_return_mutable_borrow_))) {
     diagnostics_.error(diag::kTypeMismatch, function.location(),
-                       "borrow returns require an unqualified, non-shared pointer type");
+                       "borrow returns require an unqualified pointer or immutable array view");
   }
   loop_depth_ = 0;
   loop_break_states_.clear();
@@ -583,10 +588,14 @@ void TypeChecker::check_function(FunctionDecl& function) {
     // makes them `let`, and there is no syntax to opt into mutability; treating
     // them as immutable would make it impossible to modify an array or struct
     // passed to a helper function at all.
-    if (parameter.borrowed && !parameter.type.is_pointer()) {
+    if (parameter.borrowed && !parameter.type.is_pointer() &&
+        !parameter.type.is_array_view()) {
       diagnostics_.error(diag::kTypeMismatch, parameter.location,
-                         "borrow parameters must have pointer type");
+                         "borrow parameters must have pointer or array view type");
     }
+    if (parameter.mutable_borrow && parameter.type.is_array_view())
+      diagnostics_.error(diag::kTypeMismatch, parameter.location,
+                         "array views are immutable and cannot be mutably borrowed");
     if (parameter.mutable_borrow && !parameter.borrowed) {
       diagnostics_.error(diag::kTypeMismatch, parameter.location,
                          "'mut' requires a borrowed parameter");
@@ -872,6 +881,16 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
       if (call.callee() == "memory.array_view" && !call.arguments().empty()) {
         if (const Symbol* source = find_root_symbol(*call.arguments()[0], symbols_))
           symbol.allocation_id = source->allocation_id;
+      } else if (const FunctionSignature* signature = find_function(call.callee());
+                 signature && signature->returns_borrowed) {
+        const Symbol* source = find_borrow_origin(declaration.initializer());
+        if (source && source->allocation_id != 0 && !source->moved) {
+          symbol.allocation_id = source->allocation_id;
+          if (symbols_.has_conflicting_borrow(source->allocation_id, false,
+                                              source->name))
+            diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
+                               "returned array view conflicts with a live mutable borrow");
+        }
       }
     } else {
       const Symbol* source = find_root_symbol(declaration.initializer(), symbols_);
@@ -1574,9 +1593,9 @@ void TypeChecker::check_return(ReturnStmt& statement) {
                                          : ValueOwnership::Borrowed);
     }
   }
-  if (contains_array_view(value_type)) {
+  if (contains_array_view(value_type) && !returns_borrowed) {
     diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
-                       "borrowed array views cannot escape through a return value");
+                       "borrowed array views can only escape through a source-bound borrow return");
   }
   if (current_return_type_.is_pointer() && !current_return_shared_ &&
       !returns_borrowed) {

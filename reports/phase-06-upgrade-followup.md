@@ -405,3 +405,14 @@ definitely-moved paths separately, so a conditional move still rejects
 reinitialization. Added positive runtime and negative branch-merge coverage.
 Validation passed: Windows x64 build, CTest 1/1, and integration suite
 126/126. No benchmark was run.
+
+## 41. Source-bound borrowed array-view returns - 2026-11-02
+
+Functions may now return an immutable `array_view<T>` when the signature binds
+the return to a named borrowed array-view parameter. Semantic analysis verifies
+that each returned view preserves the declared parameter's allocation identity;
+caller aliases inherit the original owner identity, so moving the owner while
+the returned view is live is rejected. Unqualified view returns, mutable view
+borrows, wrong-source returns, and aggregate-stored views remain rejected.
+Validation passed: Windows x64 build, CTest 1/1, and integration suite
+129/129. No benchmark was run.

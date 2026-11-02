@@ -1,0 +1,12 @@
+borrow source array_view<int> function invalid_view(borrow array_view<int> source) {
+    var local_values = memory.owned_array<int>(1);
+    let local_view = memory.array_view<int>(local_values, 0, 1);
+    return local_view;
+}
+
+int function main() {
+    var values = memory.owned_array<int>(1);
+    let view = memory.array_view<int>(values, 0, 1);
+    let returned = invalid_view(view);
+    return returned[0];
+}
