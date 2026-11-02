@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <atomic>
+#include <cstring>
 #include <thread>
 #include <vector>
 
@@ -418,6 +419,19 @@ TEST(GcTest, RepeatedRootRegionKeepsContiguousArrayReferencesAlive) {
   nrq_gc_root_unregister(reinterpret_cast<void**>(references));
   nrq_gc_collect();
   ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+}
+
+TEST(GcTest, ArrayRootInitializationClearsOnlyReferenceSlots) {
+  PairReferences elements[2]{};
+  std::memset(elements, 0xff, sizeof(elements));
+  const size_t offsets[] = {offsetof(PairReferences, first),
+                            offsetof(PairReferences, second)};
+  nrq_gc_root_clear_array_references(elements, 2, sizeof(PairReferences),
+                                     offsets, 2);
+  EXPECT_EQ(elements[0].first, nullptr);
+  EXPECT_EQ(elements[0].second, nullptr);
+  EXPECT_EQ(elements[1].first, nullptr);
+  EXPECT_EQ(elements[1].second, nullptr);
 }
 TEST(GcTest, PinDiagnosticsReportCountAndRejectExcessivePins) {
   nrq_gc_enable();

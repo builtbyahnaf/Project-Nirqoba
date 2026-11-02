@@ -560,6 +560,30 @@ void nrq_gc_root_register_array(void* data, size_t count, size_t element_size,
   }
 }
 
+void nrq_gc_root_clear_array_references(void* data, size_t count,
+                                        size_t element_size,
+                                        const size_t* reference_offsets,
+                                        size_t reference_count) {
+  if (!data || count == 0) return;
+  if (element_size == 0 || reference_count == 0 || !reference_offsets ||
+      count > SIZE_MAX / element_size)
+    nrq_runtime_fatal("GC array-root initialization received an invalid descriptor");
+  for (size_t index = 0; index < reference_count; ++index) {
+    const size_t offset = reference_offsets[index];
+    if (offset > element_size || sizeof(void*) > element_size - offset)
+      nrq_runtime_fatal("GC array-root initialization contains an invalid pointer offset");
+  }
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  if (roots.find(data) != roots.end())
+    nrq_runtime_fatal("GC array-root initialization requires unregistered storage");
+  auto* bytes = static_cast<unsigned char*>(data);
+  for (size_t element = 0; element < count; ++element) {
+    unsigned char* element_bytes = bytes + element * element_size;
+    for (size_t index = 0; index < reference_count; ++index)
+      std::memset(element_bytes + reference_offsets[index], 0, sizeof(void*));
+  }
+}
+
 void nrq_gc_root_unregister(void** slot) {
   if (!slot) return;
   std::lock_guard<std::mutex> lock(gc_mutex);

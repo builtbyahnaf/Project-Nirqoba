@@ -1,0 +1,9 @@
+struct Node {
+    managed<Node> child;
+}
+
+int function main() {
+    var nodes = memory.owned_array<Node>(2);
+    nodes[0].child = array.allocate<Node>(1);
+    return 0;
+}
