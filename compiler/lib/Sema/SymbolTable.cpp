@@ -118,6 +118,13 @@ bool SymbolTable::field_is_moved(const string& name, const string& path) const {
   return false;
 }
 
+bool SymbolTable::field_is_definitely_moved(const string& name,
+                                            const string& path) const {
+  const Symbol* symbol = lookup(name);
+  return symbol && symbol->definitely_moved_fields.find(path) !=
+                       symbol->definitely_moved_fields.end();
+}
+
 bool SymbolTable::field_has_moved_descendant(const string& name,
                                              const string& path) const {
   const Symbol* symbol = lookup(name);
@@ -133,6 +140,18 @@ void SymbolTable::mark_field_moved(const string& name, const string& path) {
     auto found = scope->find(name);
     if (found != scope->end()) {
       found->second.moved_fields.insert(path);
+      found->second.definitely_moved_fields.insert(path);
+      return;
+    }
+  }
+}
+
+void SymbolTable::clear_field_moved(const string& name, const string& path) {
+  for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+    auto found = scope->find(name);
+    if (found != scope->end()) {
+      found->second.moved_fields.erase(path);
+      found->second.definitely_moved_fields.erase(path);
       return;
     }
   }
@@ -166,6 +185,11 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
       destination.moved_fields = then_symbol->moved_fields;
       destination.moved_fields.insert(else_symbol->moved_fields.begin(),
                                       else_symbol->moved_fields.end());
+      destination.definitely_moved_fields.clear();
+      for (const string& path : then_symbol->definitely_moved_fields)
+        if (else_symbol->definitely_moved_fields.find(path) !=
+            else_symbol->definitely_moved_fields.end())
+          destination.definitely_moved_fields.insert(path);
     }
   }
 }

@@ -127,6 +127,7 @@ class TypeChecker {
   std::string current_module_;
   uint64_t next_allocation_id_ = 1;
   bool checking_deferred_cleanup_ = false;
+  bool checking_lvalue_ = false;
   std::vector<std::vector<DeferredCleanup>> deferred_calls_;
   std::unordered_map<std::string, FunctionSignature> functions_;
   std::unordered_map<std::string, StructInfo> structs_;
