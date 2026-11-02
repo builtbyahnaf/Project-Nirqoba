@@ -1442,23 +1442,38 @@ void* nrq_memory_reallocate(void* pointer, size_t bytes) {
   return replacement;
 }
 
+static bool query_allocator_free_statistics(uint64_t allocator_handle,
+                                            size_t& free_bytes,
+                                            size_t& largest_free_block) {
+  Allocator* allocator = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    allocator = resolve_allocator(allocator_handle);
+    if (!allocator || !increment_operation_pin_locked(allocator)) return false;
+  }
+  try {
+    allocator->free_statistics_serialized(free_bytes, largest_free_block);
+  } catch (...) {
+    release_operation_pin(allocator);
+    return false;
+  }
+  release_operation_pin(allocator);
+  return true;
+}
+
 uint64_t nrq_memory_allocator_free_bytes(uint64_t allocator_handle) {
-  std::lock_guard<std::mutex> lock(allocator_mutex);
-  Allocator* allocator = resolve_allocator(allocator_handle);
-  if (!allocator) return 0;
   size_t free_bytes = 0;
   size_t largest_free_block = 0;
-  allocator->free_statistics_serialized(free_bytes, largest_free_block);
+  if (!query_allocator_free_statistics(allocator_handle, free_bytes,
+                                       largest_free_block)) return 0;
   return free_bytes;
 }
 
 uint64_t nrq_memory_allocator_fragmentation_bytes(uint64_t allocator_handle) {
-  std::lock_guard<std::mutex> lock(allocator_mutex);
-  Allocator* allocator = resolve_allocator(allocator_handle);
-  if (!allocator) return 0;
   size_t free_bytes = 0;
   size_t largest_free_block = 0;
-  allocator->free_statistics_serialized(free_bytes, largest_free_block);
+  if (!query_allocator_free_statistics(allocator_handle, free_bytes,
+                                       largest_free_block)) return 0;
   return free_bytes > largest_free_block ? free_bytes - largest_free_block : 0;
 }
 

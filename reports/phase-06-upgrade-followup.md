@@ -237,3 +237,10 @@ buffers remain indexable; the existing secure-buffer integration case confirms
 the exception. New negative integration cases cover file and mapping handles.
 RelWithDebInfo validation passed: CTest 1/1 and integration 87/87. No GC
 benchmark was run.
+
+Allocator free-space and fragmentation queries now pin their target allocator,
+release the global registry lock, query under only that allocator's operation
+mutex, and then release the pin. A blocking custom allocation regression checks
+that unrelated allocator creation completes while a same-allocator statistics
+query waits. RelWithDebInfo validation passed: CTest 1/1 and integration 87/87.
+No GC benchmark was run.
