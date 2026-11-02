@@ -124,3 +124,14 @@ valid for the aggregate at scope exit.
 
 Validation: the RelWithDebInfo integration suite passed 159/159. No benchmark
 was run.
+
+## 33. Returned borrow source selection coverage - 2026-11-02
+
+Added a positive regression where a function returns an alias of its second
+borrowed pointer parameter, and a negative regression proving the returned
+alias keeps the correct owner's lifetime active while the unrelated first
+owner can still be released. This exercises parameter-name-to-call-argument
+provenance through a local alias.
+
+Validation: the RelWithDebInfo integration suite passed 161/161. No benchmark
+was run.

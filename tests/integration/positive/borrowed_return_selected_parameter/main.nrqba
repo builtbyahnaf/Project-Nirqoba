@@ -1,0 +1,13 @@
+borrow backing byte* function select(borrow byte* other, borrow byte* backing) {
+    let alias = backing;
+    return alias;
+}
+
+byte function main() {
+    var unrelated = memory.allocate<byte>(1);
+    var owner = memory.allocate<byte>(1);
+    unrelated[0] = 11u8;
+    owner[0] = 47u8;
+    let result = select(unrelated, owner);
+    return result[0];
+}
