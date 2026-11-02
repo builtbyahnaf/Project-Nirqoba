@@ -220,3 +220,12 @@ reserved for final release. RelWithDebInfo validation passed: CTest 1/1 and
 integration 85/85. Secure release is also checked at the allocator callback
 boundary to confirm the payload has been zeroed before deallocation. No GC
 benchmark was run.
+
+The memory-domain decision is now consistent across the main project overview,
+syntax specification, roadmap invariants, and implementation record: owned
+resources are the default, while precise GC is a separate opt-in domain with
+automatic triggers disabled until `gc.enable()`. A runtime regression allocates
+through the explicit allocator, forces collection, confirms the explicit
+allocation remains readable, and verifies GC heap statistics did not include
+it. RelWithDebInfo validation passed: CTest 1/1 and integration 85/85. No GC
+benchmark was run.
