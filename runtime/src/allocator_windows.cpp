@@ -964,6 +964,54 @@ struct ThreadSelection {
 };
 thread_local ThreadSelection thread_selection;
 
+// Small default-allocator blocks are recycled per thread. The general
+// allocator is just the process heap, so a freed block has no allocator state
+// to reset. Keeping a short thread-local free list avoids a HeapAlloc /
+// HeapFree pair for the common short-lived allocation pattern without
+// weakening the global ownership registry.
+constexpr size_t kDefaultCacheMaxBytes = 1024;
+constexpr size_t kDefaultCacheCapacity = 64;
+
+class ThreadDefaultAllocationCache {
+ public:
+  ~ThreadDefaultAllocationCache() {
+    for (size_t index = 0; index < size_; ++index)
+      heap_free_aligned(blocks_[index].pointer);
+  }
+
+  bool can_store(size_t bytes, size_t alignment) const {
+    return size_ < kDefaultCacheCapacity && bytes != 0 &&
+           bytes <= kDefaultCacheMaxBytes && alignment != 0;
+  }
+
+  void store(void* pointer, size_t bytes, size_t alignment) {
+    blocks_[size_++] = CachedBlock{pointer, bytes, alignment};
+  }
+
+  void* take(size_t bytes, size_t alignment) {
+    for (size_t index = size_; index > 0; --index) {
+      CachedBlock& block = blocks_[index - 1];
+      if (block.bytes != bytes || block.alignment != alignment) continue;
+      void* pointer = block.pointer;
+      blocks_[index - 1] = blocks_[--size_];
+      return pointer;
+    }
+    return nullptr;
+  }
+
+ private:
+  struct CachedBlock {
+    void* pointer;
+    size_t bytes;
+    size_t alignment;
+  };
+  CachedBlock blocks_[kDefaultCacheCapacity]{};
+  size_t size_ = 0;
+};
+
+thread_local ThreadDefaultAllocationCache thread_default_allocation_cache;
+std::atomic<bool> default_general_cache_enabled{true};
+
 Allocator* active_allocator() {
   if (thread_selection.allocator) return thread_selection.allocator;
   return policy_default_allocator ? policy_default_allocator : &default_allocator;
@@ -1103,6 +1151,8 @@ void* nrq_memory_set_default_allocator(void* handle) {
     return nullptr;
   Allocator* previous = policy_default_allocator;
   policy_default_allocator = handle ? allocator_handles[handle].get() : nullptr;
+  default_general_cache_enabled.store(policy_default_allocator == nullptr,
+                                      std::memory_order_release);
   return previous;
 }
 
@@ -1184,6 +1234,27 @@ static bool increment_operation_pin_locked(Allocator* allocator) {
 }
 
 void* nrq_memory_allocate(size_t bytes, size_t alignment) {
+  // The cache is only valid for the process default general allocator. A
+  // thread-selected allocator and a process default override must both keep
+  // their normal registry and pinning path.
+  if (!thread_selection.allocator &&
+      default_general_cache_enabled.load(std::memory_order_acquire)) {
+    if (void* cached =
+            thread_default_allocation_cache.take(bytes, alignment)) {
+      try {
+        std::lock_guard<std::mutex> lock(allocator_mutex);
+        auto inserted = live_allocations.emplace(
+            cached, AllocationOwner{&default_allocator, bytes, alignment});
+        if (!inserted.second)
+          nrq_runtime_fatal("allocator cache returned an already-live address");
+        record_allocation_profile(bytes);
+        return cached;
+      } catch (...) {
+        heap_free_aligned(cached);
+        return nullptr;
+      }
+    }
+  }
   Allocator* allocator = nullptr;
   {
     std::lock_guard<std::mutex> lock(allocator_mutex);
@@ -1324,6 +1395,9 @@ void* nrq_memory_allocate_from(void* handle, size_t bytes, size_t alignment) {
 void nrq_memory_deallocate_checked(void* pointer) {
   if (!pointer) return;
   Allocator* allocator = nullptr;
+  bool cached = false;
+  size_t cached_bytes = 0;
+  size_t cached_alignment = 0;
   {
     std::lock_guard<std::mutex> lock(allocator_mutex);
     if (shared_reference_counts.find(pointer) != shared_reference_counts.end())
@@ -1331,10 +1405,26 @@ void nrq_memory_deallocate_checked(void* pointer) {
     auto found = live_allocations.find(pointer);
     if (found == live_allocations.end() || found->second.operation_in_flight)
       nrq_runtime_fatal("memory.deallocate received an invalid or already freed pointer");
-    allocator = found->second.allocator;
-    if (!increment_operation_pin_locked(allocator))
-      nrq_runtime_fatal("memory.deallocate could not pin the owning allocator");
-    found->second.operation_in_flight = true;
+    if (found->second.allocator == &default_allocator &&
+        thread_default_allocation_cache.can_store(found->second.bytes,
+                                                  found->second.alignment)) {
+      cached = true;
+      cached_bytes = found->second.bytes;
+      cached_alignment = found->second.alignment;
+      record_deallocation_profile(cached_bytes);
+      live_allocations.erase(found);
+      allocation_registry_changed.notify_all();
+    } else {
+      allocator = found->second.allocator;
+      if (!increment_operation_pin_locked(allocator))
+        nrq_runtime_fatal("memory.deallocate could not pin the owning allocator");
+      found->second.operation_in_flight = true;
+    }
+  }
+  if (cached) {
+    thread_default_allocation_cache.store(pointer, cached_bytes,
+                                          cached_alignment);
+    return;
   }
 
   bool released = false;

@@ -1,0 +1,7 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O3"],
+  "expect_exit": 0,
+  "expect_stdout_contains": ["tail call i64 @fib", "define i64 @fib"],
+  "expect_stdout_not_contains": ["nrq_gc_root_frame_begin", "nrq_gc_root_frame_end"]
+}
