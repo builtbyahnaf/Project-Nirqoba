@@ -1,0 +1,105 @@
+// Benchmark 02 - Mark and sweep, Nirqoba track.
+//
+// One complete binary tree of depth 20 is built (2,097,151 nodes) and kept
+// reachable from a single managed root. Every explicit collection must trace
+// all nodes and all reference fields, then sweep the object list, reclaiming
+// nothing because the whole tree is live.
+//
+// The root is used again after the measured batches. That use guarantees the
+// compiler cannot treat it as dead before the collections and accidentally
+// turn the test into a reclamation benchmark.
+//
+// `time.now()` has 1 ms resolution, so each sample is a batch of five
+// collections; the reported COLLECT_MS value is the batch average.
+
+struct TreeNode {
+    managed<TreeNode> left;
+    managed<TreeNode> right;
+    int value;
+}
+
+managed<TreeNode> function build_tree(int depth, int value) {
+    var node = array.allocate<TreeNode>(1);
+    node[0].value = value;
+    if (depth > 0) {
+        node[0].left = build_tree(depth - 1, value * 2);
+        node[0].right = build_tree(depth - 1, value * 2 + 1);
+    }
+    return node;
+}
+
+int function sum_tree(managed<TreeNode> node, int depth) {
+    if (depth == 0) {
+        return node[0].value;
+    }
+    return node[0].value + sum_tree(node[0].left, depth - 1)
+        + sum_tree(node[0].right, depth - 1);
+}
+
+int function main() {
+    gc.disable();
+    gc.collect();
+
+    let tree_depth = 20;
+    let tree_nodes = 2097151;
+    let warmup_batches = 3;
+    let collect_batch = 5;
+    let measure_rounds = 5;
+
+    let build_start = time.now();
+    var root = build_tree(tree_depth, 1);
+    let build_end = time.now();
+
+    let traverse_start = time.now();
+    var checksum = sum_tree(root, tree_depth);
+    let traverse_end = time.now();
+
+    for (var warmup = 0; warmup < warmup_batches; warmup += 1) {
+        for (var collection = 0; collection < collect_batch; collection += 1) {
+            gc.collect();
+        }
+    }
+
+    print("TEST");
+    print("mark_and_sweep");
+    print("IMPL");
+    print("nirqoba");
+    print("OBJECTS");
+    print(tree_nodes);
+    print("WARMUP_BATCHES");
+    print(warmup_batches);
+    print("COLLECT_BATCH");
+    print(collect_batch);
+    print("MEASURE_ROUNDS");
+    print(measure_rounds);
+    print("BUILD_MS");
+    print(build_end - build_start);
+    print("TRAVERSE_MS");
+    print(traverse_end - traverse_start);
+    print("CHECKSUM");
+    print(checksum);
+
+    for (var round = 0; round < measure_rounds; round += 1) {
+        let before = gc.get_statistics().collections;
+        let collect_start = time.now();
+        for (var collection = 0; collection < collect_batch; collection += 1) {
+            gc.collect();
+        }
+        let collect_end = time.now();
+        let after = gc.get_statistics();
+
+        print("ROUND");
+        print(round);
+        print("COLLECT_MS");
+        print((collect_end - collect_start) / collect_batch);
+        print("LIVE_AFTER");
+        print(after.live_objects);
+        print("COLLECTIONS_DELTA");
+        print(after.collections - before);
+    }
+
+    // Keep the root observably live through every collection above.
+    print("ROOT_VALUE");
+    print(root[0].value);
+    return 0;
+}

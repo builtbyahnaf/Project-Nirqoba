@@ -4,10 +4,11 @@
 #pragma once
 
 // Numeric version string derived from the CMake project() version, e.g.
-// "0.102.0". Use NIRQOBA_VERSION_LABEL for anything user-facing.
+// "<major>.<minor>.<patch>". Use NIRQOBA_VERSION_LABEL for anything
+// user-facing.
 #define NIRQOBA_VERSION_STRING "@PROJECT_VERSION@"
 
-// Human-readable release label, e.g. "0.102-beta". This carries the
+// Human-readable release label, e.g. "<major>.<minor>-beta". This carries the
 // pre-release channel that the numeric version cannot express.
 #define NIRQOBA_VERSION_LABEL "@NIRQOBA_VERSION_LABEL@"
 

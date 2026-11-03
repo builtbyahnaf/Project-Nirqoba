@@ -1,0 +1,91 @@
+// Benchmark 03 - Cyclic graph reclamation, Nirqoba track.
+//
+// Each pair of nodes points only at its partner. No external root survives
+// construction, so a tracing collector must reclaim the entire set while a
+// pure reference-counting scheme would leak it. Only the collection phase is
+// timed; construction is reported separately.
+//
+// `make_one_cycle` keeps both managed locals in a short-lived frame. That
+// avoids growing the loop caller's root frame once per pair and lets the
+// collector observe the cycles as genuinely unreachable after the call.
+
+struct Node {
+    managed<Node> next;
+    int value;
+}
+
+void function make_one_cycle(int index) {
+    var first = array.allocate<Node>(1);
+    var second = array.allocate<Node>(1);
+    first[0].value = index;
+    second[0].value = index + 1;
+    first[0].next = second;
+    second[0].next = first;
+}
+
+// Returns the same value checksum the other language tracks report:
+// sum of 0..(2 * pairs - 1).
+int function build_cycles(int pairs) {
+    var checksum = 0;
+    for (var index = 0; index < pairs; index += 1) {
+        make_one_cycle(index * 2);
+        checksum += index * 4 + 1;
+    }
+    return checksum;
+}
+
+int function main() {
+    gc.disable();
+    gc.collect();
+
+    let cycle_pairs = 500000;
+    let cycle_nodes = 1000000;
+    let warmup_rounds = 2;
+    let measure_rounds = 5;
+
+    for (var warmup = 0; warmup < warmup_rounds; warmup += 1) {
+        var ignored = build_cycles(cycle_pairs);
+        gc.collect();
+    }
+
+    print("TEST");
+    print("cyclic_graph_reclamation");
+    print("IMPL");
+    print("nirqoba");
+    print("OBJECTS");
+    print(cycle_nodes);
+    print("WARMUP_ROUNDS");
+    print(warmup_rounds);
+    print("MEASURE_ROUNDS");
+    print(measure_rounds);
+
+    for (var round = 0; round < measure_rounds; round += 1) {
+        let build_start = time.now();
+        var checksum = build_cycles(cycle_pairs);
+        let build_end = time.now();
+
+        let before_collect = gc.get_statistics();
+
+        let collect_start = time.now();
+        gc.collect();
+        let collect_end = time.now();
+
+        let after_collect = gc.get_statistics();
+        let cleared_nodes = before_collect.live_objects - after_collect.live_objects;
+
+        print("ROUND");
+        print(round);
+        print("BUILD_MS");
+        print(build_end - build_start);
+        print("COLLECT_MS");
+        print(collect_end - collect_start);
+        print("CHECKSUM");
+        print(checksum);
+        print("LIVE_AFTER");
+        print(after_collect.live_objects);
+        print("CYCLES_CLEARED");
+        print((cleared_nodes as int) / 2);
+    }
+
+    return 0;
+}

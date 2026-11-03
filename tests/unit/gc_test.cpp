@@ -457,7 +457,7 @@ TEST(GcTest, RootedAllocationPublishesBeforeConcurrentCollection) {
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
 }
 
-TEST(GcTest, CollectionWaitsForActiveMutatorsToReachSafepoints) {
+TEST(GcTest, CollectionMarksIncrementallyWhileMutatorsRun) {
   nrq_gc_disable();
   nrq_gc_collect();
   safepoint_mutator_progress = 0;
@@ -493,7 +493,10 @@ TEST(GcTest, CollectionWaitsForActiveMutatorsToReachSafepoints) {
   stop_mutator.store(true, std::memory_order_release);
   mutator.join();
   ASSERT_EQ(trace_count, 2);
-  ASSERT_EQ(progress_during_first_trace, progress_during_second_trace);
+  // Marking is sliced and mutators are resumed between slices. The probe's
+  // second trace therefore observes progress made since the first trace rather
+  // than the frozen progress of a stop-the-world collector.
+  ASSERT_TRUE(progress_during_second_trace > progress_during_first_trace);
 
   nrq_gc_root_unregister(&second);
   nrq_gc_root_unregister(&first);
@@ -595,6 +598,66 @@ TEST(GcTest, PinDiagnosticsReportCountAndRejectExcessivePins) {
   ASSERT_EQ(nrq_gc_pin_count(), baseline_pins);
   nrq_gc_collect();
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
+TEST(GcTest, MinorCollectionPromotesSurvivorsAndRetainsOldGarbage) {
+  nrq_gc_disable();
+  nrq_gc_set_generational(1);
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+
+  auto* survivor = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(survivor, nullptr);
+  nrq_gc_root_register(reinterpret_cast<void**>(&survivor));
+
+  // Two young collections promote the rooted object into the old generation.
+  nrq_gc_collect_minor();
+  nrq_gc_collect_minor();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 1);
+
+  nrq_gc_root_unregister(reinterpret_cast<void**>(&survivor));
+  survivor = nullptr;
+  nrq_gc_collect_minor();
+  // The now-unreachable object is old; a young collection must retain it.
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 1);
+
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+  ASSERT_TRUE(nrq_gc_get_minor_collection_count() >= 3);
+  ASSERT_TRUE(nrq_gc_get_major_collection_count() >= 2);
+}
+
+TEST(GcTest, OldToYoungStoreBarrierKeepsYoungObjectAliveDuringMinorCollection) {
+  nrq_gc_disable();
+  nrq_gc_set_generational(1);
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+
+  auto* old_parent = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(old_parent, nullptr);
+  nrq_gc_root_register(reinterpret_cast<void**>(&old_parent));
+  nrq_gc_collect_minor();
+  nrq_gc_collect_minor();  // Promote the parent into the old generation.
+
+  auto* young_child = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(young_child, nullptr);
+  // The store barrier records this old-to-young edge for the remembered set.
+  nrq_gc_root_store(reinterpret_cast<void**>(&old_parent->next), young_child);
+
+  nrq_gc_collect_minor();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 2);
+
+  // Clear the only edge and force a full collection; the remembered set is
+  // conservative between minors, so the floating young object is reclaimed by
+  // the full collection rather than by a transitively stale remembered entry.
+  nrq_gc_root_store(reinterpret_cast<void**>(&old_parent->next), nullptr);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 1);
+
+  nrq_gc_root_unregister(reinterpret_cast<void**>(&old_parent));
+  old_parent = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
 }
 
 TEST(GcTest, AutomaticCollectionStateIsObservable) {
