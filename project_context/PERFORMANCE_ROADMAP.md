@@ -293,23 +293,24 @@ Nirqoba's garbage collector must remain a reliable memory-management option with
 - [ ] Resolve the inconsistency between default-enabled and opt-in GC semantics across implementation and documentation.
 - [ ] Replace per-object dynamic reference-offset vectors with shared immutable type descriptors.
 - [ ] Reduce global GC mutex contention.
-- [ ] Introduce thread-local allocation buffers (TLABs).
+- [x] Introduce thread-local allocation buffers (TLABs).
 - [ ] Implement size-class allocation.
 - [ ] Implement free-slot reuse.
-- [ ] Reuse empty pages and partially occupied page regions.
+- [x] Reuse empty pages and partially occupied page regions.
 - [ ] Optimize root-frame registration and cleanup.
 - [ ] Avoid root-frame machinery for functions without managed references.
 - [ ] Implement liveness-aware root maps where practical.
-- [ ] Establish explicit safepoints and stop-the-world coordination.
-- [ ] Implement write barriers and remembered sets.
-- [ ] Implement generational collection with promotion policies.
+- [x] Establish explicit safepoints and stop-the-world coordination.
+- [x] Implement write barriers and remembered sets.
+- [x] Implement generational collection with promotion policies.
 - [ ] Measure allocation latency.
 - [ ] Measure collection pause times.
 - [ ] Add heap fragmentation and object-retention diagnostics.
-- [ ] Test cyclic object graphs and deeply nested references.
-- [ ] Add multithreaded GC stress tests.
-- [ ] Evaluate incremental or concurrent collection only after safepoints and write barriers are correct.
-- [ ] Keep GC-managed and explicitly managed allocation paths distinct.
+- [x] Test cyclic object graphs and deeply nested references.
+- [x] Add multithreaded GC stress tests.
+- [x] Evaluate incremental or concurrent collection only after safepoints and write barriers are correct.
+- [x] Implement incremental marking and sliced sweeping that overlap mutator execution.
+- [x] Keep GC-managed and explicitly managed allocation paths distinct.
 
 ### Acceptance criteria
 

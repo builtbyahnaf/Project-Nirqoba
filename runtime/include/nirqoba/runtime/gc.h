@@ -69,13 +69,16 @@ void nrq_gc_root_frame_end(uint64_t marker);
 
 void nrq_gc_enable(void);
 void nrq_gc_disable(void);
-// A full collection reclaims both generations. It marks concurrently with
-// running mutators and sweeps under the collector lock; mutators that only
-// execute ordinary code continue running.
+// A full collection reclaims both generations. Marking is incremental and
+// interleaved with mutator execution; sweeping proceeds slice by slice while
+// mutators continue executing ordinary code. Mutators are parked only briefly at
+// cycle boundaries to publish thread-local allocations and prepare roots.
 void nrq_gc_collect(void);
 // A young-generation collection reclaims unreachable young objects and
-// promotes survivors. Unreachable old objects are retained until a full
-// collection. Root-store/root-copy barriers record old-to-young references.
+// promotes survivors after a few cycles. Unreachable old objects are retained
+// until a full collection. Root-store/root-copy barriers record old-to-young
+// references for the next minor cycle. When generational collection is disabled
+// this performs a full collection.
 void nrq_gc_collect_minor(void);
 
 // Generational collection is enabled by default. Disabling it makes automatic

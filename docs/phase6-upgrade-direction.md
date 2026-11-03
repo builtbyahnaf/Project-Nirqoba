@@ -19,10 +19,12 @@ diagnostics and platform utilities remain tracked separately in
   their per-instance serialization. The general heap opts out of the extra
   runtime allocator mutex because Windows heap calls already synchronize
   concurrent access.
-- **Keep GC correctness ahead of concurrency claims.** The collector remains
-  precise, non-moving, and stop-the-world. Managed roots and stores use the
-  synchronized runtime interfaces where required. No claim is made that
-  uninstrumented concurrent pointer writes are safe.
+- **Keep GC correctness ahead of concurrency claims.** The collector is now
+  precise, non-moving, generational, and incremental. Mutators pause only at
+  cycle boundaries; marking and sweeping run in bounded slices while ordinary
+  mutator code continues. Managed roots and stores use the synchronized runtime
+  write barriers. This is overlapping collection, not a parallel collector, and
+  no claim is made that uninstrumented direct pointer writes are safe.
 - **Use contiguous owned arrays and checked borrowed views.** Owned arrays
   preserve contiguous storage, allocator selection, and explicit alignment.
   Immutable views and exclusive mutable views do not own or extend the
@@ -48,13 +50,15 @@ silently counted as complete:
   implemented; closure capture ownership; cleanup semantics for a future error
   or exception unwinding model.
 - **Collector:** GC-aware generated functions use thread-local bump allocation
-  for small objects, with headers published at safepoints before collection.
-  Cooperative function-entry and loop-backedge polls coordinate stop-the-world
-  collection. TLAB refill, oversized and unregistered native allocations,
-  object metadata, and managed-reference stores still use the collector mutex.
-  Size classes and free-slot reuse, generational or incremental collection,
-  and write barriers remain open. GC benchmarking is deliberately deferred for
-  this work.
+  for small objects, with headers published at safepoints. Cooperative
+  function-entry and loop-backedge polls still coordinate the brief cycle
+  boundaries; marking and sweeping then run in bounded slices with mutators
+  resumed. Young survivors are promoted after a few minor cycles, and the
+  remembered set records old-to-young edges. TLAB refill, oversized and
+  unregistered native allocations, object metadata, and each sweep slice still
+  use the collector mutex. Size classes, free-slot reuse, compaction, parallel
+  mark/sweep, reduced metadata locking, and complete coverage for native direct
+  writes remain open. GC benchmarking is deliberately deferred for this work.
 - **Numerical memory:** allocator-aware tensor containers and shape/stride
   types; GPU device-buffer ownership and backend integration; SIMD-oriented
   container APIs. Contiguous owned-array storage, alignment, checked immutable
@@ -90,3 +94,26 @@ Validation executed for this milestone:
 - `python tests/run_tests.py --compiler build/msvc-dev/bin/nirqoba.exe --configuration RelWithDebInfo` — passed (113/113 cases).
 
 No allocator benchmark was run, and this change makes no performance claim.
+
+## Evidence for the generational and incremental collector
+
+The collector keeps two generations and a remembered set. Minor cycles trace
+young objects plus remembered old-to-young edges and promote survivors after two
+minor cycles. Automatic collection uses minor cycles with a full cycle every
+eight minors; `nrq_gc_collect()` remains a full collection. Marking is sliced at
+64 objects and the sweep at 64 objects per collector-lock acquisition, with
+mutators resumed between slices. Objects allocated after a cycle starts are
+retained by birth epoch, and rooted allocation publishes through the root-store
+barrier in the same critical section as allocation.
+
+Validation executed after the final collector changes:
+
+- `build\msvc-dev\tests\nirqoba_unit_tests.exe` — passed 107/107, repeated 15
+  consecutive times to exercise the concurrent collector and allocator paths.
+- `python tests/run_tests.py --compiler build/msvc-dev/bin/nirqoba.exe` —
+  passed 176/176.
+
+No GC pause-time or throughput benchmark was run for this change; the existing
+readiness benchmarks predate it. The collector is not claimed to be fully
+concurrent: mutators still park briefly at cycle boundaries, and sweep slices
+are serialized by the collector mutex.

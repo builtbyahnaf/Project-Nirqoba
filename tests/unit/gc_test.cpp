@@ -447,9 +447,37 @@ TEST(GcTest, RootedAllocationPublishesBeforeConcurrentCollection) {
 
   done.store(true, std::memory_order_release);
   collector.join();
+  // Allocations racing with a collection may be younger than that cycle's
+  // snapshot, so perform one final quiescent collection before asserting the
+  // exact retained set.
+  nrq_gc_collect();
   ASSERT_TRUE(succeeded.load());
   ASSERT_NE(root, nullptr);
   ASSERT_EQ(*static_cast<uint64_t*>(root), uint64_t{5000});
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{1});
+  nrq_gc_root_unregister(&root);
+  root = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
+TEST(GcTest, ConcurrentCollectionRequestsFromMutatorsSerializeWithoutDeadlock) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  void* root = nrq_gc_allocate(32, nullptr);
+  ASSERT_NE(root, nullptr);
+  nrq_gc_root_register(&root);
+
+  auto request_collections = [] {
+    nrq_gc_mutator_enter();
+    for (int index = 0; index < 24; ++index) nrq_gc_collect();
+    nrq_gc_mutator_leave();
+  };
+  std::thread first(request_collections);
+  std::thread second(request_collections);
+  first.join();
+  second.join();
+
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{1});
   nrq_gc_root_unregister(&root);
   root = nullptr;

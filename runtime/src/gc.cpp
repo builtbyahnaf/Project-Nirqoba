@@ -3,6 +3,12 @@
 // pointer slots registered by generated code or native callers. Marking follows
 // only trace callbacks, so integer data that happens to resemble an address is
 // never treated as a reference.
+//
+// Collection is generational and incremental. A minor cycle traces only young
+// objects plus the remembered old-to-young set; survivors are promoted after a
+// few cycles. Marking runs in bounded slices while mutators execute, and the
+// sweep uses the same pattern after detaching its snapshot list. Mutators are
+// parked only briefly at cycle boundaries to publish TLabs and prepare roots.
 
 #include "nirqoba/runtime/gc.h"
 #include "nirqoba/runtime/fatal.h"
@@ -290,8 +296,8 @@ constexpr size_t kMajorCollectionInterval = 8;
 std::atomic<CollectionPhase> collection_phase{CollectionPhase::Idle};
 bool active_collection_is_minor = false;
 uint64_t active_cycle_epoch = 0;
-uint64_t next_cycle_epoch = 1;
-size_t minor_collections_since_major = 0;
+std::atomic<uint64_t> next_cycle_epoch{1};
+std::atomic<size_t> minor_collections_since_major{0};
 struct MarkContext {
   ObjectHeader* pending = nullptr;
   bool young_only = false;
@@ -404,12 +410,11 @@ void trace_children(ObjectHeader* header, nrq_gc_visit_fn visit,
 
 void enqueue_header_locked(ObjectHeader* header, MarkContext& context) {
   if (!header || header->marked) return;
-  // Objects born during this cycle are outside the snapshot and are retained
-  // unconditionally by the sweep. Marking them would leave a mark bit that the
-  // detached snapshot never clears.
+  // Objects born during this cycle are retained by the sweep's birth-epoch
+  // check. Marking them would leave a mark bit that the snapshot never clears.
   if (collection_phase.load(std::memory_order_relaxed) !=
           CollectionPhase::Idle &&
-      header->birth_epoch == active_cycle_epoch)
+      header->birth_epoch >= active_cycle_epoch)
     return;
   if (context.young_only && !header->young) return;
   header->marked = true;
@@ -507,7 +512,12 @@ void remember_reference(void* object, void* opaque_context) {
   (void)opaque_context;
   if (!object) return;
   ObjectHeader* found = object_index.find(object);
-  if (found && found->young) remembered_young.insert(found);
+  if (!found || !found->young) return;
+  try {
+    remembered_young.insert(found);
+  } catch (...) {
+    nrq_runtime_fatal("GC remembered-set insertion failed");
+  }
 }
 
 void remember_young_locked(void* object) {
@@ -534,9 +544,9 @@ bool mark_slice_locked(size_t budget) {
     ObjectHeader* header = active_mark.pending;
     active_mark.pending = header->mark_next;
     header->mark_next = nullptr;
+    ++steps;
     if (active_mark.young_only && !header->young) continue;
     trace_children(header, enqueue_reference, &active_mark);
-    ++steps;
   }
   return active_mark.pending == nullptr;
 }
@@ -547,6 +557,16 @@ bool sweep_chunk_locked(size_t budget) {
     ObjectHeader* header = sweep_list;
     sweep_list = header->next;
     ++steps;
+
+    // Objects allocated after the cycle started are outside the snapshot's
+    // reachability analysis. Retain them for this cycle and consider them in
+    // the next one; marking them would leave a bit the snapshot never clears.
+    if (header->birth_epoch >= active_cycle_epoch) {
+      header->marked = false;
+      header->next = objects;
+      objects = header;
+      continue;
+    }
 
     const bool collectable = !active_collection_is_minor || header->young;
     if (!header->marked && collectable) {
@@ -583,6 +603,7 @@ bool sweep_chunk_locked(size_t budget) {
       } else {
         header->young = false;
         header->age = 0;
+        remembered_young.erase(header);
       }
     }
   }
@@ -607,7 +628,7 @@ void prepare_cycle_locked(bool young_only) {
   }
 
   sweep_list = nullptr;
-  active_cycle_epoch = ++next_cycle_epoch;
+  active_cycle_epoch = next_cycle_epoch.fetch_add(1) + 1;
   active_collection_is_minor = young_only;
   active_mark = MarkContext{};
   active_mark.young_only = young_only;
@@ -628,24 +649,53 @@ void finish_cycle_locked(bool young_only) {
   statistics.collections = saturated_add(statistics.collections, 1);
   if (young_only) {
     minor_collections = saturated_add(minor_collections, 1);
-    ++minor_collections_since_major;
+    minor_collections_since_major.store(
+        minor_collections_since_major.load(std::memory_order_relaxed) + 1,
+        std::memory_order_relaxed);
   } else {
     major_collections = saturated_add(major_collections, 1);
-    minor_collections_since_major = 0;
+    minor_collections_since_major.store(0, std::memory_order_relaxed);
   }
   statistics.allocated_bytes = 0;
   for (ObjectHeader* header = objects; header; header = header->next) {
     statistics.allocated_bytes = saturated_add(
         statistics.allocated_bytes, static_cast<uint64_t>(header->size));
   }
-  if (!young_only) remembered_young.clear();
+  // Do not clear the remembered set here. A major collection erases promoted
+  // survivors as it sweeps, while young objects allocated during the cycle
+  // remain young and may be referenced only by old objects; their remembered
+  // entries must survive into the next minor collection.
   active_mark = MarkContext{};
   collection_phase.store(CollectionPhase::Idle, std::memory_order_release);
   bytes_since_collection.store(0, std::memory_order_relaxed);
 }
 
+// A registered mutator may request a collection while another thread is already
+// collecting. Waiting on collection_cycle_mutex without parking would deadlock
+// the active collector, which waits for every mutator to reach a safepoint. Park
+// before blocking on the cycle lock, then resume once the previous cycle exits.
+std::unique_lock<std::mutex> acquire_collection_cycle() {
+  std::unique_lock<std::mutex> cycle_lock(collection_cycle_mutex, std::defer_lock);
+  if (cycle_lock.try_lock()) return cycle_lock;
+  if (thread_mutator.depth == 0) {
+    cycle_lock.lock();
+    return cycle_lock;
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutator_mutex);
+    thread_mutator.parked = true;
+    mutator_condition.notify_all();
+  }
+  cycle_lock.lock();
+  {
+    std::lock_guard<std::mutex> lock(mutator_mutex);
+    thread_mutator.parked = false;
+  }
+  return cycle_lock;
+}
+
 void run_collection(bool young_only) {
-  std::lock_guard<std::mutex> cycle_lock(collection_cycle_mutex);
+  std::unique_lock<std::mutex> cycle_lock = acquire_collection_cycle();
   begin_cycle(young_only);
   bool sweeping = false;
   for (;;) {
@@ -697,7 +747,8 @@ void maybe_collect_automatically() {
   if (!should_collect) return;
   const bool young_only =
       generational_collection_enabled.load(std::memory_order_relaxed) &&
-      minor_collections_since_major < kMajorCollectionInterval;
+      minor_collections_since_major.load(std::memory_order_relaxed) <
+          kMajorCollectionInterval;
   run_collection(young_only);
 }
 
@@ -777,12 +828,12 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     header->trace = trace;
     header->young = generational_collection_enabled.load(std::memory_order_relaxed);
     header->age = 0;
-    header->birth_epoch = next_cycle_epoch;
+    header->birth_epoch = next_cycle_epoch.load(std::memory_order_relaxed);
     header->next = objects;
-      if (!object_index.insert(object, header)) {
-        rollback_reservation();
-        return nullptr;
-      }
+    if (!object_index.insert(object, header)) {
+      rollback_reservation();
+      return nullptr;
+    }
   } catch (...) {
     rollback_reservation();
     return nullptr;
@@ -913,7 +964,7 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   header->trace = trace;
   header->young = generational_collection_enabled.load(std::memory_order_relaxed);
   header->age = 0;
-  header->birth_epoch = next_cycle_epoch;
+  header->birth_epoch = next_cycle_epoch.load(std::memory_order_relaxed);
   header->tlab_next = thread_mutator.pending_objects;
   thread_mutator.pending_objects = header;
   if (bytes > SIZE_MAX - thread_mutator.pending_bytes ||
@@ -934,6 +985,20 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     publish_tlab_locked(thread_mutator);
   }
   return object;
+}
+
+void store_root_value_locked(void** slot, void* value) {
+  const CollectionPhase phase =
+      collection_phase.load(std::memory_order_relaxed);
+  if (phase != CollectionPhase::Idle) {
+    // Snapshot-at-the-beginning: retain the old referent as well as the new
+    // one while marking. Objects reachable at the snapshot are already marked
+    // once sweeping starts, so only newly installed referents need marking.
+    if (phase == CollectionPhase::Marking) mark_value_locked(*slot);
+    mark_value_locked(value);
+  }
+  *slot = value;
+  remember_young_locked(value);
 }
 
 }  // namespace
@@ -984,32 +1049,9 @@ void* nrq_gc_allocate_array_typed_rooted(
       count > SIZE_MAX / element_size)
     return nullptr;
   maybe_collect_automatically();
-  if (thread_mutator.depth != 0) {
-    {
-      std::lock_guard<std::mutex> lock(gc_mutex);
-      const auto root = roots.find(root_slot);
-      if (root == roots.end() || root->second.repeated_count != 0 ||
-          root->second.object_size != sizeof(void*) ||
-          root->second.reference_offsets.size() != 1 ||
-          root->second.reference_offsets[0] != 0)
-        nrq_runtime_fatal(
-            "rooted GC allocation requires a registered pointer root slot");
-    }
-    bool handled = false;
-    void* object = allocate_tlab(count * element_size, element_size, nullptr,
-                                 reference_offsets, reference_count, handled);
-    if (!handled) {
-      std::lock_guard<std::mutex> lock(gc_mutex);
-      object = allocate_locked(count * element_size, element_size, nullptr,
-                               reference_offsets, reference_count);
-    }
-    std::lock_guard<std::mutex> lock(gc_mutex);
-    const auto root = roots.find(root_slot);
-    if (root == roots.end())
-      nrq_runtime_fatal("rooted GC allocation lost its registered pointer root");
-    *root_slot = object;
-    return object;
-  }
+  // Allocation and root publication must be atomic with respect to a
+  // collection. The TLAB fast path would leave a window in which the new object
+  // is in the sweep snapshot but not yet reachable from its root.
   std::lock_guard<std::mutex> lock(gc_mutex);
   const auto root = roots.find(root_slot);
   if (root == roots.end() || root->second.repeated_count != 0 ||
@@ -1019,7 +1061,7 @@ void* nrq_gc_allocate_array_typed_rooted(
     nrq_runtime_fatal("rooted GC allocation requires a registered pointer root slot");
   void* object = allocate_locked(count * element_size, element_size, nullptr,
                                  reference_offsets, reference_count);
-  *root_slot = object;
+  store_root_value_locked(root_slot, object);
   return object;
 }
 
@@ -1159,17 +1201,7 @@ void nrq_gc_root_unregister(void** slot) {
 void nrq_gc_root_store(void** slot, void* value) {
   if (!slot) return;
   std::lock_guard<std::mutex> lock(gc_mutex);
-  const CollectionPhase phase =
-      collection_phase.load(std::memory_order_relaxed);
-  if (phase != CollectionPhase::Idle) {
-    // Snapshot-at-the-beginning: retain the old referent as well as the new
-    // one. During sweep, the new referent is retained before the next slice;
-    // the old referent is already part of the snapshot decision.
-    if (phase == CollectionPhase::Marking) mark_value_locked(*slot);
-    mark_value_locked(value);
-  }
-  *slot = value;
-  remember_young_locked(value);
+  store_root_value_locked(slot, value);
 }
 
 void scan_pointer_words_locked(void* storage, size_t bytes, bool mark) {
@@ -1245,7 +1277,12 @@ void nrq_gc_disable(void) {
 
 void nrq_gc_collect(void) { run_collection(/*young_only=*/false); }
 
-void nrq_gc_collect_minor(void) { run_collection(/*young_only=*/true); }
+void nrq_gc_collect_minor(void) {
+  // With generations disabled every object is old, so a young-only cycle could
+  // not reclaim anything. Treat the explicit request as a full collection.
+  run_collection(
+      generational_collection_enabled.load(std::memory_order_relaxed));
+}
 
 void nrq_gc_set_generational(int32_t enabled) {
   generational_collection_enabled.store(enabled != 0,
