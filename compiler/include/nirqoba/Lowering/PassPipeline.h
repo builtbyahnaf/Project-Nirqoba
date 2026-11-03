@@ -16,15 +16,17 @@ namespace nirq {
 void register_dialects(mlir::DialectRegistry& registry);
 
 // Populates `pm` with the MLIR lowering and cleanup pipeline:
-//   1. canonicalize + CSE + trivial-dead-code-elimination (`optimize` only)
+//   1. canonicalize + fold integer constants + SCCP + fold again + fold
+//      constant branches + canonicalize + CSE + trivial-DCE (`optimize` only)
 //   2. nrq-to-llvm         (our custom pass — lowers nrq.print_string)
 //   3. convert-func-to-llvm
 //   4. reconcile-unrealized-casts
-//   5. canonicalize + CSE + trivial-dead-code-elimination on the LLVM dialect IR
+//   5. repeat the optimized cleanup on the LLVM dialect IR
 //
 // The cleanup passes are semantics-preserving: they never erase an operation
 // that has not proven itself free of side effects, and they never destroy a
-// reachable runtime, GC-root, ownership, or cleanup call.
+// reachable runtime, GC-root, ownership, or cleanup call. SCCP only replaces
+// values it can prove constant and removes edges it can prove unreachable.
 //
 // `optimize` is false for -O0 so debugging sees the direct lowering result.
 // The pipeline is intentionally a list so later passes can be inserted without
