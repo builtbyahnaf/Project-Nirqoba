@@ -550,6 +550,28 @@ TEST(AllocatorTest, SecureBuffersAreZeroedAndProfilerTracksLifetime) {
   nrq_memory_profiler_stop();
 }
 
+TEST(AllocatorTest, DefaultSmallAllocationCacheReusesAndKeepsProfilingAccurate) {
+  nrq_memory_profiler_start();
+  void* first = nrq_memory_allocate(64, 1);
+  ASSERT_NE(first, nullptr);
+  ASSERT_EQ(nrq_memory_profiler_get_current_bytes(), uint64_t{64});
+
+  nrq_memory_deallocate_checked(first);
+  ASSERT_EQ(nrq_memory_profiler_get_current_bytes(), uint64_t{0});
+
+  void* second = nrq_memory_allocate(64, 1);
+  ASSERT_EQ(second, first);
+  ASSERT_EQ(nrq_memory_profiler_get_current_bytes(), uint64_t{64});
+  nrq_memory_deallocate_checked(second);
+
+  const NrqMemoryProfile profile = nrq_memory_profiler_capture();
+  ASSERT_EQ(profile.current_bytes, uint64_t{0});
+  ASSERT_EQ(profile.total_bytes, uint64_t{128});
+  ASSERT_EQ(profile.allocations, uint64_t{2});
+  ASSERT_EQ(profile.deallocations, uint64_t{2});
+  nrq_memory_profiler_stop();
+}
+
 TEST(AllocatorTest, FileMappingsReportSizeAndUnmapDeterministically) {
   wchar_t directory[MAX_PATH]{};
   ASSERT_TRUE(GetTempPathW(MAX_PATH, directory) != 0);

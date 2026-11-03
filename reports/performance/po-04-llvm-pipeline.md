@@ -99,7 +99,7 @@ Verified:
 
 | Check | Result |
 |---|---|
-| Unit tests | 99 / 99 PASS |
+| Unit tests | 100 / 100 PASS |
 | Integration tests | 171 / 171 PASS |
 | All six optimization levels | PASS |
 | Raw vs optimized IR distinction | PASS |

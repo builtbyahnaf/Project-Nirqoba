@@ -36,7 +36,7 @@ python tests\run_tests.py --compiler build\msvc-dev\bin\nirqoba.exe
 | Check | Result |
 |---|---|
 | Compiler build | PASS |
-| Unit tests | 94 / 94 PASS |
+| Unit tests | 100 / 100 PASS |
 | Integration tests | 170 / 170 PASS |
 | Existing optimization scaffolding | Present but not independently validated before this pass |
 
@@ -137,5 +137,6 @@ and one registry lock from the common path.
 - `compiler/lib/Lowering/TirToMlir.cpp`
 - `runtime/src/allocator_windows.cpp`
 - `tests/run_tests.py`
+- `tests/unit/allocator_test.cpp`
 - `tests/integration/mlir/recursive_numeric_no_gc_frame/`
 - `reports/performance/po-01-baseline.md`
