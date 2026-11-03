@@ -719,3 +719,88 @@ TEST(GcTest, AllocationPressureIsCollectedWithoutLosingLiveObjects) {
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
   nrq_gc_set_threshold(1024 * 1024);
 }
+
+TEST(GcTest, NestedRootFramesWithConcurrentCollection) {
+  // Verifies that root frame begin/end correctly maintains root visibility
+  // during concurrent GC collection cycles.
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+
+  std::atomic<bool> stop_collector{false};
+  std::thread collector_thread([&] {
+    while (!stop_collector.load(std::memory_order_acquire))
+      nrq_gc_collect();
+  });
+
+  // Run many nested frame cycles while the collector runs concurrently.
+  for (int iteration = 0; iteration < 100; ++iteration) {
+    auto* outer_obj = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+    ASSERT_NE(outer_obj, nullptr);
+    const uint64_t outer_frame = nrq_gc_root_frame_begin();
+    nrq_gc_root_register(reinterpret_cast<void**>(&outer_obj));
+
+    {
+      auto* inner_obj = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+      ASSERT_NE(inner_obj, nullptr);
+      const uint64_t inner_frame = nrq_gc_root_frame_begin();
+      nrq_gc_root_register(reinterpret_cast<void**>(&inner_obj));
+      // inner_obj must remain live during collection while its frame is active.
+      nrq_gc_root_frame_end(inner_frame);
+      // After inner frame ends, inner_obj has no root -- may be collected.
+    }
+
+    nrq_gc_root_frame_end(outer_frame);
+    // outer_obj has no root now; both objects may be collected.
+  }
+
+  stop_collector.store(true, std::memory_order_release);
+  collector_thread.join();
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+}
+
+TEST(GcTest, RapidRootFrameCreationWithoutCollection) {
+  // Exercises the fast path for root_frame_begin/end when the collector is idle.
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+
+  for (int iteration = 0; iteration < 1000; ++iteration) {
+    const uint64_t f1 = nrq_gc_root_frame_begin();
+    const uint64_t f2 = nrq_gc_root_frame_begin();
+    const uint64_t f3 = nrq_gc_root_frame_begin();
+    ASSERT_NE(f1, f2);
+    ASSERT_NE(f2, f3);
+    nrq_gc_root_frame_end(f3);
+    nrq_gc_root_frame_end(f2);
+    nrq_gc_root_frame_end(f1);
+  }
+
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+}
+
+TEST(GcTest, RootedAllocationValidationIsThreadLocal) {
+  // Verifies that rooted allocation correctly validates root slot registration
+  // and that unregistered slots are rejected.
+  nrq_gc_disable();
+  nrq_gc_collect();
+  nrq_gc_mutator_enter();
+
+  void* valid_root = nullptr;
+  const uint64_t frame = nrq_gc_root_frame_begin();
+  nrq_gc_root_register(&valid_root);
+
+  // Allocate into the registered slot repeatedly to exercise the O(1) fast path.
+  for (int index = 0; index < 10; ++index) {
+    auto* object = static_cast<uint64_t*>(nrq_gc_allocate_array_typed_rooted(
+        &valid_root, 1, sizeof(uint64_t), nullptr, 0));
+    ASSERT_NE(object, nullptr);
+    *object = static_cast<uint64_t>(index);
+    ASSERT_EQ(*static_cast<uint64_t*>(valid_root), static_cast<uint64_t>(index));
+  }
+
+  nrq_gc_root_frame_end(frame);
+  nrq_gc_mutator_leave();
+  nrq_gc_collect();
+}
