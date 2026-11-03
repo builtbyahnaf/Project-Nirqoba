@@ -17,7 +17,7 @@ namespace {
 namespace fs = filesystem;
 
 static void print_version() {
-  cout << "nirqoba compiler version " << NIRQOBA_VERSION_STRING
+  cout << "nirqoba compiler version " << NIRQOBA_VERSION_LABEL
             << " (Phase " << NIRQOBA_PHASE << ")\n"
             << "LLVM/MLIR: " << NIRQOBA_LLVM_VERSION << "\n"
             << "Target: " << NIRQOBA_DEFAULT_TARGET_TRIPLE << "\n"

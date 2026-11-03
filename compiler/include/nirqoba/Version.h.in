@@ -3,8 +3,13 @@
 // and the phase identifier below.
 #pragma once
 
-// Human-readable version string, e.g. "0.1.0".
+// Numeric version string derived from the CMake project() version, e.g.
+// "0.102.0". Use NIRQOBA_VERSION_LABEL for anything user-facing.
 #define NIRQOBA_VERSION_STRING "@PROJECT_VERSION@"
+
+// Human-readable release label, e.g. "0.102-beta". This carries the
+// pre-release channel that the numeric version cannot express.
+#define NIRQOBA_VERSION_LABEL "@NIRQOBA_VERSION_LABEL@"
 
 // Individual version components.
 #define NIRQOBA_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
