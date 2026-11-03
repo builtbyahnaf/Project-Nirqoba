@@ -6,7 +6,7 @@
 extern "C" {
 #endif
 
-// Returns a NUL-terminated version string, e.g. "0.102-beta-phase6".
+// Returns a NUL-terminated version string, e.g. "<version-label>-phase<N>".
 // The returned pointer is valid for the lifetime of the process; the caller
 // must not free it.
 const char* nrq_runtime_version(void);

@@ -1,0 +1,111 @@
+// Benchmark 01 - Managed-object allocation, Nirqoba track.
+//
+// Allocation is one managed object per node, linked into a chain of one
+// million nodes. Automatic collection is disabled so that allocation,
+// traversal, and the explicit collection are timed as separate phases.
+//
+// `make_node` exists for two reasons. First, it keeps each managed local in a
+// short-lived frame instead of growing the caller's root frame once per loop
+// iteration. Second, returning the managed pointer exercises the same
+// compiler-described GC root handoff that ordinary Nirqoba code uses.
+//
+// `time.now()` reports whole milliseconds. Every phase here is deliberately
+// sized above 100 ms so the 1 ms resolution stays negligible.
+
+struct Node {
+    managed<Node> next;
+    int value;
+}
+
+managed<Node> function make_node(int value) {
+    var node = array.allocate<Node>(1);
+    node[0].value = value;
+    return node;
+}
+
+managed<Node> function build_chain(int count) {
+    var head = make_node(0);
+    var tail = head;
+    for (var index = 1; index < count; index += 1) {
+        tail[0].next = make_node(index);
+        tail = tail[0].next;
+    }
+    return head;
+}
+
+int function sum_chain(managed<Node> head, int count) {
+    var total = 0;
+    var cursor = head;
+    for (var index = 0; index < count; index += 1) {
+        total += cursor[0].value;
+        cursor = cursor[0].next;
+    }
+    return total;
+}
+
+// Builds and traverses one chain. The managed head is a local of this frame,
+// so it stops being a root as soon as this function returns; the caller can
+// then time an explicit collection that must reclaim the whole chain.
+int function measure_round(int count, int verbose) {
+    let alloc_start = time.now();
+    var head = build_chain(count);
+    let alloc_end = time.now();
+
+    let traverse_start = time.now();
+    var checksum = sum_chain(head, count);
+    let traverse_end = time.now();
+
+    if (verbose != 0) {
+        print("ALLOC_MS");
+        print(alloc_end - alloc_start);
+        print("TRAVERSE_MS");
+        print(traverse_end - traverse_start);
+    }
+
+    return checksum;
+}
+
+int function main() {
+    gc.disable();
+    gc.collect();
+
+    let object_count = 1000000;
+    let warmup_rounds = 2;
+    let measure_rounds = 5;
+
+    for (var warmup = 0; warmup < warmup_rounds; warmup += 1) {
+        var ignored = measure_round(object_count, 0);
+        gc.collect();
+    }
+
+    print("TEST");
+    print("managed_object_allocation");
+    print("IMPL");
+    print("nirqoba");
+    print("OBJECTS");
+    print(object_count);
+    print("WARMUP_ROUNDS");
+    print(warmup_rounds);
+    print("MEASURE_ROUNDS");
+    print(measure_rounds);
+
+    for (var round = 0; round < measure_rounds; round += 1) {
+        print("ROUND");
+        print(round);
+
+        var checksum = measure_round(object_count, 1);
+
+        let collect_start = time.now();
+        gc.collect();
+        let collect_end = time.now();
+
+        print("COLLECT_MS");
+        print(collect_end - collect_start);
+        print("CHECKSUM");
+        print(checksum);
+        print("LIVE_AFTER");
+        print(gc.get_statistics().live_objects);
+    }
+
+    return 0;
+}

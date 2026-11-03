@@ -39,7 +39,9 @@ void* nrq_gc_allocate_array_typed_rooted(
 
 // Root slots are addresses containing managed object pointers. Register the
 // slot before a collection can run and unregister it before its storage ends.
-// Root slot updates shared with concurrent collection must use root_store.
+// Root slot updates shared with incremental/concurrent collection must use
+// root_store (or root_copy for aggregates); those functions are write barriers.
+// Managed object fields written by native code must use the same barriers.
 void nrq_gc_root_register(void** slot);
 void nrq_gc_root_register_typed(void* slot, size_t object_size,
                                 const size_t* reference_offsets,
@@ -67,7 +69,21 @@ void nrq_gc_root_frame_end(uint64_t marker);
 
 void nrq_gc_enable(void);
 void nrq_gc_disable(void);
+// A full collection reclaims both generations. It marks concurrently with
+// running mutators and sweeps under the collector lock; mutators that only
+// execute ordinary code continue running.
 void nrq_gc_collect(void);
+// A young-generation collection reclaims unreachable young objects and
+// promotes survivors. Unreachable old objects are retained until a full
+// collection. Root-store/root-copy barriers record old-to-young references.
+void nrq_gc_collect_minor(void);
+
+// Generational collection is enabled by default. Disabling it makes automatic
+// collections full collections; explicit minor collections remain available.
+void nrq_gc_set_generational(int32_t enabled);
+int32_t nrq_gc_is_generational(void);
+uint64_t nrq_gc_get_minor_collection_count(void);
+uint64_t nrq_gc_get_major_collection_count(void);
 
 // Generated mutators register each function activation and poll at function
 // entry and loop backedges. Native code that accesses managed references over
