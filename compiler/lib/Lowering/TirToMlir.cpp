@@ -574,7 +574,8 @@ class FunctionTranslator {
         builder_(builder), ctx_(ctx), diag_(diag),
         stack_owned_arrays_(
             analyze_stack_owned_arrays(tir_fn, borrowed_view_summary)),
-        uses_gc_mutator_(function_uses_gc(tir_fn)) {
+        uses_gc_mutator_(function_uses_gc(tir_fn)),
+        needs_gc_root_frame_(uses_gc_mutator_) {
     const std::vector<tir::Op>& operations = tir_fn_.operations();
     for (std::size_t index = 0; index < operations.size(); ++index)
       if (operations[index].kind == tir::OpKind::Label)
@@ -595,10 +596,17 @@ class FunctionTranslator {
           mlir::UnknownLoc::get(ctx_), mutator_enter, mlir::ValueRange{});
     }
 
-    auto begin_frame = ensure_runtime_fn(module_, builder_, "nrq_gc_root_frame_begin",
-                                         builder_.getI64Type(), {});
-    gc_root_frame_marker_ = builder_.create<mlir::LLVM::CallOp>(
-        mlir::UnknownLoc::get(ctx_), begin_frame, mlir::ValueRange{}).getResult();
+    // Functions that cannot touch a GC-managed value do not need a root frame.
+    // Recursive numeric helpers previously paid an atomic begin and a mutex
+    // lock on every call even though they had no roots to track.
+    if (needs_gc_root_frame_) {
+      auto begin_frame = ensure_runtime_fn(
+          module_, builder_, "nrq_gc_root_frame_begin",
+          builder_.getI64Type(), {});
+      gc_root_frame_marker_ = builder_.create<mlir::LLVM::CallOp>(
+          mlir::UnknownLoc::get(ctx_), begin_frame,
+          mlir::ValueRange{}).getResult();
+    }
     for (std::size_t i = 0; i < tir_fn.parameters().size(); ++i) {
       std::vector<uint64_t> offsets;
       collect_managed_reference_offsets(tir_fn.parameters()[i].type, 0, offsets);
@@ -685,6 +693,7 @@ class FunctionTranslator {
 
   void flush_gc_root_registrations() {
     if (pending_gc_roots_.empty() || entry_block_ == nullptr) return;
+    if (!gc_root_frame_marker_) return;
     mlir::OpBuilder::InsertionGuard guard(builder_);
     mlir::Operation* frame_begin = gc_root_frame_marker_.getDefiningOp();
     if (!frame_begin) return;
@@ -2373,11 +2382,14 @@ class FunctionTranslator {
           val = pin_managed_references_for_return(
               val, op.operand.type, loc);
         }
-        auto end_frame = ensure_runtime_fn(module_, builder_, "nrq_gc_root_frame_end",
-                                           mlir::LLVM::LLVMVoidType::get(ctx_),
-                                           {builder_.getI64Type()});
-        builder_.create<mlir::LLVM::CallOp>(loc, end_frame,
-                                            mlir::ValueRange{gc_root_frame_marker_});
+        if (gc_root_frame_marker_) {
+          auto end_frame = ensure_runtime_fn(
+              module_, builder_, "nrq_gc_root_frame_end",
+              mlir::LLVM::LLVMVoidType::get(ctx_),
+              {builder_.getI64Type()});
+          builder_.create<mlir::LLVM::CallOp>(
+              loc, end_frame, mlir::ValueRange{gc_root_frame_marker_});
+        }
         if (uses_gc_mutator_) {
           auto mutator_leave = ensure_runtime_fn(
               module_, builder_, "nrq_gc_mutator_leave",
@@ -2599,6 +2611,7 @@ class FunctionTranslator {
   DiagnosticEngine& diag_;
   std::unordered_map<int, StackOwnedArrayLayout> stack_owned_arrays_;
   bool uses_gc_mutator_ = false;
+  bool needs_gc_root_frame_ = false;
   std::unordered_map<int, std::size_t> label_positions_;
   mlir::Block* entry_block_;
   struct PendingGcRoot {

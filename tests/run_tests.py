@@ -49,6 +49,7 @@ def run_case(case_dir, compiler_exe, temp_dir):
     expected_stdout = spec.get("expect_stdout", None)
     expected_stderr_contains = spec.get("expect_stderr_contains", None)
     expected_stdout_contains = spec.get("expect_stdout_contains", None)
+    expected_stdout_not_contains = spec.get("expect_stdout_not_contains", None)
     source_file = case_dir / "main.nrqba"
 
     if not source_file.exists() and "source_file" in spec:
@@ -85,6 +86,11 @@ def run_case(case_dir, compiler_exe, temp_dir):
         for needle in expected_stdout_contains:
             if needle not in out:
                 return False, f"Stdout does not contain '{needle}'.\nGot:\n{out}"
+
+    if expected_stdout_not_contains is not None:
+        for needle in expected_stdout_not_contains:
+            if needle in out:
+                return False, f"Stdout unexpectedly contains '{needle}'.\nGot:\n{out}"
 
     if expected_stderr_contains is not None:
         for needle in expected_stderr_contains:
