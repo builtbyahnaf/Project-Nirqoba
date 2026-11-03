@@ -1,0 +1,7 @@
+{
+  "mode": "build",
+  "args": ["--emit=mlir", "-O2"],
+  "expect_exit": 0,
+  "expect_stdout_contains": ["nrq_memory_array_bounds_fail"],
+  "expect_stdout_not_contains": ["nrq_memory_array_bounds_check"]
+}

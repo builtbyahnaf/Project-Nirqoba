@@ -107,6 +107,11 @@ void* nrq_memory_allocate_array(size_t count, size_t element_size,
 void* nrq_memory_allocate_array_from(void* allocator, size_t count,
                                      size_t element_size, size_t alignment);
 void nrq_memory_array_bounds_check(uint64_t index, uint64_t length);
+// Cold failure path used by optimized inline bounds checks. Never returns.
+#ifdef __cplusplus
+[[noreturn]]
+#endif
+void nrq_memory_array_bounds_fail(void);
 void nrq_memory_array_range_check(uint64_t start, uint64_t count, uint64_t length);
 void* nrq_memory_shared_allocate(size_t bytes, size_t alignment);
 void* nrq_memory_shared_retain(void* pointer);
