@@ -218,7 +218,8 @@ std::mutex gc_mutex;
 // sweep open to concurrent mutator execution.
 std::mutex collection_cycle_mutex;
 
-enum class CollectionPhase { Idle, Marking, Sweeping };
+enum class CollectionPhase { Idle, Preparing, Marking, Sweeping };
+constexpr size_t kRememberedBufferCapacity = 64;
 struct MutatorState {
   size_t depth = 0;
   bool parked = false;
@@ -229,12 +230,19 @@ struct MutatorState {
   ObjectHeader* pending_objects = nullptr;
   size_t pending_bytes = 0;
   size_t pending_count = 0;
+  // Old-to-young stores buffer raw referents so ordinary stores do not need the
+  // collector mutex. The owner drains this buffer at a safepoint/leave; the
+  // collector drains every registered mutator after parking them.
+  void* remembered[kRememberedBufferCapacity]{};
+  size_t remembered_count = 0;
 };
 std::mutex mutator_mutex;
 std::condition_variable mutator_condition;
 std::vector<MutatorState*> mutators;
-bool collection_requested = false;
-std::thread::id collector_thread;
+// Read by every safepoint poll without a lock. Writers hold mutator_mutex and
+// publish with release ordering; waiters re-check while holding that mutex.
+std::atomic<bool> collection_requested{false};
+thread_local bool thread_is_collector = false;
 thread_local MutatorState thread_mutator;
 ObjectHeader* objects = nullptr;
 ObjectIndex object_index;
@@ -255,6 +263,24 @@ struct RootInfo {
   std::vector<size_t> reference_offsets;
 };
 std::unordered_map<void*, RootInfo> roots;
+// Thread-local shadow stacks hold ordinary roots. Array/external roots stay in
+// `roots`; ordinary roots never touch gc_mutex after the stack is registered.
+struct ShadowRoot {
+  void* slot = nullptr;
+  RootInfo info;
+};
+struct ShadowStack {
+  std::mutex mutex;
+  std::vector<ShadowRoot> roots;
+  struct Frame {
+    uint64_t marker;
+    size_t root_depth;
+  };
+  std::vector<Frame> frames;
+  uint64_t next_marker = 1;
+};
+std::vector<ShadowStack*> shadow_stacks;
+thread_local ShadowStack* thread_shadow_stack = nullptr;
 std::unordered_map<void*, size_t> pinned_objects;
 // Pinning is a diagnostic facility rather than a concurrency primitive: a
 // reasonable program pins an object while a native call borrows it and unpins it
@@ -265,13 +291,6 @@ std::unordered_map<void*, size_t> pinned_objects;
 constexpr size_t kMaxPinsPerObject = 16;
 uint64_t pin_violations = 0;
 bool reference_diagnostics_enabled = false;
-thread_local std::vector<void*> thread_roots;
-struct RootFrame {
-  uint64_t marker;
-  size_t root_depth;
-};
-thread_local std::vector<RootFrame> thread_root_frames;
-std::atomic<uint64_t> next_root_frame_marker{1};
 // Collection is an explicit opt-in policy. Programs using the GC domain may
 // call gc.enable() to request automatic triggers; explicit gc.collect() always
 // works regardless of this state.
@@ -294,6 +313,11 @@ constexpr size_t kSweepBudget = 64;
 constexpr uint8_t kPromotionAge = 2;
 constexpr size_t kMajorCollectionInterval = 8;
 std::atomic<CollectionPhase> collection_phase{CollectionPhase::Idle};
+// Counts lock-free barrier operations that started while the collector was idle.
+// The collector publishes Preparing and then waits for this counter to reach
+// zero before taking a root snapshot, so a store that began before the phase
+// change is either fully visible to the snapshot or takes the slow barrier path.
+std::atomic<uint64_t> barrier_readers{0};
 bool active_collection_is_minor = false;
 uint64_t active_cycle_epoch = 0;
 std::atomic<uint64_t> next_cycle_epoch{1};
@@ -311,6 +335,10 @@ ObjectHeader* sweep_list = nullptr;
 // objects referenced by old objects; the root-store/root-copy barriers insert
 // here, and a minor collection treats the set as additional roots.
 std::unordered_set<ObjectHeader*> remembered_young;
+// A thread may buffer a reference to an object that is still in another
+// mutator's unpublished TLAB. These raw addresses are retried after all TLABs
+// are published at the next cycle boundary; they are never dereferenced.
+std::unordered_set<void*> unresolved_remembered;
 
 uint64_t saturated_add(uint64_t left, uint64_t right) {
   return right > UINT64_MAX - left ? UINT64_MAX : left + right;
@@ -358,20 +386,29 @@ void publish_tlab_locked(MutatorState& mutator) {
   mutator.pending_count = 0;
 }
 
+bool collection_is_requested() {
+  return collection_requested.load(std::memory_order_acquire);
+}
+
+void wait_until_not_requested(std::unique_lock<std::mutex>& lock) {
+  mutator_condition.wait(lock, [] {
+    return !collection_requested.load(std::memory_order_acquire);
+  });
+}
+
 void stop_mutators() {
   std::unique_lock<std::mutex> lock(mutator_mutex);
-  while (collection_requested) {
+  while (collection_is_requested()) {
     if (thread_mutator.depth != 0) {
       thread_mutator.parked = true;
       mutator_condition.notify_all();
-      mutator_condition.wait(lock, [] { return !collection_requested; });
+      wait_until_not_requested(lock);
       thread_mutator.parked = false;
     } else {
-      mutator_condition.wait(lock, [] { return !collection_requested; });
+      wait_until_not_requested(lock);
     }
   }
-  collection_requested = true;
-  collector_thread = std::this_thread::get_id();
+  collection_requested.store(true, std::memory_order_release);
   mutator_condition.notify_all();
   mutator_condition.wait(lock, [] {
     for (const MutatorState* mutator : mutators)
@@ -382,9 +419,26 @@ void stop_mutators() {
 
 void resume_mutators() {
   std::lock_guard<std::mutex> lock(mutator_mutex);
-  collection_requested = false;
-  collector_thread = std::thread::id{};
+  collection_requested.store(false, std::memory_order_release);
   mutator_condition.notify_all();
+}
+
+bool begin_fast_barrier() {
+  barrier_readers.fetch_add(1, std::memory_order_acq_rel);
+  if (collection_phase.load(std::memory_order_acquire) ==
+      CollectionPhase::Idle)
+    return true;
+  barrier_readers.fetch_sub(1, std::memory_order_release);
+  return false;
+}
+
+void end_fast_barrier() {
+  barrier_readers.fetch_sub(1, std::memory_order_release);
+}
+
+void wait_for_fast_barriers() {
+  while (barrier_readers.load(std::memory_order_acquire) != 0)
+    std::this_thread::yield();
 }
 
 void trace_children(ObjectHeader* header, nrq_gc_visit_fn visit,
@@ -499,6 +553,15 @@ void enqueue_root_locked(void* root_storage, const RootInfo& root,
 void enqueue_roots_locked(MarkContext& context) {
   for (const auto& root : roots)
     enqueue_root_locked(root.first, root.second, context);
+  // Local roots are owned by their threads. The mutex guards the vector while
+  // the collector copies a consistent view; ordinary registration does not take
+  // gc_mutex, so collection never blocks the whole world to add a stack root.
+  for (ShadowStack* stack : shadow_stacks) {
+    if (!stack) continue;
+    std::lock_guard<std::mutex> stack_lock(stack->mutex);
+    for (const ShadowRoot& root : stack->roots)
+      enqueue_root_locked(root.slot, root.info, context);
+  }
   for (const auto& pinned : pinned_objects) {
     if (pinned.second != 0) enqueue_reference(pinned.first, &context);
   }
@@ -536,6 +599,88 @@ void remember_young_locked(void* object) {
 
 void remember_children_locked(ObjectHeader* header) {
   trace_children(header, remember_reference, nullptr);
+}
+
+void defer_remembered_locked(void* object) {
+  if (!object) return;
+  ObjectHeader* found = object_index.find(object);
+  if (found && found->young) {
+    try {
+      remembered_young.insert(found);
+    } catch (...) {
+      nrq_runtime_fatal("GC remembered-set insertion failed");
+    }
+    return;
+  }
+  if (!found) {
+    try {
+      unresolved_remembered.insert(object);
+    } catch (...) {
+      nrq_runtime_fatal("GC remembered-set overflow failed");
+    }
+  }
+}
+
+void drain_remembered_locked(MutatorState& mutator, bool defer_unresolved) {
+  for (size_t index = 0; index < mutator.remembered_count; ++index) {
+    void* object = mutator.remembered[index];
+    if (!object) continue;
+    ObjectHeader* found = object_index.find(object);
+    if (found && found->young) {
+      try {
+        remembered_young.insert(found);
+      } catch (...) {
+        nrq_runtime_fatal("GC remembered-set insertion failed");
+      }
+    } else if (!found && defer_unresolved) {
+      try {
+        unresolved_remembered.insert(object);
+      } catch (...) {
+        nrq_runtime_fatal("GC remembered-set overflow failed");
+      }
+    }
+  }
+  mutator.remembered_count = 0;
+}
+
+void resolve_unresolved_remembered_locked() {
+  for (void* object : unresolved_remembered) {
+    ObjectHeader* found = object_index.find(object);
+    if (!found || !found->young) continue;
+    try {
+      remembered_young.insert(found);
+    } catch (...) {
+      nrq_runtime_fatal("GC remembered-set insertion failed");
+    }
+  }
+  unresolved_remembered.clear();
+}
+
+void buffer_remembered(void* object);
+
+void buffer_pointer_words(void* storage, size_t bytes) {
+  auto* address = static_cast<unsigned char*>(storage);
+  for (size_t offset = 0; offset + sizeof(void*) <= bytes;
+       offset += sizeof(void*)) {
+    void* reference = nullptr;
+    std::memcpy(&reference, address + offset, sizeof(reference));
+    buffer_remembered(reference);
+  }
+}
+
+void buffer_remembered(void* object) {
+  if (!object ||
+      !generational_collection_enabled.load(std::memory_order_relaxed))
+    return;
+  MutatorState& mutator = thread_mutator;
+  if (mutator.remembered_count < kRememberedBufferCapacity) {
+    mutator.remembered[mutator.remembered_count++] = object;
+    return;
+  }
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  publish_tlab_locked(mutator);
+  drain_remembered_locked(mutator, /*defer_unresolved=*/true);
+  defer_remembered_locked(object);
 }
 
 bool mark_slice_locked(size_t budget) {
@@ -613,6 +758,13 @@ bool sweep_chunk_locked(size_t budget) {
 void prepare_cycle_locked(bool young_only) {
   for (MutatorState* mutator : mutators)
     if (mutator) publish_tlab_locked(*mutator);
+  // A fast old-to-young store may have filled its buffer without taking the
+  // collector lock. Publish every mutator's TLAB first, then drain, so buffered
+  // references to objects that were still thread-local become visible. Any
+  // reference deferred by a thread exit is resolved after all TLABs are live.
+  for (MutatorState* mutator : mutators)
+    if (mutator) drain_remembered_locked(*mutator, /*defer_unresolved=*/false);
+  resolve_unresolved_remembered_locked();
 
   // No mutator can be inside an allocator while stop_mutators() has everyone
   // parked. Invalidate stale TLAB cursors before reclaiming empty pages.
@@ -637,7 +789,16 @@ void prepare_cycle_locked(bool young_only) {
 }
 
 void begin_cycle(bool young_only) {
+  // Publish the transition before parking so new fast-path stores fall back to
+  // the synchronized barrier. In-flight fast stores finish before the root
+  // snapshot; barrier_readers is the handshake that makes that visible.
+  {
+    std::lock_guard<std::mutex> lock(gc_mutex);
+    collection_phase.store(CollectionPhase::Preparing,
+                           std::memory_order_release);
+  }
   stop_mutators();
+  wait_for_fast_barriers();
   {
     std::lock_guard<std::mutex> lock(gc_mutex);
     prepare_cycle_locked(young_only);
@@ -694,7 +855,14 @@ std::unique_lock<std::mutex> acquire_collection_cycle() {
   return cycle_lock;
 }
 
+struct CollectorThreadGuard {
+  bool previous = thread_is_collector;
+  CollectorThreadGuard() { thread_is_collector = true; }
+  ~CollectorThreadGuard() { thread_is_collector = previous; }
+};
+
 void run_collection(bool young_only) {
+  CollectorThreadGuard collector_guard;
   std::unique_lock<std::mutex> cycle_lock = acquire_collection_cycle();
   begin_cycle(young_only);
   bool sweeping = false;
@@ -998,7 +1166,36 @@ void store_root_value_locked(void** slot, void* value) {
     mark_value_locked(value);
   }
   *slot = value;
-  remember_young_locked(value);
+  defer_remembered_locked(value);
+}
+
+ShadowStack& ensure_shadow_stack() {
+  if (thread_shadow_stack) return *thread_shadow_stack;
+  auto* stack = new (std::nothrow) ShadowStack();
+  if (!stack) nrq_runtime_fatal("GC shadow-stack allocation failed");
+  {
+    std::lock_guard<std::mutex> lock(gc_mutex);
+    try {
+      shadow_stacks.push_back(stack);
+    } catch (...) {
+      delete stack;
+      nrq_runtime_fatal("GC shadow-stack registration failed");
+    }
+  }
+  thread_shadow_stack = stack;
+  return *stack;
+}
+
+bool is_pointer_root(const RootInfo& root) {
+  return root.repeated_count == 0 && root.object_size == sizeof(void*) &&
+         root.reference_offsets.size() == 1 && root.reference_offsets[0] == 0;
+}
+
+bool shadow_has_pointer_root(ShadowStack& stack, void* slot) {
+  std::lock_guard<std::mutex> lock(stack.mutex);
+  for (auto entry = stack.roots.rbegin(); entry != stack.roots.rend(); ++entry)
+    if (entry->slot == slot) return is_pointer_root(entry->info);
+  return false;
 }
 
 }  // namespace
@@ -1049,17 +1246,34 @@ void* nrq_gc_allocate_array_typed_rooted(
       count > SIZE_MAX / element_size)
     return nullptr;
   maybe_collect_automatically();
-  // Allocation and root publication must be atomic with respect to a
-  // collection. The TLAB fast path would leave a window in which the new object
-  // is in the sweep snapshot but not yet reachable from its root.
+  const size_t bytes = count * element_size;
+  if (thread_mutator.depth != 0) {
+    ShadowStack& stack = ensure_shadow_stack();
+    if (!shadow_has_pointer_root(stack, root_slot))
+      nrq_runtime_fatal(
+          "rooted GC allocation requires a registered pointer root slot");
+    // The reader count spans allocation and root publication. The collector
+    // cannot take its root snapshot in that window, so the object becomes
+    // reachable before any snapshot can decide it is garbage.
+    if (begin_fast_barrier()) {
+      bool handled = false;
+      void* object = allocate_tlab(bytes, element_size, nullptr,
+                                   reference_offsets, reference_count, handled);
+      if (handled) {
+        *root_slot = object;
+        end_fast_barrier();
+        return object;
+      }
+      end_fast_barrier();
+    }
+  }
+
   std::lock_guard<std::mutex> lock(gc_mutex);
-  const auto root = roots.find(root_slot);
-  if (root == roots.end() || root->second.repeated_count != 0 ||
-      root->second.object_size != sizeof(void*) ||
-      root->second.reference_offsets.size() != 1 ||
-      root->second.reference_offsets[0] != 0)
-    nrq_runtime_fatal("rooted GC allocation requires a registered pointer root slot");
-  void* object = allocate_locked(count * element_size, element_size, nullptr,
+  if (thread_shadow_stack &&
+      !shadow_has_pointer_root(*thread_shadow_stack, root_slot))
+    nrq_runtime_fatal(
+        "rooted GC allocation requires a registered pointer root slot");
+  void* object = allocate_locked(bytes, element_size, nullptr,
                                  reference_offsets, reference_count);
   store_root_value_locked(root_slot, object);
   return object;
@@ -1080,41 +1294,55 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
     if (offset > object_size || sizeof(void*) > object_size - offset)
       nrq_runtime_fatal("GC root registration contains an out-of-range pointer offset");
   }
-  std::lock_guard<std::mutex> lock(gc_mutex);
-  auto found = roots.find(slot);
-  bool inserted = false;
-  if (found == roots.end()) {
-    try {
-      RootInfo root;
-      root.object_size = object_size;
-      root.reference_offsets.assign(reference_offsets,
-                                    reference_offsets + reference_count);
-      auto result = roots.emplace(slot, std::move(root));
-      found = result.first;
-      inserted = result.second;
-    } catch (...) {
-      nrq_runtime_fatal("GC root registration failed to allocate root metadata");
-    }
-  } else if (found->second.object_size != object_size ||
-             found->second.reference_offsets.size() != reference_count ||
-             !std::equal(found->second.reference_offsets.begin(),
-                         found->second.reference_offsets.end(), reference_offsets)) {
-    nrq_runtime_fatal("GC root slot was registered with an incompatible layout");
-  }
-  if (found->second.references == SIZE_MAX) {
-    if (inserted) roots.erase(found);
-    nrq_runtime_fatal("GC root registration count overflow");
-  }
+  RootInfo info;
+  info.object_size = object_size;
   try {
-    thread_roots.push_back(slot);
+    info.reference_offsets.assign(reference_offsets,
+                                  reference_offsets + reference_count);
   } catch (...) {
-    if (inserted) roots.erase(found);
-    nrq_runtime_fatal("GC root registration failed to track the current thread");
+    nrq_runtime_fatal("GC root registration failed to allocate root metadata");
   }
-  ++found->second.references;
-  if (collection_phase.load(std::memory_order_relaxed) !=
-      CollectionPhase::Idle)
-    mark_root_values_locked(slot, found->second);
+
+  ShadowStack& stack = ensure_shadow_stack();
+  auto push_root = [&]() {
+    for (const ShadowRoot& entry : stack.roots) {
+      if (entry.slot != slot) continue;
+      if (entry.info.object_size != info.object_size ||
+          entry.info.reference_offsets != info.reference_offsets)
+        nrq_runtime_fatal(
+            "GC root slot was registered with an incompatible layout");
+    }
+    try {
+      stack.roots.push_back(ShadowRoot{slot, std::move(info)});
+    } catch (...) {
+      nrq_runtime_fatal("GC root registration failed to track the current thread");
+    }
+  };
+
+  // Fast path: no collector mutex. The reader count keeps a snapshot from
+  // starting between the root being published and the phase check.
+  if (begin_fast_barrier()) {
+    {
+      std::lock_guard<std::mutex> stack_lock(stack.mutex);
+      push_root();
+    }
+    end_fast_barrier();
+    return;
+  }
+
+  std::lock_guard<std::mutex> heap_lock(gc_mutex);
+  {
+    std::lock_guard<std::mutex> stack_lock(stack.mutex);
+    // Re-read under gc_mutex. If the collector snapshotted before this push,
+    // prepare_cycle has already advanced the phase to Marking; if it has not,
+    // the root will be part of the snapshot.
+    const CollectionPhase phase =
+        collection_phase.load(std::memory_order_acquire);
+    if (phase == CollectionPhase::Marking ||
+        phase == CollectionPhase::Sweeping)
+      mark_root_values_locked(slot, info);
+    push_root();
+  }
 }
 
 void nrq_gc_root_register_array(void* data, size_t count, size_t element_size,
@@ -1174,32 +1402,40 @@ void nrq_gc_root_clear_array_references(void* data, size_t count,
 
 void nrq_gc_root_unregister(void** slot) {
   if (!slot) return;
+  if (thread_shadow_stack) {
+    ShadowStack& stack = *thread_shadow_stack;
+    std::lock_guard<std::mutex> stack_lock(stack.mutex);
+    for (auto entry = stack.roots.rbegin(); entry != stack.roots.rend();
+         ++entry) {
+      if (entry->slot != slot) continue;
+      stack.roots.erase(std::next(entry).base());
+      return;
+    }
+  }
+  // Array/external roots live in the global table and may be released by their
+  // owner from any thread.
   std::lock_guard<std::mutex> lock(gc_mutex);
   auto found = roots.find(slot);
-  if (found != roots.end()) {
-    auto thread_root = thread_roots.rend();
-    for (auto item = thread_roots.rbegin(); item != thread_roots.rend(); ++item) {
-      if (*item == slot) {
-        thread_root = item;
-        break;
-      }
-    }
-    // Array roots are registered as external storage rather than as a stack
-    // root on the calling thread. Ordinary root slots must be unregistered by
-    // a thread that owns one of their registrations; otherwise a cross-thread
-    // unregister could leave a stale TLS entry that later affects a reused slot.
-    if (thread_root == thread_roots.rend() && found->second.repeated_count == 0)
-      nrq_runtime_fatal("GC root unregistration must match a registration on the current thread");
-    if (found->second.references == 0)
-      nrq_runtime_fatal("GC root unregistration count underflow");
-    if (thread_root != thread_roots.rend())
-      thread_roots.erase(std::next(thread_root).base());
-    if (--found->second.references == 0) roots.erase(found);
-  }
+  // Compiler cleanup is emitted for owned arrays even when their element type
+  // contains no managed references and no root region was registered. Preserve
+  // the historical no-op for an unknown external root.
+  if (found == roots.end()) return;
+  if (found->second.references == 0)
+    nrq_runtime_fatal("GC root unregistration count underflow");
+  if (--found->second.references == 0) roots.erase(found);
 }
 
 void nrq_gc_root_store(void** slot, void* value) {
   if (!slot) return;
+  // Language-generated stores execute inside a registered mutator. The fast
+  // path is just a pointer store plus a reader-count handshake; the collector
+  // waits for in-flight readers before snapshotting roots.
+  if (thread_mutator.depth != 0 && begin_fast_barrier()) {
+    *slot = value;
+    buffer_remembered(value);
+    end_fast_barrier();
+    return;
+  }
   std::lock_guard<std::mutex> lock(gc_mutex);
   store_root_value_locked(slot, value);
 }
@@ -1212,12 +1448,18 @@ void scan_pointer_words_locked(void* storage, size_t bytes, bool mark) {
     std::memcpy(&reference, address + offset, sizeof(reference));
     if (!reference) continue;
     if (mark) mark_value_locked(reference);
-    remember_young_locked(reference);
+    defer_remembered_locked(reference);
   }
 }
 
 void nrq_gc_root_copy(void* destination, const void* source, size_t bytes) {
   if (!destination || !source || bytes == 0) return;
+  if (thread_mutator.depth != 0 && begin_fast_barrier()) {
+    std::memcpy(destination, source, bytes);
+    buffer_pointer_words(destination, bytes);
+    end_fast_barrier();
+    return;
+  }
   std::lock_guard<std::mutex> lock(gc_mutex);
   const CollectionPhase phase =
       collection_phase.load(std::memory_order_relaxed);
@@ -1232,16 +1474,13 @@ void nrq_gc_root_copy(void* destination, const void* source, size_t bytes) {
 }
 
 uint64_t nrq_gc_root_frame_begin(void) {
-  uint64_t marker = next_root_frame_marker.load(std::memory_order_relaxed);
-  for (;;) {
-    if (marker == 0 || marker == UINT64_MAX)
-      nrq_runtime_fatal("GC root frame marker space exhausted");
-    if (next_root_frame_marker.compare_exchange_weak(
-            marker, marker + 1, std::memory_order_relaxed,
-            std::memory_order_relaxed)) break;
-  }
+  ShadowStack& stack = ensure_shadow_stack();
+  std::lock_guard<std::mutex> lock(stack.mutex);
+  if (stack.next_marker == UINT64_MAX)
+    nrq_runtime_fatal("GC root frame marker space exhausted");
+  const uint64_t marker = stack.next_marker++;
   try {
-    thread_root_frames.push_back(RootFrame{marker, thread_roots.size()});
+    stack.frames.push_back(ShadowStack::Frame{marker, stack.roots.size()});
   } catch (...) {
     nrq_runtime_fatal("GC root frame registration failed to allocate thread metadata");
   }
@@ -1249,22 +1488,15 @@ uint64_t nrq_gc_root_frame_begin(void) {
 }
 
 void nrq_gc_root_frame_end(uint64_t marker) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
-  if (thread_root_frames.empty() || thread_root_frames.back().marker != marker ||
-      thread_root_frames.back().root_depth > thread_roots.size())
+  if (!thread_shadow_stack)
+    nrq_runtime_fatal("GC root frame ended without a shadow stack");
+  ShadowStack& stack = *thread_shadow_stack;
+  std::lock_guard<std::mutex> lock(stack.mutex);
+  if (stack.frames.empty() || stack.frames.back().marker != marker ||
+      stack.frames.back().root_depth > stack.roots.size())
     nrq_runtime_fatal("GC root frames must end in LIFO order with a valid marker");
-  const size_t target = thread_root_frames.back().root_depth;
-  thread_root_frames.pop_back();
-  while (thread_roots.size() > target) {
-    void* slot = thread_roots.back();
-    thread_roots.pop_back();
-    auto found = roots.find(slot);
-    if (found != roots.end()) {
-      if (found->second.references == 0)
-        nrq_runtime_fatal("GC root frame count underflow");
-      if (--found->second.references == 0) roots.erase(found);
-    }
-  }
+  stack.roots.resize(stack.frames.back().root_depth);
+  stack.frames.pop_back();
 }
 
 void nrq_gc_enable(void) {
@@ -1304,55 +1536,50 @@ uint64_t nrq_gc_get_major_collection_count(void) {
 }
 
 void nrq_gc_mutator_enter(void) {
-  std::unique_lock<std::mutex> lock(mutator_mutex);
-  while (collection_requested) {
-    if (thread_mutator.depth != 0) {
-      thread_mutator.parked = true;
-      mutator_condition.notify_all();
-      mutator_condition.wait(lock, [] { return !collection_requested; });
-      thread_mutator.parked = false;
-    } else {
-      mutator_condition.wait(lock, [] { return !collection_requested; });
-    }
-  }
   if (thread_mutator.depth == SIZE_MAX)
     nrq_runtime_fatal("GC mutator nesting depth overflow");
-  if (thread_mutator.depth++ == 0) {
-    try {
-      mutators.push_back(&thread_mutator);
-    } catch (...) {
-      thread_mutator.depth = 0;
-      nrq_runtime_fatal("GC mutator registration failed");
-    }
+  if (thread_mutator.depth++ != 0) return;
+
+  std::unique_lock<std::mutex> lock(mutator_mutex);
+  while (collection_is_requested()) wait_until_not_requested(lock);
+  try {
+    mutators.push_back(&thread_mutator);
+  } catch (...) {
+    thread_mutator.depth = 0;
+    nrq_runtime_fatal("GC mutator registration failed");
   }
 }
 
 void nrq_gc_mutator_leave(void) {
-  std::lock_guard<std::mutex> lock(mutator_mutex);
   if (thread_mutator.depth == 0)
     nrq_runtime_fatal("GC mutator leave without matching enter");
-  if (--thread_mutator.depth == 0) {
-    {
-      std::lock_guard<std::mutex> heap_lock(gc_mutex);
-      publish_tlab_locked(thread_mutator);
-    }
-    thread_mutator.parked = false;
-    auto found = std::find(mutators.begin(), mutators.end(), &thread_mutator);
-    if (found == mutators.end())
-      nrq_runtime_fatal("GC mutator registry lost an active thread");
-    mutators.erase(found);
-    mutator_condition.notify_all();
+  if (--thread_mutator.depth != 0) return;
+
+  std::lock_guard<std::mutex> lock(mutator_mutex);
+  {
+    std::lock_guard<std::mutex> heap_lock(gc_mutex);
+    publish_tlab_locked(thread_mutator);
+    drain_remembered_locked(thread_mutator, /*defer_unresolved=*/true);
   }
+  thread_mutator.parked = false;
+  auto found = std::find(mutators.begin(), mutators.end(), &thread_mutator);
+  if (found == mutators.end())
+    nrq_runtime_fatal("GC mutator registry lost an active thread");
+  mutators.erase(found);
+  mutator_condition.notify_all();
 }
 
 void nrq_gc_safepoint(void) {
+  // The common path is a single acquire load. Only threads that observe a
+  // request pay for the mutex and condition-variable protocol.
+  if (!collection_is_requested()) return;
+  if (thread_is_collector || thread_mutator.depth == 0) return;
+
   std::unique_lock<std::mutex> lock(mutator_mutex);
-  if (!collection_requested || collector_thread == std::this_thread::get_id() ||
-      thread_mutator.depth == 0)
-    return;
+  if (!collection_is_requested()) return;
   thread_mutator.parked = true;
   mutator_condition.notify_all();
-  mutator_condition.wait(lock, [] { return !collection_requested; });
+  wait_until_not_requested(lock);
   thread_mutator.parked = false;
 }
 
@@ -1504,6 +1731,34 @@ int64_t nrq_gc_get_ref_count(void* object) {
           void* reference = nullptr;
           std::memcpy(&reference, bytes + offset, sizeof(reference));
           count_reference(reference, &counts);
+        }
+      }
+    }
+    for (ShadowStack* stack : shadow_stacks) {
+      if (!stack) continue;
+      std::lock_guard<std::mutex> stack_lock(stack->mutex);
+      for (const ShadowRoot& root : stack->roots) {
+        auto* bytes = static_cast<const unsigned char*>(root.slot);
+        if (root.info.repeated_count != 0) {
+          for (size_t element = 0; element < root.info.repeated_count;
+               ++element) {
+            const unsigned char* element_bytes =
+                bytes + element * root.info.element_size;
+            for (size_t offset : root.info.reference_offsets) {
+              void* reference = nullptr;
+              std::memcpy(&reference, element_bytes + offset, sizeof(reference));
+              count_reference(reference, &counts);
+            }
+          }
+        } else {
+          for (size_t offset : root.info.reference_offsets) {
+            if (offset > root.info.object_size ||
+                sizeof(void*) > root.info.object_size - offset)
+              continue;
+            void* reference = nullptr;
+            std::memcpy(&reference, bytes + offset, sizeof(reference));
+            count_reference(reference, &counts);
+          }
         }
       }
     }
