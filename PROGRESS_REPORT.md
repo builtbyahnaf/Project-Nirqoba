@@ -11,7 +11,7 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.101-beta` |
+| Current Working Version | `0.102-beta` |
 | Development Stage | `Phase 6` |
 | Last Report Update | `2026-11-03 18:36:49` |
 | Report Entries | `4` |

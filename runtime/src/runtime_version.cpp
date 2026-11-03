@@ -7,7 +7,7 @@
 extern "C" {
 
 const char* nrq_runtime_version(void) {
-    return NIRQOBA_VERSION_STRING "-phase" NIRQOBA_PHASE;
+    return NIRQOBA_VERSION_LABEL "-phase" NIRQOBA_PHASE;
 }
 
 }  // extern "C"
