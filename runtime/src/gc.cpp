@@ -278,6 +278,11 @@ struct ShadowStack {
   };
   std::vector<Frame> frames;
   uint64_t next_marker = 1;
+  // Fast O(1) lookup for pointer-root validation in rooted allocation.
+  // Maintained by the owning thread only; never read by the collector.
+  // Tracks the slot addresses of all currently active simple pointer roots
+  // (roots registered via nrq_gc_root_register with a single void* reference).
+  std::unordered_set<void*> pointer_root_slots;
 };
 std::vector<ShadowStack*> shadow_stacks;
 thread_local ShadowStack* thread_shadow_stack = nullptr;
@@ -1192,10 +1197,9 @@ bool is_pointer_root(const RootInfo& root) {
 }
 
 bool shadow_has_pointer_root(ShadowStack& stack, void* slot) {
-  std::lock_guard<std::mutex> lock(stack.mutex);
-  for (auto entry = stack.roots.rbegin(); entry != stack.roots.rend(); ++entry)
-    if (entry->slot == slot) return is_pointer_root(entry->info);
-  return false;
+  // O(1) lookup via the maintained pointer_root_slots set.
+  // pointer_root_slots is thread-local bookkeeping only; no mutex required.
+  return stack.pointer_root_slots.count(slot) != 0;
 }
 
 }  // namespace
@@ -1249,7 +1253,9 @@ void* nrq_gc_allocate_array_typed_rooted(
   const size_t bytes = count * element_size;
   if (thread_mutator.depth != 0) {
     ShadowStack& stack = ensure_shadow_stack();
-    if (!shadow_has_pointer_root(stack, root_slot))
+    // O(1) root slot validation using the maintained pointer_root_slots set.
+    // pointer_root_slots is thread-local; no mutex needed for the check.
+    if (!stack.pointer_root_slots.count(root_slot))
       nrq_runtime_fatal(
           "rooted GC allocation requires a registered pointer root slot");
     // The reader count spans allocation and root publication. The collector
@@ -1270,7 +1276,7 @@ void* nrq_gc_allocate_array_typed_rooted(
 
   std::lock_guard<std::mutex> lock(gc_mutex);
   if (thread_shadow_stack &&
-      !shadow_has_pointer_root(*thread_shadow_stack, root_slot))
+      !thread_shadow_stack->pointer_root_slots.count(root_slot))
     nrq_runtime_fatal(
         "rooted GC allocation requires a registered pointer root slot");
   void* object = allocate_locked(bytes, element_size, nullptr,
@@ -1313,7 +1319,11 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
             "GC root slot was registered with an incompatible layout");
     }
     try {
+      const bool is_ptr_root = is_pointer_root(info);
       stack.roots.push_back(ShadowRoot{slot, std::move(info)});
+      // Maintain the O(1) pointer-root lookup set for rooted-allocation
+      // validation. pointer_root_slots is thread-local; no mutex needed.
+      if (is_ptr_root) stack.pointer_root_slots.insert(slot);
     } catch (...) {
       nrq_runtime_fatal("GC root registration failed to track the current thread");
     }
@@ -1408,6 +1418,10 @@ void nrq_gc_root_unregister(void** slot) {
     for (auto entry = stack.roots.rbegin(); entry != stack.roots.rend();
          ++entry) {
       if (entry->slot != slot) continue;
+      // If this was a pointer root, remove it from the O(1) lookup set.
+      // pointer_root_slots is thread-local; no additional mutex needed.
+      if (is_pointer_root(entry->info))
+        stack.pointer_root_slots.erase(slot);
       stack.roots.erase(std::next(entry).base());
       return;
     }
@@ -1474,8 +1488,10 @@ void nrq_gc_root_copy(void* destination, const void* source, size_t bytes) {
 }
 
 uint64_t nrq_gc_root_frame_begin(void) {
+  // stack.frames, next_marker, and the root-depth checkpoint are thread-local
+  // bookkeeping only. The collector never reads stack.frames; it only reads
+  // stack.roots under stack.mutex. No mutex is required here.
   ShadowStack& stack = ensure_shadow_stack();
-  std::lock_guard<std::mutex> lock(stack.mutex);
   if (stack.next_marker == UINT64_MAX)
     nrq_runtime_fatal("GC root frame marker space exhausted");
   const uint64_t marker = stack.next_marker++;
@@ -1491,12 +1507,40 @@ void nrq_gc_root_frame_end(uint64_t marker) {
   if (!thread_shadow_stack)
     nrq_runtime_fatal("GC root frame ended without a shadow stack");
   ShadowStack& stack = *thread_shadow_stack;
-  std::lock_guard<std::mutex> lock(stack.mutex);
+  // stack.frames is thread-private; validate without a lock.
   if (stack.frames.empty() || stack.frames.back().marker != marker ||
       stack.frames.back().root_depth > stack.roots.size())
     nrq_runtime_fatal("GC root frames must end in LIFO order with a valid marker");
-  stack.roots.resize(stack.frames.back().root_depth);
+  const size_t target_depth = stack.frames.back().root_depth;
   stack.frames.pop_back();
+
+  // Shrinking stack.roots requires coordination with the collector, which reads
+  // roots under stack.mutex. Use the fast barrier when idle so the collector
+  // cannot begin a snapshot between the resize and this function returning.
+  auto rebuild_pointer_root_slots = [&]() {
+    // Rebuild the O(1) lookup set to reflect roots remaining after the resize.
+    // pointer_root_slots is thread-local; no mutex needed for this rebuild.
+    stack.pointer_root_slots.clear();
+    for (const ShadowRoot& r : stack.roots) {
+      if (is_pointer_root(r.info))
+        stack.pointer_root_slots.insert(r.slot);
+    }
+  };
+
+  if (begin_fast_barrier()) {
+    // Collector is idle; resize freely without the stack mutex.
+    stack.roots.resize(target_depth);
+    rebuild_pointer_root_slots();
+    end_fast_barrier();
+    return;
+  }
+  // Collector is active; hold stack.mutex while shrinking roots so the
+  // collector sees a consistent view during its enumeration.
+  {
+    std::lock_guard<std::mutex> lock(stack.mutex);
+    stack.roots.resize(target_depth);
+  }
+  rebuild_pointer_root_slots();
 }
 
 void nrq_gc_enable(void) {
