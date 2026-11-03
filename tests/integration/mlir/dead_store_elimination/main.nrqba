@@ -1,0 +1,11 @@
+int function compute(int x) {
+    var y = 111;
+    y = x + 1;
+    let dead = x * 7 + 12345;
+    return y;
+}
+
+int function main() {
+    print(compute(41));
+    return 0;
+}

@@ -13,8 +13,8 @@
 | Project | Nirqoba |
 | Current Working Version | `0.101-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-03 00:15:00` |
-| Report Entries | `2` |
+| Last Report Update | `2026-11-03 18:36:49` |
+| Report Entries | `4` |
 
 ---
 
@@ -318,6 +318,214 @@ All 40 implementations were compiled and executed across 3 warmups and 10 measur
 ---
 
 **End of Entry #002**
+
+## Entry #003 — MLIR Canonicalization, CSE, and Dead-Code Cleanup Integration
+
+**Version:** `0.101-beta`  
+**Date:** `2026-11-03 18:31:30`  
+**Scope:** `PERFORMANCE_ROADMAP Section 3 / PO-3 / Compiler Optimization`  
+**Status:** `Completed`
+
+### 1. Overview
+
+Completed and validated the MLIR cleanup stage required by PO-3. The lowering
+pipeline now applies canonicalization, common-subexpression elimination (CSE),
+and trivial dead-code / unreachable-block elimination both before `nrq` lowering
+and again after `func`-to-LLVM conversion, while `-O0` keeps the direct lowering
+shape. A dedicated unit test proves duplicate pure operations are removed and
+that calls, runtime operations, and side effects survive.
+
+### 2. Implementation Details
+
+- **What:** Centralized the cleanup pass list in `add_cleanup_passes` and invoked
+  it from both cleanup points in `build_lowering_pipeline`. Added
+  `tests/unit/mlir_pipeline_test.cpp` with two regression cases.
+- **How:** The helper runs `canonicalize -> cse -> trivial-dce`. MLIR 23.1.4 no
+  longer provides `createRemoveUnreachableBlocksPass`, so the supported
+  `createTrivialDeadCodeEliminationPass` is used; it removes side-effect-free
+  operations with no users and unreachable blocks. Both stages respect MLIR
+  memory-effect interfaces, which keeps runtime and cleanup calls intact.
+- **Why:** Redundant high-level IR increases LLVM translation and optimization
+  work, and the previous pipeline had no regression evidence that cleanup was
+  semantically safe.
+- **Where:** `compiler/lib/Lowering/PassPipeline.cpp`,
+  `compiler/include/nirqoba/Lowering/PassPipeline.h`, `tests/CMakeLists.txt`,
+  `tests/unit/mlir_pipeline_test.cpp`.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `compiler/lib/Lowering/PassPipeline.cpp` | Added shared `add_cleanup_passes` (canonicalize, CSE, trivial DCE) used before lowering and after func-to-LLVM | Complete PO-3 cleanup at both legal points |
+| `compiler/include/nirqoba/Lowering/PassPipeline.h` | Updated pipeline documentation and side-effect safety contract | Keep public documentation accurate |
+| `tests/unit/mlir_pipeline_test.cpp` | Added optimized and `-O0` pipeline regression tests with op-count assertions | Provide evidence for deduplication, dead-code removal, and effect retention |
+| `tests/CMakeLists.txt` | Registered the new unit test source | Include it in the unit suite |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Compiler build (`cmd /c build\msvc-dev\build_project.bat`) | PASS | Ninja completed all targets |
+| Unit suite (`build\msvc-dev\tests\nirqoba_unit_tests.exe`) | PASS | 102/102, including 2 new `MlirPipelineTest` cases |
+| Integration suite (`python tests\run_tests.py --compiler build\msvc-dev\bin\nirqoba.exe`) | PASS | 173/173 |
+| Optimized cleanup op counts | PASS | `llvm.mul` 3 -> 1, constants 3 -> 1, returns 2 -> 1, calls 3 -> 3 |
+| `-O0` direct shape | PASS | `llvm.mul` 3, constants 3, returns 2, calls 3 |
+| `--emit=mlir` at `-O0/-O1/-O2/-O3/-Os/-Oz` | PASS | Exit 0 at every level |
+| Duplicate-computation program output at `-O0/-O2/-O3` | PASS | `84` at every level |
+
+- **Build Status:** Successful
+- **Regression Status:** None Detected
+- **Test Environment:** Windows 11 x64, MSVC 14.51.36231, LLVM/MLIR 23.1.4, RelWithDebInfo
+
+### 5. Performance & Resource Impact
+
+No runtime benchmark was claimed for this task. This is a compile-time IR
+cleanup change; its immediate effect is fewer redundant MLIR operations before
+LLVM translation. Runtime measurements belong to PO-8.
+
+### 6. Issues & Limitations
+
+- The cleanup is local and conservative; it performs no interprocedural
+  analysis, inlining, or loop transformation.
+- Trivial DCE does not remove dead use-def cycles and performs no liveness
+  analysis.
+- MLIR 23 removed the older unreachable-block pass API; the pipeline now uses the
+  supported trivial-DCE pass that performs the same block cleanup.
+
+### 7. Outstanding Work
+
+- [ ] PO-5 optimization correctness matrix across all levels.
+- [ ] PO-6 target/ABI evidence report.
+- [ ] PO-2 optimization-level evidence report.
+- [ ] PO-8 benchmark and regression gate.
+- [ ] PO-7 optimization remarks, pass logging, and optional LTO.
+
+### 8. Dependencies & Compatibility
+
+- **New Dependencies:** None.
+- **Removed Dependencies:** None.
+- **Platform Compatibility:** No platform-specific change.
+- **Breaking Changes:** None. `-O0` behavior is unchanged.
+
+### 9. Agent Assessment
+
+- **Implementation Completeness:** 100% of the PO-3 pipeline and regression-test scope.
+- **Verification Confidence:** High — build, unit, integration, and per-level `--emit=mlir` checks were executed.
+- **Known Risks:** None identified for the current lowering output; dead-cycle removal is explicitly out of scope.
+- **Recommended Next Step:** Implement the PO-5 cross-level differential correctness matrix.
+
+### 10. Evidence & References
+
+- **Relevant Files:** `compiler/lib/Lowering/PassPipeline.cpp`,
+  `compiler/include/nirqoba/Lowering/PassPipeline.h`,
+  `tests/unit/mlir_pipeline_test.cpp`, `reports/performance/po-03-mlir-cleanup.md`
+- **Logs:** Build, unit, integration, and per-level emit runs recorded in the PO-3 report.
+
+---
+
+**End of Entry #003**
+
+## Entry #004 — Explicit Dead-Code and Dead-Store Elimination
+
+**Version:** `0.101-beta`  
+**Date:** `2026-11-03 18:36:49`  
+**Scope:** `PERFORMANCE_ROADMAP Section 3 / DCE / DSE / Compiler Optimization`  
+**Status:** `Completed`
+
+### 1. Overview
+
+Verified the PO-3 MLIR cleanup and then added an explicit final LLVM dead-code
+and dead-store stage at every optimized level. Dedicated regression tests prove
+that a dead store and a dead computation are removed at `-O2`, retained at
+`-O0`, and that program output is unchanged.
+
+### 2. Implementation Details
+
+- **What:** Appended `DSEPass` and `ADCEPass` to the optimized LLVM pipeline via
+  a module-to-function adaptor; added three integration tests.
+- **How:** After `buildPerModuleDefaultPipeline` runs, a final
+  `FunctionPassManager` containing LLVM's `DSEPass` (dead stores) and
+  `ADCEPass` (aggressive dead code) runs on every function definition for
+  `-O1` through `-Oz`. `-O0` skips the stage. MLIR-level dead-operation and
+  unreachable-block removal remains in the existing `trivial-dce` cleanup.
+- **Why:** Module-level transforms can expose dead stores and computations after
+  per-function simplification. The explicit stage guarantees both Section 3
+  requirements independently of upstream pipeline ordering, while reusing
+  upstream passes instead of reimplementing them.
+- **Where:** `compiler/lib/Backend/Optimization.cpp` and
+  `tests/integration/mlir/dead_store_*`.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `compiler/lib/Backend/Optimization.cpp` | Added final `DSEPass` + `ADCEPass` function stage for optimized levels | Guarantee DSE and DCE after module-level transforms |
+| `tests/integration/mlir/dead_store_elimination` | O2 LLVM IR test: dead store and dead constant absent | Prove DSE/DCE execute |
+| `tests/integration/mlir/dead_store_retained_at_o0` | O0 LLVM IR test: dead store and constant present | Prove `-O0` stays unoptimized |
+| `tests/integration/mlir/dead_store_execution` | Runtime test at `-O2` | Prove elimination preserves semantics |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Build | PASS | Ninja completed |
+| Unit suite | PASS | 102/102 |
+| Integration suite | PASS | 176/176 (3 new) |
+| O2 IR | PASS | No `store i64 111`, no `12345` |
+| O0 IR | PASS | Both present |
+| Runtime correctness | PASS | stdout `42` |
+
+- **Build Status:** Successful
+- **Regression Status:** None Detected
+- **Test Environment:** Windows 11 x64, MSVC 14.51.36231, LLVM/MLIR 23.1.4, RelWithDebInfo
+
+### 5. Performance & Resource Impact
+
+No runtime benchmark was claimed. The change guarantees IR-level dead-store and
+dead-code removal; measured performance belongs to PO-8.
+
+### 6. Issues & Limitations
+
+- DSE is local to LLVM's store analysis; cross-module store elimination needs
+  LTO.
+- Unused public functions are not removed without whole-program analysis.
+- Optimization remarks/pass logging to identify the removing pass remain PO-7
+  work.
+
+### 7. Outstanding Work
+
+- [ ] PO-5 optimization correctness matrix across all levels.
+- [ ] PO-6 target/ABI evidence report.
+- [ ] PO-2 optimization-level evidence report.
+- [ ] PO-8 benchmark and regression gate.
+- [ ] PO-7 optimization remarks, pass logging, and optional LTO.
+
+### 8. Dependencies & Compatibility
+
+- **New Dependencies:** None (LLVM passes already linked through the `passes` component).
+- **Removed Dependencies:** None.
+- **Platform Compatibility:** No platform-specific change.
+- **Breaking Changes:** None. `-O0` behavior is unchanged.
+
+### 9. Agent Assessment
+
+- **Implementation Completeness:** 100% of the requested DCE/DSE scope.
+- **Verification Confidence:** High — build, unit, integration, and O0/O2 IR checks executed.
+- **Known Risks:** None identified.
+- **Recommended Next Step:** Implement the PO-5 cross-level differential correctness matrix.
+
+### 10. Evidence & References
+
+- **Relevant Files:** `compiler/lib/Backend/Optimization.cpp`,
+  `tests/integration/mlir/dead_store_elimination`,
+  `tests/integration/mlir/dead_store_retained_at_o0`,
+  `tests/integration/mlir/dead_store_execution`,
+  `reports/performance/po-03-dce-dse.md`
+- **Logs:** Build, unit, integration, and IR checks recorded in the DCE/DSE report.
+
+---
+
+**End of Entry #004**
 
 <!-- REPORT ENTRIES END -->
 

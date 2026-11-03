@@ -16,11 +16,15 @@ namespace nirq {
 void register_dialects(mlir::DialectRegistry& registry);
 
 // Populates `pm` with the MLIR lowering and cleanup pipeline:
-//   1. canonicalize + CSE (when `optimize` is true)
+//   1. canonicalize + CSE + trivial-dead-code-elimination (`optimize` only)
 //   2. nrq-to-llvm         (our custom pass — lowers nrq.print_string)
 //   3. convert-func-to-llvm
 //   4. reconcile-unrealized-casts
-//   5. canonicalize + CSE on the resulting LLVM dialect IR
+//   5. canonicalize + CSE + trivial-dead-code-elimination on the LLVM dialect IR
+//
+// The cleanup passes are semantics-preserving: they never erase an operation
+// that has not proven itself free of side effects, and they never destroy a
+// reachable runtime, GC-root, ownership, or cleanup call.
 //
 // `optimize` is false for -O0 so debugging sees the direct lowering result.
 // The pipeline is intentionally a list so later passes can be inserted without
