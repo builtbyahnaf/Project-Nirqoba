@@ -49,6 +49,29 @@ module {
 }
 )mlir";
 
+// SCCP must propagate a constant through a branch argument so the conditional
+// edge becomes provably constant. This is deliberately stronger than a direct
+// `icmp` of two constants: the value crosses a CFG edge as a block argument, so
+// the probe exercises propagation and reachability rather than only folding.
+constexpr const char* kConstantProbe = R"mlir(
+module {
+  llvm.func @constant_probe() -> i64 {
+    %one = llvm.mlir.constant(1 : i64) : i64
+    llvm.br ^next(%one : i64)
+  ^next(%argument : i64):
+    %is_one = llvm.icmp "eq" %argument, %one : i64
+    llvm.cond_br %is_one, ^yes, ^no
+  ^yes:
+    %six = llvm.mlir.constant(6 : i64) : i64
+    %seven = llvm.add %one, %six : i64
+    llvm.return %seven : i64
+  ^no:
+    %nine = llvm.mlir.constant(9 : i64) : i64
+    llvm.return %nine : i64
+  }
+}
+)mlir";
+
 struct Fixture {
   mlir::DialectRegistry registry;
   unique_ptr<mlir::MLIRContext> context;
@@ -71,6 +94,20 @@ int count_operations(mlir::ModuleOp module, llvm::StringRef name) {
   });
   return count;
 }
+
+struct ConstantFixture {
+  mlir::DialectRegistry registry;
+  unique_ptr<mlir::MLIRContext> context;
+  mlir::OwningOpRef<mlir::ModuleOp> module;
+
+  ConstantFixture() {
+    nirq::register_all_dialects(registry);
+    context = make_unique<mlir::MLIRContext>(registry);
+    context->loadAllAvailableDialects();
+    module = mlir::parseSourceString<mlir::ModuleOp>(kConstantProbe,
+                                                     context.get());
+  }
+};
 
 }  // namespace
 
@@ -102,6 +139,56 @@ TEST(MlirPipelineTest, CleanupMergesPureOperationsAndPreservesEffects) {
   // is the semantic-safety half of the cleanup contract: no runtime call was
   // dropped or duplicated.
   ASSERT_EQ(count_operations(*fixture.module, "llvm.call"), 3);
+}
+
+TEST(MlirPipelineTest, OptimizedPipelinePropagatesConstantsAndFoldsBranches) {
+  ConstantFixture fixture;
+  ASSERT_TRUE(static_cast<bool>(fixture.module));
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*fixture.module)));
+
+  mlir::PassManager pass_manager(fixture.context.get());
+  nirq::build_lowering_pipeline(pass_manager, /*optimize=*/true);
+  ASSERT_TRUE(mlir::succeeded(pass_manager.run(*fixture.module)));
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*fixture.module)));
+
+  // The branch argument is known to be 1, so the comparison is constant and
+  // the `^no` edge and block are unreachable. The surviving addition folds to
+  // the single constant 7.
+  ASSERT_EQ(count_operations(*fixture.module, "llvm.icmp"), 0);
+  ASSERT_EQ(count_operations(*fixture.module, "llvm.add"), 0);
+  ASSERT_EQ(count_operations(*fixture.module, "llvm.return"), 1);
+
+  bool found_seven = false;
+  bool found_nine = false;
+  fixture.module->walk([&](mlir::Operation* operation) {
+    auto constant = mlir::dyn_cast<mlir::LLVM::ConstantOp>(operation);
+    if (!constant) return;
+    auto integer = mlir::dyn_cast<mlir::IntegerAttr>(constant.getValue());
+    if (!integer || integer.getInt() != 7) return;
+    found_seven = true;
+  });
+  fixture.module->walk([&](mlir::Operation* operation) {
+    auto constant = mlir::dyn_cast<mlir::LLVM::ConstantOp>(operation);
+    if (!constant) return;
+    auto integer = mlir::dyn_cast<mlir::IntegerAttr>(constant.getValue());
+    if (!integer || integer.getInt() != 9) return;
+    found_nine = true;
+  });
+  ASSERT_TRUE(found_seven);
+  ASSERT_FALSE(found_nine);
+}
+
+TEST(MlirPipelineTest, O0PipelineKeepsConstantPropagationProbe) {
+  ConstantFixture fixture;
+  ASSERT_TRUE(static_cast<bool>(fixture.module));
+
+  mlir::PassManager pass_manager(fixture.context.get());
+  nirq::build_lowering_pipeline(pass_manager, /*optimize=*/false);
+  ASSERT_TRUE(mlir::succeeded(pass_manager.run(*fixture.module)));
+
+  ASSERT_EQ(count_operations(*fixture.module, "llvm.icmp"), 1);
+  ASSERT_EQ(count_operations(*fixture.module, "llvm.add"), 1);
+  ASSERT_EQ(count_operations(*fixture.module, "llvm.return"), 2);
 }
 
 TEST(MlirPipelineTest, O0PipelineKeepsDirectLoweringShape) {

@@ -96,9 +96,9 @@ The current native compilation architecture must evolve into a proper optimizing
 - [ ] Integrate MLIR canonicalization and common subexpression elimination (CSE).
 - [ ] Implement dead-code elimination.
 - [ ] Implement dead-store elimination.
-- [ ] Implement constant folding.
-- [ ] Implement constant propagation.
-- [ ] Implement sparse conditional constant propagation.
+- [x] Implement constant folding.
+- [x] Implement constant propagation.
+- [x] Implement sparse conditional constant propagation.
 - [ ] Implement control-flow simplification.
 - [ ] Implement unreachable-block elimination.
 - [ ] Implement function inlining with an appropriate cost model.
