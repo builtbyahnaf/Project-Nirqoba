@@ -55,8 +55,8 @@ struct OptimizationOptions {
 //
 // The target machine supplies the target IR analyses used by inlining,
 // vectorization, and cost modelling. The module must already have its data
-// layout and target triple set from the same target machine. Returns false
-// only if the requested level is invalid.
+// layout and target triple set from the same target machine. Returns false for
+// an invalid level or when the input/output module fails LLVM verification.
 bool optimize_llvm_module(llvm::Module& module,
                           llvm::TargetMachine& target_machine,
                           OptimizationLevel level,

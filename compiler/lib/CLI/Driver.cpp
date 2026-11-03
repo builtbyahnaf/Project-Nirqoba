@@ -385,7 +385,7 @@ bool parse_command_line(int argc, const char* const* argv,
       string_view kind_str = string_view(arg).substr(7);
       if (!parse_emit_kind(kind_str, options.emit)) {
         error_message = "invalid emit kind '" + string(kind_str) +
-                        "'; expected ast, tir, mlir, llvm, or obj";
+                        "'; expected ast, tir, mlir, llvm, llvm-raw, or obj";
         return false;
       }
       options.emit_specified = true;
