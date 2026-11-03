@@ -147,15 +147,18 @@ collection starts disabled and can be enabled explicitly.
 
 The collector uses precise tracing and non-moving mark-and-sweep collection.
 It never implicitly takes ownership of explicit allocations or native resources.
+The implemented collector is generational and incremental: young survivors are
+promoted, minor cycles use a remembered set, and marking and sweeping run in
+bounded slices while mutators execute. Write barriers synchronize root and
+managed-field stores; mutators park only briefly at cycle boundaries.
 
 Potential future collector capabilities include:
 
-- Generational collection.
-- Incremental collection.
-- Concurrent marking.
-- Write barriers.
-- Thread-aware allocation.
-- Precise root tracking.
+- Parallel marking and sweeping.
+- Fully concurrent heap metadata and allocation.
+- Compaction or another moving policy.
+- Size-class allocation and free-slot reuse.
+- Pause-time and throughput measurement.
 
 ### 4.2 Deterministic resource management
 

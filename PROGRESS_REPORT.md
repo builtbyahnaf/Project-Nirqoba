@@ -13,8 +13,8 @@
 | Project | Nirqoba |
 | Current Working Version | `0.105-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-03 18:36:49` |
-| Report Entries | `4` |
+| Last Report Update | `2026-11-04 01:09:15` |
+| Report Entries | `5` |
 
 ---
 
@@ -526,6 +526,157 @@ dead-code removal; measured performance belongs to PO-8.
 ---
 
 **End of Entry #004**
+
+## Entry #005 — Generational, Incremental, and Overlapping GC
+
+**Version:** `0.105-beta`  
+**Date:** `2026-11-04 01:09:15`  
+**Scope:** `Phase 6 / Runtime / Garbage collector`  
+**Status:** `Completed`
+
+### 1. Overview
+
+The collector was the largest remaining architectural limitation. It paused all
+participating execution for an entire mark-and-sweep cycle, so allocation-heavy
+or long-running programs paid a single global pause for every collection. This
+entry replaces that stop-the-world design with two generations, incremental
+marking, sliced sweeping, and brief mutator coordination only at cycle
+boundaries. The existing language ABI, root protocol, and tests are preserved.
+
+### 2. Implementation Details
+
+- **What:** Added young and old generations. New objects are young; survivors are
+  promoted after `kPromotionAge = 2` minor cycles. A full cycle promotes every
+  surviving snapshot object. Minor cycles trace young objects and a remembered
+  set of old-to-young edges; unreachable old objects wait for a full cycle.
+- **How:** Root-store and root-copy barriers record young referents in
+  `remembered_young`. Generated root and managed-field stores already use those
+  APIs, so no compiler ABI change was required. Explicit `gc.collect()` remains a
+  full collection. Automatic collection uses minor cycles and inserts a full
+  cycle every eight minors.
+- **How:** Marking is sliced at 64 objects per collector-lock acquisition, with
+  mutators resumed between slices. When marking completes, the allocation list is
+  detached as the sweep snapshot; new allocations go to the live list. Sweeping
+  then frees or promotes 64 snapshot objects per slice while mutators continue.
+  Empty pages are retired during sweep and physically released at the next cycle
+  boundary after all TLabs are published.
+- **How:** Objects born during the active cycle are retained by `birth_epoch`
+  instead of being traced as part of that cycle. Rooted allocation publishes its
+  result through the root-store barrier in the same critical section as
+  allocation, so no collection can observe the object before its root.
+- **Why:** This keeps the precise, non-moving object model and existing root
+  registration intact while removing whole-heap pauses. A full copying or
+  parallel collector would require moving or concurrent heap metadata, which is
+  outside this scope.
+- **Where:** `runtime/src/gc.cpp`, `runtime/include/nirqoba/runtime/gc.h`, and
+  `tests/unit/gc_test.cpp`.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `runtime/src/gc.cpp` | Added generations, promotion, remembered set, minor/major scheduling | Reclaim short-lived objects without tracing the old generation |
+| `runtime/src/gc.cpp` | Added sliced marking, detached sweep snapshot, page retirement | Overlap collection with mutator execution instead of pausing the heap |
+| `runtime/src/gc.cpp` | Added cycle birth epochs and rooted-allocation barrier publication | Keep allocations made during a cycle from being swept or left unrooted |
+| `runtime/src/gc.cpp` | Serialized concurrent collection requests while parking the waiting mutator | Prevent a collector/requestor deadlock with multiple registered threads |
+| `runtime/include/nirqoba/runtime/gc.h` | Added minor-collect, generational-toggle, and minor/major counter APIs | Expose and test the new policy from embedders |
+| `tests/unit/gc_test.cpp` | Added promotion, remembered-set, incremental-mark, and concurrent-collector tests | Lock in the new behavior and catch regressions |
+| `docs/memory/management.md` | Documented generations, sliced collection, barriers, and limits | Keep the user-facing memory model accurate |
+| `docs/readiness.md` | Added collector readiness status | Separate language readiness from collector claims |
+| `docs/phase6-upgrade-direction.md` | Replaced the stop-the-world collector direction | Record what is implemented and what remains open |
+| `project_context/PHASE6_MEMORY_MODEL.md` | Updated implementation and acceptance mapping | Keep project memory authoritative |
+| `project_context/PERFORMANCE_ROADMAP.md` | Checked completed GC requirements | Reflect implemented safepoints, barriers, generations, and overlap |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Build | PASS | Ninja completed all steps with MSVC RelWithDebInfo |
+| Unit suite | PASS | 107/107 |
+| Repeated unit stress | PASS | 15 consecutive full runs, 107/107 each |
+| Integration suite | PASS | 176/176 |
+| New promotion test | PASS | Old garbage retained by minor, reclaimed by full collection |
+| New remembered-set test | PASS | Old-to-young edge keeps the young child alive across a minor cycle |
+| Incremental-mark test | PASS | Mutator progress advances between trace callbacks |
+| Concurrent-collector test | PASS | Two registered mutators request collections without deadlock |
+
+- **Build Status:** Successful
+- **Regression Status:** None detected after the final fixes
+- **Test Environment:** Windows 11 x64, MSVC 14.51.36231, LLVM/MLIR 23.1.4, RelWithDebInfo
+
+### 5. Performance & Resource Impact
+
+No GC pause-time or throughput benchmark was run for this entry, so no speedup
+is claimed. The structural effect is that marking and sweeping no longer hold a
+single pause for the whole heap: collection work is bounded per slice and
+interleaved with mutator execution. The trade-off is that objects allocated
+during a cycle survive until the next cycle, and unreachable old objects survive
+until a full collection.
+
+### 6. Issues & Limitations
+
+- The collector is incremental and overlapping, not parallel: mark slices and
+  sweep slices are serialized by the collector mutex, and heap metadata and TLAB
+  refill still take that mutex.
+- Mutators still park briefly at cycle boundaries to publish TLabs and prepare
+  roots.
+- The collector is non-moving; there is no compaction, size-class allocation, or
+  free-slot reuse.
+- The remembered set is conservative: a removed old-to-young edge may retain a
+  young object until promotion or a later minor cycle.
+- Native code that writes managed-reference fields directly must use
+  `nrq_gc_root_store` or `nrq_gc_root_copy`; uninstrumented direct writes remain
+  outside the collector guarantee.
+- Stress testing exposed and fixed four concurrency defects: mark bits left set
+  on cycle-born objects, a rooted-allocation publication window, a remembered
+  set cleared at the wrong time, and a concurrent-collector deadlock.
+
+### 7. Outstanding Work
+
+- [ ] Measure allocation latency, pause times, and GC overhead.
+- [ ] Add size-class allocation and free-slot reuse.
+- [ ] Evaluate parallel marking/sweeping and reduced metadata locking.
+- [ ] Add compaction only if a moving design is approved.
+- [ ] Resolve the default-enabled versus opt-in GC documentation inconsistency.
+- [ ] Extend stress coverage to more mutator/collector interleavings and native
+  barrier usage.
+
+### 8. Dependencies & Compatibility
+
+- **New Dependencies:** None.
+- **Removed Dependencies:** None.
+- **Platform Compatibility:** No platform-specific change; verified on Windows x64/MSVC.
+- **Breaking Changes:** None. The new runtime functions are additive; existing
+  collection and root APIs keep their behavior.
+
+### 9. Agent Assessment
+
+- **Implementation Completeness:** 95% of the requested generational,
+  incremental, and overlapping-collection scope; parallel collection and
+  compaction were not requested and remain separate work.
+- **Verification Confidence:** High — build, 107 unit tests, 15 repeated stress
+  runs, and the 176-case integration suite passed after the final fixes.
+- **Known Risks:** Conservative remembered-set retention can delay reclamation;
+  uninstrumented native writes are still unsafe; pause-time behavior is not yet
+  measured.
+- **Recommended Next Step:** Add pause-time and allocation-latency measurement
+  before making performance claims or tuning slice budgets.
+
+### 10. Evidence & References
+
+- **Relevant Files:** `runtime/src/gc.cpp`,
+  `runtime/include/nirqoba/runtime/gc.h`, `tests/unit/gc_test.cpp`,
+  `docs/memory/management.md`, `docs/readiness.md`,
+  `docs/phase6-upgrade-direction.md`, `project_context/PHASE6_MEMORY_MODEL.md`.
+- **Logs:** Local build, unit, repeated stress, and integration runs recorded in
+  this entry.
+- **Documentation:** `docs/memory/management.md` §"Managed and explicit memory";
+  `docs/phase6-upgrade-direction.md` §"Evidence for the generational and
+  incremental collector".
+
+---
+
+**End of Entry #005**
 
 <!-- REPORT ENTRIES END -->
 

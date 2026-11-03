@@ -16,6 +16,35 @@ The implemented memory domains include owned pointers and arrays (move and deter
 references from compiler registered roots and typed object layouts instead of
 scanning arbitrary integer data.
 
+The collector is precise, non-moving, generational, and incremental. It keeps a
+young generation and an old generation. Young objects that survive a small
+number of minor collections are promoted; a minor collection traces young
+objects plus the remembered set of old-to-young references, while unreachable
+old objects wait for a full collection. Automatic collection uses minor cycles
+and inserts a full cycle at a fixed interval, so long-running programs
+eventually reclaim old garbage. `gc.collect()` requests a full collection; the
+runtime also exposes `nrq_gc_collect_minor()` for embedders. When generational
+collection is disabled, a minor request runs as a full collection.
+
+Marking and sweeping are sliced. After a short stop at the cycle boundary, where
+registered mutators park to publish thread-local allocations and prepare roots,
+marking runs in bounded slices with mutators resumed between slices. The sweep
+then detaches its snapshot list and frees objects in bounded chunks while
+mutators continue executing ordinary code. Objects allocated during the cycle
+are retained until the next cycle. This is incremental and overlapping with
+mutator execution, not a parallel collector: heap metadata, allocation-page
+refills, root publication, and each sweep slice still use the collector mutex.
+
+The runtime root-store and root-copy operations are write barriers. Generated
+code uses them for root slots and managed-field stores; they retain the old
+referent during marking (snapshot-at-the-beginning), mark the new referent, and
+record old-to-young edges in the remembered set. Native code that writes a
+managed reference field directly must use `nrq_gc_root_store` (or
+`nrq_gc_root_copy` for aggregates); uninstrumented direct stores are outside the
+collector's guarantee. The remembered set is conservative: a removed
+old-to-young edge may keep a floating young object alive until it is promoted or
+a later minor cycle reclaims it.
+
 Use `memory.allocate<T>(bytes)` for explicitly managed raw memory and pair it
 with `memory.deallocate(pointer)`. A failed allocation returns null. The
 runtime tracks allocation ownership and rejects invalid and repeated frees.

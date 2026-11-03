@@ -495,8 +495,8 @@ The following are out of scope for this plan until Section 3 passes:
 
 - Parallel execution, async runtime, and scheduler work (Section 5).
 - Numerical/SIMD kernel and tensor optimizations (Section 6).
-- GC generational/concurrent redesign (Section 8), except where optimization
-  correctness requires preserving existing GC behavior.
+- Parallel/fully concurrent GC, compaction, and GC pause-time benchmarking
+  (Section 8); generational and incremental collection are implemented.
 - Allocator benchmarking and generalized allocator replacement (Section 9).
 - Comparative C++/Rust performance claims (Section 10.3 / 6U:G).
 - GPU backends (Section 12).

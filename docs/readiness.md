@@ -6,6 +6,7 @@
 **Host:** Windows x64, Intel Family 6 Model 154, 8+ logical cores
 **Corpus:** `tests/readiness/` — 13 programs, 5 gap probes, 4 benchmarks
 **Runner:** `python tests/readiness/run_readiness.py --runs 7`
+**Collector update:** 2026-11-04 — generational, incremental marking, sliced sweep
 
 ---
 
@@ -80,6 +81,32 @@ python tests/readiness/run_readiness.py --runs 7
   `system.exit`, `input`.
 - The Phase 6 memory surface (`memory.allocate<T>`, `gc.*`, allocators) — exercised by the
   existing integration suite, not repeated here.
+
+### 3.2 Collector readiness update
+
+The Phase 6 collector moved from stop-the-world mark-sweep to a generational,
+incremental collector after this audit's benchmark run. The corpus above still
+describes language readiness; the collector change does not add new language
+syntax. Its current readiness status is:
+
+- **Generational collection:** implemented. Young survivors promote after two
+  minor cycles; minor cycles trace young objects plus a remembered set.
+- **Incremental marking and sweeping:** implemented in bounded slices with
+  mutators resumed between slices. Mutators park only at cycle boundaries to
+  publish TLABs and prepare roots.
+- **Write barriers:** the runtime root-store/root-copy operations are barriers;
+  generated root and managed-field stores use them. Uninstrumented native direct
+  writes are not covered.
+- **Automatic policy:** minor cycles on the allocation threshold, with a full
+  cycle every eight minors. `gc.collect()` remains a full collection.
+- **Not yet provided:** parallel mark/sweep, compaction, fully concurrent heap
+  metadata, size classes, and free-slot reuse. The collector remains non-moving.
+
+Verification after the collector change: unit suite **107/107**, repeated 15
+consecutive times on Windows x64/MSVC; integration suite **176/176**. No new
+pause-time or throughput benchmark was run, so this section makes no performance
+claim and the §6 numbers should not be read as measurements of the incremental
+collector.
 
 ---
 
