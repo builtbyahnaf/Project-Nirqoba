@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "llvm/IR/Attributes.h"
@@ -12,6 +13,8 @@
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Scalar/ADCE.h"
+#include "llvm/Transforms/Scalar/DeadStoreElimination.h"
 
 #include "nirqoba/Diagnostics/Diagnostic.h"
 #include "nirqoba/Diagnostics/DiagnosticEngine.h"
@@ -117,6 +120,24 @@ bool optimize_llvm_module(llvm::Module& module,
   llvm::ModulePassManager pipeline = level == OptimizationLevel::O0
       ? pass_builder.buildO0DefaultPipeline(llvm_level)
       : pass_builder.buildPerModuleDefaultPipeline(llvm_level);
+
+  // Guarantee dead-code and dead-store elimination at every optimized level.
+  //
+  // LLVM's per-module pipeline already contains DCE and DSE, but module-level
+  // transforms (inlining, global simplification, constant propagation) can
+  // expose computations and overwritten stores after the per-function
+  // simplification stage has run. This final function stage performs the two
+  // Section 3 requirements explicitly, so their presence does not depend on the
+  // upstream pipeline ordering. Both passes are idempotent when nothing is
+  // dead. -O0 intentionally skips the stage so the direct, source-shaped IR
+  // remains inspectable.
+  if (level != OptimizationLevel::O0) {
+    llvm::FunctionPassManager final_cleanup;
+    final_cleanup.addPass(llvm::DSEPass());
+    final_cleanup.addPass(llvm::ADCEPass());
+    pipeline.addPass(
+        llvm::createModuleToFunctionPassAdaptor(std::move(final_cleanup)));
+  }
 
   // The new pass manager reports analysis preservation, not failure. Verify the
   // transformed module before it reaches code generation so a bad pass or an

@@ -21,6 +21,7 @@ add_executable(nirqoba_unit_tests
   unit/socket_test.cpp
   unit/tir_test.cpp
   unit/nrq_dialect_test.cpp
+  unit/mlir_pipeline_test.cpp
   unit/cli_test.cpp
   unit/optimization_test.cpp
 )

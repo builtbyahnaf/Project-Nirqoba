@@ -37,13 +37,38 @@ void register_dialects(mlir::DialectRegistry& registry) {
   register_all_dialects(registry);
 }
 
+namespace {
+
+// Adds the semantics-preserving MLIR cleanup shared by the pre- and
+// post-lowering stages.
+//
+// The canonicalizer folds constants, removes trivially dead operations whose
+// results are unused, and simplifies control flow. CSE then merges structurally
+// identical operations that are proven side-effect-free. Both passes rely on
+// MLIR's side-effect interfaces, so calls, runtime operations, GC-root
+// operations, ownership transfers, and cleanup calls are retained: an operation
+// without a proven memory-effect model is never treated as removable or
+// deduplicable. Trivial DCE then removes side-effect-free operations that only
+// became dead during CSE and drops blocks that are unreachable from their
+// region entry, which cannot remove reachable runtime or cleanup work.
+//
+// Order matters: canonicalization exposes dead operations and simpler CFG, CSE
+// deduplicates the remaining pure operations, and trivial DCE runs last so it
+// also drops operations and blocks exposed by the preceding simplifications.
+void add_cleanup_passes(mlir::PassManager& pm) {
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::createCSEPass());
+  pm.addPass(mlir::createTrivialDeadCodeEliminationPass());
+}
+
+}  // namespace
+
 void build_lowering_pipeline(mlir::PassManager& pm, bool optimize) {
   // MLIR-level cleanup catches duplicated constants, unreachable blocks, and
   // dead alias-forming operations before they reach LLVM. At -O0 the direct
   // lowering is preserved for inspection and debugging.
   if (optimize) {
-    pm.addPass(mlir::createCanonicalizerPass());
-    pm.addPass(mlir::createCSEPass());
+    add_cleanup_passes(pm);
   }
 
   // Step 1: Lower nrq dialect ops to LLVM dialect calls.
@@ -57,8 +82,11 @@ void build_lowering_pipeline(mlir::PassManager& pm, bool optimize) {
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
 
   if (optimize) {
-    pm.addPass(mlir::createCanonicalizerPass());
-    pm.addPass(mlir::createCSEPass());
+    // Canonicalization and CSE are legal on LLVM-dialect IR too. Running the
+    // same cleanup again removes duplicate constants and casts introduced by
+    // the conversion passes while leaving every call and runtime operation
+    // intact.
+    add_cleanup_passes(pm);
   }
 }
 

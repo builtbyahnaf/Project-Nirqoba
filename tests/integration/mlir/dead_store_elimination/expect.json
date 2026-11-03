@@ -1,0 +1,7 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O2"],
+  "expect_exit": 0,
+  "expect_stdout_contains": ["define i64 @compute"],
+  "expect_stdout_not_contains": ["store i64 111", "12345"]
+}

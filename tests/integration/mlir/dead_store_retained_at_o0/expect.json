@@ -1,0 +1,6 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O0"],
+  "expect_exit": 0,
+  "expect_stdout_contains": ["store i64 111", "12345"]
+}
