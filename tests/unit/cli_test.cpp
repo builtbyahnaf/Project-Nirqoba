@@ -69,3 +69,70 @@ TEST(CliTest, RejectsUnknownOption) {
   std::string err;
   ASSERT_FALSE(parse_command_line(4, argv, opts, err));
 }
+
+TEST(CliTest, ParsesOptimizationLevels) {
+  const char* levels[] = {"-O0", "-O1", "-O2", "-O3", "-Os", "-Oz"};
+  const OptimizationLevel expected[] = {
+      OptimizationLevel::O0, OptimizationLevel::O1, OptimizationLevel::O2,
+      OptimizationLevel::O3, OptimizationLevel::Os, OptimizationLevel::Oz};
+  for (size_t index = 0; index < 6; ++index) {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", levels[index]};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(4, argv, opts, err));
+    ASSERT_EQ(opts.optimization_level, expected[index]);
+  }
+
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", "--opt-level=z"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(4, argv, opts, err));
+    ASSERT_EQ(opts.optimization_level, OptimizationLevel::Oz);
+  }
+
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", "-O9"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_FALSE(parse_command_line(4, argv, opts, err));
+    ASSERT_TRUE(err.find("invalid optimization level") != string::npos);
+  }
+}
+
+TEST(CliTest, ParsesTargetSelection) {
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", "--native",
+                          "--target-features=+avx2"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(5, argv, opts, err));
+    ASSERT_TRUE(opts.host_cpu);
+    ASSERT_EQ(opts.target_features, "+avx2");
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba",
+                          "--target-cpu=znver4"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(4, argv, opts, err));
+    ASSERT_EQ(opts.target_cpu, "znver4");
+  }
+}
+
+TEST(CliTest, ParsesLlvmEmitVariants) {
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", "--emit=llvm"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(4, argv, opts, err));
+    ASSERT_EQ(opts.emit, EmitKind::Llvm);
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", "--emit=llvm-raw"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(4, argv, opts, err));
+    ASSERT_EQ(opts.emit, EmitKind::LlvmRaw);
+  }
+}

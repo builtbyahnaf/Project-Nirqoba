@@ -22,6 +22,7 @@ add_executable(nirqoba_unit_tests
   unit/tir_test.cpp
   unit/nrq_dialect_test.cpp
   unit/cli_test.cpp
+  unit/optimization_test.cpp
 )
 
 set_property(TARGET nirqoba_unit_tests PROPERTY CXX_STANDARD 20)

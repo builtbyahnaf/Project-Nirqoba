@@ -90,6 +90,14 @@ bool optimize_llvm_module(llvm::Module& module,
     return false;
   }
 
+  // Catch malformed IR before the pass pipeline so a frontend bug produces a
+  // compiler diagnostic instead of an optimizer crash or a silent miscompile.
+  if (llvm::verifyModule(module, &llvm::errs())) {
+    diagnostics.error(diag::kInternalError, SourceLocation{},
+                      "LLVM IR failed verification before optimization");
+    return false;
+  }
+
   apply_size_attributes(module, level);
 
   llvm::PassBuilder pass_builder(&target_machine);
@@ -110,10 +118,9 @@ bool optimize_llvm_module(llvm::Module& module,
       ? pass_builder.buildO0DefaultPipeline(llvm_level)
       : pass_builder.buildPerModuleDefaultPipeline(llvm_level);
 
-  // The new pass manager reports analysis preservation, not failure. A
-  // malformed IR that slips through the frontend is still rejected by the
-  // verifier immediately below, so optimization errors surface as diagnostics
-  // rather than as a silently miscompiled object.
+  // The new pass manager reports analysis preservation, not failure. Verify the
+  // transformed module before it reaches code generation so a bad pass or an
+  // invalid source construct cannot silently become a broken object file.
   pipeline.run(module, module_analyses);
 
   if (llvm::verifyModule(module, &llvm::errs())) {
