@@ -1,0 +1,18 @@
+int function count_to_two() {
+    var count = 0;
+    while (count < 2) {
+        count += 1;
+    }
+    return count;
+}
+
+int function main() {
+    gc.enable();
+    let enabled = gc.is_enabled();
+    let count = count_to_two();
+    gc.disable();
+    if (enabled) {
+        return count;
+    }
+    return 0;
+}

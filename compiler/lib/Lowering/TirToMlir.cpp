@@ -511,9 +511,9 @@ static bool function_uses_gc(const tir::Function& function) {
   for (const tir::Function::Parameter& parameter : function.parameters())
     if (type_uses_gc(parameter.type)) return true;
   for (const tir::Op& op : function.operations()) {
-    if (op.kind == tir::OpKind::Call &&
-        (op.callee.rfind("gc.", 0) == 0 || op.callee.rfind("nrq_gc_", 0) == 0))
-      return true;
+    // Only managed values require mutator/root instrumentation. A function that
+    // merely queries GC state (or calls gc.collect) without holding a managed
+    // reference does not need a mutator frame or loop safepoints.
     if ((op.result.is_valid() && type_uses_gc(op.result.type)) ||
         (op.operand.is_valid() && type_uses_gc(op.operand.type)) ||
         (op.lhs.is_valid() && type_uses_gc(op.lhs.type)) ||

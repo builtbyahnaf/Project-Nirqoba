@@ -1,0 +1,10 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O0"],
+  "expect_exit": 0,
+  "expect_stdout_not_contains": [
+    "nrq_gc_mutator_enter",
+    "nrq_gc_root_frame_begin",
+    "nrq_gc_safepoint"
+  ]
+}
