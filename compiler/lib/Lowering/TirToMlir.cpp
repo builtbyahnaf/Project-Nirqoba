@@ -653,6 +653,41 @@ class FunctionTranslator {
            target->second < current_operation_index_;
   }
 
+  // Bounds checks used to be ordinary runtime calls on every array access.
+  // That prevented the loop vectorizer from seeing the loop body and forced a
+  // call/return pair per element. Emit the comparison inline and branch to a
+  // cold noreturn failure block instead; LLVM can then fold a check that is
+  // implied by the loop condition, or version/vectorize the loop around it.
+  void emit_bounds_guard(mlir::Value index, mlir::Value length,
+                         mlir::Location loc) {
+    const mlir::Type i64 = builder_.getI64Type();
+    if (index.getType() != i64) {
+      const unsigned bits = index.getType().getIntOrFloatBitWidth();
+      index = bits < 64
+          ? builder_.create<mlir::LLVM::ZExtOp>(loc, i64, index).getResult()
+          : builder_.create<mlir::LLVM::TruncOp>(loc, i64, index).getResult();
+    }
+    mlir::Value in_bounds = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::ult, index, length).getResult();
+
+    mlir::Block* fail_block = func_op_.addBlock();
+    mlir::Block* continue_block = func_op_.addBlock();
+    builder_.create<mlir::LLVM::CondBrOp>(loc, in_bounds, continue_block,
+                                           fail_block);
+
+    builder_.setInsertionPointToStart(fail_block);
+    auto fail_fn = ensure_runtime_fn(
+        module_, builder_, "nrq_memory_array_bounds_fail",
+        mlir::LLVM::LLVMVoidType::get(ctx_), {});
+    fail_fn.setNoreturn(true);
+    fail_fn.setCold(true);
+    fail_fn.setNoUnwind(true);
+    builder_.create<mlir::LLVM::CallOp>(loc, fail_fn, mlir::ValueRange{});
+    builder_.create<mlir::LLVM::UnreachableOp>(loc);
+
+    builder_.setInsertionPointToStart(continue_block);
+  }
+
   void emit_gc_safepoint(mlir::Location loc) {
     if (!uses_gc_mutator_) return;
     auto safepoint = ensure_runtime_fn(
@@ -2147,17 +2182,18 @@ class FunctionTranslator {
           return true;
         }
 
+        if (op.callee == "memory.array_bounds_check" && args.size() == 2) {
+          emit_bounds_guard(args[0], args[1], loc);
+          return true;
+        }
+
         // Check if this is a runtime library builtin call:
         llvm::StringRef callee = op.callee;
         std::string runtime_sym;
         mlir::Type runtime_ret_ty;
         std::vector<mlir::Type> runtime_arg_tys;
 
-        if (callee == "memory.array_bounds_check") {
-          runtime_sym = "nrq_memory_array_bounds_check";
-          runtime_ret_ty = mlir::LLVM::LLVMVoidType::get(ctx_);
-          runtime_arg_tys = {builder_.getI64Type(), builder_.getI64Type()};
-        } else if (callee == "mutex.create") {
+        if (callee == "mutex.create") {
           runtime_sym = "nrq_mutex_create";
           runtime_ret_ty = llvm_ptr_type(ctx_);
           runtime_arg_tys = {};
@@ -2552,11 +2588,7 @@ class FunctionTranslator {
               loc, array, builder_.getDenseI64ArrayAttr({0})).getResult();
           mlir::Value length = builder_.create<mlir::LLVM::ExtractValueOp>(
               loc, array, builder_.getDenseI64ArrayAttr({1})).getResult();
-          auto bounds = ensure_runtime_fn(
-              module_, builder_, "nrq_memory_array_bounds_check",
-              mlir::LLVM::LLVMVoidType::get(ctx_), {i64, i64});
-          builder_.create<mlir::LLVM::CallOp>(loc, bounds,
-              mlir::ValueRange{index, length});
+          emit_bounds_guard(index, length, loc);
           mlir::Type element_type = tir_type_to_mlir(op.result.type, ctx_, builder_);
           mlir::Value pointer = builder_.create<mlir::LLVM::GEPOp>(
               loc, llvm_ptr_type(ctx_), element_type, data,

@@ -1,0 +1,7 @@
+int function main() {
+    var values = memory.owned_array<int>(4);
+    var index = 2;
+    values[index] = 7;
+    print(values[index]);
+    return 0;
+}
