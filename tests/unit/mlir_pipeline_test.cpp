@@ -437,3 +437,53 @@ TEST(MlirPipelineTest, PromotesEveryArrayReadThroughLocalViews) {
   ASSERT_TRUE(allocas >= static_cast<unsigned>(kArrays));
   ASSERT_EQ(heap_allocations, 0u);
 }
+
+// Bounds checks share one cold failure block. Giving each check its own block
+// doubled the block count of checked code for a message that never varies, and
+// every later pass paid for the extra blocks.
+TEST(MlirPipelineTest, SharesOneBoundsFailureBlockPerFunction) {
+  constexpr const char* source = R"nrqba(
+int function main() {
+    var values = memory.owned_array<int>(4);
+    values[0] = 1;
+    values[1] = 2;
+    values[2] = 3;
+    print(values[0] + values[1] + values[2]);
+    return 0;
+}
+)nrqba";
+
+  mlir::DialectRegistry registry;
+  nirq::register_all_dialects(registry);
+  mlir::MLIRContext context(registry);
+  context.loadAllAvailableDialects();
+  nirq::DiagnosticEngine diagnostics;
+
+  auto module = lower_source_to_mlir(source, context, diagnostics);
+  ASSERT_FALSE(diagnostics.has_errors());
+  ASSERT_TRUE(static_cast<bool>(module));
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*module)));
+
+  unsigned failure_calls = 0;
+  unsigned guard_branches = 0;
+  module->walk([&](mlir::func::FuncOp function) {
+    function.walk([&](mlir::LLVM::CallOp call) {
+      const auto callee = call.getCallee();
+      if (callee && callee->str() == "nrq_memory_array_bounds_fail")
+        ++failure_calls;
+    });
+    function.walk([&](mlir::LLVM::CondBrOp branch) {
+      for (mlir::Block* successor : branch->getSuccessors()) {
+        if (successor->mightHaveTerminator()) {
+          auto terminator = successor->getTerminator();
+          if (terminator && mlir::isa<mlir::LLVM::UnreachableOp>(terminator))
+            ++guard_branches;
+        }
+      }
+    });
+  });
+
+  // One call, reached from every checked access in the body.
+  ASSERT_EQ(failure_calls, 1u);
+  ASSERT_TRUE(guard_branches >= 3u);
+}

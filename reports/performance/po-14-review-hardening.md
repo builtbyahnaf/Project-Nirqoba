@@ -299,3 +299,82 @@ Behaviour is unchanged where it matters:
 - The measurement is a wall-clock comparison on one machine, not a benchmark
   harness; it is reported to show the asymptotic change, not a speedup claim for
   real programs, whose compile time is dominated elsewhere.
+
+---
+
+## F5 — every bounds check carried its own copy of the failure block
+
+**Status:** fixed.
+
+### Problem
+
+`emit_bounds_guard` allocated two blocks per checked access:
+
+```cpp
+mlir::Block* fail_block = func_op_.addBlock();
+mlir::Block* continue_block = func_op_.addBlock();
+builder_.create<mlir::LLVM::CondBrOp>(loc, in_bounds, continue_block, fail_block);
+builder_.setInsertionPointToStart(fail_block);
+// call @nrq_memory_array_bounds_fail(); unreachable
+builder_.setInsertionPointToStart(continue_block);
+```
+
+The fail block is identical for every check in the function — the same call to
+the same `noreturn` symbol followed by `llvm.unreachable` — but each check got a
+private copy placed in the middle of the body, pushing the hot blocks apart.
+
+### Root cause
+
+The guard was written as a local, self-contained construct. Nothing needed the
+failure block to be per-check: the check's branch is the only thing that differs,
+and `noreturn` means the block never returns to a specific guard. The block's
+position was also an artefact of creating it inline: blocks are appended, so each
+copy landed between two hot blocks.
+
+### Change
+
+- `bounds_fail_block()` builds the block once per function, on first use, and
+  caches it. It keeps `noreturn`, `cold` and `no_unwind` on the declaration, so
+  the layout and trap behaviour are unchanged.
+- `emit_bounds_guard` now allocates only its `continue_block` and branches to the
+  shared block.
+- The block is created detached and attached by `attach_cold_blocks()` after the
+  body is translated (`func_op_.getBody().push_back(...)`), so the cold block
+  lands at the end and does not split the hot blocks. A detached block cannot be
+  a branch target in the final IR, which is why attachment happens once the loop
+  is done; translation never verifies the module in between.
+
+### Why it is correct
+
+Both versions branch to a block whose only operations are
+`call @nrq_memory_array_bounds_fail()` and `llvm.unreachable`, and the callee is
+declared `noreturn`, so no value flows from it and no check depends on which copy
+it reaches. Sharing the block is therefore observationally identical: same check,
+same call, same trap. Only the block graph shrinks.
+
+### Verification
+
+- `tests/integration/mlir/inline_bounds_guard/` still emits
+  `nrq_memory_array_bounds_fail` and still uses no runtime range-check helper.
+- `tests/integration/negative/runtime_array_bounds_fail/` still exits with
+  status 70 and the "outside the array bounds" message, so the trap path is
+  intact.
+- Unlowered output for the 600-allocation program: 1200 guards now share one
+  block, and the function holds 1201 blocks instead of 2401 (`^bb` count in the
+  `--emit=mlir -O0` output).
+- New unit test `MlirPipelineTest.SharesOneBoundsFailureBlockPerFunction` lowers
+  a function with six checked accesses and asserts exactly one call to the
+  failure symbol, reached from every guard's `unreachable` block.
+- All 120 unit tests and 193 of 194 integration tests pass (`memory_advanced`
+  version-string drift is pre-existing); the attribute diff over all 108
+  integration programs is empty.
+
+### Known limitations
+
+- The block is shared per function, not per module, so a module with many small
+  checked functions still has one cold block each. Cross-function sharing would
+  have to go through a helper function instead of a block, which changes the
+  call graph and is not worth it for the size of the win here.
+- The failure call receives no location information (index and length), as
+  before; carrying them would need a second, per-function-shaped block and is a
+  separate decision about the runtime message.
