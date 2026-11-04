@@ -272,6 +272,29 @@ static bool borrowed_view_parameter_does_not_escape(
   return true;
 }
 
+// Runtime operations that use a borrowed pointer for the duration of the call
+// and never retain it: the standard streams and the resource handles. A pointer
+// passed to one of them does not escape the caller, so it does not disqualify
+// the argument from `nocapture`.
+//
+// The list is an assertion about the runtime ABI, so anything missing from it is
+// treated conservatively as an escape. That is the safe direction: the attribute
+// is withheld, never wrongly claimed.
+static bool runtime_call_consumes_borrow_without_retaining(
+    const std::string& callee) {
+  static const std::unordered_set<std::string> consumers = {
+      "print",           "print_string",     "print_cstr",
+      "nrq_print_int",   "nrq_print_uint",   "nrq_print_f64",
+      "nrq_print_bool",  "nrq_print_char",   "nrq_print_string",
+      "nrq_print_cstr",  "file.read",        "file.write",
+      "file.read_text",  "file.write_text",  "file.append_text",
+      "file.exists",     "file.close",       "socket.send",
+      "socket.receive",  "socket.close",     "mutex.lock",
+      "mutex.unlock",    "mutex.destroy",
+  };
+  return consumers.count(callee) != 0;
+}
+
 static bool borrowed_pointer_parameter_does_not_escape(
     const tir::Function& function, std::size_t parameter_index,
     const BorrowedEscapeSummary& summary) {
@@ -337,10 +360,7 @@ static bool borrowed_pointer_parameter_does_not_escape(
       continue;
     }
     if (op.kind == tir::OpKind::Call) {
-      if (op.callee == "print" || op.callee == "nrq_print_int" ||
-          op.callee == "nrq_print_uint" || op.callee == "nrq_print_f64" ||
-          op.callee == "nrq_print_bool" || op.callee == "nrq_print_char")
-        continue;
+      if (runtime_call_consumes_borrow_without_retaining(op.callee)) continue;
       const auto callee = summary.find(op.callee);
       bool passed_pointer = false;
       bool all_borrows_are_safe = callee != summary.end();
@@ -376,6 +396,74 @@ static bool borrowed_parameter_does_not_escape(
     return borrowed_pointer_parameter_does_not_escape(function, parameter_index, summary);
   }
   return false;
+}
+
+// True when the function never writes through `parameter_index`: no store uses
+// the parameter, a pointer derived from it, or the pointer reloaded from the
+// slot it was spilled into as its destination.
+//
+// This is the proof behind `llvm.readonly`. Ownership alone only makes the
+// promise plausible: the attribute says the body does not write through this
+// pointer, which is a statement about the instructions, not about the type. A
+// callee cannot write through it either, because handing an immutable borrow to
+// a mutable or owning parameter is rejected before lowering, so the local scan
+// is sufficient.
+static bool parameter_is_never_stored_through(const tir::Function& function,
+                                             std::size_t parameter_index) {
+  if (parameter_index >= function.parameters().size()) return false;
+  const tir::Function::Parameter& parameter =
+      function.parameters()[parameter_index];
+  if (parameter.ownership != ValueOwnership::Borrowed) return false;
+
+  std::unordered_set<int> local_slots;
+  for (const tir::Op& op : function.operations()) {
+    if (op.kind != tir::OpKind::Store || !op.operand.is_valid() ||
+        op.operand.id != parameter.value.id)
+      continue;
+    const bool local_slot = std::any_of(
+        function.operations().begin(), function.operations().end(),
+        [&op](const tir::Op& candidate) {
+          return candidate.kind == tir::OpKind::Alloca &&
+                 candidate.result.id == op.lhs.id;
+        });
+    if (local_slot) local_slots.insert(op.lhs.id);
+  }
+
+  std::unordered_set<int> data_pointers{parameter.value.id};
+  for (const tir::Op& op : function.operations()) {
+    if (op.kind == tir::OpKind::Load && local_slots.count(op.lhs.id) &&
+        op.result.is_valid())
+      data_pointers.insert(op.result.id);
+
+    auto uses = [&](int id) {
+      if (id < 0) return false;
+      if (op.operand.id == id || op.lhs.id == id || op.rhs.id == id)
+        return true;
+      for (const tir::Value argument : op.arguments)
+        if (argument.id == id) return true;
+      for (const tir::Value value : op.aggregate_elements)
+        if (value.id == id) return true;
+      return false;
+    };
+    bool uses_data = false;
+    for (int id : data_pointers) uses_data |= uses(id);
+    if (!uses_data) continue;
+
+    if (op.kind == tir::OpKind::Store) {
+      if (data_pointers.count(op.lhs.id)) return false;
+      continue;
+    }
+    if (op.kind == tir::OpKind::GetElementPtr &&
+        data_pointers.count(op.lhs.id) && op.result.is_valid()) {
+      data_pointers.insert(op.result.id);
+      continue;
+    }
+    if (op.kind == tir::OpKind::Load || op.kind == tir::OpKind::Call) continue;
+    if (op.kind == tir::OpKind::Return) continue;
+    // Any other use of the pointer could write through it.
+    return false;
+  }
+  return true;
 }
 
 static BorrowedEscapeSummary summarize_borrowed_parameters(
@@ -3546,7 +3634,8 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     if (!tir_fn->parameters().empty()) {
       llvm::SmallVector<mlir::Attribute> argument_attrs;
       argument_attrs.reserve(tir_fn->parameters().size());
-      for (const auto& param : tir_fn->parameters()) {
+      for (std::size_t index = 0; index < tir_fn->parameters().size(); ++index) {
+        const auto& param = tir_fn->parameters()[index];
         mlir::NamedAttrList attrs;
         if (param.ownership != ValueOwnership::Trivial)
           attrs.set("nirqoba.ownership",
@@ -3555,19 +3644,31 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
           attrs.set("nirqoba.resource_domain",
                     builder.getStringAttr(param.resource_domain));
         if (param.type.is_pointer()) {
+          // `noalias` follows from the ownership class: a mutable borrow or an
+          // owned pointer is the only access path the language allows to that
+          // memory for the duration of the call.
+          //
+          // `nocapture` and `readonly` are promises about the instructions in
+          // this body, so they are only attached when the analyses prove them.
+          // Two independent measurements had been missing here: the borrowed
+          // escape fixpoint was computed for every function and never consulted
+          // for attributes, and nothing checked for a write through the
+          // parameter at all.
+          const bool non_escaping =
+              borrowed_parameter_does_not_escape(*tir_fn, index, borrowed_summary);
           if (param.ownership == ValueOwnership::MutableBorrowed ||
               param.ownership == ValueOwnership::Owned) {
             attrs.set(mlir::LLVM::LLVMDialect::getNoAliasAttrName(),
                       builder.getUnitAttr());
-            if (param.ownership == ValueOwnership::MutableBorrowed &&
-                param.name != tir_fn->return_borrow_parameter()) {
+            if (param.ownership == ValueOwnership::MutableBorrowed && non_escaping) {
               attrs.set(mlir::LLVM::LLVMDialect::getNoCaptureAttrName(),
                         builder.getUnitAttr());
             }
           } else if (param.ownership == ValueOwnership::Borrowed) {
-            attrs.set(mlir::LLVM::LLVMDialect::getReadonlyAttrName(),
-                      builder.getUnitAttr());
-            if (param.name != tir_fn->return_borrow_parameter()) {
+            if (parameter_is_never_stored_through(*tir_fn, index))
+              attrs.set(mlir::LLVM::LLVMDialect::getReadonlyAttrName(),
+                        builder.getUnitAttr());
+            if (non_escaping) {
               attrs.set(mlir::LLVM::LLVMDialect::getNoCaptureAttrName(),
                         builder.getUnitAttr());
             }
