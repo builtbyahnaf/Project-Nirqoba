@@ -1,0 +1,12 @@
+int* function allocate_node() {
+    var node = memory.allocate<int>(8);
+    node[0] = 7;
+    return node;
+}
+
+int function main() {
+    var n = allocate_node();
+    print(n[0]);
+    memory.deallocate(n);
+    return 0;
+}

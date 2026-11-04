@@ -1,0 +1,9 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "tail call ptr @nrq_memory_allocate",
+    "tail call void @nrq_memory_deallocate_checked"
+  ]
+}
