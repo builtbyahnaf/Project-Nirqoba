@@ -1,0 +1,14 @@
+void function copy_data(borrow mut int* dst, borrow int* src) {
+    dst[0] = src[0];
+}
+
+int function main() {
+    var a = memory.allocate<int>(1);
+    var b = memory.allocate<int>(1);
+    a[0] = 42;
+    copy_data(b, a);
+    print(b[0]);
+    memory.deallocate(a);
+    memory.deallocate(b);
+    return 0;
+}

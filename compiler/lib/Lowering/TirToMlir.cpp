@@ -2799,6 +2799,8 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
 
     auto func_op = builder.create<mlir::func::FuncOp>(
         builder.getUnknownLoc(), symbol, fn_type);
+    func_op->setAttr("passthrough",
+                     builder.getArrayAttr({builder.getStringAttr("nounwind")}));
     if (tir_fn->return_ownership() != ValueOwnership::Trivial)
       func_op->setAttr("nirqoba.return_ownership",
                        builder.getStringAttr(
@@ -2809,6 +2811,11 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     if (!tir_fn->return_borrow_parameter().empty())
       func_op->setAttr("nirqoba.return_borrow_parameter",
                        builder.getStringAttr(tir_fn->return_borrow_parameter()));
+    if (tir_fn->return_type().is_pointer() &&
+        tir_fn->return_ownership() == ValueOwnership::Owned) {
+      func_op.setResultAttr(0, mlir::LLVM::LLVMDialect::getNoAliasAttrName(),
+                            builder.getUnitAttr());
+    }
     if (!tir_fn->parameters().empty()) {
       llvm::SmallVector<mlir::Attribute> argument_attrs;
       argument_attrs.reserve(tir_fn->parameters().size());
@@ -2820,6 +2827,25 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
         if (!param.resource_domain.empty())
           attrs.set("nirqoba.resource_domain",
                     builder.getStringAttr(param.resource_domain));
+        if (param.type.is_pointer()) {
+          if (param.ownership == ValueOwnership::MutableBorrowed ||
+              param.ownership == ValueOwnership::Owned) {
+            attrs.set(mlir::LLVM::LLVMDialect::getNoAliasAttrName(),
+                      builder.getUnitAttr());
+            if (param.ownership == ValueOwnership::MutableBorrowed &&
+                param.name != tir_fn->return_borrow_parameter()) {
+              attrs.set(mlir::LLVM::LLVMDialect::getNoCaptureAttrName(),
+                        builder.getUnitAttr());
+            }
+          } else if (param.ownership == ValueOwnership::Borrowed) {
+            attrs.set(mlir::LLVM::LLVMDialect::getReadonlyAttrName(),
+                      builder.getUnitAttr());
+            if (param.name != tir_fn->return_borrow_parameter()) {
+              attrs.set(mlir::LLVM::LLVMDialect::getNoCaptureAttrName(),
+                        builder.getUnitAttr());
+            }
+          }
+        }
         argument_attrs.push_back(attrs.getDictionary(&context));
       }
       func_op.setArgAttrsAttr(builder.getArrayAttr(argument_attrs));
