@@ -332,14 +332,23 @@ bool effects_from_attribute(mlir::LLVM::MemoryEffectsAttr attribute,
   return true;
 }
 
-MemoryEffectSummary analyze_body(
-    mlir::LLVM::LLVMFuncOp function,
-    const llvm::StringMap<MemoryEffectSummary>& known_callees,
-    const llvm::StringSet<>& callees_with_known_effects) {
-  MemoryEffectSummary summary;
-  if (function.isExternal()) return summary;
+// Walks one function body and charges every memory access it performs.
+//
+// `slot_value_origins` maps a stack slot (an llvm.alloca result) to the origin
+// of the pointer values stored into it. The toolchain spills every parameter
+// into a stack slot, so without this the pointer loaded back out of the slot
+// would have to be treated as unknown and the function would lose all
+// precision. When `collect_slots` is set the walk only records those origins;
+// the charging pass then runs a second time with them available.
+void scan_body(mlir::LLVM::LLVMFuncOp function,
+               const llvm::StringMap<MemoryEffectSummary>& known_callees,
+               const llvm::StringSet<>& callees_with_known_effects,
+               llvm::DenseMap<mlir::Value, AddressOrigin>& slot_value_origins,
+               bool collect_slots, MemoryEffectSummary& summary) {
+  if (function.isExternal()) return;
 
   llvm::DenseMap<mlir::Value, AddressOrigin> origins;
+  llvm::DenseMap<mlir::Value, mlir::Value> root_slot;
   // Every parameter is argument memory, including aggregates: a pointer
   // extracted from a by-value array view still points into the caller's memory.
   for (mlir::BlockArgument argument : function.getBody().front().getArguments())
@@ -349,9 +358,21 @@ MemoryEffectSummary analyze_body(
     const auto found = origins.find(value);
     return found == origins.end() ? AddressOrigin::Unknown : found->second;
   };
-  auto record_pointer = [&](mlir::Value value, AddressOrigin origin) {
-    if (mlir::isa<mlir::LLVM::LLVMPointerType>(value.getType()))
-      origins[value] = origin;
+  // The origin of the memory a pointer addresses.
+  auto address_origin = [&](mlir::Value address) {
+    const AddressOrigin origin = origin_of(address);
+    if (origin != AddressOrigin::Local) return origin;
+    const auto slot = root_slot.find(address);
+    if (slot == root_slot.end()) return AddressOrigin::Unknown;
+    const auto stored = slot_value_origins.find(slot->second);
+    return stored == slot_value_origins.end() ? AddressOrigin::Unknown
+                                              : stored->second;
+  };
+  auto record_value = [&](mlir::Value value, AddressOrigin origin) {
+    origins[value] = origin;
+  };
+  auto record_derived_pointer = [&](mlir::Value value, mlir::Value address) {
+    record_value(value, address_origin(address));
   };
 
   for (mlir::Block& block : function.getBody()) {
@@ -360,23 +381,37 @@ MemoryEffectSummary analyze_body(
         const AddressOrigin origin = origin_of(load.getAddr());
         charge_access(summary, origin, /*write=*/false);
         // A pointer read out of argument memory still addresses memory
-        // reachable from that argument. A pointer read out of stack memory
-        // could address anything, so it stays unknown.
-        record_pointer(load.getResult(),
-                       origin == AddressOrigin::Argument ? AddressOrigin::Argument
-                                                         : AddressOrigin::Unknown);
+        // reachable from that argument; a pointer read out of a stack slot
+        // addresses whatever was stored into it.
+        record_derived_pointer(load.getResult(), load.getAddr());
         continue;
       }
       if (auto store = mlir::dyn_cast<mlir::LLVM::StoreOp>(operation)) {
-        charge_access(summary, origin_of(store.getAddr()), /*write=*/true);
+        const ::mlir::Value address = store.getAddr();
+        charge_access(summary, origin_of(address), /*write=*/true);
+        if (!collect_slots) continue;
+        const auto slot = root_slot.find(address);
+        if (slot == root_slot.end()) continue;
+        const AddressOrigin stored = address_origin(store.getValue());
+        const auto existing = slot_value_origins.find(slot->second);
+        if (existing == slot_value_origins.end())
+          slot_value_origins[slot->second] = stored;
+        else if (existing->second != stored)
+          // Two different origins reachable through the same slot: keep the
+          // conservative one. Argument and Local both widen to Unknown, which
+          // charges the access to every location.
+          existing->second = AddressOrigin::Unknown;
         continue;
       }
       if (auto alloca = mlir::dyn_cast<mlir::LLVM::AllocaOp>(operation)) {
-        record_pointer(alloca.getResult(), AddressOrigin::Local);
+        record_value(alloca.getResult(), AddressOrigin::Local);
+        root_slot[alloca.getResult()] = alloca.getResult();
         continue;
       }
       if (auto gep = mlir::dyn_cast<mlir::LLVM::GEPOp>(operation)) {
-        record_pointer(gep.getResult(), origin_of(gep.getBase()));
+        record_value(gep.getResult(), origin_of(gep.getBase()));
+        const auto slot = root_slot.find(gep.getBase());
+        if (slot != root_slot.end()) root_slot[gep.getResult()] = slot->second;
         continue;
       }
       if (auto call = mlir::dyn_cast<mlir::LLVM::CallOp>(operation)) {
@@ -389,20 +424,35 @@ MemoryEffectSummary analyze_body(
           charge_unknown_effects(summary);
         }
         for (mlir::Value result : call.getResults())
-          record_pointer(result, AddressOrigin::Unknown);
+          record_value(result, AddressOrigin::Unknown);
         continue;
       }
       if (llvm_op_accesses_no_memory(operation.getName().getStringRef())) {
         // Propagate provenance through pointer casts so a cast of an argument
         // is still argument memory.
         if (operation.getNumOperands() == 1 && operation.getNumResults() == 1)
-          record_pointer(operation.getResult(0),
-                         origin_of(operation.getOperand(0)));
+          record_value(operation.getResult(0),
+                       origin_of(operation.getOperand(0)));
         continue;
       }
       charge_unknown_effects(summary);
     }
   }
+}
+
+MemoryEffectSummary analyze_body(
+    mlir::LLVM::LLVMFuncOp function,
+    const llvm::StringMap<MemoryEffectSummary>& known_callees,
+    const llvm::StringSet<>& callees_with_known_effects) {
+  if (function.isExternal()) return MemoryEffectSummary{};
+
+  llvm::DenseMap<mlir::Value, AddressOrigin> slot_value_origins;
+  MemoryEffectSummary ignored;
+  scan_body(function, known_callees, callees_with_known_effects,
+            slot_value_origins, /*collect_slots=*/true, ignored);
+  MemoryEffectSummary summary;
+  scan_body(function, known_callees, callees_with_known_effects,
+            slot_value_origins, /*collect_slots=*/false, summary);
   return summary;
 }
 

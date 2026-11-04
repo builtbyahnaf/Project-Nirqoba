@@ -1,0 +1,10 @@
+{
+  "mode": "build",
+  "args": ["--emit=mlir", "-O2"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "other = none, argMem = none, inaccessibleMem = readwrite",
+    "argMem = read",
+    "other = readwrite, argMem = none, inaccessibleMem = none"
+  ]
+}
