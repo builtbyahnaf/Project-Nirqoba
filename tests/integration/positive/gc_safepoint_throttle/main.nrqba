@@ -1,0 +1,18 @@
+// A GC loop that must keep working while the safepoint poll is throttled: the
+// counter is carried in a stack slot, and a collection is still observed long
+// before the loop ends.
+managed<byte> function make_value() {
+    return array.allocate<byte>(8);
+}
+
+int function main(string[] args) {
+    var value = make_value();
+    var count = 0;
+    var limit = args.length + 5000;
+    while (count < limit) {
+        count += 1;
+    }
+    gc.collect();
+    print(count);
+    return 0;
+}
