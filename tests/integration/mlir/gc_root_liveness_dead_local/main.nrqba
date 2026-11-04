@@ -1,0 +1,23 @@
+struct Node {
+    int value;
+    managed<Node> next;
+}
+
+int function peek(managed<Node> node) {
+    return node[0].value;
+}
+
+int function main() {
+    var total = 0;
+    var i = 0;
+    while (i < 3) {
+        // The per-iteration object is read before the loop back edge and before
+        // any other allocation, so no collection can observe the slot that
+        // holds it.
+        var node = array.allocate<Node>(1);
+        node[0].value = i;
+        total += peek(node);
+        i += 1;
+    }
+    return total;
+}

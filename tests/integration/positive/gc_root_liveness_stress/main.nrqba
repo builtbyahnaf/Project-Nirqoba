@@ -1,0 +1,29 @@
+struct Node {
+    int value;
+    managed<Node> next;
+}
+
+int function main() {
+    gc.set_threshold(4096);
+    gc.enable();
+    var keep = array.allocate<Node>(1);
+    keep[0].value = 7;
+    var i = 0;
+    while (i < 4096) {
+        // `keep` stays live across every one of these allocations, while `temp`
+        // dies before the next one. Only `keep` may be collected prematurely;
+        // a wrong root plan would reclaim it and corrupt the chain below.
+        var temp = array.allocate<Node>(1);
+        temp[0].value = i;
+        keep[0].next = temp;
+        i += 1;
+    }
+    gc.collect();
+    if (keep[0].value != 7) {
+        gc.disable();
+        return 1;
+    }
+    var last = keep[0].next[0].value;
+    gc.disable();
+    return last - 4095;
+}
