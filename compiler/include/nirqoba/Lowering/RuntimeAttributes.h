@@ -140,6 +140,107 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
     return policy;
   }
 
+  // 7. GC mutator protocol and root management
+  //
+  // These routines report failures through nrq_runtime_fatal (which terminates
+  // the process) and never propagate a C++ exception, so every one of them is
+  // nounwind. None of them is marked memory(none): they read and write the
+  // shadow stack, the global root table, the remembered set and allocator
+  // statistics. The ones that only publish or remove bookkeeping for the
+  // current activation cannot wait on another thread, so they also return.
+  if (symbol == "nrq_gc_mutator_enter" || symbol == "nrq_gc_mutator_leave" ||
+      symbol == "nrq_gc_safepoint") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    return policy;
+  }
+  if (symbol == "nrq_gc_root_frame_begin" || symbol == "nrq_gc_root_frame_end") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    policy.willreturn = true;
+    return policy;
+  }
+  // The root slot itself is retained by the shadow stack (no nocapture on
+  // argument 0), while the reference-offset array is copied into root metadata
+  // and never kept.
+  if (symbol == "nrq_gc_root_register" ||
+      symbol == "nrq_gc_root_register_typed") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    policy.nocapture_args_mask = (1u << 2);
+    return policy;
+  }
+  if (symbol == "nrq_gc_root_register_array" ||
+      symbol == "nrq_gc_root_clear_array_references") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    policy.nocapture_args_mask = (1u << 3);
+    return policy;
+  }
+  if (symbol == "nrq_gc_root_unregister") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    policy.willreturn = true;
+    // The slot address is only compared, never stored.
+    policy.nocapture_args_mask = (1u << 0);
+    return policy;
+  }
+  if (symbol == "nrq_gc_unpin") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    policy.willreturn = true;
+    policy.nocapture_args_mask = (1u << 0);
+    return policy;
+  }
+  if (symbol == "nrq_gc_allocate_array_typed_rooted" ||
+      symbol == "nrq_gc_allocate_array_typed" ||
+      symbol == "nrq_gc_allocate_array") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    policy.return_noalias = true;
+    return policy;
+  }
+  // A collection waits for every other mutator to park, so it is not marked
+  // willreturn; it still cannot unwind.
+  if (symbol == "nrq_gc_collect" || symbol == "nrq_gc_collect_minor") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    return policy;
+  }
+  if (symbol == "nrq_gc_enable" || symbol == "nrq_gc_disable" ||
+      symbol == "nrq_gc_set_threshold" || symbol == "nrq_gc_set_generational" ||
+      symbol == "nrq_gc_is_enabled" || symbol == "nrq_gc_is_generational" ||
+      symbol == "nrq_gc_get_allocated_bytes" ||
+      symbol == "nrq_gc_get_collected_bytes" ||
+      symbol == "nrq_gc_get_collection_count" ||
+      symbol == "nrq_gc_get_live_objects" ||
+      symbol == "nrq_gc_get_minor_collection_count" ||
+      symbol == "nrq_gc_get_major_collection_count" ||
+      symbol == "nrq_gc_pin_count" || symbol == "nrq_gc_pin_violations" ||
+      symbol == "nrq_gc_ref_count_start" || symbol == "nrq_gc_ref_count_stop" ||
+      symbol == "nrq_gc_get_ref_count") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    policy.willreturn = true;
+    return policy;
+  }
+
+  // 8. Synchronization primitives
+  // The mutex family reports failure through nrq_runtime_fatal. Locking may
+  // wait for another thread, so only create/unlock/destroy return immediately.
+  if (symbol == "nrq_mutex_lock") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    return policy;
+  }
+  if (symbol == "nrq_mutex_create" || symbol == "nrq_mutex_unlock" ||
+      symbol == "nrq_mutex_destroy") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    policy.willreturn = true;
+    return policy;
+  }
+
   return std::nullopt;
 }
 

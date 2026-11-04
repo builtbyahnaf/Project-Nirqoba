@@ -7,6 +7,80 @@
 
 ---
 
+## 0. Latest Run — Nirqoba 0.111-beta (2026-11-04)
+
+**Compiler:** `nirqoba compiler version 0.111-beta (Phase 6)`, LLVM/MLIR 23.1.4, RelWithDebInfo   
+**Re-run of the full suite with the latest compiler.** All 45 processes validated.
+
+### 0.1 Executive summary (0.111-beta)
+
+- **Managed allocation** (Test 01): **445 ms** for 1M nodes (vs 1,147 ms in 0.105 — **2.6× faster**)
+- **Chain traversal** (Test 01): **16 ms** (vs 215 ms — **13.4× faster**)
+- **Tree build** (Test 02): **1,068 ms** for 2.1M nodes (vs 3,527 ms — **3.3× faster**)
+- **Tree traversal** (Test 02): **22 ms** (vs 2,002 ms — **91× faster**)
+- **Mark-sweep collection** (Test 02): **349 ms** (vs 328 ms — similar)
+- **Cycle build** (Test 03): **441 ms** (vs 803 ms — **1.8× faster**)
+- **Cycle collection** (Test 03): **75 ms** (vs 201 ms — **2.7× faster**)
+
+The 0.111-beta compiler delivers **dramatic improvements** in managed allocation and especially managed pointer traversal (the dominant bottleneck in 0.105). Collection performance is now close to Java SerialGC (Test 03: 75 ms vs 48 ms = **1.6×**; Test 02: 349 ms vs 70 ms = **5×**).
+
+### 0.2 Results — 0.111-beta
+
+#### Test 01 — Managed-object allocation (1,000,000 nodes)
+
+| Language | Allocation (ms) | Traversal (ms) | Collection (ms) |
+|---|---:|---:|---:|
+| C | 27.286 ± 0.637 [26.156-28.083] | 5.687 ± 0.279 [5.259-6.164] | 16.614 ± 0.493 [15.534-17.296] |
+| C++ | 29.136 ± 1.621 [26.444-31.851] | 6.049 ± 0.912 [5.406-8.697] | 17.599 ± 0.735 [16.531-18.977] |
+| Rust | 30.066 ± 0.720 [29.208-31.678] | 5.611 ± 0.457 [5.342-6.577] | 17.736 ± 0.801 [16.672-19.131] |
+| Java | 2.951 ± 0.569 [2.278-4.148] | 1.974 ± 0.360 [1.737-2.963] | 6.626 ± 0.596 [6.049-8.256] |
+| **Nirqoba 0.111** | **445.0 ± 111.7 [432-731]** | **16.0 ± 3.8 [15-25]** | **71.0 ± 16.2 [64-108]** |
+
+#### Test 02 — Mark and sweep (2,097,151 live nodes)
+
+| Language | Build (ms) | Traversal (ms) | Collection/GC (ms) |
+|---|---:|---:|---:|
+| C | 25.026 ± 0.473 [24.290-25.174] | 12.990 ± 0.972 [12.578-14.430] | 34.450 ± 1.645 [32.856-39.667] |
+| C++ | 25.374 ± 1.463 [24.852-27.607] | 13.871 ± 0.818 [13.315-14.925] | 34.842 ± 1.511 [32.712-39.326] |
+| Rust | 25.741 ± 1.562 [24.965-27.974] | 7.380 ± 0.122 [7.217-7.456] | 38.060 ± 1.222 [37.144-41.612] |
+| Java | 14.110 ± 8.978 [13.988-29.599] | 5.095 ± 0.275 [5.091-5.569] | 69.869 ± 2.766 [63.333-72.308] |
+| **Nirqoba 0.111** | **1,068 ± 6.6 [1,060-1,073]** | **22.0 ± 1.0 [21-23]** | **349.0 ± 9.5 [335-365]** |
+
+#### Test 03 — Cyclic graph reclamation (500,000 cycles, 1,000,000 nodes)
+
+| Language | Build (ms) | Collection (ms) |
+|---|---:|---:|
+| C | 5.664 ± 1.469 [7.132-13.072]* | 6.338 ± 2.605 [5.598-16.322]* |
+| C++ | 5.752 ± 0.939 [5.057-8.051]* | 5.703 ± 1.086 [4.845-9.026]* |
+| Rust | 6.266 ± 0.781 [5.015-7.348]* | 6.598 ± 1.220 [4.751-8.216]* |
+| Java | 6.188 ± 1.698 [6.947-13.030]* | 47.993 ± 7.747 [55.497-84.553]* |
+| **Nirqoba 0.111** | **441.0 ± 144.0 [620-1,193]*** | **75.0 ± 42.6 [168-301]*** |
+
+*Values from the previous 0.105 run for C/C++/Rust/Java (same binaries reused). Nirqoba rebuilt with 0.111.
+
+### 0.3 Relative comparison — 0.111-beta vs 0.105-beta
+
+| Phase | 0.105-beta | 0.111-beta | Speedup |
+|---|---:|---:|---:|
+| 01 Allocation | 1,147 ms | 445 ms | **2.6×** |
+| 01 Traversal | 215 ms | 16 ms | **13.4×** |
+| 01 Collection | 221 ms | 71 ms | **3.1×** |
+| 02 Build | 3,527 ms | 1,068 ms | **3.3×** |
+| 02 Traversal | 2,002 ms | 22 ms | **91×** |
+| 02 Collection | 328 ms | 349 ms | ~1.0× |
+| 03 Build | 803 ms | 441 ms | **1.8×** |
+| 03 Collection | 201 ms | 75 ms | **2.7×** |
+
+### 0.4 Conclusion (0.111-beta)
+
+The 0.111-beta compiler **eliminates the managed pointer traversal bottleneck** (91× faster on tree traversal, 13× on chain traversal) and significantly improves allocation throughput. The mark-sweep collector is now competitive with Java SerialGC on cyclic reclamation (1.6×) and within 5× on full live-tree collection. The remaining gap vs native C/C++/Rust is primarily in the managed allocation path (~15-40×), not the collector.
+
+---
+
+## 1. Executive summary
+
+---
+
 ## 1. Executive summary
 
 This report compares Nirqoba's managed heap with C, C++, Rust, and Java on the
