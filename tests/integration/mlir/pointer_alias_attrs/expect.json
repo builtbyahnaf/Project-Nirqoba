@@ -1,0 +1,9 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "define void @copy_data(ptr noalias",
+    "ptr readonly captures(none)"
+  ]
+}
