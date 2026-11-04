@@ -2,8 +2,8 @@
 
 **Task:** follow-up hardening of the PO 3.1 / 3.2 review findings
 **Date:** 2026-11-04
-**Status:** in progress — one stage per finding, each with an implementation commit
-and a verification commit
+**Status:** complete — F2–F6 fixed, one stage per finding, each with an
+implementation commit and a verification commit
 **Compiler:** Nirqoba 0.1.0, LLVM/MLIR 23.1.4, MSVC x64 RelWithDebInfo
 
 The PO 3.1/3.2 review of the ownership, alias and escape work produced six
@@ -378,3 +378,93 @@ same call, same trap. Only the block graph shrinks.
 - The failure call receives no location information (index and length), as
   before; carrying them would need a second, per-function-shaped block and is a
   separate decision about the runtime message.
+
+
+---
+
+## F6 — every loop back edge called the GC safepoint
+
+**Status:** fixed.
+
+### Problem
+
+The lowering polled `nrq_gc_safepoint` at every back edge:
+
+```cpp
+case tir::OpKind::Branch: {
+  mlir::Block* target_block = get_or_create_block(op.label_id);
+  if (is_backedge(op.label_id)) emit_gc_safepoint(loc);   // call every iteration
+  builder_.create<mlir::LLVM::BrOp>(loc, target_block);
+```
+
+The poll exists so another thread can ask this mutator to stop and snapshot its
+roots. Paying an interprocedural call per iteration is a large price for a
+request that arrives rarely, and it is paid by loops that allocate nothing and
+therefore cannot themselves trigger a collection.
+
+### Root cause
+
+The poll frequency was never a design decision: the safepoint was emitted at the
+only place a collection point can be observed (`is_backedge`), and every such
+place got an unconditional call. There is no invariant that requires the poll to
+run on every crossing — only that it runs often enough to bound how long a
+stop-the-world request waits.
+
+### Change
+
+- A per-function counter lives in an entry-block slot, initialised to zero:
+  `add 1`, `and 63`, `store`, `icmp eq 0`.
+- A plain back edge becomes `cond_br due, ^poll, ^loop_header`, where `^poll`
+  calls `nrq_gc_safepoint` and branches to the loop header. Nothing is inserted
+  between the guard and the header, so the loop body gains a scalar carry and no
+  extra block on the hot path.
+- A conditional back edge (either successor is a loop target) polls first and
+  continues in a fresh block that holds the original `cond_br`.
+- The counter slot is created lazily, so functions without a GC mutator get
+  neither the slot nor the poll.
+
+### Why it is correct
+
+- Only the *frequency* changes. The poll still runs on a back edge, still before
+  the branch to the loop header, and the call is the same `noreturn`-free runtime
+  routine with no results.
+- The root-liveness plan treats every back edge as a collection point, so the
+  compiler is strictly more conservative than the throttled code needs: slots
+  that the plan keeps rooted stay rooted even when a particular crossing does not
+  poll. Throttling can lose polls, never roots.
+- A stop-the-world request is observed within `kSafepointInterval` (64) back-edge
+  crossings, so pause latency is bounded by construction rather than by luck.
+- Allocation still collects on its own; an allocating loop does not depend on the
+  back-edge poll for collection.
+
+### Verification
+
+- `tests/integration/positive/gc_safepoint_throttle/` builds and runs a GC
+  function whose loop bound comes from `args.length` (so the loop cannot be
+  folded away) and prints the expected count.
+- `MlirPipelineTest.ThrottlesGcSafepointOnLoopBackEdges` lowers the same shape
+  and asserts exactly one `nrq_gc_safepoint` call, exactly one `and 63` counter
+  update, and that the call's block has a single predecessor which is a
+  conditional branch — i.e. the poll is off the hot path.
+- At `-O2` the LLVM IR carries the counter as a loop phi (`%12 = and i64 %11, 63`)
+  with no memory traffic, and the call sits in a block reached only by the guard.
+- `tests/integration/mlir/gc_safepoints/` still emits
+  `nrq_gc_mutator_enter`, `nrq_gc_safepoint` and `nrq_gc_mutator_leave`.
+- All 121 unit tests and 194 of 195 integration tests pass; the one failure is
+  the pre-existing `memory_advanced` version-string drift.
+
+The first version of this change dropped the unconditional `br` for functions
+that need no poll at all, because the new branch helper returned early and the
+caller returned with it. `positive/locals_in_loops` caught it immediately
+(expected `9599419`, printed `0`), which is why the helper now reports whether it
+emitted the branch and the caller falls back to the plain one.
+
+### Known limitations
+
+- The interval is a compile-time constant (64). A loop whose body is expensive
+  delays a stop-the-world request by 64 bodies; a loop whose body is trivial
+  polls far more often than needed. Making it a knob (or profile-driven) is a
+  separate decision.
+- The counter is shared by every loop in the function, so a nested loop advances
+  the same counter and the effective interval per loop varies with the mix of
+  loop nestings. It is still bounded by 64 crossings in total.
