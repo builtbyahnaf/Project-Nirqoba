@@ -392,3 +392,48 @@ TEST(MlirPipelineTest, AllocatesEveryStackSlotInTheEntryBlock) {
   ASSERT_TRUE(allocas > 0);
   ASSERT_EQ(outside_entry, 0u);
 }
+
+// Many views of many arrays at once. The escape scan used to test every
+// descriptor against every operation, so this shape made lowering take seconds;
+// the analytical result must not change with the indexing, which means every one
+// of these arrays is still promoted and never reaches the heap allocator.
+TEST(MlirPipelineTest, PromotesEveryArrayReadThroughLocalViews) {
+  constexpr int kArrays = 24;
+  std::string source = "int function main() {\n    var total = 0;\n";
+  for (int index = 0; index < kArrays; ++index) {
+    source += "    var a" + std::to_string(index) +
+              " = memory.owned_array<int>(4);\n";
+    source += "    a" + std::to_string(index) + "[0] = " +
+              std::to_string(index) + ";\n";
+    source += "    let v" + std::to_string(index) +
+              " = memory.array_view<int>(a" + std::to_string(index) +
+              ", 0, 2);\n";
+    source += "    total += v" + std::to_string(index) + "[0];\n";
+  }
+  source += "    print(total);\n    return 0;\n}\n";
+
+  mlir::DialectRegistry registry;
+  nirq::register_all_dialects(registry);
+  mlir::MLIRContext context(registry);
+  context.loadAllAvailableDialects();
+  nirq::DiagnosticEngine diagnostics;
+
+  auto module = lower_source_to_mlir(source, context, diagnostics);
+  ASSERT_FALSE(diagnostics.has_errors());
+  ASSERT_TRUE(static_cast<bool>(module));
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*module)));
+
+  unsigned allocas = 0;
+  unsigned heap_allocations = 0;
+  module->walk([&](mlir::func::FuncOp function) {
+    function.walk([&](mlir::LLVM::AllocaOp) { ++allocas; });
+    function.walk([&](mlir::LLVM::CallOp call) {
+      const auto callee = call.getCallee();
+      if (callee && callee->str().rfind("nrq_memory_allocate", 0) == 0)
+        ++heap_allocations;
+    });
+  });
+
+  ASSERT_TRUE(allocas >= static_cast<unsigned>(kArrays));
+  ASSERT_EQ(heap_allocations, 0u);
+}
