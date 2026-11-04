@@ -517,6 +517,53 @@ static std::unordered_map<int, StackAllocationLayout> analyze_stack_allocations(
     if (op.kind == tir::OpKind::ConstantInt && op.result.is_valid())
       integer_constants.emplace(op.result.id, op.integer_value);
 
+  // Indexes that do not depend on the candidate allocation. They are built in
+  // two linear passes instead of being recomputed per candidate: the previous
+  // shape rescanned the body for every candidate, and the alloca lookups nested
+  // one scan inside another, which made the analysis quadratic in the operation
+  // count for every allocation in the function.
+  std::unordered_set<int> alloca_slots;
+  for (const tir::Op& op : function.operations())
+    if (op.kind == tir::OpKind::Alloca && op.result.is_valid())
+      alloca_slots.insert(op.result.id);
+
+  std::unordered_map<int, std::vector<const tir::Op*>> stores_by_value;
+  std::unordered_map<int, std::vector<const tir::Op*>> loads_by_slot;
+  // Slots that receive an array view; the escape scan below has to know them.
+  std::unordered_set<int> view_slots;
+  for (const tir::Op& op : function.operations()) {
+    if (op.kind == tir::OpKind::Store && op.operand.is_valid()) {
+      stores_by_value[op.operand.id].push_back(&op);
+      if (op.operand.type.is_array_view() && alloca_slots.count(op.lhs.id) != 0)
+        view_slots.insert(op.lhs.id);
+      continue;
+    }
+    if (op.kind == tir::OpKind::Load && op.result.is_valid())
+      loads_by_slot[op.lhs.id].push_back(&op);
+  }
+
+  // A candidate's descriptor set grows while the escape scan walks the body, so
+  // the scan can only ask "does this operation reference a member of the set".
+  // Testing every descriptor against every operation made the analysis cubic in
+  // practice, because each array view read adds another descriptor: a function
+  // with 600 views spent most of its compile time here. Membership is a hash
+  // lookup per referenced value instead.
+  auto references_any = [](const tir::Op& op,
+                           const std::unordered_set<int>& values) {
+    if (values.empty()) return false;
+    auto contains = [&values](int id) {
+      return id >= 0 && values.count(id) != 0;
+    };
+    if (contains(op.operand.id) || contains(op.lhs.id) ||
+        contains(op.rhs.id))
+      return true;
+    for (const tir::Value& argument : op.arguments)
+      if (contains(argument.id)) return true;
+    for (const tir::Value& element : op.aggregate_elements)
+      if (contains(element.id)) return true;
+    return false;
+  };
+
   std::unordered_map<int, StackAllocationLayout> candidates;
   std::size_t promoted_bytes = 0;
   constexpr std::size_t kMaxArrayBytes = 4096;
@@ -565,60 +612,32 @@ static std::unordered_map<int, StackAllocationLayout> analyze_stack_allocations(
       const std::size_t frame_cost = bytes + requested_alignment - 1;
       if (frame_cost > kMaxFunctionFrameBytes - promoted_bytes) continue;
 
+      // The owned array must be stored exactly once, into a local slot, so the
+      // pointer is either this frame's storage or not promoted at all.
       int owner_slot = -1;
       std::size_t initial_stores = 0;
-      for (const tir::Op& op : function.operations()) {
-        if (op.kind == tir::OpKind::Store && op.operand.id == allocation.result.id) {
+      const auto owners = stores_by_value.find(allocation.result.id);
+      if (owners != stores_by_value.end())
+        for (const tir::Op* store : owners->second) {
           ++initial_stores;
-          owner_slot = op.lhs.id;
+          owner_slot = store->lhs.id;
         }
-      }
       if (initial_stores != 1 || owner_slot < 0) continue;
-      const bool is_local_slot = std::any_of(
-          function.operations().begin(), function.operations().end(),
-          [owner_slot](const tir::Op& op) {
-            return op.kind == tir::OpKind::Alloca && op.result.id == owner_slot;
-          });
-      if (!is_local_slot) continue;
+      if (alloca_slots.count(owner_slot) == 0) continue;
 
       std::unordered_set<int> descriptors{allocation.result.id};
-      for (const tir::Op& op : function.operations())
-        if (op.kind == tir::OpKind::Load && op.lhs.id == owner_slot &&
-            op.result.is_valid())
-          descriptors.insert(op.result.id);
-      std::unordered_set<int> view_slots;
-      for (const tir::Op& op : function.operations()) {
-        if (op.kind != tir::OpKind::Store || !op.operand.is_valid() ||
-            !op.operand.type.is_array_view())
-          continue;
-        const bool is_slot = std::any_of(
-            function.operations().begin(), function.operations().end(),
-            [&op](const tir::Op& candidate) {
-              return candidate.kind == tir::OpKind::Alloca &&
-                     candidate.result.id == op.lhs.id;
-            });
-        if (is_slot) view_slots.insert(op.lhs.id);
-      }
+      const auto slot_loads = loads_by_slot.find(owner_slot);
+      if (slot_loads != loads_by_slot.end())
+        for (const tir::Op* load : slot_loads->second)
+          if (load->result.is_valid()) descriptors.insert(load->result.id);
       std::unordered_set<int> data_pointers;
       bool escapes = false;
       for (const tir::Op& op : function.operations()) {
-        auto uses = [&](int id) {
-          if (id < 0) return false;
-          if (op.operand.id == id || op.lhs.id == id || op.rhs.id == id)
-            return true;
-          for (const tir::Value argument : op.arguments)
-            if (argument.id == id) return true;
-          for (const tir::Value element : op.aggregate_elements)
-            if (element.id == id) return true;
-          return false;
-        };
         if (op.kind == tir::OpKind::Load && view_slots.count(op.lhs.id) &&
             op.result.is_valid())
           descriptors.insert(op.result.id);
-        bool uses_descriptor = false;
-        for (int id : descriptors) uses_descriptor |= uses(id);
-        bool uses_data = false;
-        for (int id : data_pointers) uses_data |= uses(id);
+        const bool uses_descriptor = references_any(op, descriptors);
+        const bool uses_data = references_any(op, data_pointers);
         if (!uses_descriptor && !uses_data) continue;
 
         if (op.kind == tir::OpKind::Store) {
@@ -705,50 +724,33 @@ static std::unordered_map<int, StackAllocationLayout> analyze_stack_allocations(
 
       int owner_slot = -1;
       std::size_t initial_stores = 0;
-      for (const tir::Op& op : function.operations()) {
-        if (op.kind == tir::OpKind::Store && op.operand.id == allocation.result.id) {
+      const auto owners = stores_by_value.find(allocation.result.id);
+      if (owners != stores_by_value.end())
+        for (const tir::Op* store : owners->second) {
           ++initial_stores;
-          owner_slot = op.lhs.id;
+          owner_slot = store->lhs.id;
         }
-      }
       if (initial_stores != 1 || owner_slot < 0) continue;
-      const bool is_local_slot = std::any_of(
-          function.operations().begin(), function.operations().end(),
-          [owner_slot](const tir::Op& op) {
-            return op.kind == tir::OpKind::Alloca && op.result.id == owner_slot;
-          });
-      if (!is_local_slot) continue;
+      if (alloca_slots.count(owner_slot) == 0) continue;
 
       std::unordered_set<int> descriptors{allocation.result.id};
       std::unordered_set<int> data_pointers{allocation.result.id};
-      for (const tir::Op& op : function.operations())
-        if (op.kind == tir::OpKind::Load && op.lhs.id == owner_slot &&
-            op.result.is_valid()) {
-          descriptors.insert(op.result.id);
-          data_pointers.insert(op.result.id);
+      const auto slot_loads = loads_by_slot.find(owner_slot);
+      if (slot_loads != loads_by_slot.end())
+        for (const tir::Op* load : slot_loads->second) {
+          descriptors.insert(load->result.id);
+          data_pointers.insert(load->result.id);
         }
 
       bool escapes = false;
       for (const tir::Op& op : function.operations()) {
-        auto uses = [&](int id) {
-          if (id < 0) return false;
-          if (op.operand.id == id || op.lhs.id == id || op.rhs.id == id)
-            return true;
-          for (const tir::Value argument : op.arguments)
-            if (argument.id == id) return true;
-          for (const tir::Value element : op.aggregate_elements)
-            if (element.id == id) return true;
-          return false;
-        };
         if (op.kind == tir::OpKind::Load && op.lhs.id == owner_slot &&
             op.result.is_valid()) {
           descriptors.insert(op.result.id);
           data_pointers.insert(op.result.id);
         }
-        bool uses_descriptor = false;
-        for (int id : descriptors) uses_descriptor |= uses(id);
-        bool uses_data = false;
-        for (int id : data_pointers) uses_data |= uses(id);
+        const bool uses_descriptor = references_any(op, descriptors);
+        const bool uses_data = references_any(op, data_pointers);
         if (!uses_descriptor && !uses_data) continue;
 
         if (op.kind == tir::OpKind::Store) {
