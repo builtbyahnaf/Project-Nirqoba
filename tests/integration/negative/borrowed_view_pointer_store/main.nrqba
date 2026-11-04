@@ -1,0 +1,11 @@
+// The escape analysis assumes a borrowed view can only be used to move plain
+// data out to the caller, never to publish a pointer into it. That is a promise
+// the checker makes, so it is pinned here: storing a pointer through a borrowed
+// view is rejected before lowering.
+void function stash(borrow mut array_view<int*> slot, borrow int* value) {
+    slot[0] = value;
+}
+
+int function main() {
+    return 0;
+}
