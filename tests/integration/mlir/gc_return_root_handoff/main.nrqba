@@ -4,6 +4,9 @@ managed<byte> function make_managed() {
 
 int function main() {
     var buffer = make_managed();
+    buffer[0] = 5 as byte;
+    // The buffer is still needed after an explicit collection, so the caller
+    // must publish the pinned handoff into a registered root slot.
     gc.collect();
-    return 0;
+    return buffer[0] as int;
 }

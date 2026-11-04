@@ -1,0 +1,14 @@
+struct Node {
+    int value;
+    managed<Node> next;
+}
+
+// The parameter is only read, and nothing in this function can run a
+// collection, so the value never has to be published as a root.
+int function read_only(managed<Node> node) {
+    return node[0].value;
+}
+
+int function main() {
+    return 0;
+}

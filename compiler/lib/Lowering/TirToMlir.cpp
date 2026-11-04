@@ -766,6 +766,413 @@ static bool function_uses_gc(const tir::Function& function) {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// GC root liveness
+//
+// Root registration used to be activation-wide and unconditional: every stack
+// slot able to hold a managed reference was registered at function entry, every
+// managed store paid a write barrier, and every activation opened a root frame.
+// Registration is not cheap - it allocates root metadata, takes the shadow
+// stack lock and pushes a root that marking must then trace - and most slots
+// die long before the next allocation can collect. The plan below answers one
+// question per slot: can a collection observe this slot's contents while some
+// later instruction still reads them? Only those slots are registered. Every
+// other slot stays an ordinary stack slot, which additionally lets LLVM promote
+// it and its contents to SSA values.
+//
+// A collection can run at two kinds of program point, and both are treated as
+// collection points here:
+//   * a call that may allocate or explicitly collect (transitively, so calls to
+//     user functions inherit the property of their callees), and
+//   * a loop back edge, where the generated code polls nrq_gc_safepoint and a
+//     collection requested by another thread snapshots this thread's roots.
+//
+// A slot must stay registered across such a point when it is live there: the
+// collector takes its snapshot at exactly that point, so a slot whose contents
+// are still needed afterwards must be visible to it. When the analysis proves
+// that a slot is never live across any collection point, it is registered
+// nowhere and its stores skip the write barrier.
+
+struct GcRootPlan {
+  // Alloca results that must be registered as typed roots.
+  std::unordered_set<int> rooted_slots;
+  // Parameter values that need an activation-wide root slot.
+  std::unordered_set<int> rooted_values;
+  // Managed call results whose handoff needs a real root slot in the caller.
+  std::unordered_set<int> rooted_call_results;
+  // Stack addresses the collector can never observe; stores through them need
+  // no write barrier and no root copy.
+  std::unordered_set<int> unobserved_addresses;
+  // The function contains an allocation that must publish its result through an
+  // already registered root slot.
+  bool has_rooted_allocation = false;
+  // Whether a root frame (and therefore any root registration) is required.
+  bool needs_root_frame = false;
+};
+
+// Runtime routines that never allocate a managed object and never run a
+// collection. Calls to anything else - including every user function not proven
+// collection-free - are treated as collection points. The list is deliberately
+// narrow: a missing entry only costs precision, while a wrong entry would let
+// the collector reclaim a value that is still live.
+static bool callee_is_collection_free(llvm::StringRef callee) {
+  static const std::unordered_set<std::string> collection_free = {
+      "print", "nrq_print_int", "nrq_print_uint", "nrq_print_f64",
+      "nrq_print_bool", "nrq_print_char", "nrq_print_string",
+      "nrq_print_cstr", "nrq_strlen", "nrq_args_length", "nrq_args_get",
+      "math.sqrt", "sqrt", "math.sin", "sin", "math.cos", "cos",
+      "math.abs", "abs", "math.floor", "floor", "math.ceil", "ceil",
+      "time.now", "memory.used_bytes", "memory.total_bytes",
+      "memory.device_memory_total_bytes", "memory.device_memory_used_bytes",
+      "memory.available_bytes", "memory.cpu_count", "memory.cpu_features",
+      "memory.thread_count", "memory.allocator_kind", "memory.runtime_version",
+      "memory.pin_count", "memory.pin_violations", "memory.get_ref_count",
+      "memory.array_bounds_check", "gc.is_enabled", "gc.set_threshold",
+      "gc.set_generational", "gc.disable", "mutex.create", "mutex.lock",
+      "mutex.unlock", "mutex.destroy", "memory.get_allocator",
+      "memory.get_default_allocator", "memory.profiler.start",
+      "memory.profiler.stop", "memory.profiler.capture",
+      // The general allocator, the ref-counted allocator and the mapping, file
+      // and socket APIs never enter the collector: only nrq_gc_allocate* runs
+      // maybe_collect_automatically, and only gc.collect* runs a cycle.
+      "memory.owned_array", "memory.owned_array_aligned", "memory.allocate",
+      "nrq_memory_allocate", "memory.deallocate", "nrq_memory_deallocate",
+      "memory.reallocate", "memory.shared_allocate", "memory.shared_retain",
+      "memory.shared_release", "memory.shared_count", "memory.secure_allocate",
+      "memory.secure_release", "memory.secure_zero", "memory.start_ref_count",
+      "memory.stop_ref_count", "memory.pin", "memory.unpin", "memory.map_file",
+      "memory.unmap_file", "memory.mapping_size", "memory.mapped_read",
+      "memory.mapped_write", "memory.general_allocator", "memory.pool_allocator",
+      "memory.arena_allocator", "memory.region", "memory.stack_allocator",
+      "memory.slab_allocator", "memory.buddy_allocator",
+      "memory.free_list_allocator", "memory.tlsf_allocator",
+      "memory.use_allocator", "memory.reset_allocator",
+      "memory.destroy_allocator", "memory.set_default_allocator",
+      "memory.array_view", "memory.array_view_mut", "array.owned_release",
+      "aggregate.owned_drop", "file.open", "file.close", "file.write",
+      "file.read", "file.read_text", "file.write_text", "file.append_text",
+      "file.exists", "socket.connect", "socket.close", "socket.send",
+      "socket.receive", "system.exit",
+  };
+  return collection_free.count(callee.str()) != 0;
+}
+
+// Module-wide answer to "can this call run a collection?". A call to a module
+// function inherits that function's answer; a call to anything else is a
+// collection point unless the runtime routine is on the proven list above.
+struct CollectionSummary {
+  std::unordered_set<std::string> defined_functions;
+  std::unordered_set<std::string> collecting_functions;
+
+  bool call_may_collect(const std::string& callee) const {
+    if (collecting_functions.count(callee) != 0) return true;
+    if (defined_functions.count(callee) != 0) return false;
+    return !callee_is_collection_free(callee);
+  }
+};
+
+// Greatest fixpoint over the call graph: a function may trigger a collection
+// when any operation in it can, where a call inherits its callee's answer.
+static CollectionSummary summarize_collections(const tir::Module& module) {
+  CollectionSummary summary;
+  for (const auto& function : module.functions())
+    summary.defined_functions.insert(function->name());
+
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (const auto& function : module.functions()) {
+      if (summary.collecting_functions.count(function->name())) continue;
+      for (const tir::Op& op : function->operations()) {
+        if (op.kind != tir::OpKind::Call) continue;
+        if (!summary.call_may_collect(op.callee)) continue;
+        summary.collecting_functions.insert(function->name());
+        changed = true;
+        break;
+      }
+    }
+  }
+  return summary;
+}
+
+// Backward liveness over TIR values. The CFG is implicit in the operation
+// stream: labels split blocks, branches carry the edges, and an operation
+// without a terminator falls through to its successor.
+class ValueLiveness {
+ public:
+  explicit ValueLiveness(const tir::Function& function) {
+    const std::vector<tir::Op>& operations = function.operations();
+    const std::size_t op_count = operations.size();
+    value_count_ = function.value_count();
+    words_ = (value_count_ + 63) / 64;
+    if (op_count == 0 || words_ == 0) return;
+
+    live_in_.assign(op_count * words_, 0);
+    live_out_.assign(op_count * words_, 0);
+    successors_.resize(op_count);
+    predecessors_.resize(op_count);
+
+    std::unordered_map<int, std::size_t> label_positions;
+    for (std::size_t index = 0; index < op_count; ++index)
+      if (operations[index].kind == tir::OpKind::Label)
+        label_positions.emplace(operations[index].label_id, index);
+    label_positions_ = label_positions;
+
+    auto label_position = [&](int label) -> long long {
+      const auto found = label_positions.find(label);
+      return found == label_positions.end()
+                 ? -1
+                 : static_cast<long long>(found->second);
+    };
+
+    for (std::size_t index = 0; index < op_count; ++index) {
+      const tir::Op& op = operations[index];
+      auto fall_through = [&]() {
+        if (index + 1 < op_count) successors_[index].push_back(index + 1);
+      };
+      switch (op.kind) {
+        case tir::OpKind::Branch: {
+          const long long target = label_position(op.label_id);
+          if (target >= 0)
+            successors_[index].push_back(static_cast<std::size_t>(target));
+          else
+            fall_through();
+          break;
+        }
+        case tir::OpKind::BranchCond: {
+          const long long yes = label_position(op.true_label);
+          const long long no = label_position(op.false_label);
+          if (yes >= 0) successors_[index].push_back(static_cast<std::size_t>(yes));
+          if (no >= 0) successors_[index].push_back(static_cast<std::size_t>(no));
+          if (yes < 0 || no < 0) fall_through();
+          break;
+        }
+        case tir::OpKind::Return:
+        case tir::OpKind::Unreachable:
+          break;
+        default:
+          fall_through();
+          break;
+      }
+    }
+    for (std::size_t index = 0; index < op_count; ++index)
+      for (std::size_t successor : successors_[index])
+        predecessors_[successor].push_back(index);
+
+    std::vector<uint64_t> uses(words_, 0);
+    std::vector<uint64_t> defs(words_, 0);
+    std::vector<uint64_t> new_out(words_, 0);
+    std::vector<std::size_t> worklist;
+    std::vector<char> queued(op_count, 1);
+    worklist.reserve(op_count);
+    for (std::size_t index = 0; index < op_count; ++index)
+      worklist.push_back(index);
+
+    while (!worklist.empty()) {
+      const std::size_t index = worklist.back();
+      worklist.pop_back();
+      queued[index] = 0;
+
+      std::fill(uses.begin(), uses.end(), uint64_t{0});
+      std::fill(defs.begin(), defs.end(), uint64_t{0});
+      const tir::Op& op = operations[index];
+      add_bit(uses, op.operand.id);
+      add_bit(uses, op.lhs.id);
+      add_bit(uses, op.rhs.id);
+      for (const tir::Value argument : op.arguments)
+        add_bit(uses, argument.id);
+      for (const tir::Value element : op.aggregate_elements)
+        add_bit(uses, element.id);
+      add_bit(defs, op.result.id);
+
+      std::fill(new_out.begin(), new_out.end(), uint64_t{0});
+      for (std::size_t successor : successors_[index]) {
+        const uint64_t* successor_in = &live_in_[successor * words_];
+        for (std::size_t word = 0; word < words_; ++word)
+          new_out[word] |= successor_in[word];
+      }
+
+      uint64_t* out = &live_out_[index * words_];
+      uint64_t* in = &live_in_[index * words_];
+      bool changed = false;
+      for (std::size_t word = 0; word < words_; ++word) {
+        if (out[word] != new_out[word]) {
+          out[word] = new_out[word];
+          changed = true;
+        }
+        const uint64_t updated = uses[word] | (new_out[word] & ~defs[word]);
+        if (in[word] != updated) {
+          in[word] = updated;
+          changed = true;
+        }
+      }
+      if (!changed) continue;
+      for (std::size_t predecessor : predecessors_[index]) {
+        if (queued[predecessor]) continue;
+        queued[predecessor] = 1;
+        worklist.push_back(predecessor);
+      }
+    }
+  }
+
+  bool live_in(std::size_t op_index, int value) const {
+    return test(live_in_, op_index, value);
+  }
+  bool live_out(std::size_t op_index, int value) const {
+    return test(live_out_, op_index, value);
+  }
+  bool is_backedge_target(int label_id, std::size_t op_index) const {
+    const auto found = label_positions_.find(label_id);
+    return found != label_positions_.end() && found->second < op_index;
+  }
+
+ private:
+  bool test(const std::vector<uint64_t>& bits, std::size_t op_index,
+            int value) const {
+    if (words_ == 0 || value < 0) return false;
+    const std::size_t id = static_cast<std::size_t>(value);
+    if (id >= value_count_) return false;
+    return (bits[op_index * words_ + id / 64] & (uint64_t{1} << (id % 64))) != 0;
+  }
+
+  void add_bit(std::vector<uint64_t>& bits, int value) const {
+    if (words_ == 0 || value < 0) return;
+    const std::size_t id = static_cast<std::size_t>(value);
+    if (id >= value_count_) return;
+    bits[id / 64] |= uint64_t{1} << (id % 64);
+  }
+
+  std::size_t value_count_ = 0;
+  std::size_t words_ = 0;
+  std::vector<uint64_t> live_in_;
+  std::vector<uint64_t> live_out_;
+  std::vector<std::vector<std::size_t>> successors_;
+  std::vector<std::vector<std::size_t>> predecessors_;
+  std::unordered_map<int, std::size_t> label_positions_;
+};
+
+static GcRootPlan analyze_gc_root_plan(const tir::Function& function,
+                                       const CollectionSummary& summary) {
+  const std::vector<tir::Op>& operations = function.operations();
+
+  bool has_managed_slots = false;
+  bool has_managed_parameters = false;
+  bool has_managed_call_results = false;
+  GcRootPlan plan;
+  for (const tir::Op& op : operations) {
+    if (op.kind == tir::OpKind::Alloca && op.result.is_valid() &&
+        collect_has_managed_reference(op.result.type))
+      has_managed_slots = true;
+    if (op.kind == tir::OpKind::Call && op.result.is_valid() &&
+        collect_has_managed_reference(op.result.type) &&
+        op.callee != "memory.array_view" &&
+        op.callee != "memory.array_view_mut")
+      has_managed_call_results = true;
+    if (op.kind == tir::OpKind::Call && op.callee == "array.allocate" &&
+        op.result.is_valid() && op.result.type.is_managed_pointer())
+      plan.has_rooted_allocation = true;
+  }
+  for (const tir::Function::Parameter& parameter : function.parameters())
+    if (collect_has_managed_reference(parameter.type)) has_managed_parameters = true;
+
+  if (!has_managed_slots && !has_managed_parameters && !has_managed_call_results) {
+    plan.needs_root_frame = plan.has_rooted_allocation;
+    return plan;
+  }
+
+  const ValueLiveness liveness(function);
+
+  // Collection points: calls that may collect, plus loop back edges where the
+  // thread parks and publishes its roots.
+  std::vector<std::size_t> collection_points;
+  for (std::size_t index = 0; index < operations.size(); ++index) {
+    const tir::Op& op = operations[index];
+    if (op.kind == tir::OpKind::Call) {
+      if (summary.call_may_collect(op.callee)) collection_points.push_back(index);
+      continue;
+    }
+    if (op.kind == tir::OpKind::Branch) {
+      if (liveness.is_backedge_target(op.label_id, index))
+        collection_points.push_back(index);
+      continue;
+    }
+    if (op.kind == tir::OpKind::BranchCond &&
+        (liveness.is_backedge_target(op.true_label, index) ||
+         liveness.is_backedge_target(op.false_label, index)))
+      collection_points.push_back(index);
+  }
+
+  auto live_at_any_collection_point = [&](int value) {
+    for (std::size_t point : collection_points)
+      if (liveness.live_in(point, value)) return true;
+    return false;
+  };
+
+  // Stack slots whose type contains managed references, plus every address
+  // derived from them, so field and element stores can be attributed.
+  std::unordered_map<int, std::unordered_set<int>> slot_addresses;
+  for (const tir::Op& op : operations) {
+    if (op.kind != tir::OpKind::Alloca || !op.result.is_valid() ||
+        !collect_has_managed_reference(op.result.type))
+      continue;
+    slot_addresses[op.result.id].insert(op.result.id);
+  }
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (const tir::Op& op : operations) {
+      if (op.kind != tir::OpKind::GetElementPtr || !op.result.is_valid())
+        continue;
+      for (auto& entry : slot_addresses) {
+        if (entry.second.count(op.lhs.id) == 0) continue;
+        if (entry.second.insert(op.result.id).second) changed = true;
+        break;
+      }
+    }
+  }
+
+  // A value loaded out of a slot keeps the object alive only while its source
+  // slot still holds the reference, so the slot has to stay registered as long
+  // as any value loaded from it is live at a collection point.
+  for (auto& entry : slot_addresses) {
+    std::unordered_set<int> candidates = entry.second;
+    for (const tir::Op& op : operations) {
+      if (op.kind != tir::OpKind::Load || !op.result.is_valid()) continue;
+      if (entry.second.count(op.lhs.id) != 0) candidates.insert(op.result.id);
+    }
+    bool rooted = false;
+    for (int candidate : candidates) {
+      if (!live_at_any_collection_point(candidate)) continue;
+      rooted = true;
+      break;
+    }
+    if (rooted) {
+      plan.rooted_slots.insert(entry.first);
+    } else {
+      plan.unobserved_addresses.insert(entry.second.begin(), entry.second.end());
+    }
+  }
+
+  for (const tir::Function::Parameter& parameter : function.parameters()) {
+    if (!collect_has_managed_reference(parameter.type)) continue;
+    if (live_at_any_collection_point(parameter.value.id))
+      plan.rooted_values.insert(parameter.value.id);
+  }
+
+  for (const tir::Op& op : operations) {
+    if (op.kind != tir::OpKind::Call || !op.result.is_valid()) continue;
+    if (!collect_has_managed_reference(op.result.type)) continue;
+    if (live_at_any_collection_point(op.result.id))
+      plan.rooted_call_results.insert(op.result.id);
+  }
+
+  plan.needs_root_frame = !plan.rooted_slots.empty() ||
+                          !plan.rooted_values.empty() ||
+                          !plan.rooted_call_results.empty() ||
+                          plan.has_rooted_allocation;
+  return plan;
+}
+
 static mlir::Location to_mlir_loc(const SourceLocation& loc, mlir::MLIRContext* ctx) {
   if (!loc.is_valid()) return mlir::UnknownLoc::get(ctx);
   return mlir::FileLineColLoc::get(ctx,
@@ -807,6 +1214,7 @@ class FunctionTranslator {
   FunctionTranslator(mlir::ModuleOp module,
                      const tir::Function& tir_fn,
                      const BorrowedEscapeSummary& borrowed_summary,
+                     const CollectionSummary& collections,
                      mlir::func::FuncOp func_op,
                      mlir::OpBuilder& builder,
                      mlir::MLIRContext* ctx,
@@ -815,8 +1223,9 @@ class FunctionTranslator {
         builder_(builder), ctx_(ctx), diag_(diag),
         stack_allocations_(
             analyze_stack_allocations(tir_fn, borrowed_summary)),
+        gc_roots_(analyze_gc_root_plan(tir_fn, collections)),
         uses_gc_mutator_(function_uses_gc(tir_fn)),
-        needs_gc_root_frame_(uses_gc_mutator_) {
+        needs_gc_root_frame_(uses_gc_mutator_ && gc_roots_.needs_root_frame) {
     const std::vector<tir::Op>& operations = tir_fn_.operations();
     for (std::size_t index = 0; index < operations.size(); ++index)
       if (operations[index].kind == tir::OpKind::Label)
@@ -849,6 +1258,7 @@ class FunctionTranslator {
           mlir::ValueRange{}).getResult();
     }
     for (std::size_t i = 0; i < tir_fn.parameters().size(); ++i) {
+      if (!gc_roots_.rooted_values.count(tir_fn.parameters()[i].value.id)) continue;
       std::vector<uint64_t> offsets;
       collect_managed_reference_offsets(tir_fn.parameters()[i].type, 0, offsets);
       if (offsets.empty()) continue;
@@ -1103,26 +1513,32 @@ class FunctionTranslator {
     return builder_.create<mlir::LLVM::LoadOp>(loc, value_type, slot).getResult();
   }
 
+  // A callee hands a managed result back pinned (`nrq_gc_pin_transfer`); the
+  // caller either publishes it into a registered root or, when the result is
+  // provably dead at every future collection point, only releases the pin.
   void root_managed_references_and_release_handoffs(
-      mlir::Value value, const Type& type, mlir::Location loc) {
+      mlir::Value value, const Type& type, mlir::Location loc, bool keep_root) {
     std::vector<uint64_t> offsets;
     collect_managed_reference_offsets(type, 0, offsets);
     if (offsets.empty() || !value) return;
     mlir::Type value_type = tir_type_to_mlir(type, ctx_, builder_);
     if (!value_type) return;
-    mlir::Value root_slot = alloca_at_entry(value_type, loc);
-    register_gc_root(root_slot, type, loc);
-    mlir::Value source_slot = alloca_at_entry(value_type, loc);
-    builder_.create<mlir::LLVM::StoreOp>(loc, value, source_slot);
-    auto copy = ensure_runtime_fn(
-        module_, builder_, "nrq_gc_root_copy",
-        mlir::LLVM::LLVMVoidType::get(ctx_),
-        {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_), builder_.getI64Type()});
-    mlir::Value byte_count = builder_.create<mlir::LLVM::ConstantOp>(
-        loc, builder_.getI64Type(),
-        builder_.getI64IntegerAttr(static_cast<int64_t>(type_size(type)))).getResult();
-    builder_.create<mlir::LLVM::CallOp>(
-        loc, copy, mlir::ValueRange{root_slot, source_slot, byte_count});
+    mlir::Value slot = alloca_at_entry(value_type, loc);
+    builder_.create<mlir::LLVM::StoreOp>(loc, value, slot);
+    if (keep_root) {
+      mlir::Value root_slot = alloca_at_entry(value_type, loc);
+      register_gc_root(root_slot, type, loc);
+      auto copy = ensure_runtime_fn(
+          module_, builder_, "nrq_gc_root_copy",
+          mlir::LLVM::LLVMVoidType::get(ctx_),
+          {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_), builder_.getI64Type()});
+      mlir::Value byte_count = builder_.create<mlir::LLVM::ConstantOp>(
+          loc, builder_.getI64Type(),
+          builder_.getI64IntegerAttr(static_cast<int64_t>(type_size(type)))).getResult();
+      builder_.create<mlir::LLVM::CallOp>(
+          loc, copy, mlir::ValueRange{root_slot, slot, byte_count});
+      slot = root_slot;
+    }
     auto unpin = ensure_runtime_fn(
         module_, builder_, "nrq_gc_unpin",
         mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
@@ -1131,7 +1547,7 @@ class FunctionTranslator {
           loc, builder_.getI64Type(),
           builder_.getI64IntegerAttr(static_cast<int64_t>(offset))).getResult();
       mlir::Value field = builder_.create<mlir::LLVM::GEPOp>(
-          loc, llvm_ptr_type(ctx_), builder_.getI8Type(), root_slot,
+          loc, llvm_ptr_type(ctx_), builder_.getI8Type(), slot,
           mlir::ValueRange{byte_offset}).getResult();
       mlir::Value reference = builder_.create<mlir::LLVM::LoadOp>(
           loc, llvm_ptr_type(ctx_), field).getResult();
@@ -1287,10 +1703,15 @@ class FunctionTranslator {
         std::vector<uint64_t> root_offsets;
         collect_managed_reference_offsets(op.result.type, 0, root_offsets);
         if (!root_offsets.empty()) {
+          // A slot whose contents no collection can observe still gets a
+          // deterministic zero value, but it is not registered as a root: the
+          // slot is then only reached by plain loads and stores, so mem2reg and
+          // SROA can promote it like an ordinary local.
           mlir::Value zero_value = builder_.create<mlir::LLVM::ZeroOp>(
               loc, elem_type).getResult();
           builder_.create<mlir::LLVM::StoreOp>(loc, zero_value, slot);
-          register_gc_root(slot, op.result.type, loc);
+          if (gc_roots_.rooted_slots.count(op.result.id))
+            register_gc_root(slot, op.result.type, loc);
         }
         set(op.result, slot);
         return true;
@@ -1300,13 +1721,22 @@ class FunctionTranslator {
         mlir::Value ptr = get(op.lhs);
         mlir::Value val = get(op.operand);
         if (!ptr || !val) return true;
+        // A destination no collection can observe needs neither a write barrier
+        // nor a root copy. Keeping the store plain also leaves the slot free for
+        // SSA promotion instead of making every access a runtime call.
+        const bool unobserved =
+            gc_roots_.unobserved_addresses.count(op.lhs.id) != 0;
         if (op.operand.type.is_managed_pointer()) {
+          if (unobserved) {
+            builder_.create<mlir::LLVM::StoreOp>(loc, val, ptr);
+            return true;
+          }
           auto store_fn = ensure_runtime_fn(module_, builder_, "nrq_gc_root_store",
                                             mlir::LLVM::LLVMVoidType::get(ctx_),
                                             {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)});
           builder_.create<mlir::LLVM::CallOp>(loc, store_fn,
                                               mlir::ValueRange{ptr, val});
-        } else if (!collect_has_managed_reference(op.operand.type)) {
+        } else if (!collect_has_managed_reference(op.operand.type) || unobserved) {
           builder_.create<mlir::LLVM::StoreOp>(loc, val, ptr);
         } else {
           mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
@@ -2660,7 +3090,8 @@ class FunctionTranslator {
               loc, op.callee, mlir::TypeRange{ret_ty}, args);
           mlir::Value result = call_op.getResult(0);
           root_managed_references_and_release_handoffs(
-              result, op.result.type, loc);
+              result, op.result.type, loc,
+              gc_roots_.rooted_call_results.count(op.result.id) != 0);
           set(op.result, result);
         } else {
           builder_.create<mlir::func::CallOp>(
@@ -2941,6 +3372,7 @@ class FunctionTranslator {
   mlir::MLIRContext* ctx_;
   DiagnosticEngine& diag_;
   std::unordered_map<int, StackAllocationLayout> stack_allocations_;
+  GcRootPlan gc_roots_;
   bool uses_gc_mutator_ = false;
   bool needs_gc_root_frame_ = false;
   std::unordered_map<int, std::size_t> label_positions_;
@@ -3035,6 +3467,7 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
   builder.setInsertionPointToStart(module->getBody());
   const BorrowedEscapeSummary borrowed_summary =
       summarize_borrowed_parameters(tir_module);
+  const CollectionSummary collections = summarize_collections(tir_module);
 
   for (const auto& tir_fn : tir_module.functions()) {
     mlir::Type ret_type;
@@ -3129,7 +3562,8 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     }
 
     FunctionTranslator translator(*module, *tir_fn, borrowed_summary,
-                                  func_op, builder, &context, diagnostics);
+                                  collections, func_op, builder, &context,
+                                  diagnostics);
     if (!translator.translate()) return nullptr;
 
     builder.setInsertionPointAfter(func_op);
