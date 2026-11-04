@@ -15,6 +15,11 @@ enum class MemoryEffectKind {
   Unspecified,
   None,     // memory(none)
   ErrnoMem, // errnoMem: readwrite, other: none
+  // Reads and writes global state (the standard streams, the heap, allocator
+  // statistics) but touches neither argument memory nor inaccessible memory.
+  OtherReadWrite,
+  // As OtherReadWrite, and also reads through a pointer argument.
+  OtherReadWriteArgRead,
 };
 
 struct RuntimeFunctionPolicy {
@@ -46,11 +51,23 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
   }
 
   // 2. Fatal, bounds fail, and exit
-  if (symbol == "nrq_memory_array_bounds_fail" || symbol == "nrq_fatal_error") {
+  if (symbol == "nrq_memory_array_bounds_fail") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     policy.noreturn = true;
     policy.cold = true;
+    // Formats and writes a diagnostic to the error stream. It takes no
+    // arguments, so argument memory is untouched even though globals are not.
+    policy.memory = MemoryEffectKind::OtherReadWrite;
+    return policy;
+  }
+  if (symbol == "nrq_fatal_error") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    policy.noreturn = true;
+    policy.cold = true;
+    // Reads the caller's message and writes the error stream.
+    policy.memory = MemoryEffectKind::OtherReadWriteArgRead;
     return policy;
   }
   if (symbol == "nrq_runtime_fatal") {
@@ -58,6 +75,7 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
     policy.nounwind = true;
     policy.noreturn = true;
     policy.cold = true;
+    policy.memory = MemoryEffectKind::OtherReadWriteArgRead;
     policy.nocapture_args_mask = (1u << 0);
     return policy;
   }
@@ -66,6 +84,8 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
     policy.nounwind = true;
     policy.noreturn = true;
     policy.cold = true;
+    // Flushes the standard streams before terminating.
+    policy.memory = MemoryEffectKind::OtherReadWrite;
     return policy;
   }
 
@@ -76,12 +96,14 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     policy.willreturn = true;
+    policy.memory = MemoryEffectKind::OtherReadWrite;
     return policy;
   }
   if (symbol == "nrq_print_string" || symbol == "nrq_print_cstr") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     policy.willreturn = true;
+    policy.memory = MemoryEffectKind::OtherReadWriteArgRead;
     policy.nocapture_args_mask = (1u << 0);
     return policy;
   }
@@ -163,8 +185,7 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
   // The root slot itself is retained by the shadow stack (no nocapture on
   // argument 0), while the reference-offset array is copied into root metadata
   // and never kept.
-  if (symbol == "nrq_gc_root_register" ||
-      symbol == "nrq_gc_root_register_typed") {
+  if (symbol == "nrq_gc_root_register_typed") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     policy.nocapture_args_mask = (1u << 2);
@@ -177,7 +198,15 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
     policy.nocapture_args_mask = (1u << 3);
     return policy;
   }
-  if (symbol == "nrq_gc_root_unregister") {
+  // The write barriers publish a new reference into the shadow stack and the
+  // remembered set. They are emitted on the assignment path, so they must not
+  // be treated as throwing call sites either.
+  if (symbol == "nrq_gc_root_store" || symbol == "nrq_gc_root_copy") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    return policy;
+  }
+  if (symbol == "nrq_gc_root_unregister" || symbol == "nrq_gc_unpin") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     policy.willreturn = true;
@@ -185,16 +214,12 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
     policy.nocapture_args_mask = (1u << 0);
     return policy;
   }
-  if (symbol == "nrq_gc_unpin") {
+  if (symbol == "nrq_gc_pin" || symbol == "nrq_gc_pin_transfer") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
-    policy.willreturn = true;
-    policy.nocapture_args_mask = (1u << 0);
     return policy;
   }
-  if (symbol == "nrq_gc_allocate_array_typed_rooted" ||
-      symbol == "nrq_gc_allocate_array_typed" ||
-      symbol == "nrq_gc_allocate_array") {
+  if (symbol == "nrq_gc_allocate_array_typed_rooted") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     policy.return_noalias = true;
@@ -202,20 +227,23 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
   }
   // A collection waits for every other mutator to park, so it is not marked
   // willreturn; it still cannot unwind.
-  if (symbol == "nrq_gc_collect" || symbol == "nrq_gc_collect_minor") {
+  if (symbol == "nrq_gc_collect") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    return policy;
+  }
+  // Initialization and shutdown run once around the program.
+  if (symbol == "nrq_gc_init" || symbol == "nrq_gc_shutdown") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     return policy;
   }
   if (symbol == "nrq_gc_enable" || symbol == "nrq_gc_disable" ||
-      symbol == "nrq_gc_set_threshold" || symbol == "nrq_gc_set_generational" ||
-      symbol == "nrq_gc_is_enabled" || symbol == "nrq_gc_is_generational" ||
+      symbol == "nrq_gc_set_threshold" || symbol == "nrq_gc_is_enabled" ||
       symbol == "nrq_gc_get_allocated_bytes" ||
       symbol == "nrq_gc_get_collected_bytes" ||
       symbol == "nrq_gc_get_collection_count" ||
       symbol == "nrq_gc_get_live_objects" ||
-      symbol == "nrq_gc_get_minor_collection_count" ||
-      symbol == "nrq_gc_get_major_collection_count" ||
       symbol == "nrq_gc_pin_count" || symbol == "nrq_gc_pin_violations" ||
       symbol == "nrq_gc_ref_count_start" || symbol == "nrq_gc_ref_count_stop" ||
       symbol == "nrq_gc_get_ref_count") {
@@ -291,6 +319,19 @@ inline void apply_runtime_function_attributes(
         /*argMem=*/mlir::LLVM::ModRefInfo::NoModRef,
         /*inaccessibleMem=*/mlir::LLVM::ModRefInfo::NoModRef,
         /*errnoMem=*/mlir::LLVM::ModRefInfo::ModRef,
+        /*targetMem0=*/mlir::LLVM::ModRefInfo::NoModRef,
+        /*targetMem1=*/mlir::LLVM::ModRefInfo::NoModRef);
+    func_op.setMemoryEffectsAttr(mem_attr);
+  } else if (policy.memory == MemoryEffectKind::OtherReadWrite ||
+             policy.memory == MemoryEffectKind::OtherReadWriteArgRead) {
+    auto mem_attr = mlir::LLVM::MemoryEffectsAttr::get(
+        builder.getContext(),
+        /*other=*/mlir::LLVM::ModRefInfo::ModRef,
+        /*argMem=*/policy.memory == MemoryEffectKind::OtherReadWriteArgRead
+            ? mlir::LLVM::ModRefInfo::Ref
+            : mlir::LLVM::ModRefInfo::NoModRef,
+        /*inaccessibleMem=*/mlir::LLVM::ModRefInfo::NoModRef,
+        /*errnoMem=*/mlir::LLVM::ModRefInfo::NoModRef,
         /*targetMem0=*/mlir::LLVM::ModRefInfo::NoModRef,
         /*targetMem1=*/mlir::LLVM::ModRefInfo::NoModRef);
     func_op.setMemoryEffectsAttr(mem_attr);

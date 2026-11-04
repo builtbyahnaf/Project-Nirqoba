@@ -1,0 +1,31 @@
+// Each helper exercises a different memory-effect shape so the lowered module
+// can be inspected for the promise the compiler inferred for it.
+//
+//   pure_helper     arithmetic only, no allocation, no runtime call
+//   sum_borrowed    reads through a borrowed view, spilled to a stack slot
+//   main            allocates, so it must keep the conservative default
+
+int function pure_helper(int a, int b) {
+    return a * 2 + b;
+}
+
+int function sum_borrowed(borrow array_view<int> values) {
+    var total = 0;
+    var i = 0;
+    while (i < values.length) {
+        total += values[i];
+        i += 1;
+    }
+    return total;
+}
+
+int function main() {
+    var values = memory.owned_array<int>(4);
+    values[0] = 1;
+    values[1] = 2;
+    values[2] = 3;
+    values[3] = 4;
+    let view = memory.array_view<int>(values, 0, 4);
+    print(pure_helper(sum_borrowed(view), 5));
+    return 0;
+}
