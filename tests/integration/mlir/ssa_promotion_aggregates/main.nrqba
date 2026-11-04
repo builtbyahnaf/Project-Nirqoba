@@ -1,0 +1,31 @@
+// Locals whose address never escapes must end up in SSA form: mem2reg promotes
+// scalar locals and SROA splits the aggregates, so the optimized module should
+// contain no stack slot and no memory traffic for them.
+
+struct Point {
+    int x;
+    int y;
+}
+
+int function distance(Point a, Point b) {
+    let dx = a.x - b.x;
+    let dy = a.y - b.y;
+    return dx * dx + dy * dy;
+}
+
+int function pair_sum((int, int) pair) {
+    return pair.0 + pair.1;
+}
+
+int function array_sum(int[3] values) {
+    return values[0] + values[1] + values[2];
+}
+
+int function main() {
+    var origin: Point = Point {0, 0};
+    var corner: Point = Point {x: 3, y: 4};
+    var pair: (int, int) = (7, 11);
+    var values: int[3] = [1, 2, 3];
+    print(distance(origin, corner) + pair_sum(pair) + array_sum(values));
+    return 0;
+}

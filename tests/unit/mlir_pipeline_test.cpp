@@ -12,6 +12,17 @@
 #include "nirqoba/Lowering/PassPipeline.h"
 #include "nirqoba/Lowering/RegisterDialects.h"
 
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+
+#include "nirqoba/Diagnostics/DiagnosticEngine.h"
+#include "nirqoba/Frontend/Lexer.h"
+#include "nirqoba/Frontend/Parser.h"
+#include "nirqoba/Frontend/SourceFile.h"
+#include "nirqoba/Lowering/TirToMlir.h"
+#include "nirqoba/Sema/TypeChecker.h"
+#include "nirqoba/TIR/Builder.h"
+#include "nirqoba/TIR/Verifier.h"
+
 using namespace std;
 
 namespace {
@@ -166,6 +177,49 @@ struct MemoryEffectFixture {
 
 using mlir::LLVM::ModRefInfo;
 
+// A source program that forces every kind of stack slot the lowering can
+// create: scalar and aggregate locals, a managed allocation whose reference
+// offsets must be described in memory, and a profiler capture. Every one of
+// them used to be allocated where it is used, which inside the loop means once
+// per iteration.
+constexpr const char* kStackSlotSource = R"nrqba(
+struct Node {
+    int value;
+    managed<Node> next;
+}
+
+int function main() {
+    var total = 0;
+    var i = 0;
+    while (i < 4) {
+        var node = array.allocate<Node>(1);
+        node[0].value = i;
+        var profile = memory.profiler.capture();
+        total += node[0].value;
+        i += 1;
+    }
+    print(total);
+    return 0;
+}
+)nrqba";
+
+mlir::OwningOpRef<mlir::ModuleOp> lower_source_to_mlir(
+    const std::string& source, mlir::MLIRContext& context,
+    nirq::DiagnosticEngine& diagnostics) {
+  nirq::SourceFile file("lowering_probe.nrqba", source);
+  nirq::Lexer lexer(file, diagnostics);
+  nirq::Parser parser(lexer.tokenize(), diagnostics);
+  auto program = parser.parse_program();
+  if (!program || diagnostics.has_errors()) return nullptr;
+  nirq::TypeChecker checker(diagnostics);
+  if (!checker.check(*program)) return nullptr;
+  nirq::TirBuilder builder(diagnostics);
+  auto tir_module = builder.lower(*program);
+  if (!tir_module) return nullptr;
+  if (!nirq::verify_tir_module(*tir_module, diagnostics)) return nullptr;
+  return nirq::translate_tir_to_mlir(*tir_module, context, diagnostics);
+}
+
 }  // namespace
 
 TEST(MlirPipelineTest, CleanupMergesPureOperationsAndPreservesEffects) {
@@ -307,4 +361,34 @@ TEST(MlirPipelineTest, InfersFunctionMemoryEffectsFromProvenance) {
   auto caller = fixture.function("opaque_caller");
   ASSERT_TRUE(static_cast<bool>(caller));
   ASSERT_FALSE(static_cast<bool>(caller.getMemoryEffectsAttr()));
+}
+
+TEST(MlirPipelineTest, AllocatesEveryStackSlotInTheEntryBlock) {
+  mlir::DialectRegistry registry;
+  nirq::register_all_dialects(registry);
+  mlir::MLIRContext context(registry);
+  context.loadAllAvailableDialects();
+  nirq::DiagnosticEngine diagnostics;
+
+  auto module = lower_source_to_mlir(kStackSlotSource, context, diagnostics);
+  ASSERT_FALSE(diagnostics.has_errors());
+  ASSERT_TRUE(static_cast<bool>(module));
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*module)));
+
+  // An `llvm.alloca` outside the entry block is re-executed every time its
+  // block runs, so a slot created in a loop body grows the stack until the
+  // process dies. It is also unreachable for mem2reg, which only promotes entry
+  // block slots, so the local would keep going through memory at every level.
+  unsigned allocas = 0;
+  unsigned outside_entry = 0;
+  module->walk([&](mlir::func::FuncOp function) {
+    mlir::Block& entry = function.getBody().front();
+    function.walk([&](mlir::LLVM::AllocaOp alloca) {
+      ++allocas;
+      if (alloca->getBlock() != &entry) ++outside_entry;
+    });
+  });
+
+  ASSERT_TRUE(allocas > 0);
+  ASSERT_EQ(outside_entry, 0u);
 }
