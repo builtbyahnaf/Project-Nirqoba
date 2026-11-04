@@ -1,0 +1,6 @@
+{
+  "mode": "build_and_run",
+  "args": [],
+  "expect_exit": 0,
+  "expect_stdout": "200000\n"
+}

@@ -1739,10 +1739,15 @@ class FunctionTranslator {
         } else if (!collect_has_managed_reference(op.operand.type) || unobserved) {
           builder_.create<mlir::LLVM::StoreOp>(loc, val, ptr);
         } else {
-          mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
-              loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
-          mlir::Value temporary = builder_.create<mlir::LLVM::AllocaOp>(
-              loc, llvm_ptr_type(ctx_), val.getType(), one).getResult();
+          // The barrier needs the value in memory. Allocating at entry rather
+          // than here keeps a store inside a loop from growing the frame once
+          // per iteration, and puts the slot where mem2reg can see it.
+          mlir::Value temporary = alloca_at_entry(val.getType(), loc);
+          if (!temporary) {
+            diag_.error("NRQ4006", op.location,
+                        "internal: no entry block for an aggregate store temporary");
+            return false;
+          }
           builder_.create<mlir::LLVM::StoreOp>(loc, val, temporary);
           auto copy_fn = ensure_runtime_fn(module_, builder_, "nrq_gc_root_copy",
                                            mlir::LLVM::LLVMVoidType::get(ctx_),
@@ -2332,10 +2337,15 @@ class FunctionTranslator {
           if (!reference_offsets.empty()) {
             auto offsets_type = mlir::LLVM::LLVMArrayType::get(
                 builder_.getI64Type(), static_cast<unsigned>(reference_offsets.size()));
-            mlir::Value offset_count = builder_.create<mlir::LLVM::ConstantOp>(
-                loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
-            offsets_pointer = builder_.create<mlir::LLVM::AllocaOp>(
-                loc, llvm_ptr_type(ctx_), offsets_type, offset_count).getResult();
+            // The offsets describe the element type, not this call, so one slot
+            // per allocation site is enough; allocating it at entry stops an
+            // allocating loop from extending the frame every iteration.
+            offsets_pointer = alloca_at_entry(offsets_type, loc);
+            if (!offsets_pointer) {
+              diag_.error("NRQ4006", op.location,
+                          "internal: no entry block for the reference offsets slot");
+              return false;
+            }
             mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
                 loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
             for (std::size_t index = 0; index < reference_offsets.size(); ++index) {
@@ -2519,10 +2529,14 @@ class FunctionTranslator {
           }
           mlir::Type element_type = tir_type_to_mlir(
               write ? op.arguments[2].type : op.result.type, ctx_, builder_);
-          mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
-              loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
-          mlir::Value temporary = builder_.create<mlir::LLVM::AllocaOp>(
-              loc, llvm_ptr_type(ctx_), element_type, one).getResult();
+          // Mapped access moves a single element through a stack slot. The slot
+          // is per-activation, not per-iteration.
+          mlir::Value temporary = alloca_at_entry(element_type, loc);
+          if (!temporary) {
+            diag_.error("NRQ4006", op.location,
+                        "internal: no entry block for a mapped access temporary");
+            return false;
+          }
           mlir::Value byte_count = builder_.create<mlir::LLVM::ConstantOp>(
               loc, builder_.getI64Type(),
               builder_.getI64IntegerAttr(type_size(write ? op.arguments[2].type
@@ -2550,10 +2564,13 @@ class FunctionTranslator {
         }
         if (op.callee == "memory.profiler.capture") {
           mlir::Type profile_type = tir_type_to_mlir(op.result.type, ctx_, builder_);
-          mlir::Value count = builder_.create<mlir::LLVM::ConstantOp>(
-              loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
-          mlir::Value slot = builder_.create<mlir::LLVM::AllocaOp>(
-              loc, llvm_ptr_type(ctx_), profile_type, count).getResult();
+          // The capture writes one profile record per activation of the call.
+          mlir::Value slot = alloca_at_entry(profile_type, loc);
+          if (!slot) {
+            diag_.error("NRQ4006", op.location,
+                        "internal: no entry block for a profiler capture slot");
+            return false;
+          }
           auto capture = ensure_runtime_fn(module_, builder_,
               "nrq_memory_profiler_capture_into",
               mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
