@@ -1,0 +1,7 @@
+{
+  "mode": "build",
+  "args": ["--emit=mlir"],
+  "expect_exit": 0,
+  "expect_stdout_contains": ["nrq_gc_root_register_typed", "nrq_gc_safepoint"],
+  "expect_stdout_not_contains": ["nrq_gc_root_store"]
+}
