@@ -1464,13 +1464,84 @@ class FunctionTranslator {
     func_op_.getBody().push_back(bounds_fail_block_);
   }
 
+  // Back edges poll the safepoint so another thread can snapshot this thread's
+  // roots. Polling on every crossing made an allocation-free loop pay a runtime
+  // call per iteration, so the poll is throttled by a scalar counter kept in an
+  // entry-block slot: the loop carries an add, an and and a store, and the call
+  // runs once every kSafepointInterval crossings. A collection requested by
+  // another thread is therefore observed within that many iterations, which
+  // bounds the pause latency without paying for a call per iteration.
+  static constexpr int64_t kSafepointInterval = 64;
+
+  // A back edge with one target: poll in a block of its own on the way there, so
+  // nothing is added between the branch and the loop header. Returns false when
+  // the function needs no poll at all, and then the caller emits the plain
+  // branch itself.
+  bool emit_gc_safepoint(mlir::Location loc, mlir::Block* target) {
+    if (!uses_gc_mutator_) return false;
+    mlir::Value due = safepoint_due(loc);
+    mlir::Block* poll_block = func_op_.addBlock();
+    builder_.create<mlir::LLVM::CondBrOp>(loc, due, poll_block, target);
+    builder_.setInsertionPointToStart(poll_block);
+    emit_safepoint_call(loc);
+    builder_.create<mlir::LLVM::BrOp>(loc, target);
+    return true;
+  }
+
+  // A back edge that may take either of two targets: both have to poll, so the
+  // guard runs first and the caller branches from the returned block.
   void emit_gc_safepoint(mlir::Location loc) {
     if (!uses_gc_mutator_) return;
+    mlir::Value due = safepoint_due(loc);
+    mlir::Block* poll_block = func_op_.addBlock();
+    mlir::Block* continue_block = func_op_.addBlock();
+    builder_.create<mlir::LLVM::CondBrOp>(loc, due, poll_block, continue_block);
+    builder_.setInsertionPointToStart(poll_block);
+    emit_safepoint_call(loc);
+    builder_.create<mlir::LLVM::BrOp>(loc, continue_block);
+    builder_.setInsertionPointToStart(continue_block);
+  }
+
+  // Advances the counter and reports whether this crossing is the one that
+  // polls. The counter is an entry-block slot, so LLVM promotes it to a register
+  // and the loop carries no memory traffic that mem2reg cannot remove.
+  mlir::Value safepoint_due(mlir::Location loc) {
+    mlir::Value counter = safepoint_counter_slot(loc);
+    const mlir::Type i64 = builder_.getI64Type();
+    auto constant = [&](int64_t value) {
+      return builder_.create<mlir::LLVM::ConstantOp>(
+          loc, i64, builder_.getI64IntegerAttr(value)).getResult();
+    };
+    mlir::Value current = builder_.create<mlir::LLVM::LoadOp>(
+        loc, i64, counter).getResult();
+    mlir::Value next = builder_.create<mlir::LLVM::AddOp>(
+        loc, current, constant(1)).getResult();
+    mlir::Value masked = builder_.create<mlir::LLVM::AndOp>(
+        loc, next, constant(kSafepointInterval - 1)).getResult();
+    builder_.create<mlir::LLVM::StoreOp>(loc, masked, counter);
+    return builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::eq, masked, constant(0)).getResult();
+  }
+
+  void emit_safepoint_call(mlir::Location loc) {
     auto safepoint = ensure_runtime_fn(
         module_, builder_, "nrq_gc_safepoint",
         mlir::LLVM::LLVMVoidType::get(ctx_), {});
     builder_.create<mlir::LLVM::CallOp>(
         loc, safepoint, mlir::ValueRange{});
+  }
+
+  mlir::Value safepoint_counter_slot(mlir::Location loc) {
+    if (safepoint_counter_) return safepoint_counter_;
+    const mlir::Type i64 = builder_.getI64Type();
+    mlir::Value slot = alloca_at_entry(i64, loc);
+    mlir::OpBuilder::InsertionGuard guard(builder_);
+    builder_.setInsertionPointAfter(slot.getDefiningOp());
+    mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, i64, builder_.getI64IntegerAttr(0)).getResult();
+    builder_.create<mlir::LLVM::StoreOp>(loc, zero, slot);
+    safepoint_counter_ = slot;
+    return slot;
   }
 
   // Every stack slot is allocated in the function's entry block, never at the
@@ -1763,7 +1834,8 @@ class FunctionTranslator {
 
       case tir::OpKind::Branch: {
         mlir::Block* target_block = get_or_create_block(op.label_id);
-        if (is_backedge(op.label_id)) emit_gc_safepoint(loc);
+        if (is_backedge(op.label_id) && emit_gc_safepoint(loc, target_block))
+          return true;
         builder_.create<mlir::LLVM::BrOp>(loc, target_block);
         return true;
       }
@@ -3533,6 +3605,7 @@ class FunctionTranslator {
   std::size_t current_operation_index_ = 0;
   mlir::Value gc_root_frame_marker_;
   mlir::Block* bounds_fail_block_ = nullptr;
+  mlir::Value safepoint_counter_;
 };
 
 // The Windows CRT calls `main(int argc, char** argv)`. A Nirqoba entry point
