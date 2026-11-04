@@ -1,0 +1,8 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "ptr readonly captures(none)"
+  ]
+}

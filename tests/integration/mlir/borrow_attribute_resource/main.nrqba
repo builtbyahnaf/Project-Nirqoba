@@ -1,0 +1,12 @@
+// The resource operations use the handle for the duration of the call and never
+// retain it, so a borrowed handle passed to one of them does not escape.
+i32 function write_text(borrow file byte* handle, string content) {
+    return file.write(handle, content);
+}
+
+int function main() {
+    let handle = file.open("NUL", true);
+    defer file.close(handle);
+    print(write_text(handle, "borrowed"));
+    return 0;
+}

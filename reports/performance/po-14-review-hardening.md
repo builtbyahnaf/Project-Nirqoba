@@ -1,0 +1,121 @@
+# PO-14 — Review Hardening (F2–F6)
+
+**Task:** follow-up hardening of the PO 3.1 / 3.2 review findings
+**Date:** 2026-11-04
+**Status:** in progress — one stage per finding, each with an implementation commit
+and a verification commit
+**Compiler:** Nirqoba 0.1.0, LLVM/MLIR 23.1.4, MSVC x64 RelWithDebInfo
+
+The PO 3.1/3.2 review of the ownership, alias and escape work produced six
+findings. F1 (stack slots materialised at their use site) was fixed as part of
+PO 3.5. This report covers F2–F6, one stage each.
+
+---
+
+## F2 — `nocapture` and `readonly` were attached from ownership, not from analysis
+
+**Status:** fixed.
+
+### Problem
+
+Two parameter attributes were asserted from the parameter's ownership class
+alone:
+
+```cpp
+} else if (param.ownership == ValueOwnership::Borrowed) {
+  attrs.set(readonly);                                   // always
+  if (param.name != tir_fn->return_borrow_parameter())
+    attrs.set(nocapture);                                // always
+}
+```
+
+Both attributes are statements about the *instructions in the body*, not about
+the type: `nocapture` says the function does not copy the pointer into memory
+that outlives the call, `readonly` says it does not write through it. The
+compiler had a dedicated analysis for exactly the first question —
+`summarize_borrowed_parameters`, a greatest fixpoint over the call graph — and
+threaded its result into `FunctionTranslator`, where it was used only to decide
+stack promotion. It was never consulted for the attributes. For `readonly`
+there was no analysis at all.
+
+### Root cause
+
+`translate_tir_to_mlir` builds the argument attribute dictionaries before it
+constructs the translator, from `tir_fn->parameters()` only. The escape summary
+was in scope at that point (`borrowed_summary`, computed once per module) but
+nothing made the connection, so the attribute block degenerated into a mapping
+from `ValueOwnership` to a fixed set of attributes.
+
+### Change
+
+- `nocapture` for `Borrowed` and `MutableBorrowed` parameters is now
+  `borrowed_parameter_does_not_escape(fn, index, borrowed_summary)`, i.e. the
+  existing fixpoint. A returned borrow is still excluded (the predicate already
+  handles `return_borrow_parameter`).
+- `readonly` for `Borrowed` parameters is now
+  `parameter_is_never_stored_through(fn, index)`: a local scan that rejects any
+  `Store` using the parameter, a pointer derived from it, or the pointer
+  reloaded from the slot it was spilled into as the destination. Returning the
+  pointer is allowed, because returning is not writing.
+- `runtime_call_consumes_borrow_without_retaining` replaces the hard-coded print
+  whitelist with one table that also covers the resource handles
+  (`file.read/write/…`, `socket.send/receive/close`, `mutex.lock/unlock/destroy`)
+  and the string printers. Those operations use the pointer for the duration of
+  the call and never retain it, which is what the escape fixpoint needs to know.
+  Anything missing from the table is still treated as an escape — the safe
+  direction, where the attribute is withheld rather than wrongly claimed.
+
+### Why it is correct
+
+- Both attributes can now only appear when a function-local or interprocedural
+  argument produces them; no ownership class alone can create one.
+- A callee cannot write through an immutable borrow either, because handing an
+  immutable borrow to a mutable or owning parameter is rejected before lowering
+  (`NRQ3015` and the mutable-borrow rules), so the local write scan is
+  sufficient for `readonly`.
+- The escape fixpoint is unchanged and already conservative: unknown operations,
+  unknown callees and stores of the pointer all fail it.
+- `noalias` keeps following from ownership, which is what the language actually
+  guarantees: a mutable borrow or an owned pointer is the only access path the
+  caller has to that memory for the duration of the call.
+
+### Verification
+
+The emitted attribute lines (`define`/`declare`/`attributes`) were captured for
+all 108 integration programs before and after the change and diffed:
+
+```
+$ build/tmp_liveness/dump_attrs.sh before && … && diff -r before after
+(no differences)
+```
+
+No program lost or gained a promise, which is the intended result: the
+attributes were *correct* before, but only because the type checker closed the
+holes that the analysis was there to close. They are now derived from the
+analyses that justify them.
+
+New tests pin the derivation:
+
+- `tests/integration/mlir/borrow_attribute_readonly/` — a function whose body
+  reads through one borrow and writes through another must still emit
+  `ptr readonly captures(none)` for the reader.
+- `tests/integration/mlir/borrow_attribute_returned/` — a function that returns
+  its borrow keeps `llvm.readonly` and must **not** claim `llvm.nocapture`.
+- `tests/integration/mlir/borrow_attribute_resource/` — passing a borrowed
+  handle to `file.write` does not disqualify it, because the resource operations
+  do not retain the handle.
+
+Suite results after the change: 118/118 unit tests and 192/193 integration tests
+pass (the failure is the pre-existing `memory_advanced` version-string drift).
+
+### Known limitations
+
+- The escape fixpoint cannot express "does not escape" for a program that is not
+  expressible in the language today: pointer-to-pointer parameters, pointers
+  stored in aggregate fields and borrow→owning transfers are all rejected by the
+  checker, so no test can distinguish the old code from the new one. The change
+  is defensive: it removes the *possibility* of the attributes being right by
+  accident.
+- `runtime_call_consumes_borrow_without_retaining` is a curated list and an
+  assertion about the runtime ABI. A new resource operation that is missing from
+  it loses `nocapture` (pessimisation) rather than gaining a false promise.

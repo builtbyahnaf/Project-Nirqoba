@@ -1,0 +1,11 @@
+{
+  "mode": "build",
+  "args": ["--emit=mlir"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "llvm.ptr {llvm.readonly"
+  ],
+  "expect_stdout_not_contains": [
+    "llvm.nocapture"
+  ]
+}
