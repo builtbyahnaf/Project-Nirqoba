@@ -1,12 +1,18 @@
 #include "nirqoba/Lowering/PassPipeline.h"
 #include "nirqoba/Lowering/RegisterDialects.h"
 
+#include <string>
+#include <unordered_set>
+
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinDialect.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 #include "mlir/Pass/Pass.h"  // completes mlir::Pass for the unique_ptr created below
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
@@ -188,6 +194,296 @@ class FoldConstantLlvmCondBrPass
   }
 };
 
+// ---------------------------------------------------------------------------
+// Function-level memory effects
+// ---------------------------------------------------------------------------
+//
+// A generated function's declaration told the optimizer nothing about the
+// memory it touches, so every call to it acted as a full memory barrier: loads
+// could not be hoisted across calls, identical calls could not be merged, and a
+// call whose result is unused could not be removed even when the callee was
+// pure arithmetic.
+//
+// The lowered body already contains the evidence needed to do better. Every
+// memory access is classified by address provenance:
+//
+//   * a pointer derived from an llvm.alloca addresses inaccessible memory: the
+//     stack frame the caller cannot name;
+//   * a pointer derived from a function argument addresses argument memory,
+//     including memory reachable through pointers loaded out of it;
+//   * anything else (a pointer loaded from a stack slot, a global, an
+//     allocation) is charged to both "other" and argument memory, because it
+//     may be reachable from an argument.
+//
+// Calls inherit their callee's effects. Module functions are analysed to a
+// greatest fixpoint starting from "no effects", which handles recursion: since
+// effects can only be added as evidence accumulates, a self-recursive
+// arithmetic function remains memory(none). Declarations use the effects the
+// runtime attribute policy already attached; a declaration with unknown effects,
+// a target-specific memory location or an errno access makes the call
+// conservative instead.
+//
+// An attribute is attached only when it actually narrows the default, and any
+// operation this pass does not model charges all three locations. A construct
+// it does not understand can therefore never produce a false promise.
+
+
+enum class AddressOrigin { Local, Argument, Unknown };
+
+struct MemoryEffectSummary {
+  bool reads_argument = false;
+  bool writes_argument = false;
+  bool reads_inaccessible = false;
+  bool writes_inaccessible = false;
+  bool reads_other = false;
+  bool writes_other = false;
+
+  bool operator==(const MemoryEffectSummary& other) const = default;
+
+  void add(const MemoryEffectSummary& other_summary) {
+    reads_argument |= other_summary.reads_argument;
+    writes_argument |= other_summary.writes_argument;
+    reads_inaccessible |= other_summary.reads_inaccessible;
+    writes_inaccessible |= other_summary.writes_inaccessible;
+    reads_other |= other_summary.reads_other;
+    writes_other |= other_summary.writes_other;
+  }
+
+  bool touches_everything() const {
+    return reads_argument && writes_argument && reads_inaccessible &&
+           writes_inaccessible && reads_other && writes_other;
+  }
+};
+
+void charge_access(MemoryEffectSummary& summary, AddressOrigin origin,
+                   bool write) {
+  switch (origin) {
+    case AddressOrigin::Local:
+      if (write) summary.writes_inaccessible = true;
+      else summary.reads_inaccessible = true;
+      return;
+    case AddressOrigin::Argument:
+      if (write) summary.writes_argument = true;
+      else summary.reads_argument = true;
+      return;
+    case AddressOrigin::Unknown:
+      // The address may be reachable from an argument and may also be outside
+      // it, so neither location can be excluded.
+      if (write) {
+        summary.writes_argument = true;
+        summary.writes_other = true;
+      } else {
+        summary.reads_argument = true;
+        summary.reads_other = true;
+      }
+      return;
+  }
+}
+
+void charge_unknown_effects(MemoryEffectSummary& summary) {
+  summary.reads_argument = summary.writes_argument = true;
+  summary.reads_inaccessible = summary.writes_inaccessible = true;
+  summary.reads_other = summary.writes_other = true;
+}
+
+bool llvm_op_accesses_no_memory(llvm::StringRef name) {
+  static const std::unordered_set<std::string> memory_free = {
+      "llvm.mlir.constant", "llvm.mlir.zero", "llvm.mlir.undef",
+      "llvm.mlir.poison", "llvm.mlir.null", "llvm.mlir.addressof",
+      "llvm.alloca", "llvm.getelementptr",
+      "llvm.add", "llvm.sub", "llvm.mul", "llvm.udiv", "llvm.sdiv",
+      "llvm.urem", "llvm.srem", "llvm.and", "llvm.or", "llvm.xor",
+      "llvm.shl", "llvm.lshr", "llvm.ashr", "llvm.fadd", "llvm.fsub",
+      "llvm.fmul", "llvm.fdiv", "llvm.frem", "llvm.fneg",
+      "llvm.icmp", "llvm.fcmp", "llvm.select", "llvm.freeze",
+      "llvm.trunc", "llvm.zext", "llvm.sext", "llvm.fptrunc", "llvm.fpext",
+      "llvm.fptosi", "llvm.fptoui", "llvm.sitofp", "llvm.uitofp",
+      "llvm.bitcast", "llvm.addrspacecast", "llvm.ptrtoint", "llvm.inttoptr",
+      "llvm.extractvalue", "llvm.insertvalue", "llvm.mlir.poison",
+      "llvm.br", "llvm.cond_br", "llvm.switch", "llvm.return",
+      "llvm.unreachable", "llvm.lifetime.start", "llvm.lifetime.end",
+  };
+  return memory_free.count(name.str()) != 0;
+}
+
+// Reads the memory effects already attached to a declaration. Returns false
+// when the declaration touches errno or a target-specific location, because the
+// caller's attribute cannot describe those through other/argmem/inaccessible.
+bool effects_from_attribute(mlir::LLVM::MemoryEffectsAttr attribute,
+                            MemoryEffectSummary& summary) {
+  using mlir::LLVM::ModRefInfo;
+  if (!attribute) return false;
+  if (attribute.getErrnoMem() != ModRefInfo::NoModRef ||
+      attribute.getTargetMem0() != ModRefInfo::NoModRef ||
+      attribute.getTargetMem1() != ModRefInfo::NoModRef)
+    return false;
+  auto reads = [](ModRefInfo info) {
+    return info == ModRefInfo::Ref || info == ModRefInfo::ModRef;
+  };
+  auto writes = [](ModRefInfo info) {
+    return info == ModRefInfo::Mod || info == ModRefInfo::ModRef;
+  };
+  summary.reads_other = reads(attribute.getOther());
+  summary.writes_other = writes(attribute.getOther());
+  summary.reads_argument = reads(attribute.getArgMem());
+  summary.writes_argument = writes(attribute.getArgMem());
+  summary.reads_inaccessible = reads(attribute.getInaccessibleMem());
+  summary.writes_inaccessible = writes(attribute.getInaccessibleMem());
+  return true;
+}
+
+MemoryEffectSummary analyze_body(
+    mlir::LLVM::LLVMFuncOp function,
+    const llvm::StringMap<MemoryEffectSummary>& known_callees,
+    const llvm::StringSet<>& callees_with_known_effects) {
+  MemoryEffectSummary summary;
+  if (function.isExternal()) return summary;
+
+  llvm::DenseMap<mlir::Value, AddressOrigin> origins;
+  // Every parameter is argument memory, including aggregates: a pointer
+  // extracted from a by-value array view still points into the caller's memory.
+  for (mlir::BlockArgument argument : function.getBody().front().getArguments())
+    origins[argument] = AddressOrigin::Argument;
+
+  auto origin_of = [&](mlir::Value value) {
+    const auto found = origins.find(value);
+    return found == origins.end() ? AddressOrigin::Unknown : found->second;
+  };
+  auto record_pointer = [&](mlir::Value value, AddressOrigin origin) {
+    if (mlir::isa<mlir::LLVM::LLVMPointerType>(value.getType()))
+      origins[value] = origin;
+  };
+
+  for (mlir::Block& block : function.getBody()) {
+    for (mlir::Operation& operation : block) {
+      if (auto load = mlir::dyn_cast<mlir::LLVM::LoadOp>(operation)) {
+        const AddressOrigin origin = origin_of(load.getAddr());
+        charge_access(summary, origin, /*write=*/false);
+        // A pointer read out of argument memory still addresses memory
+        // reachable from that argument. A pointer read out of stack memory
+        // could address anything, so it stays unknown.
+        record_pointer(load.getResult(),
+                       origin == AddressOrigin::Argument ? AddressOrigin::Argument
+                                                         : AddressOrigin::Unknown);
+        continue;
+      }
+      if (auto store = mlir::dyn_cast<mlir::LLVM::StoreOp>(operation)) {
+        charge_access(summary, origin_of(store.getAddr()), /*write=*/true);
+        continue;
+      }
+      if (auto alloca = mlir::dyn_cast<mlir::LLVM::AllocaOp>(operation)) {
+        record_pointer(alloca.getResult(), AddressOrigin::Local);
+        continue;
+      }
+      if (auto gep = mlir::dyn_cast<mlir::LLVM::GEPOp>(operation)) {
+        record_pointer(gep.getResult(), origin_of(gep.getBase()));
+        continue;
+      }
+      if (auto call = mlir::dyn_cast<mlir::LLVM::CallOp>(operation)) {
+        const mlir::FlatSymbolRefAttr callee = call.getCalleeAttr();
+        const std::string name =
+            callee ? callee.getValue().str() : std::string();
+        if (!name.empty() && callees_with_known_effects.count(name) != 0) {
+          summary.add(known_callees.lookup(name));
+        } else {
+          charge_unknown_effects(summary);
+        }
+        for (mlir::Value result : call.getResults())
+          record_pointer(result, AddressOrigin::Unknown);
+        continue;
+      }
+      if (llvm_op_accesses_no_memory(operation.getName().getStringRef())) {
+        // Propagate provenance through pointer casts so a cast of an argument
+        // is still argument memory.
+        if (operation.getNumOperands() == 1 && operation.getNumResults() == 1)
+          record_pointer(operation.getResult(0),
+                         origin_of(operation.getOperand(0)));
+        continue;
+      }
+      charge_unknown_effects(summary);
+    }
+  }
+  return summary;
+}
+
+mlir::LLVM::ModRefInfo mod_ref_info(bool reads, bool writes) {
+  using mlir::LLVM::ModRefInfo;
+  if (reads && writes) return ModRefInfo::ModRef;
+  if (reads) return ModRefInfo::Ref;
+  if (writes) return ModRefInfo::Mod;
+  return ModRefInfo::NoModRef;
+}
+
+void attach_memory_effects(mlir::LLVM::LLVMFuncOp function,
+                           const MemoryEffectSummary& summary) {
+  if (function.isExternal()) return;
+  using mlir::LLVM::ModRefInfo;
+  const ModRefInfo other = mod_ref_info(summary.reads_other, summary.writes_other);
+  const ModRefInfo argument =
+      mod_ref_info(summary.reads_argument, summary.writes_argument);
+  const ModRefInfo inaccessible =
+      mod_ref_info(summary.reads_inaccessible, summary.writes_inaccessible);
+  if (other == ModRefInfo::ModRef && argument == ModRefInfo::ModRef &&
+      inaccessible == ModRefInfo::ModRef)
+    return;
+  auto attribute = mlir::LLVM::MemoryEffectsAttr::get(
+      function.getContext(), other, argument, inaccessible,
+      ModRefInfo::NoModRef, ModRefInfo::NoModRef, ModRefInfo::NoModRef);
+  function.setMemoryEffectsAttr(attribute);
+}
+
+class InferFunctionMemoryEffectsPass
+    : public mlir::PassWrapper<InferFunctionMemoryEffectsPass,
+                               mlir::OperationPass<mlir::ModuleOp>> {
+ public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(InferFunctionMemoryEffectsPass)
+
+  llvm::StringRef getArgument() const final {
+    return "infer-function-memory-effects";
+  }
+  llvm::StringRef getDescription() const final {
+    return "Attach memory effects inferred from each generated function body";
+  }
+
+  void runOnOperation() override {
+    mlir::ModuleOp module = getOperation();
+    llvm::StringMap<MemoryEffectSummary> known;
+    llvm::StringSet<> has_known_effects;
+    llvm::SmallVector<mlir::LLVM::LLVMFuncOp> definitions;
+
+    for (mlir::LLVM::LLVMFuncOp function :
+         module.getOps<mlir::LLVM::LLVMFuncOp>()) {
+      MemoryEffectSummary summary;
+      if (function.isExternal()) {
+        if (!effects_from_attribute(function.getMemoryEffectsAttr(), summary))
+          continue;
+      } else {
+        definitions.push_back(function);
+      }
+      const std::string name = function.getSymName().str();
+      known[name] = summary;
+      has_known_effects.insert(name);
+    }
+
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      for (mlir::LLVM::LLVMFuncOp function : definitions) {
+        const MemoryEffectSummary analyzed =
+            analyze_body(function, known, has_known_effects);
+        MemoryEffectSummary& current = known[function.getSymName()];
+        if (analyzed == current) continue;
+        current = analyzed;
+        changed = true;
+      }
+    }
+
+    for (mlir::LLVM::LLVMFuncOp function : definitions)
+      attach_memory_effects(function, known[function.getSymName()]);
+  }
+};
+
+
 // Adds the semantics-preserving MLIR cleanup shared by the pre- and
 // post-lowering stages.
 //
@@ -245,6 +541,11 @@ void build_lowering_pipeline(mlir::PassManager& pm, bool optimize) {
     // intact.
     add_cleanup_passes(pm);
   }
+
+  // Step 4: Describe the memory each generated function actually touches. This
+  // runs last so it sees the final body. It runs at every optimization level:
+  // the attribute is a property of the program, not of a pass run.
+  pm.addPass(std::make_unique<InferFunctionMemoryEffectsPass>());
 }
 
 }  // namespace nirq
