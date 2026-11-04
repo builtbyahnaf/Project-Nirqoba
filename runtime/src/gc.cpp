@@ -68,6 +68,17 @@ class ReferenceLayout {
     return size_ <= inline_offsets_.size()
         ? inline_offsets_[index] : (*overflow_offsets_)[index];
   }
+  const size_t* begin() const {
+    return size_ <= inline_offsets_.size()
+        ? inline_offsets_.data() : overflow_offsets_->data();
+  }
+  const size_t* end() const { return begin() + size_; }
+  bool matches(const size_t* offsets, size_t count) const {
+    if (count != size_) return false;
+    for (size_t index = 0; index < count; ++index)
+      if ((*this)[index] != offsets[index]) return false;
+    return true;
+  }
 
  private:
   std::array<size_t, 2> inline_offsets_{};
@@ -260,7 +271,7 @@ struct RootInfo {
   size_t object_size = 0;
   size_t repeated_count = 0;
   size_t element_size = 0;
-  std::vector<size_t> reference_offsets;
+  ReferenceLayout reference_offsets;
 };
 std::unordered_map<void*, RootInfo> roots;
 // Thread-local shadow stacks hold ordinary roots. Array/external roots stay in
@@ -268,6 +279,16 @@ std::unordered_map<void*, RootInfo> roots;
 struct ShadowRoot {
   void* slot = nullptr;
   RootInfo info;
+};
+// Per-slot bookkeeping for an active shadow root. `count` preserves
+// duplicate-registration semantics: a slot stays indexed while any frame still
+// owns a registration for it. `layout` is the validated descriptor shared by
+// every registration of that slot.
+struct SlotState {
+  size_t count = 0;
+  size_t object_size = 0;
+  ReferenceLayout layout;
+  bool pointer_root = false;
 };
 struct ShadowStack {
   std::mutex mutex;
@@ -278,14 +299,24 @@ struct ShadowStack {
   };
   std::vector<Frame> frames;
   uint64_t next_marker = 1;
-  // Fast O(1) lookup for pointer-root validation in rooted allocation.
-  // Maintained by the owning thread only; never read by the collector.
-  // Tracks the slot addresses of all currently active simple pointer roots
-  // (roots registered via nrq_gc_root_register with a single void* reference).
-  std::unordered_set<void*> pointer_root_slots;
+  // O(1) index of active root slots. Maintained by the owning thread only and
+  // never read by the collector. It replaces both the old full-root scan used
+  // for duplicate-layout validation and the pointer-root set that was rebuilt
+  // on every frame end.
+  std::unordered_map<void*, SlotState> slot_states;
 };
 std::vector<ShadowStack*> shadow_stacks;
 thread_local ShadowStack* thread_shadow_stack = nullptr;
+// Cleans up thread-local GC state when a thread terminates without unwinding
+// its mutator/root frames. Without this the collector could later enumerate a
+// shadow stack whose owning thread is gone and whose slots are dangling, and a
+// thread-local allocation batch could be lost.
+struct ThreadGcStateCleanup {
+  bool armed = false;
+  void arm() { armed = true; }
+  ~ThreadGcStateCleanup();
+};
+thread_local ThreadGcStateCleanup thread_gc_cleanup;
 std::unordered_map<void*, size_t> pinned_objects;
 // Pinning is a diagnostic facility rather than a concurrency primitive: a
 // reasonable program pins an object while a native call borrows it and unpins it
@@ -344,6 +375,15 @@ std::unordered_set<ObjectHeader*> remembered_young;
 // mutator's unpublished TLAB. These raw addresses are retried after all TLABs
 // are published at the next cycle boundary; they are never dereferenced.
 std::unordered_set<void*> unresolved_remembered;
+// While every live managed object is young, a young-to-young assignment cannot
+// create an old-to-young edge, so the write barrier can skip remembered-set
+// work. `generational_barrier_active` is raised for the duration of every
+// collection cycle (because a concurrent promotion can make an object old while
+// mutators run) and lowered after a cycle that leaves no old objects. This
+// keeps the idle fast path allocation-only for young workloads without
+// weakening generational tracking once an old generation exists.
+std::atomic<bool> generational_barrier_active{false};
+std::atomic<size_t> old_object_count{0};
 
 uint64_t saturated_add(uint64_t left, uint64_t right) {
   return right > UINT64_MAX - left ? UINT64_MAX : left + right;
@@ -590,6 +630,7 @@ void remember_reference(void* object, void* opaque_context) {
 
 void remember_young_locked(void* object) {
   if (!generational_collection_enabled.load(std::memory_order_relaxed) ||
+      !generational_barrier_active.load(std::memory_order_acquire) ||
       !object)
     return;
   ObjectHeader* found = object_index.find(object);
@@ -607,7 +648,8 @@ void remember_children_locked(ObjectHeader* header) {
 }
 
 void defer_remembered_locked(void* object) {
-  if (!object) return;
+  if (!object || !generational_barrier_active.load(std::memory_order_acquire))
+    return;
   ObjectHeader* found = object_index.find(object);
   if (found && found->young) {
     try {
@@ -648,6 +690,35 @@ void drain_remembered_locked(MutatorState& mutator, bool defer_unresolved) {
   mutator.remembered_count = 0;
 }
 
+ThreadGcStateCleanup::~ThreadGcStateCleanup() {
+  if (!armed) return;
+  ShadowStack* stack = thread_shadow_stack;
+  // Match the mutator_leave lock order (mutator_mutex then gc_mutex) so a
+  // thread that exits while another thread is leaving cannot deadlock.
+  std::lock_guard<std::mutex> mutator_lock(mutator_mutex);
+  if (thread_mutator.depth != 0) {
+    {
+      std::lock_guard<std::mutex> heap_lock(gc_mutex);
+      publish_tlab_locked(thread_mutator);
+      drain_remembered_locked(thread_mutator, /*defer_unresolved=*/true);
+    }
+    auto found = std::find(mutators.begin(), mutators.end(), &thread_mutator);
+    if (found != mutators.end()) mutators.erase(found);
+    thread_mutator.depth = 0;
+    thread_mutator.parked = false;
+    mutator_condition.notify_all();
+  }
+  if (stack) {
+    // Remove the stack under gc_mutex: enqueue_roots_locked enumerates the
+    // registry under the same lock, so the collector can no longer reach it.
+    std::lock_guard<std::mutex> heap_lock(gc_mutex);
+    auto found = std::find(shadow_stacks.begin(), shadow_stacks.end(), stack);
+    if (found != shadow_stacks.end()) shadow_stacks.erase(found);
+    thread_shadow_stack = nullptr;
+  }
+  delete stack;
+}
+
 void resolve_unresolved_remembered_locked() {
   for (void* object : unresolved_remembered) {
     ObjectHeader* found = object_index.find(object);
@@ -664,6 +735,9 @@ void resolve_unresolved_remembered_locked() {
 void buffer_remembered(void* object);
 
 void buffer_pointer_words(void* storage, size_t bytes) {
+  if (!generational_collection_enabled.load(std::memory_order_relaxed) ||
+      !generational_barrier_active.load(std::memory_order_acquire))
+    return;
   auto* address = static_cast<unsigned char*>(storage);
   for (size_t offset = 0; offset + sizeof(void*) <= bytes;
        offset += sizeof(void*)) {
@@ -675,7 +749,8 @@ void buffer_pointer_words(void* storage, size_t bytes) {
 
 void buffer_remembered(void* object) {
   if (!object ||
-      !generational_collection_enabled.load(std::memory_order_relaxed))
+      !generational_collection_enabled.load(std::memory_order_relaxed) ||
+      !generational_barrier_active.load(std::memory_order_acquire))
     return;
   MutatorState& mutator = thread_mutator;
   if (mutator.remembered_count < kRememberedBufferCapacity) {
@@ -722,6 +797,12 @@ bool sweep_chunk_locked(size_t budget) {
     if (!header->marked && collectable) {
       object_index.erase(header->object);
       remembered_young.erase(header);
+      if (!header->young) {
+        const size_t old_count =
+            old_object_count.load(std::memory_order_relaxed);
+        if (old_count != 0)
+          old_object_count.store(old_count - 1, std::memory_order_relaxed);
+      }
       statistics.collected_bytes = saturated_add(
           statistics.collected_bytes, static_cast<uint64_t>(header->size));
       if (statistics.live_objects != 0) --statistics.live_objects;
@@ -746,12 +827,18 @@ bool sweep_chunk_locked(size_t budget) {
           if (header->age >= kPromotionAge) {
             header->young = false;
             header->age = 0;
+            old_object_count.fetch_add(1, std::memory_order_relaxed);
+            generational_barrier_active.store(true, std::memory_order_release);
             remember_children_locked(header);
             remembered_young.erase(header);
           }
         }
       } else {
-        header->young = false;
+        if (header->young) {
+          header->young = false;
+          old_object_count.fetch_add(1, std::memory_order_relaxed);
+          generational_barrier_active.store(true, std::memory_order_release);
+        }
         header->age = 0;
         remembered_young.erase(header);
       }
@@ -799,6 +886,10 @@ void begin_cycle(bool young_only) {
   // snapshot; barrier_readers is the handshake that makes that visible.
   {
     std::lock_guard<std::mutex> lock(gc_mutex);
+    // A concurrent promotion can turn a reachable object old while mutators
+    // run, so enable remembered-set recording for the whole cycle. The flag is
+    // lowered again if the cycle finishes with no old objects.
+    generational_barrier_active.store(true, std::memory_order_release);
     collection_phase.store(CollectionPhase::Preparing,
                            std::memory_order_release);
   }
@@ -831,6 +922,9 @@ void finish_cycle_locked(bool young_only) {
   // survivors as it sweeps, while young objects allocated during the cycle
   // remain young and may be referenced only by old objects; their remembered
   // entries must survive into the next minor collection.
+  if (generational_collection_enabled.load(std::memory_order_relaxed) &&
+      old_object_count.load(std::memory_order_relaxed) == 0)
+    generational_barrier_active.store(false, std::memory_order_release);
   active_mark = MarkContext{};
   collection_phase.store(CollectionPhase::Idle, std::memory_order_release);
   bytes_since_collection.store(0, std::memory_order_relaxed);
@@ -1000,6 +1094,10 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     header->element_size = element_size;
     header->trace = trace;
     header->young = generational_collection_enabled.load(std::memory_order_relaxed);
+    if (!header->young) {
+      old_object_count.fetch_add(1, std::memory_order_relaxed);
+      generational_barrier_active.store(true, std::memory_order_release);
+    }
     header->age = 0;
     header->birth_epoch = next_cycle_epoch.load(std::memory_order_relaxed);
     header->next = objects;
@@ -1136,6 +1234,10 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   header->element_size = element_size;
   header->trace = trace;
   header->young = generational_collection_enabled.load(std::memory_order_relaxed);
+  if (!header->young) {
+    old_object_count.fetch_add(1, std::memory_order_relaxed);
+    generational_barrier_active.store(true, std::memory_order_release);
+  }
   header->age = 0;
   header->birth_epoch = next_cycle_epoch.load(std::memory_order_relaxed);
   header->tlab_next = thread_mutator.pending_objects;
@@ -1176,6 +1278,7 @@ void store_root_value_locked(void** slot, void* value) {
 
 ShadowStack& ensure_shadow_stack() {
   if (thread_shadow_stack) return *thread_shadow_stack;
+  thread_gc_cleanup.arm();
   auto* stack = new (std::nothrow) ShadowStack();
   if (!stack) nrq_runtime_fatal("GC shadow-stack allocation failed");
   {
@@ -1196,10 +1299,47 @@ bool is_pointer_root(const RootInfo& root) {
          root.reference_offsets.size() == 1 && root.reference_offsets[0] == 0;
 }
 
+void add_slot_state(ShadowStack& stack, void* slot, const RootInfo& info,
+                    bool pointer_root) {
+  auto found = stack.slot_states.find(slot);
+  if (found == stack.slot_states.end()) {
+    SlotState state;
+    state.count = 1;
+    state.object_size = info.object_size;
+    state.layout.assign(info.reference_offsets.begin(),
+                        info.reference_offsets.size());
+    state.pointer_root = pointer_root;
+    stack.slot_states.emplace(slot, std::move(state));
+    return;
+  }
+  if (found->second.object_size != info.object_size ||
+      !found->second.layout.matches(info.reference_offsets.begin(),
+                                    info.reference_offsets.size()) ||
+      found->second.pointer_root != pointer_root)
+    nrq_runtime_fatal(
+        "GC root slot was registered with an incompatible layout");
+  ++found->second.count;
+}
+
+void remove_slot_state(ShadowStack& stack, void* slot) {
+  auto found = stack.slot_states.find(slot);
+  if (found == stack.slot_states.end())
+    nrq_runtime_fatal("GC root slot registration bookkeeping is inconsistent");
+  if (--found->second.count == 0) stack.slot_states.erase(found);
+}
+
 bool shadow_has_pointer_root(ShadowStack& stack, void* slot) {
-  // O(1) lookup via the maintained pointer_root_slots set.
-  // pointer_root_slots is thread-local bookkeeping only; no mutex required.
-  return stack.pointer_root_slots.count(slot) != 0;
+  // O(1) lookup in the per-thread slot index. Never read by the collector.
+  auto found = stack.slot_states.find(slot);
+  return found != stack.slot_states.end() && found->second.pointer_root;
+}
+
+ObjectHeader* find_pending_header(MutatorState& mutator, void* object) {
+  for (ObjectHeader* header = mutator.pending_objects; header;
+       header = header->tlab_next) {
+    if (header->object == object) return header;
+  }
+  return nullptr;
 }
 
 }  // namespace
@@ -1253,9 +1393,8 @@ void* nrq_gc_allocate_array_typed_rooted(
   const size_t bytes = count * element_size;
   if (thread_mutator.depth != 0) {
     ShadowStack& stack = ensure_shadow_stack();
-    // O(1) root slot validation using the maintained pointer_root_slots set.
-    // pointer_root_slots is thread-local; no mutex needed for the check.
-    if (!stack.pointer_root_slots.count(root_slot))
+    // O(1) root slot validation through the per-thread slot index.
+    if (!shadow_has_pointer_root(stack, root_slot))
       nrq_runtime_fatal(
           "rooted GC allocation requires a registered pointer root slot");
     // The reader count spans allocation and root publication. The collector
@@ -1276,7 +1415,7 @@ void* nrq_gc_allocate_array_typed_rooted(
 
   std::lock_guard<std::mutex> lock(gc_mutex);
   if (thread_shadow_stack &&
-      !thread_shadow_stack->pointer_root_slots.count(root_slot))
+      !shadow_has_pointer_root(*thread_shadow_stack, root_slot))
     nrq_runtime_fatal(
         "rooted GC allocation requires a registered pointer root slot");
   void* object = allocate_locked(bytes, element_size, nullptr,
@@ -1303,27 +1442,20 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
   RootInfo info;
   info.object_size = object_size;
   try {
-    info.reference_offsets.assign(reference_offsets,
-                                  reference_offsets + reference_count);
+    info.reference_offsets.assign(reference_offsets, reference_count);
   } catch (...) {
     nrq_runtime_fatal("GC root registration failed to allocate root metadata");
   }
 
   ShadowStack& stack = ensure_shadow_stack();
   auto push_root = [&]() {
-    for (const ShadowRoot& entry : stack.roots) {
-      if (entry.slot != slot) continue;
-      if (entry.info.object_size != info.object_size ||
-          entry.info.reference_offsets != info.reference_offsets)
-        nrq_runtime_fatal(
-            "GC root slot was registered with an incompatible layout");
-    }
     try {
       const bool is_ptr_root = is_pointer_root(info);
       stack.roots.push_back(ShadowRoot{slot, std::move(info)});
-      // Maintain the O(1) pointer-root lookup set for rooted-allocation
-      // validation. pointer_root_slots is thread-local; no mutex needed.
-      if (is_ptr_root) stack.pointer_root_slots.insert(slot);
+      // Validate and count this slot in O(1). A slot may be registered more
+      // than once (nested frames or repeated registration); the per-slot count
+      // keeps the pointer-root index alive until the last owner exits.
+      add_slot_state(stack, slot, stack.roots.back().info, is_ptr_root);
     } catch (...) {
       nrq_runtime_fatal("GC root registration failed to track the current thread");
     }
@@ -1378,8 +1510,7 @@ void nrq_gc_root_register_array(void* data, size_t count, size_t element_size,
     root.object_size = count * element_size;
     root.repeated_count = count;
     root.element_size = element_size;
-    root.reference_offsets.assign(reference_offsets,
-                                  reference_offsets + reference_count);
+    root.reference_offsets.assign(reference_offsets, reference_count);
     roots.emplace(data, std::move(root));
   } catch (...) {
     nrq_runtime_fatal("GC array-root registration failed to allocate metadata");
@@ -1418,10 +1549,7 @@ void nrq_gc_root_unregister(void** slot) {
     for (auto entry = stack.roots.rbegin(); entry != stack.roots.rend();
          ++entry) {
       if (entry->slot != slot) continue;
-      // If this was a pointer root, remove it from the O(1) lookup set.
-      // pointer_root_slots is thread-local; no additional mutex needed.
-      if (is_pointer_root(entry->info))
-        stack.pointer_root_slots.erase(slot);
+      remove_slot_state(stack, slot);
       stack.roots.erase(std::next(entry).base());
       return;
     }
@@ -1514,33 +1642,28 @@ void nrq_gc_root_frame_end(uint64_t marker) {
   const size_t target_depth = stack.frames.back().root_depth;
   stack.frames.pop_back();
 
+  // Remove exactly the registrations owned by this frame. Complexities of this
+  // path are proportional to the number of roots the frame leaves behind, not
+  // to all roots still active on the thread.
+  auto remove_owned_roots = [&]() {
+    for (size_t index = target_depth; index < stack.roots.size(); ++index)
+      remove_slot_state(stack, stack.roots[index].slot);
+    stack.roots.resize(target_depth);
+  };
+
   // Shrinking stack.roots requires coordination with the collector, which reads
   // roots under stack.mutex. Use the fast barrier when idle so the collector
   // cannot begin a snapshot between the resize and this function returning.
-  auto rebuild_pointer_root_slots = [&]() {
-    // Rebuild the O(1) lookup set to reflect roots remaining after the resize.
-    // pointer_root_slots is thread-local; no mutex needed for this rebuild.
-    stack.pointer_root_slots.clear();
-    for (const ShadowRoot& r : stack.roots) {
-      if (is_pointer_root(r.info))
-        stack.pointer_root_slots.insert(r.slot);
-    }
-  };
-
   if (begin_fast_barrier()) {
-    // Collector is idle; resize freely without the stack mutex.
-    stack.roots.resize(target_depth);
-    rebuild_pointer_root_slots();
+    std::lock_guard<std::mutex> lock(stack.mutex);
+    remove_owned_roots();
     end_fast_barrier();
     return;
   }
   // Collector is active; hold stack.mutex while shrinking roots so the
   // collector sees a consistent view during its enumeration.
-  {
-    std::lock_guard<std::mutex> lock(stack.mutex);
-    stack.roots.resize(target_depth);
-  }
-  rebuild_pointer_root_slots();
+  std::lock_guard<std::mutex> lock(stack.mutex);
+  remove_owned_roots();
 }
 
 void nrq_gc_enable(void) {
@@ -1582,6 +1705,7 @@ uint64_t nrq_gc_get_major_collection_count(void) {
 void nrq_gc_mutator_enter(void) {
   if (thread_mutator.depth == SIZE_MAX)
     nrq_runtime_fatal("GC mutator nesting depth overflow");
+  thread_gc_cleanup.arm();
   if (thread_mutator.depth++ != 0) return;
 
   std::unique_lock<std::mutex> lock(mutator_mutex);
@@ -1706,8 +1830,15 @@ void nrq_gc_unpin(void* object) {
 void* nrq_gc_pin_transfer(void* object) {
   if (!object) return nullptr;
   std::lock_guard<std::mutex> lock(gc_mutex);
-  if (thread_mutator.depth != 0) publish_tlab_locked(thread_mutator);
-  if (!object_index.find(object)) return nullptr;
+  // A managed return usually refers to an object that is still in this
+  // thread's unpublished TLAB. Publishing the whole pending batch here would
+  // defeat TLAB batching for every helper that returns a managed pointer. The
+  // object is already protected: cycle preparation publishes every registered
+  // mutator's TLAB before enumerating pinned roots, so a pending pin becomes
+  // visible for exactly the collection that needs it.
+  if (!object_index.find(object) &&
+      !find_pending_header(thread_mutator, object))
+    return nullptr;
   if (collection_phase.load(std::memory_order_relaxed) !=
       CollectionPhase::Idle)
     mark_value_locked(object);
