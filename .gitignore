@@ -14,7 +14,8 @@ build/
 toolchain/*
 !toolchain/versions.lock.json
 
-
+tasks/*
+tasks/
 
 out/
 

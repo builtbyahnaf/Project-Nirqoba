@@ -54,6 +54,20 @@ void trace_safepoint_probe(void* object, size_t object_bytes,
   if (index == 0) std::this_thread::sleep_for(std::chrono::milliseconds(10));
 }
 
+void recurse_with_roots(int depth, uint64_t& live_at_bottom) {
+  auto* local = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  const uint64_t frame = nrq_gc_root_frame_begin();
+  nrq_gc_root_register(reinterpret_cast<void**>(&local));
+  if (depth > 1) {
+    recurse_with_roots(depth - 1, live_at_bottom);
+  } else {
+    nrq_gc_collect();
+    live_at_bottom = nrq_gc_get_live_objects();
+  }
+  nrq_gc_root_frame_end(frame);
+  local = nullptr;
+}
+
 }  // namespace
 
 TEST(GcTest, PreservesReachableCyclesAndSweepsAfterRootRemoval) {
@@ -803,4 +817,140 @@ TEST(GcTest, RootedAllocationValidationIsThreadLocal) {
   nrq_gc_root_frame_end(frame);
   nrq_gc_mutator_leave();
   nrq_gc_collect();
+}
+
+TEST(GcTest, DeeplyNestedRootFramesRemoveOnlyOwnedRoots) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  constexpr int kDepth = 128;
+  std::vector<Node*> nodes(kDepth, nullptr);
+  std::vector<uint64_t> frames;
+  frames.reserve(kDepth);
+
+  for (int index = 0; index < kDepth; ++index) {
+    nodes[index] = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+    ASSERT_NE(nodes[index], nullptr);
+    frames.push_back(nrq_gc_root_frame_begin());
+    nrq_gc_root_register(reinterpret_cast<void**>(&nodes[index]));
+  }
+
+  // Ending an inner frame must leave every outer registration intact.
+  for (int index = kDepth - 1; index > 0; --index)
+    nrq_gc_root_frame_end(frames[index]);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{1});
+
+  nrq_gc_root_frame_end(frames[0]);
+  nodes[0] = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
+TEST(GcTest, RecursiveManagedTraversalKeepsAncestorRootsVisible) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  constexpr int kDepth = 64;
+  uint64_t live_at_bottom = 0;
+  recurse_with_roots(kDepth, live_at_bottom);
+  ASSERT_EQ(live_at_bottom, static_cast<uint64_t>(kDepth));
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
+TEST(GcTest, DuplicateRootSlotRegistrationsPreserveOuterOwners) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  void* slot = nullptr;
+  const uint64_t outer = nrq_gc_root_frame_begin();
+  nrq_gc_root_register(&slot);
+
+  const uint64_t inner = nrq_gc_root_frame_begin();
+  nrq_gc_root_register(&slot);  // duplicate registration of the same slot
+  nrq_gc_root_frame_end(inner);
+
+  // The outer frame still owns the slot, so rooted allocation must accept it.
+  auto* replacement =
+      nrq_gc_allocate_array_typed_rooted(&slot, 1, sizeof(uint64_t), nullptr, 0);
+  ASSERT_NE(replacement, nullptr);
+
+  // Two entries inside one frame must both disappear when that frame ends.
+  const uint64_t repeated = nrq_gc_root_frame_begin();
+  nrq_gc_root_register(&slot);
+  nrq_gc_root_register(&slot);
+  nrq_gc_root_frame_end(repeated);
+  ASSERT_NE(nrq_gc_allocate_array_typed_rooted(&slot, 1, sizeof(uint64_t),
+                                               nullptr, 0),
+            nullptr);
+
+  nrq_gc_root_frame_end(outer);
+  slot = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
+TEST(GcTest, EarlyReturnUnwindsRootFrameAndReleasesRoots) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  struct FrameGuard {
+    uint64_t marker;
+    ~FrameGuard() { nrq_gc_root_frame_end(marker); }
+  };
+  void* root = nullptr;
+  bool returned_early = false;
+  try {
+    const uint64_t frame = nrq_gc_root_frame_begin();
+    nrq_gc_root_register(&root);
+    root = nrq_gc_allocate(sizeof(Node), trace_node);
+    ASSERT_NE(root, nullptr);
+    FrameGuard guard{frame};
+    if (root != nullptr) throw 7;  // simulate early-return unwinding
+    returned_early = true;
+  } catch (int value) {
+    ASSERT_EQ(value, 7);
+  }
+  ASSERT_TRUE(!returned_early);
+  root = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
+TEST(GcTest, ThreadTerminationWithActiveRootFramesRemovesDanglingRoots) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  std::thread worker([] {
+    nrq_gc_mutator_enter();
+    void* local = nrq_gc_allocate(sizeof(Node), trace_node);
+    const uint64_t frame = nrq_gc_root_frame_begin();
+    nrq_gc_root_register(&local);
+    (void)frame;  // exit without ending the frame or leaving the mutator
+  });
+  worker.join();
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
+TEST(GcTest, DuplicateRootRegistrationsInConcurrentCollectionStayConsistent) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  std::atomic<bool> stop_collector{false};
+  std::thread collector([&] {
+    while (!stop_collector.load(std::memory_order_acquire)) nrq_gc_collect();
+  });
+
+  for (int iteration = 0; iteration < 200; ++iteration) {
+    void* slot = nullptr;
+    const uint64_t outer = nrq_gc_root_frame_begin();
+    nrq_gc_root_register(&slot);
+    const uint64_t inner = nrq_gc_root_frame_begin();
+    nrq_gc_root_register(&slot);
+    slot = nrq_gc_allocate(sizeof(Node), trace_node);
+    nrq_gc_root_frame_end(inner);
+    nrq_gc_root_frame_end(outer);
+    slot = nullptr;
+  }
+
+  stop_collector.store(true, std::memory_order_release);
+  collector.join();
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
 }
