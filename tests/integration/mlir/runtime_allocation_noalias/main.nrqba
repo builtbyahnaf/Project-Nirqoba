@@ -1,5 +1,9 @@
+int* function allocate_heap() {
+    return memory.allocate<int>(1);
+}
+
 int function main() {
-    var p = memory.allocate<int>(1);
+    var p = allocate_heap();
     memory.deallocate(p);
     return 0;
 }

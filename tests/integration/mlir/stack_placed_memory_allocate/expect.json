@@ -1,0 +1,13 @@
+{
+  "mode": "build",
+  "args": ["--emit=mlir"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "nirqoba.stack_placed",
+    "llvm.alloca %2 x !llvm.array<8 x i8>"
+  ],
+  "expect_stdout_not_contains": [
+    "nrq_memory_allocate",
+    "nrq_memory_deallocate_checked"
+  ]
+}

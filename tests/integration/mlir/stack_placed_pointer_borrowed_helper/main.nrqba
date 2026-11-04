@@ -1,0 +1,11 @@
+void function set_value(borrow mut int* ptr, int val) {
+    ptr[0] = val;
+}
+
+int function main() {
+    var a = memory.allocate<int>(8);
+    set_value(a, 99);
+    print(a[0]);
+    memory.deallocate(a);
+    return 0;
+}
