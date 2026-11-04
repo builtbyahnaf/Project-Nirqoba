@@ -12,6 +12,7 @@
 
 #include "nirqoba/Lowering/NrqDialect.h"
 #include "nirqoba/Lowering/NrqOps.h"
+#include "nirqoba/Lowering/RuntimeAttributes.h"
 
 namespace nirq {
 using namespace std;
@@ -26,8 +27,10 @@ static mlir::LLVM::LLVMFuncOp ensure_runtime_decl(
   mlir::OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToStart(module.getBody());
   auto fnTy = mlir::LLVM::LLVMFunctionType::get(retTy, argTys);
-  return builder.create<mlir::LLVM::LLVMFuncOp>(
+  auto fn = builder.create<mlir::LLVM::LLVMFuncOp>(
       module.getLoc(), symbol, fnTy, mlir::LLVM::Linkage::External);
+  nirq::runtime::apply_runtime_function_attributes(fn, builder);
+  return fn;
 }
 
 static mlir::LLVM::GlobalOp get_or_create_string_global(

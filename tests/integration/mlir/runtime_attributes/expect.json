@@ -1,0 +1,10 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "memory(none)",
+    "memory(errnomem: readwrite)",
+    "nounwind willreturn"
+  ]
+}
