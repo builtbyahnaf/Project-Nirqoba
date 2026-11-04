@@ -295,6 +295,16 @@ static bool runtime_call_consumes_borrow_without_retaining(
   return consumers.count(callee) != 0;
 }
 
+// True when a store moves an ordinary scalar: a number, a boolean or a
+// character. Only those are data. A pointer, a string, a managed reference or
+// an aggregate can carry a pointer, so storing one into memory the caller can
+// still observe publishes that pointer, wherever the value came from.
+static bool store_moves_pointer_free_data(const tir::Op& op) {
+  if (!op.operand.is_valid() || !op.aggregate_elements.empty()) return false;
+  const Type& type = op.operand.type;
+  return type.is_numeric() || type.is_bool() || type.is_char();
+}
+
 static bool borrowed_pointer_parameter_does_not_escape(
     const tir::Function& function, std::size_t parameter_index,
     const BorrowedEscapeSummary& summary) {
@@ -346,8 +356,13 @@ static bool borrowed_pointer_parameter_does_not_escape(
       const bool local_store = local_slots.count(op.lhs.id) &&
                                data_pointers.count(op.operand.id);
       if (local_store) continue;
-      // Storing data through pointer: lhs is data pointer, operand is not a pointer
-      if (data_pointers.count(op.lhs.id) && !data_pointers.count(op.operand.id))
+      // Storing through the pointer: the pointer is not captured by that, but
+      // only a plain scalar is data. A pointer, string, managed reference or
+      // aggregate written here would be published into memory the caller can
+      // still reach, which is an escape regardless of where the value came
+      // from.
+      if (data_pointers.count(op.lhs.id) && !data_pointers.count(op.operand.id) &&
+          store_moves_pointer_free_data(op))
         continue;
       return false;
     }
