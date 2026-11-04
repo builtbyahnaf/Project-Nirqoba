@@ -1,0 +1,13 @@
+// Returning the borrow is not a capture, but it does make the caller's pointer
+// outlive the callee, so the argument keeps `readonly` and must not claim
+// `nocapture`.
+borrow source byte* function alias(borrow byte* source) {
+    return source;
+}
+
+byte function main() {
+    var owner = memory.allocate<byte>(1);
+    owner[0] = 42u8;
+    let view = alias(owner);
+    return view[0];
+}

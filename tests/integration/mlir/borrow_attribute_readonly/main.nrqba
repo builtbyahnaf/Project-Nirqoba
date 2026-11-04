@@ -1,0 +1,17 @@
+// A borrowed pointer that the body only reads keeps both promises: the stores
+// it performs go through the mutable borrow, and every value loaded from `src`
+// is a plain scalar, which is data and not a published pointer.
+void function copy_scaled(borrow mut int* dst, borrow int* src) {
+    dst[0] = src[0] * 2;
+}
+
+int function main() {
+    var a = memory.allocate<int>(1);
+    var b = memory.allocate<int>(1);
+    a[0] = 21;
+    copy_scaled(b, a);
+    print(b[0]);
+    memory.deallocate(a);
+    memory.deallocate(b);
+    return 0;
+}
