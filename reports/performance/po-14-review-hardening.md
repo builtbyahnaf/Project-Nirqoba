@@ -468,3 +468,14 @@ emitted the branch and the caller falls back to the plain one.
 - The counter is shared by every loop in the function, so a nested loop advances
   the same counter and the effective interval per loop varies with the mix of
   loop nestings. It is still bounded by 64 crossings in total.
+
+---
+
+## Follow-up — the version-string drift is gone
+
+The `positive/memory_advanced` failure quoted throughout this report was not a
+compiler defect: it asserted `0.105-beta-phase6`, while the runtime has reported
+`0.111-beta-phase6` since the phase-6 runtime bump (see
+`docs/architecture/06-runtime.md`). The expectation now names the version the
+runtime actually prints, so the integration suite is 195/195 with no known
+failures.
