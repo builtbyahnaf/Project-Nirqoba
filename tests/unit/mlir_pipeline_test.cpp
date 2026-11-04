@@ -72,6 +72,43 @@ module {
 }
 )mlir";
 
+// A body for each memory-effect outcome the inference pass must distinguish:
+//
+//   * `pure` performs arithmetic only, so it may not touch any memory;
+//   * `reader` loads through its pointer argument, so it reads argument memory
+//     and nothing else;
+//   * `spilled` spills that argument into a stack slot and reads it back, the
+//     shape the toolchain generates for every local; the slot must not erase
+//     the argument provenance, and the slot itself is inaccessible memory;
+//   * `opaque_caller` calls a function with no known effects, so it must keep
+//     the default (no attribute) rather than promise anything.
+constexpr const char* kMemoryEffectProbe = R"mlir(
+module {
+  llvm.func @opaque()
+  llvm.func @pure(%x : i64) -> i64 {
+    %two = llvm.mlir.constant(2 : i64) : i64
+    %product = llvm.mul %x, %two : i64
+    llvm.return %product : i64
+  }
+  llvm.func @reader(%p : !llvm.ptr) -> i64 {
+    %value = llvm.load %p : !llvm.ptr -> i64
+    llvm.return %value : i64
+  }
+  llvm.func @spilled(%p : !llvm.ptr) -> i64 {
+    %one = llvm.mlir.constant(1 : i64) : i64
+    %slot = llvm.alloca %one x !llvm.ptr : (i64) -> !llvm.ptr
+    llvm.store %p, %slot : !llvm.ptr, !llvm.ptr
+    %reloaded = llvm.load %slot : !llvm.ptr -> !llvm.ptr
+    %value = llvm.load %reloaded : !llvm.ptr -> i64
+    llvm.return %value : i64
+  }
+  llvm.func @opaque_caller() {
+    llvm.call @opaque() : () -> ()
+    llvm.return
+  }
+}
+)mlir";
+
 struct Fixture {
   mlir::DialectRegistry registry;
   unique_ptr<mlir::MLIRContext> context;
@@ -108,6 +145,26 @@ struct ConstantFixture {
                                                      context.get());
   }
 };
+
+struct MemoryEffectFixture {
+  mlir::DialectRegistry registry;
+  unique_ptr<mlir::MLIRContext> context;
+  mlir::OwningOpRef<mlir::ModuleOp> module;
+
+  MemoryEffectFixture() {
+    nirq::register_all_dialects(registry);
+    context = make_unique<mlir::MLIRContext>(registry);
+    context->loadAllAvailableDialects();
+    module = mlir::parseSourceString<mlir::ModuleOp>(kMemoryEffectProbe,
+                                                     context.get());
+  }
+
+  mlir::LLVM::LLVMFuncOp function(llvm::StringRef name) {
+    return module->lookupSymbol<mlir::LLVM::LLVMFuncOp>(name);
+  }
+};
+
+using mlir::LLVM::ModRefInfo;
 
 }  // namespace
 
@@ -208,4 +265,46 @@ TEST(MlirPipelineTest, O0PipelineKeepsDirectLoweringShape) {
   // Even at -O0 the mandatory nrq lowering produces the runtime call, so the
   // side-effect count must equal the optimized case.
   ASSERT_EQ(count_operations(*fixture.module, "llvm.call"), 3);
+}
+
+TEST(MlirPipelineTest, InfersFunctionMemoryEffectsFromProvenance) {
+  MemoryEffectFixture fixture;
+  ASSERT_TRUE(static_cast<bool>(fixture.module));
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*fixture.module)));
+
+  mlir::PassManager pass_manager(fixture.context.get());
+  nirq::build_lowering_pipeline(pass_manager, /*optimize=*/false);
+  ASSERT_TRUE(mlir::succeeded(pass_manager.run(*fixture.module)));
+
+  auto pure = fixture.function("pure");
+  ASSERT_TRUE(static_cast<bool>(pure));
+  auto pure_effects = pure.getMemoryEffectsAttr();
+  ASSERT_TRUE(static_cast<bool>(pure_effects));
+  ASSERT_EQ(pure_effects.getOther(), ModRefInfo::NoModRef);
+  ASSERT_EQ(pure_effects.getArgMem(), ModRefInfo::NoModRef);
+  ASSERT_EQ(pure_effects.getInaccessibleMem(), ModRefInfo::NoModRef);
+
+  auto reader = fixture.function("reader");
+  ASSERT_TRUE(static_cast<bool>(reader));
+  auto reader_effects = reader.getMemoryEffectsAttr();
+  ASSERT_TRUE(static_cast<bool>(reader_effects));
+  ASSERT_EQ(reader_effects.getArgMem(), ModRefInfo::Ref);
+  ASSERT_EQ(reader_effects.getOther(), ModRefInfo::NoModRef);
+
+  // Spilling the argument into a stack slot must not lose its provenance: the
+  // load through the reloaded pointer still reads argument memory, and the slot
+  // itself is inaccessible memory the caller cannot name.
+  auto spilled = fixture.function("spilled");
+  ASSERT_TRUE(static_cast<bool>(spilled));
+  auto spilled_effects = spilled.getMemoryEffectsAttr();
+  ASSERT_TRUE(static_cast<bool>(spilled_effects));
+  ASSERT_EQ(spilled_effects.getArgMem(), ModRefInfo::Ref);
+  ASSERT_EQ(spilled_effects.getOther(), ModRefInfo::NoModRef);
+  ASSERT_EQ(spilled_effects.getInaccessibleMem(), ModRefInfo::ModRef);
+
+  // A callee with unknown effects poisons the summary, so the caller keeps the
+  // conservative default instead of claiming it touches nothing.
+  auto caller = fixture.function("opaque_caller");
+  ASSERT_TRUE(static_cast<bool>(caller));
+  ASSERT_FALSE(static_cast<bool>(caller.getMemoryEffectsAttr()));
 }
