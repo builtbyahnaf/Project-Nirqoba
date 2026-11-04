@@ -119,3 +119,76 @@ pass (the failure is the pre-existing `memory_advanced` version-string drift).
 - `runtime_call_consumes_borrow_without_retaining` is a curated list and an
   assertion about the runtime ABI. A new resource operation that is missing from
   it loses `nocapture` (pessimisation) rather than gaining a false promise.
+
+---
+
+## F3 — The escape scan could not tell a scalar store from a published pointer
+
+**Status:** fixed.
+
+### Problem
+
+`borrowed_pointer_parameter_does_not_escape` accepted every store whose
+destination was the borrowed pointer and whose value was not pointer-derived:
+
+```cpp
+// Storing data through pointer: lhs is data pointer, operand is not a pointer
+if (data_pointers.count(op.lhs.id) && !data_pointers.count(op.operand.id))
+  continue;
+```
+
+The comment states the intent — "the operand is not a pointer" — but the
+condition never checked it. `data_pointers` is the set of values *derived from
+this parameter*, so an unrelated pointer, a string, a managed reference or an
+aggregate all satisfy `!data_pointers.count(operand)` and were treated as plain
+data. Writing a pointer through a borrowed handle publishes it into memory the
+caller can still observe, which is an escape by any reading of `nocapture`.
+
+### Root cause
+
+The predicate answers two different questions with one test: "is the destination
+the borrowed pointer?" (about capture of *this* argument) and "is the value
+being moved plain data?" (about what is being published). Only the first was
+checked.
+
+### Change
+
+`store_moves_pointer_free_data(op)` now decides the second question: a store is
+plain data only when the value is a number, boolean or character, has no
+aggregate elements and is valid. Anything else falls through to `return false`,
+i.e. the parameter escapes and loses `nocapture` (and, with F2, cannot be
+promoted on the strength of this summary).
+
+The `array_view` variant of the analysis was already correct — it marks a store
+whose operand is a data pointer as an escape — so the two variants now agree.
+
+### Why it is correct
+
+- The rule is a strict weakening of the old one: a program that satisfied the
+  old condition with a scalar still satisfies the new condition, and every case
+  that changed verdict was a pointer-carrying value, which is exactly the case
+  the old comment intended to exclude.
+- The emitted ``nocapture``/``readonly`` attributes are unchanged across all 108
+  integration programs (verified with the same attribute diff as F2), because
+  the programs that would exercise the removed hole are rejected by the checker
+  before lowering.
+
+### Verification
+
+- `tests/integration/negative/borrowed_view_pointer_store/` pins the checker
+  invariant the analysis leans on: storing a pointer through a borrowed view is
+  rejected (`owned, shared, and borrowed pointers cannot be stored in aggregate
+  fields`). Without that invariant the analysis would have to be far more
+  conservative.
+- Attribute diff over the whole suite: no differences.
+- Suite results: 118/118 unit tests and 193/194 integration tests pass
+  (`memory_advanced` version-string drift is pre-existing).
+
+### Known limitations
+
+- The hole is not reachable through the current language, so no program can
+  distinguish the old analysis from the new one. The fix removes the reliance on
+  a comment for a correctness property.
+- `store_moves_pointer_free_data` decides by TIR type. A future opaque
+  scalar type would need an explicit entry here, and the safe default is
+  "not data".
