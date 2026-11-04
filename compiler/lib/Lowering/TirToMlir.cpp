@@ -1384,6 +1384,7 @@ class FunctionTranslator {
       const tir::Op& op = operations[index];
       if (!translate_op(op)) return false;
     }
+    attach_cold_blocks();
     flush_gc_root_registrations();
     return true;
   }
@@ -1426,12 +1427,25 @@ class FunctionTranslator {
     mlir::Value in_bounds = builder_.create<mlir::LLVM::ICmpOp>(
         loc, mlir::LLVM::ICmpPredicate::ult, index, length).getResult();
 
-    mlir::Block* fail_block = func_op_.addBlock();
     mlir::Block* continue_block = func_op_.addBlock();
     builder_.create<mlir::LLVM::CondBrOp>(loc, in_bounds, continue_block,
-                                           fail_block);
+                                           bounds_fail_block());
+    builder_.setInsertionPointToStart(continue_block);
+  }
 
-    builder_.setInsertionPointToStart(fail_block);
+  // One cold failure block serves every bounds check in the function. The
+  // message, call and unreachable are identical for all of them, and giving each
+  // check its own block tripled the block count of bounds-checked code, which
+  // then had to be laid out, verified and merged by every later pass. The block
+  // is built on first use and attached at the end of the body, so the hot blocks
+  // stay contiguous.
+  mlir::Block* bounds_fail_block() {
+    if (bounds_fail_block_) return bounds_fail_block_;
+    mlir::Block* block = new mlir::Block();
+    bounds_fail_block_ = block;
+    mlir::OpBuilder::InsertionGuard guard(builder_);
+    builder_.setInsertionPointToStart(block);
+    const mlir::Location loc = mlir::UnknownLoc::get(ctx_);
     auto fail_fn = ensure_runtime_fn(
         module_, builder_, "nrq_memory_array_bounds_fail",
         mlir::LLVM::LLVMVoidType::get(ctx_), {});
@@ -1440,8 +1454,14 @@ class FunctionTranslator {
     fail_fn.setNoUnwind(true);
     builder_.create<mlir::LLVM::CallOp>(loc, fail_fn, mlir::ValueRange{});
     builder_.create<mlir::LLVM::UnreachableOp>(loc);
+    return block;
+  }
 
-    builder_.setInsertionPointToStart(continue_block);
+  // Cold blocks are built detached so they can be appended once the whole body
+  // exists; a block has to live in the function's region to be a branch target.
+  void attach_cold_blocks() {
+    if (!bounds_fail_block_) return;
+    func_op_.getBody().push_back(bounds_fail_block_);
   }
 
   void emit_gc_safepoint(mlir::Location loc) {
@@ -3512,6 +3532,7 @@ class FunctionTranslator {
   int string_literal_counter_ = 0;
   std::size_t current_operation_index_ = 0;
   mlir::Value gc_root_frame_marker_;
+  mlir::Block* bounds_fail_block_ = nullptr;
 };
 
 // The Windows CRT calls `main(int argc, char** argv)`. A Nirqoba entry point
