@@ -1,0 +1,24 @@
+// Every stack slot is allocated in the entry block, so a loop that allocates
+// and profiles does not extend its frame once per iteration. Allocating these
+// slots at their use site made this program exhaust its stack, which is why the
+// iteration count is part of the test: 200000 iterations times the profiler
+// slot alone is far more than a default 1 MiB frame.
+
+struct Node {
+    int value;
+    managed<Node> next;
+}
+
+int function main() {
+    var total = 0;
+    var i = 0;
+    while (i < 200000) {
+        var node = array.allocate<Node>(1);
+        node[0].value = 1;
+        var profile = memory.profiler.capture();
+        total += node[0].value;
+        i += 1;
+    }
+    print(total);
+    return 0;
+}

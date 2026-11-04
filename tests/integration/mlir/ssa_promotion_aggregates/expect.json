@@ -1,0 +1,11 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O3"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "define noundef i64 @main"
+  ],
+  "expect_stdout_not_contains": [
+    "alloca"
+  ]
+}
