@@ -1,0 +1,9 @@
+int function main() {
+    var s = math.sqrt(25.0);
+    var v = math.sin(0.0);
+    var t = time.now();
+    print(s);
+    print(v);
+    print(t);
+    return 0;
+}

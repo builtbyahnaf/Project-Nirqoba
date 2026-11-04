@@ -19,6 +19,7 @@
 #include "nirqoba/Diagnostics/Diagnostic.h"
 #include "nirqoba/Lowering/NrqDialect.h"
 #include "nirqoba/Lowering/NrqOps.h"
+#include "nirqoba/Lowering/RuntimeAttributes.h"
 
 namespace nirq {
 using namespace std;
@@ -557,8 +558,10 @@ static mlir::LLVM::LLVMFuncOp ensure_runtime_fn(
   mlir::OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToStart(module.getBody());
   auto fnTy = mlir::LLVM::LLVMFunctionType::get(retTy, argTys);
-  return builder.create<mlir::LLVM::LLVMFuncOp>(
+  auto fn = builder.create<mlir::LLVM::LLVMFuncOp>(
       module.getLoc(), symbol, fnTy, mlir::LLVM::Linkage::External);
+  nirq::runtime::apply_runtime_function_attributes(fn, builder);
+  return fn;
 }
 
 class FunctionTranslator {
@@ -2103,7 +2106,14 @@ class FunctionTranslator {
           auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_deallocate_checked",
                                      mlir::LLVM::LLVMVoidType::get(ctx_),
                                      {llvm_ptr_type(ctx_)});
-          if (!args.empty()) builder_.create<mlir::LLVM::CallOp>(loc, fn, args);
+          if (!args.empty()) {
+            mlir::Value pointer = args[0];
+            if (!mlir::isa<mlir::LLVM::LLVMPointerType>(pointer.getType())) {
+              pointer = builder_.create<mlir::LLVM::IntToPtrOp>(
+                  loc, llvm_ptr_type(ctx_), pointer).getResult();
+            }
+            builder_.create<mlir::LLVM::CallOp>(loc, fn, mlir::ValueRange{pointer});
+          }
           return true;
         }
         if (op.callee == "nrq_memory_allocate" || op.callee == "memory.allocate") {
@@ -2119,15 +2129,27 @@ class FunctionTranslator {
           return true;
         }
         if (op.callee == "nrq_memory_deallocate") {
-          if (!args.empty()) {
-            args[0] = builder_.create<mlir::LLVM::IntToPtrOp>(
-                loc, llvm_ptr_type(ctx_), args[0]).getResult();
+          if (args.size() >= 3) {
+            mlir::Value pointer = args[0];
+            if (!mlir::isa<mlir::LLVM::LLVMPointerType>(pointer.getType())) {
+              pointer = builder_.create<mlir::LLVM::IntToPtrOp>(
+                  loc, llvm_ptr_type(ctx_), pointer).getResult();
+            }
+            auto coerce_i64 = [&](mlir::Value val) -> mlir::Value {
+              if (val.getType() == builder_.getI64Type()) return val;
+              const unsigned bits = val.getType().getIntOrFloatBitWidth();
+              return bits < 64
+                  ? builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), val).getResult()
+                  : builder_.create<mlir::LLVM::TruncOp>(loc, builder_.getI64Type(), val).getResult();
+            };
+            mlir::Value bytes = coerce_i64(args[1]);
+            mlir::Value align = coerce_i64(args[2]);
+            auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_deallocate",
+                                       mlir::LLVM::LLVMVoidType::get(ctx_),
+                                       {llvm_ptr_type(ctx_), builder_.getI64Type(),
+                                        builder_.getI64Type()});
+            builder_.create<mlir::LLVM::CallOp>(loc, fn, mlir::ValueRange{pointer, bytes, align});
           }
-          auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_deallocate",
-                                     mlir::LLVM::LLVMVoidType::get(ctx_),
-                                     {llvm_ptr_type(ctx_), builder_.getI64Type(),
-                                      builder_.getI64Type()});
-          builder_.create<mlir::LLVM::CallOp>(loc, fn, args);
           return true;
         }
         if (op.callee == "gc.get_statistics") {
@@ -2178,7 +2200,7 @@ class FunctionTranslator {
                         : "nrq_gc_collect";
           auto fn = ensure_runtime_fn(module_, builder_, runtime_sym,
                                      mlir::LLVM::LLVMVoidType::get(ctx_), {});
-          builder_.create<mlir::LLVM::CallOp>(loc, fn, args);
+          builder_.create<mlir::LLVM::CallOp>(loc, fn, mlir::ValueRange{});
           return true;
         }
 

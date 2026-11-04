@@ -1,0 +1,5 @@
+int function main() {
+    var p = memory.allocate<int>(1);
+    memory.deallocate(p);
+    return 0;
+}
