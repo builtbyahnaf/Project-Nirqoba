@@ -487,3 +487,72 @@ int function main() {
   ASSERT_EQ(failure_calls, 1u);
   ASSERT_TRUE(guard_branches >= 3u);
 }
+
+// A back edge used to call the safepoint on every crossing. The poll is now
+// throttled by a counter in an entry-block slot, so the call sits in a block that
+// only one conditional branch reaches and the loop keeps a scalar carry instead
+// of a call per iteration.
+TEST(MlirPipelineTest, ThrottlesGcSafepointOnLoopBackEdges) {
+  constexpr const char* source = R"nrqba(
+managed<byte> function make_value() {
+    return array.allocate<byte>(8);
+}
+
+int function main(string[] args) {
+    var value = make_value();
+    var count = 0;
+    var limit = args.length + 1000;
+    while (count < limit) {
+        count += 1;
+    }
+    gc.collect();
+    print(count);
+    return 0;
+}
+)nrqba";
+
+  mlir::DialectRegistry registry;
+  nirq::register_all_dialects(registry);
+  mlir::MLIRContext context(registry);
+  context.loadAllAvailableDialects();
+  nirq::DiagnosticEngine diagnostics;
+
+  auto module = lower_source_to_mlir(source, context, diagnostics);
+  ASSERT_FALSE(diagnostics.has_errors());
+  ASSERT_TRUE(static_cast<bool>(module));
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*module)));
+
+  unsigned safepoint_calls = 0;
+  unsigned masked_counters = 0;
+  unsigned guarded_poll_blocks = 0;
+  module->walk([&](mlir::func::FuncOp function) {
+    function.walk([&](mlir::LLVM::CallOp call) {
+      const auto callee = call.getCallee();
+      if (!callee || callee->str() != "nrq_gc_safepoint") return;
+      ++safepoint_calls;
+      // The callee is noreturn-free but the poll must stay off the hot path:
+      // exactly one predecessor, and it is the conditional that guards it.
+      mlir::Block* block = call->getBlock();
+      unsigned predecessors = 0;
+      bool guarded_by_condition = false;
+      for (mlir::Block* predecessor : block->getPredecessors()) {
+        ++predecessors;
+        if (auto branch = mlir::dyn_cast<mlir::LLVM::CondBrOp>(
+                predecessor->getTerminator()))
+          guarded_by_condition =
+              branch.getTrueDest() == block || branch.getFalseDest() == block;
+      }
+      if (predecessors == 1 && guarded_by_condition) ++guarded_poll_blocks;
+    });
+    function.walk([&](mlir::LLVM::AndOp and_op) {
+      auto mask = and_op.getRhs().getDefiningOp<mlir::LLVM::ConstantOp>();
+      if (mask && mlir::cast<mlir::IntegerAttr>(mask.getValue()).getInt() == 63)
+        ++masked_counters;
+    });
+  });
+
+  // One poll site, guarded by one counter update.
+  ASSERT_EQ(safepoint_calls, 1u);
+  ASSERT_EQ(masked_counters, 1u);
+  ASSERT_EQ(guarded_poll_blocks, 1u);
+}
