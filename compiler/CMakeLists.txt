@@ -90,6 +90,7 @@ add_library(nirqoba_compiler_lib STATIC
   # Backend
   lib/Backend/ObjectEmitter.cpp
   lib/Backend/Optimization.cpp
+  lib/Backend/TargetInfo.cpp
 
   # Driver
   lib/Driver/LinkerEnvironment.cpp

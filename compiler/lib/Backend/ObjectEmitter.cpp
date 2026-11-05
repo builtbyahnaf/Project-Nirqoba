@@ -1,6 +1,5 @@
 #include "nirqoba/Backend/ObjectEmitter.h"
 #include "nirqoba/Backend/TargetInfo.h"
-#include "nirqoba/Version.h"  // NIRQOBA_DEFAULT_TARGET_TRIPLE
 
 #include <algorithm>
 #include <string>
@@ -25,13 +24,6 @@
 
 namespace nirq {
 using namespace std;
-
-string default_target_triple() {
-  // The Windows x64 target is the supported release target. The triple can be
-  // overridden on the command line for experimentation, but the packaged
-  // runtime is still a Windows static library.
-  return NIRQOBA_DEFAULT_TARGET_TRIPLE;
-}
 
 namespace {
 
@@ -97,13 +89,9 @@ unique_ptr<llvm::TargetMachine> create_target_machine(
 
   string cpu = options.target_cpu.empty() ? "generic" : options.target_cpu;
   string features = options.target_features;
-  if (options.host_cpu || cpu == "native") {
+  if (options.target_profile == TargetProfile::Native) {
     cpu = llvm::sys::getHostCPUName().str();
-    const string detected = host_feature_string();
-    if (!detected.empty()) {
-      if (!features.empty()) features.push_back(',');
-      features += detected;
-    }
+    features = host_feature_string();
   }
 
   llvm::TargetOptions target_options;

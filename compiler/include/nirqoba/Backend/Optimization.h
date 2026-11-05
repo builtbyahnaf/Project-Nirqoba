@@ -29,6 +29,27 @@ enum class OptimizationLevel {
   Oz,
 };
 
+// How much hardware-specific knowledge the backend may use.
+//
+// Portable keeps the published x86-64 baseline so the object runs on any
+// x86-64 Windows machine. Native replaces the CPU and feature set with the
+// host's, which is faster but must not be shipped as a universal binary.
+// Explicit uses the CPU/features/triple named by the developer, for a known
+// deployment target. The profile is resolved and validated once, before the
+// target machine and optimization pipeline are created.
+enum class TargetProfile {
+  Portable,
+  Native,
+  Explicit,
+};
+
+// Returns the spelling accepted on the command line ("portable", "native",
+// "explicit").
+std::string_view target_profile_name(TargetProfile profile);
+
+// Parses a target profile spelling. Returns false for an unknown name.
+bool parse_target_profile(std::string_view text, TargetProfile& profile);
+
 // Returns the spelling accepted on the command line (for example "-O2").
 std::string_view optimization_level_name(OptimizationLevel level);
 
@@ -53,14 +74,19 @@ enum class RemarkMode {
 struct OptimizationOptions {
   OptimizationLevel level = OptimizationLevel::O2;
 
+  // Which target profile the backend should honour. `Portable` ignores the
+  // CPU/features fields, `Native` derives them from the host, and `Explicit`
+  // uses them exactly as given.
+  TargetProfile target_profile = TargetProfile::Portable;
+
   // Empty means the platform default triple (x86_64-pc-windows-msvc).
   std::string target_triple;
 
   // "generic" keeps the object portable. A named CPU selects that model, and
-  // `host_cpu` replaces both fields with the host CPU and its feature set.
+  // the `Native` profile replaces both fields with the host CPU and its
+  // feature set.
   std::string target_cpu = "generic";
   std::string target_features;
-  bool host_cpu = false;
 
   // Optimization-remark reporting, selected by `--remarks`.
   RemarkMode remarks = RemarkMode::None;
