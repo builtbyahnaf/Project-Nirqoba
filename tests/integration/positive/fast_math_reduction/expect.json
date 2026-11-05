@@ -1,0 +1,6 @@
+{
+  "mode": "build_and_run",
+  "args": ["--fast-math"],
+  "expect_exit": 0,
+  "expect_stdout_contains": ["85344"]
+}

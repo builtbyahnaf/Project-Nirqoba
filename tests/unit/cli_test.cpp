@@ -173,3 +173,20 @@ TEST(CliTest, ParsesRemarkModes) {
     ASSERT_FALSE(parse_command_line(4, argv, opts, err));
   }
 }
+
+TEST(CliTest, ParsesFastMath) {
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", "--fast-math"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(4, argv, opts, err));
+    ASSERT_TRUE(opts.fast_math);
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(3, argv, opts, err));
+    ASSERT_FALSE(opts.fast_math);
+  }
+}

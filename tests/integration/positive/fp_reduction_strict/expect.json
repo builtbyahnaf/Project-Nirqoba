@@ -1,0 +1,6 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O2"],
+  "expect_exit": 0,
+  "expect_stdout_not_contains": ["reassoc"]
+}

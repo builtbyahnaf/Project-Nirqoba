@@ -21,9 +21,13 @@ namespace nirq {
 // Preconditions:
 //   - `tir_module` has passed verify_tir_module() with no errors.
 //   - The nrq dialect and func dialect are registered in `context`.
+//
+// `fast_math` opts floating-point arithmetic into reassociation and FMA
+// contraction; the default leaves IEEE semantics strict.
 mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     const tir::Module& tir_module,
     mlir::MLIRContext& context,
-    DiagnosticEngine& diagnostics);
+    DiagnosticEngine& diagnostics,
+    bool fast_math = false);
 
 }  // namespace nirq

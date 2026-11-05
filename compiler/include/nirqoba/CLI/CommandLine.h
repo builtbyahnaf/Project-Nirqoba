@@ -42,6 +42,9 @@ struct CommandLineOptions {
   bool emit_remarks = false;
   bool remarks_missed_only = false;
   std::string remark_filter;
+  // `--fast-math` allows reassociation and FMA contraction of floating-point
+  // arithmetic so reductions can vectorize; the default keeps strict semantics.
+  bool fast_math = false;
   std::vector<std::string> trailing_args;  // For `nirqoba run ... -- args`
 };
 

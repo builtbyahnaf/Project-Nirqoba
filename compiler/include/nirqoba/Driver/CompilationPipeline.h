@@ -45,6 +45,7 @@ struct PipelineOptions {
   bool emit_remarks = false;
   bool remarks_missed_only = false;
   std::string remark_filter;
+  bool fast_math = false;
 };
 
 // Runs the compilation pipeline as directed by `options`. Returns 0 on

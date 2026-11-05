@@ -1,0 +1,6 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O2", "--fast-math"],
+  "expect_exit": 0,
+  "expect_stdout_contains": ["fadd reassoc contract <2 x double>"]
+}
