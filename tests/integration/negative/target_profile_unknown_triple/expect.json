@@ -1,0 +1,6 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O2", "--target-profile=explicit", "--target", "not-a-real-target"],
+  "expect_exit": 1,
+  "expect_stderr_contains": ["[NRQ5002]", "unsupported target triple"]
+}

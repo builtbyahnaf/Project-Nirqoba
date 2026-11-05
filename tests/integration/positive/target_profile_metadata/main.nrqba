@@ -1,0 +1,25 @@
+// A floating-point dot product over heap arrays. Reassociating the accumulation
+// is what lets LLVM vectorize the reduction, so `--fast-math` is required for the
+// wide version; the values are chosen so the sum is exact either way.
+f64 function dot(int count, f64 scale) {
+    var a = memory.owned_array<f64>(count);
+    var b = memory.owned_array<f64>(count);
+    var i = 0;
+    while (i < count) {
+        a[i] = i as f64;
+        b[i] = (i as f64) * scale;
+        i += 1;
+    }
+    var sum = 0.0;
+    var j = 0;
+    while (j < count) {
+        sum += a[j] * b[j];
+        j += 1;
+    }
+    return sum;
+}
+
+int function main() {
+    print(dot(64, 1.0));
+    return 0;
+}

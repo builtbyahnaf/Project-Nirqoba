@@ -1,0 +1,4 @@
+int function main() {
+    print("Hello, Nirqoba!");
+    return 0;
+}

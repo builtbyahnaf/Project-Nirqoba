@@ -1,0 +1,6 @@
+{
+  "mode": "assembly_check",
+  "args": ["--emit=obj", "-O2", "--target-profile=explicit", "--target-cpu=znver4"],
+  "expect_exit": 0,
+  "expect_asm_contains": ["zmm"]
+}

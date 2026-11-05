@@ -1,0 +1,10 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O2", "--native"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "!\"nrqoba.target.profile\", !\"native\"",
+    "!\"nrqoba.target.triple\""
+  ],
+  "expect_stdout_not_contains": ["!\"nrqoba.target.cpu\", !\"generic\""]
+}

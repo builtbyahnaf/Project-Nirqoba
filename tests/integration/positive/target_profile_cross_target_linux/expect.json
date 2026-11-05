@@ -1,0 +1,14 @@
+{
+  "mode": "assembly_check",
+  "args": [
+    "--emit=obj",
+    "-O2",
+    "--target-profile=explicit",
+    "--target",
+    "x86_64-unknown-linux-gnu",
+    "--target-cpu=x86-64-v3"
+  ],
+  "expect_exit": 0,
+  "expect_asm_contains": ["file format elf64-x86-64", "ymm"],
+  "expect_asm_not_contains": ["zmm"]
+}
