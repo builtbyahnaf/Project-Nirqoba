@@ -25,6 +25,70 @@ namespace nirq {
 using namespace std;
 namespace {
 
+static uint64_t type_alignment(const Type& type);
+
+// Nirqoba aggregates are layout-private: the language has no FFI, `sizeof`,
+// unions or type punning, so no code the compiler does not lower itself can
+// observe a struct's byte layout. Fields are therefore stored widest-alignment
+// first (declaration order breaking ties), which removes interior padding and
+// keeps 8-byte fields on naturally aligned offsets. Every consumer of that
+// layout - the LLVM type, GEP indices, aggregate pack/extract order, the size
+// and the GC reference offsets - must go through these helpers so the views
+// cannot drift apart.
+static std::vector<std::size_t> aggregate_physical_order(const Type& type) {
+  std::vector<std::size_t> order;
+  std::vector<uint64_t> alignments;
+  if (type.is_struct()) {
+    for (const auto& field : type.struct_fields()) {
+      alignments.push_back(type_alignment(field.second));
+    }
+  } else if (type.is_tuple()) {
+    for (const Type& field : type.tuple_elements()) {
+      alignments.push_back(type_alignment(field));
+    }
+  } else {
+    return order;
+  }
+  order.resize(alignments.size());
+  for (std::size_t index = 0; index < order.size(); ++index) order[index] = index;
+  std::stable_sort(order.begin(), order.end(), [&](std::size_t lhs, std::size_t rhs) {
+    return alignments[lhs] > alignments[rhs];
+  });
+  return order;
+}
+
+// Declaration index -> index of the same field in the physical layout.
+static int aggregate_physical_index(const Type& type, int declaration_index) {
+  if (declaration_index < 0) return declaration_index;
+  const std::vector<std::size_t> order = aggregate_physical_order(type);
+  for (std::size_t physical = 0; physical < order.size(); ++physical) {
+    if (order[physical] == static_cast<std::size_t>(declaration_index)) {
+      return static_cast<int>(physical);
+    }
+  }
+  return declaration_index;
+}
+
+// Physical index -> declaration index, i.e. the inverse of the above.
+static int aggregate_declaration_index(const Type& type, std::size_t physical_index) {
+  const std::vector<std::size_t> order = aggregate_physical_order(type);
+  if (physical_index >= order.size()) return static_cast<int>(physical_index);
+  return static_cast<int>(order[physical_index]);
+}
+
+// Appends the declaration type of every field, in physical layout order.
+static void for_each_field_in_layout_order(
+    const Type& type, const std::function<void(const Type&)>& visit) {
+  const std::vector<std::size_t> order = aggregate_physical_order(type);
+  for (std::size_t physical : order) {
+    if (type.is_struct()) {
+      visit(type.struct_fields()[physical].second);
+    } else {
+      visit(type.tuple_elements()[physical]);
+    }
+  }
+}
+
 static mlir::Type tir_type_to_mlir(const Type& type, mlir::MLIRContext* ctx,
                                    mlir::Builder& builder) {
   if (type.is_bool()) return builder.getI1Type();
@@ -60,31 +124,24 @@ static mlir::Type tir_type_to_mlir(const Type& type, mlir::MLIRContext* ctx,
     if (!elem) return {};
     return mlir::LLVM::LLVMArrayType::get(elem, static_cast<unsigned>(type.array_length()));
   }
-  if (type.is_tuple()) {
+  if (type.is_tuple() || type.is_struct()) {
+    const bool is_struct = type.is_struct();
+    if (!is_struct && type.tuple_elements().empty()) return {};
+    if (is_struct && type.struct_fields().empty()) {
+      // Opaque struct type by name — fields will be resolved during a full lowering pass.
+      // We map it to an identified struct with the struct name.
+      return mlir::LLVM::LLVMStructType::getIdentified(ctx, type.struct_name());
+    }
     std::vector<mlir::Type> fields;
-    fields.reserve(type.tuple_elements().size());
-    for (const Type& t : type.tuple_elements()) {
-      mlir::Type ft = tir_type_to_mlir(t, ctx, builder);
-      if (!ft) return {};
-      fields.push_back(ft);
+    fields.reserve(is_struct ? type.struct_fields().size() : type.tuple_elements().size());
+    for_each_field_in_layout_order(type, [&](const Type& field) {
+      mlir::Type field_type = tir_type_to_mlir(field, ctx, builder);
+      if (field_type) fields.push_back(field_type);
+    });
+    if (fields.size() != (is_struct ? type.struct_fields().size() : type.tuple_elements().size())) {
+      return {};
     }
     return mlir::LLVM::LLVMStructType::getLiteral(ctx, fields);
-  }
-  if (type.is_struct()) {
-    if (!type.struct_fields().empty()) {
-      std::vector<mlir::Type> fields;
-      fields.reserve(type.struct_fields().size());
-      for (const auto& field : type.struct_fields()) {
-        mlir::Type field_type = tir_type_to_mlir(field.second, ctx, builder);
-        if (!field_type) return {};
-        fields.push_back(field_type);
-      }
-      return mlir::LLVM::LLVMStructType::getLiteral(ctx, fields);
-    }
-    // Opaque struct type by name — fields will be resolved during a full lowering pass.
-    // We map it to an identified struct with the struct name.
-    auto stype = mlir::LLVM::LLVMStructType::getIdentified(ctx, type.struct_name());
-    return stype;
   }
   return {};
 }
@@ -122,17 +179,12 @@ static uint64_t type_size(const Type& type) {
   if (type.is_struct() || type.is_tuple()) {
     uint64_t size = 0;
     uint64_t aggregate_alignment = 1;
-    auto append_field = [&](const Type& field_type) {
+    for_each_field_in_layout_order(type, [&](const Type& field_type) {
       const uint64_t alignment = type_alignment(field_type);
       aggregate_alignment = std::max(aggregate_alignment, alignment);
       size = (size + alignment - 1) & ~(alignment - 1);
       size += type_size(field_type);
-    };
-    if (type.is_struct()) {
-      for (const auto& field : type.struct_fields()) append_field(field.second);
-    } else {
-      for (const Type& field : type.tuple_elements()) append_field(field);
-    }
+    });
     return (size + aggregate_alignment - 1) & ~(aggregate_alignment - 1);
   }
   if (type.is_float()) return type.is_f32() ? 4 : 8;
@@ -845,17 +897,12 @@ static void collect_managed_reference_offsets(const Type& type, uint64_t base,
   }
   if (type.is_struct() || type.is_tuple()) {
     uint64_t field_offset = 0;
-    auto append_field = [&](const Type& field_type) {
+    for_each_field_in_layout_order(type, [&](const Type& field_type) {
       const uint64_t alignment = type_alignment(field_type);
       field_offset = (field_offset + alignment - 1) & ~(alignment - 1);
       collect_managed_reference_offsets(field_type, base + field_offset, offsets);
       field_offset += type_size(field_type);
-    };
-    if (type.is_struct()) {
-      for (const auto& field : type.struct_fields()) append_field(field.second);
-    } else {
-      for (const Type& field : type.tuple_elements()) append_field(field);
-    }
+    });
   }
 }
 
@@ -3526,9 +3573,13 @@ class FunctionTranslator {
         if (op.operand.is_valid()) {
           idx = get(op.operand);
         } else {
+          int field_index = op.field_index >= 0 ? op.field_index : 0;
+          if (op.lhs.type.is_struct() || op.lhs.type.is_tuple()) {
+            field_index = aggregate_physical_index(op.lhs.type, field_index);
+          }
           idx = builder_.create<mlir::LLVM::ConstantOp>(
               loc, builder_.getI64Type(),
-              builder_.getI64IntegerAttr(op.field_index >= 0 ? op.field_index : 0)).getResult();
+              builder_.getI64IntegerAttr(field_index)).getResult();
         }
 
         // The base type for GEP is the array/struct type; we use a zero-based outer index.
@@ -3566,13 +3617,17 @@ class FunctionTranslator {
           return true;
         }
 
+        const Type& agg_tir_type = op.result.type;
+        const bool is_aggregate = agg_tir_type.is_struct() || agg_tir_type.is_tuple();
         mlir::Value agg = builder_.create<mlir::LLVM::UndefOp>(loc, agg_type).getResult();
         for (std::size_t i = 0; i < op.aggregate_elements.size(); ++i) {
           mlir::Value elem = get(op.aggregate_elements[i]);
           if (!elem) continue;
+          const int64_t slot = is_aggregate
+              ? aggregate_physical_index(agg_tir_type, static_cast<int>(i))
+              : static_cast<int64_t>(i);
           agg = builder_.create<mlir::LLVM::InsertValueOp>(
-              loc, agg, elem,
-              builder_.getDenseI64ArrayAttr({static_cast<int64_t>(i)})).getResult();
+              loc, agg, elem, builder_.getDenseI64ArrayAttr({slot})).getResult();
         }
         set(op.result, agg);
         return true;
@@ -3586,7 +3641,10 @@ class FunctionTranslator {
         mlir::Type result_type = tir_type_to_mlir(op.result.type, ctx_, builder_);
         if (!result_type) return true;
 
-        const int idx = op.field_index >= 0 ? op.field_index : 0;
+        int idx = op.field_index >= 0 ? op.field_index : 0;
+        if (op.operand.type.is_struct() || op.operand.type.is_tuple()) {
+          idx = aggregate_physical_index(op.operand.type, idx);
+        }
         mlir::Value extracted = builder_.create<mlir::LLVM::ExtractValueOp>(
             loc, agg,
             builder_.getDenseI64ArrayAttr({static_cast<int64_t>(idx)})).getResult();
