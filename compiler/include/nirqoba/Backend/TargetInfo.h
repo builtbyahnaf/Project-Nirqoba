@@ -8,7 +8,24 @@
 
 #include <string>
 
+#include "nirqoba/Backend/Optimization.h"
+
 namespace nirq {
+
+class DiagnosticEngine;
+
+// The concrete triple, CPU, and feature set the backend will use after the
+// requested profile has been resolved. `Portable` and `Native` ignore most of
+// the raw options; `Explicit` uses them verbatim.
+struct TargetConfiguration {
+  TargetProfile profile = TargetProfile::Portable;
+  std::string triple;
+  std::string cpu = "generic";
+  std::string features;
+  // True when CPU and features came from the host rather than the command
+  // line. Verbose output and tests use it to prove native tuning happened.
+  bool from_host = false;
+};
 
 // The default target triple for Phase 1 builds. Set at CMake time via
 // NIRQOBA_DEFAULT_TARGET_TRIPLE (see cmake/NirqobaLLVMTargets.cmake) and
@@ -22,5 +39,17 @@ std::string default_target_triple();
 // so host CPU name and host feature set can never be paired with a different
 // architecture.
 std::string host_target_triple();
+
+// Turns the profile plus raw CPU/features/triple options into the values code
+// generation will use. Rejects contradictory combinations (for example
+// `portable` with a named CPU) and validates named CPUs and features against
+// the selected target. Records NRQ5002 diagnostics and returns false on error.
+bool resolve_target_configuration(const OptimizationOptions& options,
+                                  TargetConfiguration& resolved,
+                                  DiagnosticEngine& diagnostics);
+
+// One-line summary for `--verbose` (for example
+// "portable (x86_64-pc-windows-msvc, generic)"). Never empty.
+std::string describe_target_configuration(const TargetConfiguration& config);
 
 }  // namespace nirq

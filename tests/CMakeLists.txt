@@ -24,6 +24,7 @@ add_executable(nirqoba_unit_tests
   unit/mlir_pipeline_test.cpp
   unit/cli_test.cpp
   unit/optimization_test.cpp
+  unit/target_test.cpp
 )
 
 set_property(TARGET nirqoba_unit_tests PROPERTY CXX_STANDARD 20)
