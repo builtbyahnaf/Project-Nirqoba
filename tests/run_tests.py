@@ -25,6 +25,21 @@ def run_command(cmd, cwd=None):
     return proc.returncode, proc.stdout, proc.stderr
 
 
+def find_llvm_profdata(compiler_exe):
+    """Locates llvm-profdata next to the compiler or in the packaged toolchain."""
+    candidates = [
+        compiler_exe.parent / "llvm-profdata.exe",
+        compiler_exe.resolve().parents[3] / "toolchain" / "llvm-23.1.4" / "bin" / "llvm-profdata.exe",
+    ]
+    on_path = shutil.which("llvm-profdata")
+    if on_path:
+        candidates.append(Path(on_path))
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def find_llvm_objdump(compiler_exe):
     """Locates llvm-objdump next to the compiler or in the packaged toolchain."""
     candidates = [
@@ -51,6 +66,116 @@ def check_coff_header(obj_path):
         return False, f"Expected 0x64 0x86, got {header.hex()}"
 
 
+def check_outputs(spec, out, err, stage):
+    """Applies the stdout/stderr assertions shared by the normal and PGO modes."""
+    if spec.get("expect_stdout") is not None:
+        normalized_out = out.replace("\r\n", "\n")
+        normalized_exp = spec["expect_stdout"].replace("\r\n", "\n")
+        if normalized_out != normalized_exp:
+            return False, (
+                f"{stage}: stdout mismatch.\nExpected:\n{normalized_exp}\nGot:\n{normalized_out}"
+            )
+
+    for needle in spec.get("expect_stdout_contains", []):
+        if needle not in out:
+            return False, f"{stage}: stdout does not contain '{needle}'.\nGot:\n{out}"
+
+    for needle in spec.get("expect_stdout_not_contains", []):
+        if needle in out:
+            return False, f"{stage}: stdout unexpectedly contains '{needle}'.\nGot:\n{out}"
+
+    if spec.get("expect_stderr_contains") is not None:
+        needle = spec["expect_stderr_contains"]
+        if needle not in err:
+            return False, f"{stage}: stderr does not contain '{needle}'.\nGot:\n{err}"
+
+    return True, "PASSED"
+
+
+def run_pgo_roundtrip(case_dir, source_file, compiler_exe, temp_dir, spec):
+    """Builds instrumented code, runs it, merges the profile, and rebuilds.
+
+    The round trip is what proves reproducibility and consumption: the profile
+    is produced by executing the program, not checked in, and every stage uses
+    the compiler's public command line.
+    """
+    extra_args = spec.get("args", [])
+    pgo_dir = temp_dir / f"pgo_{case_dir.name}"
+    pgo_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Instrumented build. The executable links the profile runtime.
+    code, out, err = run_command(
+        [str(compiler_exe), "build", str(source_file),
+         "--out-dir", str(pgo_dir), "--pgo-generate"] + extra_args
+    )
+    if code != 0:
+        return False, f"Instrumented build failed with exit {code}.\nStderr: {err}\nStdout: {out}"
+
+    executable = pgo_dir / f"{source_file.stem}.exe"
+    if not executable.exists():
+        return False, f"Instrumented build did not produce '{executable}'"
+
+    # 2. Execute in the profile directory so default.profraw lands there.
+    expected_program_exit = spec.get("expect_program_exit", 0)
+    code, run_out, run_err = run_command([str(executable)], cwd=str(pgo_dir))
+    if code != expected_program_exit:
+        return False, (
+            f"Instrumented program exited with {code}, expected {expected_program_exit}.\n"
+            f"Stderr: {run_err}\nStdout: {run_out}"
+        )
+    ok, message = check_outputs(spec, run_out, run_err, "instrumented run")
+    if not ok:
+        return False, message
+
+    # 3. The runtime must have written raw counters.
+    profraw = pgo_dir / "default.profraw"
+    if not profraw.exists() or profraw.stat().st_size == 0:
+        return False, f"Profile runtime did not write a non-empty '{profraw}'"
+
+    # 4. Merge the raw counters into the format LLVM's use pass expects.
+    profdata_tool = find_llvm_profdata(compiler_exe)
+    if profdata_tool is None:
+        return False, "llvm-profdata was not found next to the compiler or in the toolchain"
+    profdata = pgo_dir / "app.profdata"
+    code, out, err = run_command(
+        [str(profdata_tool), "merge", "-o", str(profdata), str(profraw)]
+    )
+    if code != 0 or not profdata.exists() or profdata.stat().st_size == 0:
+        return False, f"llvm-profdata merge failed with exit {code}.\nStderr: {err}\nStdout: {out}"
+
+    # 5. Inspect the optimized IR. A consumed profile adds function/branch
+    #    metadata and removes the instrumentation counters.
+    code, ir, err = run_command(
+        [str(compiler_exe), "build", str(source_file), "--out-dir", str(pgo_dir),
+         "--emit=llvm", f"--pgo-use={profdata}"] + extra_args
+    )
+    if code != 0:
+        return False, f"Profile-use IR build failed with exit {code}.\nStderr: {err}\nStdout: {ir}"
+    for needle in spec.get("expect_ir_contains", []):
+        if needle not in ir:
+            return False, f"Profile-use IR does not contain '{needle}'.\nGot:\n{ir}"
+    for needle in spec.get("expect_ir_not_contains", []):
+        if needle in ir:
+            return False, f"Profile-use IR unexpectedly contains '{needle}'.\nGot:\n{ir}"
+
+    # 6. Final optimized build and execution: the profile must not change the
+    #    program's observable behaviour.
+    code, out, err = run_command(
+        [str(compiler_exe), "build", str(source_file), "--out-dir", str(pgo_dir),
+         f"--pgo-use={profdata}"] + extra_args
+    )
+    if code != 0:
+        return False, f"Profile-use build failed with exit {code}.\nStderr: {err}\nStdout: {out}"
+
+    code, run_out, run_err = run_command([str(executable)], cwd=str(pgo_dir))
+    if code != expected_program_exit:
+        return False, (
+            f"Profile-optimized program exited with {code}, expected {expected_program_exit}.\n"
+            f"Stderr: {run_err}\nStdout: {run_out}"
+        )
+    return check_outputs(spec, run_out, run_err, "profile-optimized run")
+
+
 def run_case(case_dir, compiler_exe, temp_dir):
     expect_path = case_dir / "expect.json"
     if not expect_path.exists():
@@ -70,6 +195,9 @@ def run_case(case_dir, compiler_exe, temp_dir):
 
     if not source_file.exists() and "source_file" in spec:
         source_file = Path(spec["source_file"])
+
+    if mode == "pgo_roundtrip":
+        return run_pgo_roundtrip(case_dir, source_file, compiler_exe, temp_dir, spec)
 
     cmd = [str(compiler_exe)]
 
