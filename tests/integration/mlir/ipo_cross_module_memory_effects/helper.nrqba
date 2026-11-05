@@ -1,0 +1,8 @@
+module helper;
+
+// Arithmetic only; the interprocedural memory-effect pass must prove the
+// module-qualified function touches no memory despite living in another source
+// module.
+public int function combine(int left, int right) {
+    return left * 2 + right;
+}

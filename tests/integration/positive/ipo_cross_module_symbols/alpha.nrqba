@@ -1,0 +1,12 @@
+module alpha;
+
+// Both modules define a private-looking helper with the same source name. The
+// resolver qualifies non-entry symbols with the module name, so these are
+// distinct (`alpha.helper` and `beta.helper`) and must not collide.
+int function helper() {
+    return 7;
+}
+
+public int function value() {
+    return helper();
+}

@@ -1,0 +1,10 @@
+// Both helpers live in another module and are small. The front end merges the
+// modules before LLVM runs, so whole-program inlining and IPSCCP fold each call
+// to its constant result and GlobalDCE removes the now-unused definitions.
+import helper;
+
+int function main() {
+    print(helper.scale(14));
+    print(helper.add(40, 2));
+    return 0;
+}

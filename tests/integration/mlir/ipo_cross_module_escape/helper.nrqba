@@ -1,0 +1,8 @@
+module helper;
+
+// `src` is only read and `dst` only written, and neither pointer is retained.
+// The interprocedural escape summary therefore grants `nocapture`, while the
+// local write scan grants `readonly` to `src`.
+public void function copy_scaled(borrow mut int* dst, borrow int* src) {
+    dst[0] = src[0] * 2;
+}

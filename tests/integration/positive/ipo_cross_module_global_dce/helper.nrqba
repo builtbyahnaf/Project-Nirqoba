@@ -1,0 +1,11 @@
+module helper;
+
+// Exported but never called. Internalization makes it module-private, so
+// GlobalDCE can remove it from the object instead of emitting dead code.
+public int function unused(int value) {
+    return value * 7;
+}
+
+public int function used(int value) {
+    return value + 1;
+}

@@ -1,0 +1,6 @@
+import helper;
+
+int function main() {
+    print(helper.calc(6, 9));
+    return 0;
+}

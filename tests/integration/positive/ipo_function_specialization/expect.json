@@ -1,0 +1,13 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O2"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "@helper.calc(i64 6)",
+    "define internal fastcc range(i64 18, 17) i64 @helper.calc(i64 range(i64 0, 7) %0)",
+    "memory(none)"
+  ],
+  "expect_stdout_not_contains": [
+    "@helper.calc(i64 6, i64 9)"
+  ]
+}

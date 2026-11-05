@@ -1,0 +1,8 @@
+import alpha;
+import beta;
+
+int function main() {
+    print(alpha.value());
+    print(beta.value());
+    return 0;
+}

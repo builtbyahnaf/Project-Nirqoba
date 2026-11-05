@@ -1,0 +1,9 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O0"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "define internal void @helper.copy_scaled(ptr noalias",
+    "ptr readonly captures(none)"
+  ]
+}
