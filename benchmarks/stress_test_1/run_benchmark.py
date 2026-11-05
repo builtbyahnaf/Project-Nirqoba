@@ -22,7 +22,7 @@ from pathlib import Path
 
 # -- Paths --------------------------------------------------------------------
 PROJECT_ROOT = Path(r"D:\Actual Project Files\Project Nirqoba")
-BENCH_DIR    = PROJECT_ROOT / "benchmarks" / "stress_test"
+BENCH_DIR    = PROJECT_ROOT / "benchmarks" / "stress_test_1"
 BIN_DIR      = BENCH_DIR / "bin"
 
 NRQ_EXE     = PROJECT_ROOT / "build" / "msvc-dev" / "bin" / "nirqoba.exe"
