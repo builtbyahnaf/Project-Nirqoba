@@ -278,13 +278,14 @@ int run_pipeline(const PipelineOptions& options,
   }
 
   unique_ptr<llvm::TargetMachine> target_machine =
-      create_target_machine(*llvm_module, backend_options, diagnostics);
+      create_target_machine(*llvm_module, backend_options, target_config,
+                            diagnostics);
   if (!target_machine) return fail_with(diagnostics, sources);
 
   if (options.verbose) {
     cerr << "optimization: " << optimization_level_name(options.optimization_level)
-         << " (target " << target_machine->getTargetTriple().str()
-         << ", cpu " << target_machine->getTargetCPU().str() << ")\n";
+         << "\n"
+         << "target: " << describe_target_configuration(target_config) << "\n";
   }
 
   if (!optimize_llvm_module(*llvm_module, *target_machine, backend_options,

@@ -1,25 +1,17 @@
 #include "nirqoba/Backend/ObjectEmitter.h"
 #include "nirqoba/Backend/TargetInfo.h"
 
-#include <algorithm>
 #include <string>
 #include <system_error>
-#include <utility>
-#include <vector>
 
-#include "llvm/ADT/StringMap.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
-#include "llvm/TargetParser/Host.h"
-
-// Ensure the X86 target backend is linked in. LLVM uses a registration
-// pattern: including this header runs the static initialiser.
-#include "llvm/Support/TargetSelect.h"
 #include "llvm/TargetParser/Triple.h"
 
 namespace nirq {
@@ -40,66 +32,30 @@ llvm::CodeGenOptLevel codegen_level_for(OptimizationLevel level) {
   return llvm::CodeGenOptLevel::Default;
 }
 
-// Converts the host feature map into the comma-separated form accepted by
-// LLVM's TargetMachine. Sorting keeps diagnostic output and object files
-// reproducible for the same host.
-string host_feature_string() {
-  llvm::StringMap<bool> features = llvm::sys::getHostCPUFeatures();
-  vector<pair<string, bool>> ordered;
-  ordered.reserve(features.size());
-  for (const auto& feature : features) {
-    ordered.emplace_back(feature.first().str(), feature.second);
-  }
-  sort(ordered.begin(), ordered.end());
-
-  string result;
-  for (const auto& feature : ordered) {
-    if (!result.empty()) result.push_back(',');
-    result.push_back(feature.second ? '+' : '-');
-    result += feature.first;
-  }
-  return result;
-}
-
 }  // namespace
 
 unique_ptr<llvm::TargetMachine> create_target_machine(
     llvm::Module& llvm_module,
     const OptimizationOptions& options,
+    const TargetConfiguration& target,
     DiagnosticEngine& diagnostics) {
-  // Target registration is idempotent and must happen before LookupTarget.
-  llvm::InitializeAllTargets();
-  llvm::InitializeAllTargetMCs();
-  llvm::InitializeAllAsmPrinters();
-  llvm::InitializeAllAsmParsers();
-
-  const string triple = options.target_triple.empty()
-      ? default_target_triple()
-      : options.target_triple;
-  const llvm::Triple target_triple(triple);
+  const llvm::Triple target_triple(target.triple);
   string error_message;
-  const llvm::Target* target =
+  const llvm::Target* llvm_target =
       llvm::TargetRegistry::lookupTarget(target_triple, error_message);
-  if (target == nullptr) {
+  if (llvm_target == nullptr) {
     diagnostics.error(diag::kInternalError, SourceLocation{},
-                      "LLVM target lookup failed for '" + triple + "': " +
-                          error_message);
+                      "LLVM target lookup failed for '" + target.triple +
+                          "': " + error_message);
     return nullptr;
-  }
-
-  string cpu = options.target_cpu.empty() ? "generic" : options.target_cpu;
-  string features = options.target_features;
-  if (options.target_profile == TargetProfile::Native) {
-    cpu = llvm::sys::getHostCPUName().str();
-    features = host_feature_string();
   }
 
   llvm::TargetOptions target_options;
   unique_ptr<llvm::TargetMachine> target_machine(
-      target->createTargetMachine(
+      llvm_target->createTargetMachine(
           target_triple,
-          cpu,
-          features,
+          target.cpu,
+          target.features,
           target_options,
           // PIC keeps the object usable in both position-dependent and
           // position-independent executables.
@@ -109,14 +65,27 @@ unique_ptr<llvm::TargetMachine> create_target_machine(
 
   if (!target_machine) {
     diagnostics.error(diag::kInternalError, SourceLocation{},
-                      "failed to create LLVM TargetMachine for '" + triple +
-                          "' (CPU '" + cpu + "')");
+                      "failed to create LLVM TargetMachine for '" +
+                          target.triple + "' (CPU '" + target.cpu + "')");
     return nullptr;
   }
 
   // Optimization passes and code generation must agree on layout and triple.
   llvm_module.setDataLayout(target_machine->createDataLayout());
   llvm_module.setTargetTriple(target_machine->getTargetTriple());
+
+  // Persist the resolved profile with the module so `--emit=llvm` output and
+  // object files can be audited after the fact.
+  llvm::LLVMContext& context = llvm_module.getContext();
+  const auto add_flag = [&](llvm::StringRef key, const string& value) {
+    llvm_module.addModuleFlag(llvm::Module::Error, key,
+                              llvm::MDString::get(context, value));
+  };
+  add_flag("nrqoba.target.profile",
+           string(target_profile_name(target.profile)));
+  add_flag("nrqoba.target.triple", target.triple);
+  add_flag("nrqoba.target.cpu", target.cpu);
+  add_flag("nrqoba.target.features", target.features);
   return target_machine;
 }
 
