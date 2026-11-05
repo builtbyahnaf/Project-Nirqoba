@@ -155,6 +155,24 @@ struct StackAllocationLayout {
   std::size_t alignment = 0;
 };
 
+// Alignment floor for promoted stack buffers.
+//
+// A promoted array lives in an entry-block alloca, so its alignment is free
+// information the backend can use: with the element's natural alignment only
+// (8 bytes for `int`/`f64`), LLVM emits every vector load and store as
+// unaligned. Aligning the slot to the x86-64 baseline vector width lets it
+// issue aligned 16-byte accesses for the same loop. A stricter alignment from
+// `memory.owned_array_aligned` still wins, and a slot that is smaller than one
+// vector register is left at its natural alignment because no vector access
+// can span it.
+constexpr std::size_t kStackSlotAlignmentBytes = 16;
+
+static std::size_t stack_slot_alignment(std::size_t natural_alignment,
+                                        std::size_t bytes) {
+  if (bytes < kStackSlotAlignmentBytes) return natural_alignment;
+  return std::max(natural_alignment, kStackSlotAlignmentBytes);
+}
+
 using BorrowedEscapeSummary =
     std::unordered_map<std::string, std::vector<bool>>;
 
@@ -608,6 +626,7 @@ static std::unordered_map<int, StackAllocationLayout> analyze_stack_allocations(
         requested_alignment = std::max(
             requested_alignment, static_cast<std::size_t>(requested));
       }
+      requested_alignment = stack_slot_alignment(requested_alignment, bytes);
       if (requested_alignment > kMaxFunctionFrameBytes) continue;
       const std::size_t frame_cost = bytes + requested_alignment - 1;
       if (frame_cost > kMaxFunctionFrameBytes - promoted_bytes) continue;
@@ -718,6 +737,7 @@ static std::unordered_map<int, StackAllocationLayout> analyze_stack_allocations(
       std::size_t requested_alignment =
           type_alignment(allocation.result.type.element_type());
       if (requested_alignment == 0) requested_alignment = 1;
+      requested_alignment = stack_slot_alignment(requested_alignment, bytes);
       if (requested_alignment > kMaxFunctionFrameBytes) continue;
       const std::size_t frame_cost = bytes + requested_alignment - 1;
       if (frame_cost > kMaxFunctionFrameBytes - promoted_bytes) continue;

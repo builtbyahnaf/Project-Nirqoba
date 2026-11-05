@@ -1,0 +1,8 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O2"],
+  "expect_stdout_contains": [
+    "alloca [64 x i64], align 16",
+    "store <2 x i64>"
+  ]
+}

@@ -1,0 +1,16 @@
+int function main() {
+    var values = memory.owned_array<int>(64);
+    var i = 0;
+    while (i < 64) {
+        values[i] = i * 2;
+        i += 1;
+    }
+    var total = 0;
+    var j = 0;
+    while (j < 64) {
+        total += values[j];
+        j += 1;
+    }
+    print(total);
+    return 0;
+}
