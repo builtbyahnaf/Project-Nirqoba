@@ -1,0 +1,23 @@
+// Loop-heavy workload. The inner loop dominates execution and runs a known
+// number of times, so the profile has a stable loop-trip count instead of
+// depending on one branch-heavy call pattern.
+int function sum_squares(int count) {
+    var total = 0;
+    var i = 0;
+    while (i < count) {
+        total += i * i;
+        i += 1;
+    }
+    return total;
+}
+
+int function main() {
+    var grand = 0;
+    var round = 0;
+    while (round < 5) {
+        grand += sum_squares(100);
+        round += 1;
+    }
+    print(grand);
+    return 0;
+}
