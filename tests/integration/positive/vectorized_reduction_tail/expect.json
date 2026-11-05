@@ -1,0 +1,6 @@
+{
+  "mode": "build_and_run",
+  "args": ["-O2", "--", "a", "b", "c"],
+  "expect_exit": 0,
+  "expect_stdout_contains": ["1998"]
+}

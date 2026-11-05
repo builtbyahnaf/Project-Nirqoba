@@ -1,0 +1,19 @@
+// The bounds check must survive vectorization: the loop runs 7 + 3 = 10 times
+// over an 8-element array, so the access at index 8 terminates the program.
+int function main(string[] args) {
+    var n = 7 + args.length;
+    var values = memory.owned_array<int>(8);
+    var i = 0;
+    while (i < 8) {
+        values[i] = i;
+        i += 1;
+    }
+    var sum = 0;
+    var j = 0;
+    while (j < n) {
+        sum += values[j];
+        j += 1;
+    }
+    print(sum);
+    return 0;
+}
