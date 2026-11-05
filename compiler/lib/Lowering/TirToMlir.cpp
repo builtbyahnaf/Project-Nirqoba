@@ -1334,6 +1334,60 @@ static mlir::LLVM::LLVMFuncOp ensure_runtime_fn(
   return fn;
 }
 
+// The frontend owns every local slot: `alloca`, `store` of the initial value,
+// then a `load` per use. When that is the whole story, the slot is pure spill and
+// the stored value can be used directly: no slot, no store, no loads. A slot is
+// only eligible when the store that initializes it immediately follows the
+// alloca, nothing else ever writes it, and every other use is a load. Those
+// conditions describe exactly the single-assignment locals, and the language's
+// definite assignment means the initializing store has already run wherever the
+// slot is read.
+//
+// Scalar, GC-free types only. A slot that holds a managed pointer may also be a
+// registered GC root, and a root must keep the address it was registered with.
+struct SlotPromotion {
+  // Slot value id -> the value stored into it, which every load now returns.
+  std::unordered_map<int, int> slots;
+};
+
+static SlotPromotion analyze_promoted_slots(const tir::Function& function) {
+  SlotPromotion promotion;
+  const std::vector<tir::Op>& operations = function.operations();
+
+  auto is_plain_scalar = [](const Type& type) {
+    return type.is_integer() || type.is_float() || type.is_bool() || type.is_char();
+  };
+
+  for (std::size_t index = 0; index + 1 < operations.size(); ++index) {
+    const tir::Op& slot = operations[index];
+    const tir::Op& init = operations[index + 1];
+    if (slot.kind != tir::OpKind::Alloca || !slot.result.is_valid()) continue;
+    if (!is_plain_scalar(slot.result.type)) continue;
+    if (init.kind != tir::OpKind::Store || init.lhs.id != slot.result.id) continue;
+    if (!init.operand.is_valid() || init.lhs.id == init.operand.id) continue;
+
+    // The slot is spill only if nothing else ever writes it or takes its
+    // address; a single unexpected use disqualifies it.
+    bool read_only = true;
+    for (std::size_t use = index + 2; use < operations.size() && read_only; ++use) {
+      const tir::Op& op = operations[use];
+      if (op.kind == tir::OpKind::Load && op.lhs.id == slot.result.id) continue;
+      auto touches_slot = [&](const tir::Value& value) {
+        return value.is_valid() && value.id == slot.result.id;
+      };
+      if (touches_slot(op.operand) || touches_slot(op.lhs) || touches_slot(op.rhs))
+        read_only = false;
+      for (const tir::Value& argument : op.arguments)
+        if (touches_slot(argument)) read_only = false;
+      for (const tir::Value& element : op.aggregate_elements)
+        if (touches_slot(element)) read_only = false;
+    }
+    if (!read_only) continue;
+    promotion.slots.emplace(slot.result.id, init.operand.id);
+  }
+  return promotion;
+}
+
 class FunctionTranslator {
  public:
   FunctionTranslator(mlir::ModuleOp module,
@@ -1351,7 +1405,8 @@ class FunctionTranslator {
             analyze_stack_allocations(tir_fn, borrowed_summary)),
         gc_roots_(analyze_gc_root_plan(tir_fn, collections)),
         uses_gc_mutator_(function_uses_gc(tir_fn)),
-        needs_gc_root_frame_(uses_gc_mutator_ && gc_roots_.needs_root_frame) {
+        needs_gc_root_frame_(uses_gc_mutator_ && gc_roots_.needs_root_frame),
+        promoted_slots_(analyze_promoted_slots(tir_fn)) {
     const std::vector<tir::Op>& operations = tir_fn_.operations();
     for (std::size_t index = 0; index < operations.size(); ++index)
       if (operations[index].kind == tir::OpKind::Label)
@@ -1926,6 +1981,13 @@ class FunctionTranslator {
       }
 
       case tir::OpKind::Alloca: {
+        // A promoted parameter slot has no storage: the slot name is bound to the
+        // incoming argument, so the loads below read it directly.
+        if (auto promoted = promoted_slots_.slots.find(op.result.id);
+            promoted != promoted_slots_.slots.end()) {
+          set(op.result, get(tir::Value{promoted->second}));
+          return true;
+        }
         mlir::Type elem_type = tir_type_to_mlir(op.result.type, ctx_, builder_);
         if (!elem_type) {
           diag_.error("NRQ4005", op.location, "internal: alloca of unsupported type");
@@ -1954,6 +2016,9 @@ class FunctionTranslator {
       }
 
       case tir::OpKind::Store: {
+        // The initialization of a promoted slot is the binding itself, and the
+        // analysis proved nothing else writes the slot.
+        if (promoted_slots_.slots.count(op.lhs.id) != 0) return true;
         mlir::Value ptr = get(op.lhs);
         mlir::Value val = get(op.operand);
         if (!ptr || !val) return true;
@@ -1999,6 +2064,11 @@ class FunctionTranslator {
       }
 
       case tir::OpKind::Load: {
+        if (auto promoted = promoted_slots_.slots.find(op.lhs.id);
+            promoted != promoted_slots_.slots.end()) {
+          set(op.result, get(tir::Value{promoted->second}));
+          return true;
+        }
         mlir::Value ptr = get(op.lhs);
         if (!ptr) return true;
         mlir::Type elem_type = tir_type_to_mlir(op.result.type, ctx_, builder_);
@@ -3646,6 +3716,7 @@ class FunctionTranslator {
   mlir::Value gc_root_frame_marker_;
   mlir::Block* bounds_fail_block_ = nullptr;
   mlir::Value safepoint_counter_;
+  SlotPromotion promoted_slots_;
 };
 
 // The Windows CRT calls `main(int argc, char** argv)`. A Nirqoba entry point

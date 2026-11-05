@@ -2,7 +2,7 @@
 // can be inspected for the promise the compiler inferred for it.
 //
 //   pure_helper     arithmetic only, no allocation, no runtime call
-//   sum_borrowed    reads through a borrowed view, spilled to a stack slot
+//   sum_borrowed    reads through a borrowed view
 //   main            allocates, so it must keep the conservative default
 
 int function pure_helper(int a, int b) {

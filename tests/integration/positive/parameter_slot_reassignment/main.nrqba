@@ -1,0 +1,24 @@
+// A parameter the body assigns is real storage, not spill, so its slot stays.
+// The printed values prove the slot keeps every assignment at -O0, where no
+// optimization can hide a lowering mistake.
+int function accumulate(int count) {
+    count = count + 5;
+    var i = 0;
+    while (i < 3) {
+        count += i;
+        i += 1;
+    }
+    return count;
+}
+
+int function halve(int value) {
+    value = value / 2;
+    value = value - 1;
+    return value;
+}
+
+int function main() {
+    print(accumulate(10));
+    print(halve(20));
+    return 0;
+}
