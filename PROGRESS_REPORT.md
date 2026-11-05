@@ -11,7 +11,7 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.120-beta` |
+| Current Working Version | `0.127-beta` |
 | Development Stage | `Phase 6` |
 | Last Report Update | `2026-11-05 14:30:00` |
 | Report Entries | `10` |
@@ -903,7 +903,7 @@ features, triple, data layout, and instruction selection cannot disagree.
 
 ## Entry #009 - Interprocedural Optimization
 
-**Version:** `0.120-beta`  
+**Version:** `0.127-beta`  
 **Date:** `2026-11-05 14:40:00`  
 **Scope:** `Phase 6 / Compiler Backend / Whole-Program LTO / IPO Policy / Cross-Module Inlining / Memory Effects`  
 **Status:** `Completed`
