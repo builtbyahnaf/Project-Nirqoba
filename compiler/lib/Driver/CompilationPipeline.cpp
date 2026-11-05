@@ -24,6 +24,7 @@
 #include "nirqoba/Backend/ObjectEmitter.h"
 #include "nirqoba/Backend/TargetInfo.h"
 #include "nirqoba/Diagnostics/Diagnostic.h"
+#include "nirqoba/Lowering/DataLayout.h"
 #include "nirqoba/Diagnostics/DiagnosticRenderer.h"
 #include "nirqoba/Driver/LinkerEnvironment.h"
 #include "nirqoba/Driver/ModuleResolver.h"
@@ -230,6 +231,12 @@ int run_pipeline(const PipelineOptions& options,
 
   if (options.emit == EmitKind::Tir) {
     cout << print_tir(*tir_module);
+    return 0;
+  }
+
+  // The layout report needs the fully typed TIR module but nothing after it.
+  if (options.emit == EmitKind::Layout) {
+    cout << print_data_layout(*tir_module);
     return 0;
   }
 

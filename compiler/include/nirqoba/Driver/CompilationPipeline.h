@@ -18,6 +18,7 @@ namespace nirq {
 // What the pipeline should produce; used by `--emit` to stop early.
 enum class EmitKind {
   Ast,    // print AST text, exit
+  Layout, // print aggregate sizes/field offsets, exit
   Tir,    // print TIR text, exit
   Mlir,   // print MLIR (before and after lowering), exit
   Llvm,   // print optimized LLVM IR text, exit

@@ -1,0 +1,16 @@
+{
+  "mode": "build",
+  "args": ["--emit=layout"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "struct Wide {",
+    "size 24 align 8 padding 3 elements_per_cache_line 3 declared 32",
+    "first : int @ 0 (8 bytes, align 8)",
+    "second : int @ 8 (8 bytes, align 8)",
+    "tag : char @ 16 (4 bytes, align 4)",
+    "flag : bool @ 20 (1 bytes, align 1)",
+    "struct Nested {",
+    "wide : Wide @ 0 (24 bytes, align 8)",
+    "marker : char @ 24 (4 bytes, align 4)"
+  ]
+}
