@@ -1,0 +1,15 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O2", "--pgo-generate"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "@__profc_main = private global [1 x i64] zeroinitializer",
+    "@__profd_main = private global",
+    "define linkonce_odr hidden i32 @__llvm_profile_runtime_user()",
+    "!\"nrqoba.pgo.mode\", !\"generate\"",
+    "!\"nrqoba.pgo.cold\", !\"default\""
+  ],
+  "expect_stdout_not_contains": [
+    "!\"nrqoba.pgo.mode\", !\"use\""
+  ]
+}
