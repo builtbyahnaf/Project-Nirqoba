@@ -6,6 +6,31 @@
 
 ---
 
+## Version 0.114-beta
+
+### Summary of Changes (since `0.111-beta`):
+
+#### 1. Optimization Diagnostics & Remarks Reporting (`--remarks`)
+- Added compiler CLI flag `--remarks` (with `--remarks=missed` and pass-name filtering like `--remarks=loop-vectorize`).
+- Plugs a custom diagnostic handler into LLVM's `DiagnosticInfoOptimizationBase` to report loop vectorization, inlining, and unrolling decisions to stderr without affecting emitted object code.
+
+#### 2. Vector Alignment for Stack Allocations
+- Promoted stack buffers for owned arrays and raw memory allocations previously defaulted to scalar natural alignment (`align 8`), forcing LLVM to emit unaligned SIMD instructions (`movups`).
+- Implemented a 16-byte alignment floor for promoted stack slots meeting or exceeding vector register widths, generating `align 16` in LLVM IR and enabling selection of aligned SIMD moves (`movaps`). Stricter explicit alignments requested via `owned_array_aligned` continue to take precedence.
+
+#### 3. Floating-Point Reduction Vectorization (`--fast-math`)
+- Added an opt-in `--fast-math` flag enabling `reassoc` and `contract` fast-math flags on lowered floating-point operations.
+- Relaxes strict IEEE 754 reordering constraints that previously prevented LLVM from vectorizing `f64` loop accumulations, allowing vector reduction synthesis (`llvm.vector.reduce.fadd`) and fused multiply-add (FMA) instruction selection while preserving strict IEEE semantics by default.
+
+#### 4. Vectorized Loop Correctness & Integration Coverage
+- Added dedicated test coverage verifying execution semantics under loop vectorization:
+  - Runtime non-multiple trip counts (`vectorized_reduction_tail`) exercising scalar loop epilogues.
+  - Overflow wrapping semantics (`vectorized_reduction_wrap`) across SIMD reduction trees.
+  - Array bounds checking traps (`vectorized_bounds_trap`) ensuring runtime violation detection and exit code 70 remain intact in vectorized loop bodies.
+  - Verification of 16-byte alignment and emitted `--remarks` diagnostics.
+
+---
+
 ## Version 0.111-beta
 
 ### Summary of Changes (since `0.108-beta`):
