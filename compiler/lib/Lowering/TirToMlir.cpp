@@ -1343,9 +1343,10 @@ class FunctionTranslator {
                      mlir::func::FuncOp func_op,
                      mlir::OpBuilder& builder,
                      mlir::MLIRContext* ctx,
-                     DiagnosticEngine& diag)
+                     DiagnosticEngine& diag,
+                     bool fast_math)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
-        builder_(builder), ctx_(ctx), diag_(diag),
+        builder_(builder), ctx_(ctx), diag_(diag), fast_math_(fast_math),
         stack_allocations_(
             analyze_stack_allocations(tir_fn, borrowed_summary)),
         gc_roots_(analyze_gc_root_plan(tir_fn, collections)),
@@ -1413,6 +1414,24 @@ class FunctionTranslator {
   mlir::Value get(tir::Value v) const {
     if (!v.is_valid()) return {};
     return values_[static_cast<std::size_t>(v.id)];
+  }
+
+  // `--fast-math` opts into reassociation and FMA contraction for floating-point
+  // arithmetic. Strict IEEE ordering stays the default, because reassociation
+  // changes the result of a sum. With the flag LLVM may reassociate an
+  // accumulation, which is the difference between a scalar and a vectorized
+  // floating-point reduction.
+  //
+  // The flags are passed to the op's builder rather than set as a raw attribute:
+  // MLIR keeps them in the op's properties, and a plain "fastmath" attribute is
+  // printed but ignored by the LLVM translation.
+  template <typename OpTy>
+  mlir::Value create_fp_binary(mlir::Location loc, mlir::Value lhs,
+                               mlir::Value rhs) {
+    if (!fast_math_) return builder_.create<OpTy>(loc, lhs, rhs).getResult();
+    const mlir::LLVM::FastmathFlags flags =
+        mlir::LLVM::FastmathFlags::reassoc | mlir::LLVM::FastmathFlags::contract;
+    return builder_.create<OpTy>(loc, lhs, rhs, flags).getResult();
   }
 
   void set(tir::Value v, mlir::Value mlir_val) {
@@ -2084,10 +2103,10 @@ class FunctionTranslator {
 
         if (lhs_type.is_float()) {
           switch (op.binary_op) {
-            case tir::BinaryOp::Add: result = builder_.create<mlir::LLVM::FAddOp>(loc, lhs, rhs).getResult(); break;
-            case tir::BinaryOp::Subtract: result = builder_.create<mlir::LLVM::FSubOp>(loc, lhs, rhs).getResult(); break;
-            case tir::BinaryOp::Multiply: result = builder_.create<mlir::LLVM::FMulOp>(loc, lhs, rhs).getResult(); break;
-            case tir::BinaryOp::Divide: result = builder_.create<mlir::LLVM::FDivOp>(loc, lhs, rhs).getResult(); break;
+            case tir::BinaryOp::Add: result = create_fp_binary<mlir::LLVM::FAddOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::Subtract: result = create_fp_binary<mlir::LLVM::FSubOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::Multiply: result = create_fp_binary<mlir::LLVM::FMulOp>(loc, lhs, rhs); break;
+            case tir::BinaryOp::Divide: result = create_fp_binary<mlir::LLVM::FDivOp>(loc, lhs, rhs); break;
             case tir::BinaryOp::Remainder: result = builder_.create<mlir::LLVM::FRemOp>(loc, lhs, rhs).getResult(); break;
             case tir::BinaryOp::Equal:
               result = builder_.create<mlir::LLVM::FCmpOp>(loc, mlir::LLVM::FCmpPredicate::oeq, lhs, rhs).getResult(); break;
@@ -3605,6 +3624,7 @@ class FunctionTranslator {
   mlir::OpBuilder& builder_;
   mlir::MLIRContext* ctx_;
   DiagnosticEngine& diag_;
+  bool fast_math_ = false;
   std::unordered_map<int, StackAllocationLayout> stack_allocations_;
   GcRootPlan gc_roots_;
   bool uses_gc_mutator_ = false;
@@ -3695,7 +3715,8 @@ static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
 mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     const tir::Module& tir_module,
     mlir::MLIRContext& context,
-    DiagnosticEngine& diagnostics) {
+    DiagnosticEngine& diagnostics,
+    bool fast_math) {
 
   mlir::OpBuilder builder(&context);
   mlir::OwningOpRef<mlir::ModuleOp> module =
@@ -3812,7 +3833,7 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
 
     FunctionTranslator translator(*module, *tir_fn, borrowed_summary,
                                   collections, func_op, builder, &context,
-                                  diagnostics);
+                                  diagnostics, fast_math);
     if (!translator.translate()) return nullptr;
 
     builder.setInsertionPointAfter(func_op);

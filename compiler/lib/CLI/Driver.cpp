@@ -56,6 +56,7 @@ static void print_command_help(string_view cmd) {
               << "  --remarks[=mode]     Print LLVM optimization remarks to stderr;\n"
               << "                       mode is 'all', 'missed', or a pass name\n"
               << "                       (e.g. loop-vectorize)\n"
+              << "  --fast-math          Allow FP reassociation and FMA contraction\n"
               << "  --verbose            Enable verbose output\n";
   } else if (cmd == "run") {
     cout << "Usage: nirqoba run <file.nrqba>... [options] [-- <args>...]\n\n"
@@ -69,6 +70,7 @@ static void print_command_help(string_view cmd) {
               << "  --remarks[=mode]     Print LLVM optimization remarks to stderr;\n"
               << "                       mode is 'all', 'missed', or a pass name\n"
               << "                       (e.g. loop-vectorize)\n"
+              << "  --fast-math          Allow FP reassociation and FMA contraction\n"
               << "  --verbose            Enable verbose output\n";
   } else if (cmd == "check") {
     cout << "Usage: nirqoba check <file.nrqba>... [options]\n\n"
@@ -355,6 +357,10 @@ bool parse_command_line(int argc, const char* const* argv,
       options.emit_remarks = true;
       continue;
     }
+    if (arg == "--fast-math") {
+      options.fast_math = true;
+      continue;
+    }
     if (arg.rfind("--remarks=", 0) == 0) {
       string_view mode = string_view(arg).substr(10);
       options.emit_remarks = true;
@@ -505,6 +511,7 @@ int run_driver(int argc, const char* const* argv) {
   pipe_opts.emit_remarks = options.emit_remarks;
   pipe_opts.remarks_missed_only = options.remarks_missed_only;
   pipe_opts.remark_filter = options.remark_filter;
+  pipe_opts.fast_math = options.fast_math;
 
   if (options.command == CommandKind::Check) {
     pipe_opts.emit = options.emit_specified ? options.emit : EmitKind::Tir;

@@ -209,7 +209,8 @@ int run_pipeline(const PipelineOptions& options,
   mlir_context.loadAllAvailableDialects();
 
   mlir::OwningOpRef<mlir::ModuleOp> mlir_module =
-      translate_tir_to_mlir(*tir_module, mlir_context, diagnostics);
+      translate_tir_to_mlir(*tir_module, mlir_context, diagnostics,
+                            options.fast_math);
   if (!mlir_module || diagnostics.has_errors()) {
     return fail_with(diagnostics, sources);
   }
