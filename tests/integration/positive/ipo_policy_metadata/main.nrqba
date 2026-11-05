@@ -1,0 +1,6 @@
+// The optimized module records which interprocedural policy produced it and
+// that all imports were merged into one whole-program LTO unit.
+int function main() {
+    print(42);
+    return 0;
+}
