@@ -590,6 +590,37 @@ class MarkTailCallsPass
   }
 };
 
+// Only the C entry point is visible outside the object file. Every other
+// generated function is reached exclusively from this module's own code, so its
+// linkage should say so: external linkage forces the linker to keep functions
+// the program never calls, hides their bodies from interprocedural reasoning,
+// and (because the symbol is public) keeps LLVM from deleting them. `main` stays
+// external because the C runtime starts there. Dropping the functions a program
+// never reaches is then LLVM's job: dead-function elimination runs in every
+// optimized pipeline and can only see these functions at all once they stop
+// looking externally visible. At -O0 nothing is removed, which is what a debug
+// build wants.
+class InternalizeFunctionsPass
+    : public mlir::PassWrapper<InternalizeFunctionsPass,
+                               mlir::OperationPass<>> {
+ public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(InternalizeFunctionsPass)
+
+  llvm::StringRef getArgument() const final { return "internalize-functions"; }
+  llvm::StringRef getDescription() const final {
+    return "Give every generated function except the C entry point internal "
+           "linkage";
+  }
+
+  void runOnOperation() override {
+    getOperation()->walk([&](mlir::LLVM::LLVMFuncOp function) {
+      if (function.isExternal()) return;
+      if (function.getSymName() == "main") return;
+      function.setLinkage(mlir::LLVM::Linkage::Internal);
+    });
+  }
+};
+
 // The canonicalizer folds constants, removes trivially dead operations whose
 // results are unused, and simplifies control flow. SCCP then propagates known
 // constants through SSA values, block arguments, and conditional control flow,
@@ -651,7 +682,13 @@ void build_lowering_pipeline(mlir::PassManager& pm, bool optimize) {
   // exhausts the stack.
   pm.addPass(std::make_unique<MarkTailCallsPass>());
 
-  // Step 5: Describe the memory each generated function actually touches. This
+  // Step 5: State which functions actually leave the object file. This is a
+  // property of the program too, so it is decided at every optimization level;
+  // it is what allows the optimizer to drop unreachable functions instead of
+  // emitting them.
+  pm.addPass(std::make_unique<InternalizeFunctionsPass>());
+
+  // Step 6: Describe the memory each generated function actually touches. This
   // runs last so it sees the final body. It runs at every optimization level:
   // the attribute is a property of the program, not of a pass run.
   pm.addPass(std::make_unique<InferFunctionMemoryEffectsPass>());
