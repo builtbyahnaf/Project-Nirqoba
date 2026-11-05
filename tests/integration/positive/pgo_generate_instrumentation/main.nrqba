@@ -1,0 +1,7 @@
+// A normal optimized build with instrumentation. The backend must emit the
+// profile counters and the runtime hooks that write default.profraw when the
+// generated executable exits.
+int function main() {
+    print(42);
+    return 0;
+}
