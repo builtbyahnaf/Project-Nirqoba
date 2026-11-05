@@ -13,8 +13,8 @@
 | Project | Nirqoba |
 | Current Working Version | `0.120-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-05 14:40:00` |
-| Report Entries | `9` |
+| Last Report Update | `2026-11-05 14:30:00` |
+| Report Entries | `10` |
 
 ---
 
@@ -1005,6 +1005,101 @@ facts, internalization, and the scalable whole-program unit.
 ---
 
 **End of Entry #009**
+
+## Entry #010 - Profile-Guided Optimization
+
+**Version:** `0.120-beta`  
+**Date:** `2026-11-05 14:30:00`  
+**Scope:** `Phase 6 / Compiler Backend / Instrumentation PGO / Sample PGO / Hot-Cold Separation`  
+**Status:** `Completed`
+
+### 1. Problem Identified
+
+All optimization decisions were based on static heuristics. The compiler could
+not instrument a program to produce a profile, could not consume an
+instrumentation or sample profile, and would have silently ignored a missing
+profile file. Hot and cold functions, branch probabilities, inlining, loop
+optimization, code layout, function specialization, and hot/cold separation were
+therefore all profile-blind.
+
+### 2. Implementation Details
+
+- Added `PgoMode` (`None`, `Generate`, `Use`, `Sample`) and `PgoColdMode`
+  (`Default`, `OptSize`, `MinSize`, `OptNone`) with strict parsers, carried from
+  `CommandLineOptions` through `PipelineOptions` into `OptimizationOptions`.
+- Added `--pgo-generate`, `--pgo-use=<file>`, `--pgo-sample=<file>`, and
+  `--pgo-cold=<mode>` to `build`, `run`, and `check`, including conflict checks
+  and help text. `--verbose` reports the active policy.
+- Mapped the policy to LLVM `PGOOptions` (`IRInstr`, `IRUse`, `SampleUse`) and
+  passed it to the existing `PassBuilder`; no profile pass or inliner was
+  reimplemented.
+- Linked `clang_rt.profile-x86_64.lib` from the packaged clang toolchain for
+  `--pgo-generate`, with `NRQ5003` if the runtime is unavailable.
+- Added `NRQ5009` for a missing, empty, or directory profile and recorded
+  `nrqoba.pgo.mode` / `nrqoba.pgo.cold` module flags without embedding the
+  profile path.
+- Added a `pgo_roundtrip` integration mode (instrument, run, merge with
+  `llvm-profdata`, rebuild, inspect IR, execute) and a `pgo_sample` mode for
+  checked-in sample profiles.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `compiler/include/nirqoba/Backend/Optimization.h` | `PgoMode`, `PgoColdMode`, name/parsers, option fields | One explicit PGO vocabulary. |
+| `compiler/lib/Backend/Optimization.cpp` | `pgo_options_for`, cold mapping, validation, module flags, PassBuilder wiring | Apply and record the policy through LLVM. |
+| `compiler/lib/CLI/Driver.cpp` | `--pgo-*` parsing, help, forwarding | Expose PGO to users. |
+| `compiler/lib/Driver/CompilationPipeline.cpp` | Backend forwarding, verbose line, profile runtime link | Make generation usable and observable. |
+| `compiler/include/nirqoba/Diagnostics/Diagnostic.h` | `kPgoProfileMissing = "NRQ5009"` | Fail loudly on invalid profile input. |
+| `tests/run_tests.py` | `pgo_roundtrip` and `pgo_sample` modes | Reproduce generation and consumption end to end. |
+| `tests/unit/optimization_test.cpp`, `cli_test.cpp` | Parse/name/CLI/default/conflict tests | Pin the vocabulary and plumbing. |
+| `tests/integration/positive/pgo_generate_instrumentation/` | Counter and runtime-hook assertions | Prove instrumentation is emitted. |
+| `tests/integration/pgo/profile_consumption_branch/` | Branch-heavy round trip | Prove merge, use, IR metadata, and behaviour. |
+| `tests/integration/pgo/profile_consumption_loop/` | Loop-heavy round trip | Prove PGO is not tied to one workload. |
+| `tests/integration/pgo/sample_profile_consumption/` | Sample fixture and execution | Prove the sample path loads and preserves output. |
+| `tests/integration/negative/pgo_missing_profile/` | `NRQ5009` assertion | Prove missing profiles fail. |
+| `README.md` | PGO commands and workflow | Document usage. |
+| `reports/performance/po-19-profile-guided-optimization.md` | Created PO-19 report | Record design, evidence, and deferred measurements. |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Unit suite (Debug) | PASS | 138/138 tests. |
+| Integration suite (Debug) | PASS (PGO) | 236 cases, 235 passed; the only failure is the pre-existing, unrelated `positive/memory_advanced` stale version expectation. |
+| Instrumentation IR | PASS | `@__profc_main`, `@__profd_main`, `@__llvm_profile_runtime_user`, `@llvm.used`, `nrqoba.pgo.mode = generate`. |
+| Instrumented executable | PASS | Runs and writes a non-empty `default.profraw`. |
+| Branch round trip | PASS | Output `92750` before and after; `ProfileSummary` and `function_entry_count` present; no counters after use. |
+| Loop round trip | PASS | Output `1641750` before and after; profile summary present; no counters after use. |
+| Sample-profile consumption | PASS | `ProfileFormat SampleProfile`, `NumFunctions 3`, `nrqoba.pgo.mode = sample`; output `1499585`. |
+| Missing profile | PASS | Non-zero exit with `NRQ5009`. |
+| Reproducibility | PASS | Profiles are regenerated from an executed instrumented build; no profile artifact is checked in. |
+| Runtime performance (PGO vs non-PGO) | DEFERRED | Section 5 verification requires explicit project-owner permission. |
+| Compilation time / peak memory | DEFERRED | Same Section 5 restriction; no numbers claimed. |
+
+### 5. Safety and Acceptance
+
+- Profile use only annotates IR with measured facts; every transformation remains
+  LLVM's. Both round-trip programs keep the same observable output.
+- Missing, empty, or directory profiles fail with `NRQ5009` instead of silently
+  falling back to unprofiled code.
+- Instrumentation profiles are generated by executing the program and merged with
+  `llvm-profdata`; the workflow is reproducible and no profile is checked in.
+- Only `nrqoba.pgo.mode` and `nrqoba.pgo.cold` are recorded; the profile path is
+  not embedded, so build-machine paths cannot leak into artifacts.
+- Coverage spans branch-heavy, loop-heavy, and hot/cold sample workloads, so the
+  design does not depend on a single benchmark shape.
+- `--pgo-generate` links the compiler-rt profile archive explicitly because
+  Nirqoba invokes the linker directly; a missing runtime is a build error.
+- `--pgo-cold` maps to LLVM's supported cold-function control and is recorded in
+  the module. A direct cold-attribute assertion is not made because LLVM may
+  fully inline a small cold helper.
+- Runtime, compilation-time, and peak-memory measurements remain deferred under
+  the Section 5 policy; no performance claim is made.
+
+---
+
+**End of Entry #010**
 
 <!-- REPORT ENTRIES END -->
 
