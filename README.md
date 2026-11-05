@@ -243,6 +243,15 @@ nirqoba build main.nrqba -O2 --ipo=standard -o program.exe    # default
 nirqoba build main.nrqba -O2 --ipo=aggressive -o program.exe  # deeper analysis
 nirqoba build main.nrqba -O2 --ipo=minimal -o program.exe     # bounded compile
 
+# Profile-guided optimization: instrument, run, merge, then rebuild
+nirqoba build main.nrqba -O2 --pgo-generate -o app_instrumented.exe
+.\app_instrumented.exe            # writes default.profraw in the current directory
+llvm-profdata merge -o app.profdata default.profraw
+nirqoba build main.nrqba -O2 --pgo-use=app.profdata -o program.exe
+
+# Consume a sample profile captured by an external profiler
+nirqoba build main.nrqba -O2 --pgo-sample=app.sample -o program.exe
+
 # Inspect lowered LLVM IR or MLIR representations
 nirqoba build main.nrqba --emit=llvm
 nirqoba build main.nrqba --emit=mlir
@@ -280,6 +289,35 @@ link-time step.
 Every optimized module records its policy and strategy as `nrqoba.ipo.mode` and
 `nrqoba.ipo.strategy` module flags, visible in `--emit=llvm` output. `--verbose`
 prints the active policy before optimization.
+
+### Profile-Guided Optimization
+
+Static heuristics estimate which functions, branches, and loops matter. A
+profile replaces those estimates with measurements from a representative run.
+Nirqoba supports both LLVM approaches:
+
+- **Instrumentation-based:** build with `--pgo-generate`, run the program, merge
+  the raw counters with `llvm-profdata merge`, then rebuild with
+  `--pgo-use=<profile.profdata>`. Instrumented executables link the LLVM profile
+  runtime from the packaged clang toolchain and write `default.profraw` when
+  they exit.
+- **Sample-based:** capture samples with an external profiler (for example ETW,
+  `perf`, or Instruments) in LLVM sample-profile format, then rebuild with
+  `--pgo-sample=<profile>`.
+
+The loaded profile informs function entry counts and hot/cold identification,
+branch probabilities, inlining, loop trip counts, code layout, function
+specialization, and hot/cold path separation. Ordinary transformations remain
+LLVM's; Nirqoba supplies the policy, validates the input, and records the mode.
+
+`--pgo-cold=<mode>` controls how functions the profile marks cold are optimized:
+`default` (LLVM's normal handling), `optsize`, `minsize`, or `optnone`. Every
+profile-guided module records `nrqoba.pgo.mode` and `nrqoba.pgo.cold` module
+flags in `--emit=llvm` output; the profile path itself is not embedded. A
+missing, empty, or directory profile is rejected with `NRQ5009` instead of
+silently producing an unprofiled build. Instrumented builds are slower and
+larger by design, and the profile is only as representative as the workload used
+to produce it.
 
 ---
 
