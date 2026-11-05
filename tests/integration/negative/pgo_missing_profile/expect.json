@@ -1,0 +1,6 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "--pgo-use=definitely-missing.profdata"],
+  "expect_exit": 1,
+  "expect_stderr_contains": "NRQ5009"
+}

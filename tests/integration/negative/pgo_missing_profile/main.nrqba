@@ -1,0 +1,6 @@
+// Asking for a profile that does not exist must fail instead of silently
+// producing an unprofiled build.
+int function main() {
+    print(1);
+    return 0;
+}
