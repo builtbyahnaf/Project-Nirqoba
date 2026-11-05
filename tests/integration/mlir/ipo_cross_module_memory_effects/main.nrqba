@@ -1,0 +1,6 @@
+import helper;
+
+int function main() {
+    print(helper.combine(20, 2));
+    return 0;
+}

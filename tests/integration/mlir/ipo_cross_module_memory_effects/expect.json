@@ -1,0 +1,8 @@
+{
+  "mode": "build",
+  "args": ["--emit=mlir", "-O2"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "@helper.combine(%arg0: i64, %arg1: i64) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none"
+  ]
+}

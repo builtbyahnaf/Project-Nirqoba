@@ -1,0 +1,12 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O2"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "define noundef i64 @main",
+    "@nrq_print_int(i64 42)"
+  ],
+  "expect_stdout_not_contains": [
+    "@helper.unused"
+  ]
+}

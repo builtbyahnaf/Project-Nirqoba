@@ -1,0 +1,13 @@
+module helper;
+
+// Recursive, so LLVM does not simply inline it. The constant `seed` argument
+// makes the function a specialization candidate: IPSCCP clones it with the
+// constant folded in, and dead-argument elimination removes the now-constant
+// parameter from the clone.
+public int function calc(int n, int seed) {
+    if (n == 0) {
+        return seed * 3;
+    }
+    var rest = calc(n - 1, seed);
+    return (rest + seed) * 2;
+}
