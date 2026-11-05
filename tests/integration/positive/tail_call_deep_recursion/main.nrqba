@@ -1,0 +1,40 @@
+// Mutual recursion a quarter of a million frames deep only finishes when the
+// returned calls reuse the caller's frame. The frames are deliberately large
+// (a spin loop keeps the bodies non-trivial), so the run overflows the stack
+// without the `tail` marker at -O0, where nothing inlines.
+int function is_even(int n) {
+    var spin = 0;
+    var i = 0;
+    while (i < 3) {
+        spin += i * n;
+        i += 1;
+    }
+    if (n == 0) {
+        return 1;
+    }
+    if (spin > 1000000000) {
+        return 2;
+    }
+    return is_odd(n - 1);
+}
+
+int function is_odd(int n) {
+    var spin = 0;
+    var i = 0;
+    while (i < 3) {
+        spin += i * n;
+        i += 1;
+    }
+    if (n == 0) {
+        return 0;
+    }
+    if (spin > 1000000000) {
+        return 2;
+    }
+    return is_even(n - 1);
+}
+
+int function main(string[] args) {
+    print(is_even(250000 + args.length * 2) * 42);
+    return 0;
+}
