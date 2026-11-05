@@ -1343,7 +1343,7 @@ static mlir::LLVM::LLVMFuncOp ensure_runtime_fn(
 // definite assignment means the initializing store has already run wherever the
 // slot is read.
 //
-// Scalar, GC-free types only. A slot that holds a managed pointer may also be a
+// Slots that hold a managed reference are left alone: such a slot may also be a
 // registered GC root, and a root must keep the address it was registered with.
 struct SlotPromotion {
   // Slot value id -> the value stored into it, which every load now returns.
@@ -1354,15 +1354,17 @@ static SlotPromotion analyze_promoted_slots(const tir::Function& function) {
   SlotPromotion promotion;
   const std::vector<tir::Op>& operations = function.operations();
 
-  auto is_plain_scalar = [](const Type& type) {
-    return type.is_integer() || type.is_float() || type.is_bool() || type.is_char();
+  auto holds_no_managed_reference = [](const Type& type) {
+    std::vector<uint64_t> offsets;
+    collect_managed_reference_offsets(type, 0, offsets);
+    return offsets.empty();
   };
 
   for (std::size_t index = 0; index + 1 < operations.size(); ++index) {
     const tir::Op& slot = operations[index];
     const tir::Op& init = operations[index + 1];
     if (slot.kind != tir::OpKind::Alloca || !slot.result.is_valid()) continue;
-    if (!is_plain_scalar(slot.result.type)) continue;
+    if (!holds_no_managed_reference(slot.result.type)) continue;
     if (init.kind != tir::OpKind::Store || init.lhs.id != slot.result.id) continue;
     if (!init.operand.is_valid() || init.lhs.id == init.operand.id) continue;
 
