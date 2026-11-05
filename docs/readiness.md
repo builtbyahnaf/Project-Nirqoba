@@ -1,12 +1,13 @@
 # Language Readiness Audit and Benchmark
 
 **Audit date:** 2026-11-01
-**Compiler:** Nirqoba 0.114-beta (Phase 6), LLVM/MLIR 23.1.4, `x86_64-pc-windows-msvc`
+**Compiler:** Nirqoba 0.117-beta (Phase 6), LLVM/MLIR 23.1.4, `x86_64-pc-windows-msvc`
 **Build:** RelWithDebInfo (`build/msvc-dev`)
 **Host:** Windows x64, Intel Family 6 Model 154, 8+ logical cores
 **Corpus:** `tests/readiness/` — 13 programs, 5 gap probes, 4 benchmarks
 **Runner:** `python tests/readiness/run_readiness.py --runs 7`
 **Collector update:** 2026-11-04 — generational, incremental marking, sliced sweep
+**Optimization update:** 2026-11-05 — SIMD loop vectorization, 16-byte stack alignment floor, fast-math reduction, optimization remarks
 
 ---
 

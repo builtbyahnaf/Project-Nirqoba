@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.114-beta` |
+| Current Working Version | `0.117-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-04 01:09:15` |
-| Report Entries | `5` |
+| Last Report Update | `2026-11-05 11:34:13` |
+| Report Entries | `6` |
 
 ---
 
@@ -677,6 +677,50 @@ until a full collection.
 ---
 
 **End of Entry #005**
+
+
+## Entry #006 — Loop Optimization, SIMD Vectorization, and Optimization Diagnostics
+
+**Version:** `0.114-beta`  
+**Date:** `2026-11-05 11:34:13`  
+**Scope:** `Phase 6 / Compiler Backend / SIMD Vectorization / Optimization Remarks`  
+**Status:** `Completed`
+
+### 1. Overview
+
+This entry implements task P0 3.6 (Loop Optimization and SIMD Vectorization) and compiler optimization diagnostic infrastructure. While LLVM already contains a capable loop vectorizer, generated code previously presented several structural obstacles: promoted stack slots lacked vector alignment floors, floating-point accumulations were blocked by strict IEEE constraints, and optimization decisions could not be observed from the compiler CLI. This update removes those barriers, introduces opt-in fast-math reductions, ensures 16-byte stack alignment for SIMD operations, and adds user-facing remark diagnostics.
+
+### 2. Implementation Details
+
+- **What:** Added compiler CLI flag `--remarks` (along with `--remarks=missed` and substring filters like `--remarks=loop-vectorize`) to report vectorizer, inline, and unroll decisions directly to stderr without altering emitted machine code.
+- **What:** Enforced a 16-byte alignment floor for promoted stack buffers (owned arrays and memory allocations) matching or exceeding vector register widths. Emits `align 16` in LLVM IR to enable aligned vector instructions (`movaps`) instead of unaligned moves (`movups`).
+- **What:** Implemented opt-in `--fast-math` flag attaching `reassoc` and `contract` fast-math flags to floating-point dialect operations, enabling LLVM to generate vectorized reductions (`llvm.vector.reduce.fadd`) and fused multiply-accumulates for float loops.
+- **Where:** `compiler/lib/Backend/Optimization.cpp`, `compiler/lib/CLI/Driver.cpp`, `compiler/lib/Driver/CompilationPipeline.cpp`, `compiler/lib/Lowering/TirToMlir.cpp`, and associated headers.
+- **Verification:** Added dedicated unit tests for CLI argument parsing (`cli_test.cpp`) and 7 integration tests covering remark diagnostics, array vector alignment, tail epilogue reduction, integer wrapping across SIMD trees, fast-math floating point reductions, and vector bounds trap safety.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `compiler/include/nirqoba/Backend/Optimization.h` | Added `RemarkMode` and `remark_filter` | Expose optimization remarks configuration |
+| `compiler/lib/Backend/Optimization.cpp` | Installed LLVM `DiagnosticInfoOptimizationBase` handler | Emit remarks to stderr during pass execution |
+| `compiler/lib/CLI/Driver.cpp` | Added CLI parsing for `--remarks` and `--fast-math` | Expose vectorization inspection and fast-math control |
+| `compiler/lib/Lowering/TirToMlir.cpp` | Added 16-byte alignment floor and fast-math flag emission | Enable aligned SIMD codegen and floating-point reduction vectorization |
+| `tests/unit/cli_test.cpp` | Added tests for remarks and fast-math flags | Guarantee flag parsing correctness |
+| `tests/integration/positive/` | Added 7 new integration test suites | Verify SIMD execution semantics, alignment, traps, and reductions |
+| `reports/performance/po-15-loop-vectorization.md` | Created comprehensive task report | Record IR evidence and vectorization verification |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Unit suite | PASS | CLI flag parsing and remark filters verified |
+| Integration suite | PASS | 7 new suites passed covering reduction tails, SIMD wrapping, bounds traps, fast-math |
+| SIMD Code Inspection | PASS | LLVM remarks confirmed vectorization; objdump confirmed `movaps` and `vector.body` |
+
+---
+
+**End of Entry #006**
 
 <!-- REPORT ENTRIES END -->
 
