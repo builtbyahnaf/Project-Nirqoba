@@ -50,6 +50,8 @@ static void print_command_help(string_view cmd) {
               << "  -O<level>            Optimization level: -O0, -O1, -O2, -O3,\n"
               << "                       -Os, -Oz (default: -O2)\n"
               << "  --opt-level=<level>  Long form of -O<level> (0-3, s, z)\n"
+              << "  --ipo=<mode>         Interprocedural optimization: standard,\n"
+              << "                       aggressive, minimal (default: standard)\n"
               << "  --target-profile=<p> Target profile: portable, native, explicit\n"
               << "                       (default: inferred; portable without target flags)\n"
               << "  --target <triple>    Explicit target triple (e.g. x86_64-pc-windows-msvc)\n"
@@ -67,6 +69,8 @@ static void print_command_help(string_view cmd) {
               << "  --out-dir <dir>      Directory for temporary build artifacts\n"
               << "  --module-path <dir>  Extra directory searched for imported modules\n"
               << "  -O<level>            Optimization level (default: -O2)\n"
+              << "  --ipo=<mode>         Interprocedural optimization: standard,\n"
+              << "                       aggressive, minimal (default: standard)\n"
               << "  --target-profile=<p> Target profile: portable, native, explicit\n"
               << "  --target <triple>    Explicit target triple\n"
               << "  --target-cpu <cpu>   Target CPU model, or 'native'\n"
@@ -330,6 +334,28 @@ bool parse_command_line(int argc, const char* const* argv,
       options.optimization_level = level;
       continue;
     }
+    if (arg == "--ipo") {
+      if (idx >= argc) {
+        error_message = "missing mode after '--ipo'";
+        return false;
+      }
+      if (!parse_ipo_mode(argv[idx++], options.ipo_mode)) {
+        error_message = "invalid interprocedural mode; expected standard, "
+                        "aggressive, or minimal";
+        return false;
+      }
+      continue;
+    }
+    if (arg.rfind("--ipo=", 0) == 0) {
+      IpoMode mode = options.ipo_mode;
+      if (!parse_ipo_mode(string_view(arg).substr(6), mode)) {
+        error_message = "invalid interprocedural mode '" + arg.substr(6) +
+                        "'; expected standard, aggressive, or minimal";
+        return false;
+      }
+      options.ipo_mode = mode;
+      continue;
+    }
     if (arg == "--native") {
       options.target_profile = TargetProfile::Native;
       options.target_profile_specified = true;
@@ -577,6 +603,7 @@ int run_driver(int argc, const char* const* argv) {
   pipe_opts.obj_path = obj_file;
   pipe_opts.verbose = options.verbose;
   pipe_opts.optimization_level = options.optimization_level;
+  pipe_opts.ipo_mode = options.ipo_mode;
   pipe_opts.target_profile = options.target_profile;
   pipe_opts.target_triple = options.target_triple;
   pipe_opts.target_cpu = options.target_cpu;

@@ -218,6 +218,37 @@ TEST(CliTest, ParsesRemarkModes) {
   }
 }
 
+TEST(CliTest, ParsesIpoPolicy) {
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(3, argv, opts, err));
+    ASSERT_EQ(opts.ipo_mode, IpoMode::Standard);
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", "--ipo=aggressive"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(4, argv, opts, err));
+    ASSERT_EQ(opts.ipo_mode, IpoMode::Aggressive);
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", "--ipo", "minimal"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(5, argv, opts, err));
+    ASSERT_EQ(opts.ipo_mode, IpoMode::Minimal);
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", "--ipo=full"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_FALSE(parse_command_line(4, argv, opts, err));
+    ASSERT_TRUE(err.find("invalid interprocedural mode") != string::npos);
+  }
+}
+
 TEST(CliTest, ParsesFastMath) {
   {
     const char* argv[] = {"nirqoba", "build", "main.nrqba", "--fast-math"};

@@ -70,9 +70,34 @@ enum class RemarkMode {
   Missed,  // missed/analysis explanations only
 };
 
+// How much interprocedural optimization the backend should run.
+//
+// Nirqoba lowers every resolved language module into one LLVM module, so the
+// optimizer already has whole-program visibility: the default "standard" mode
+// is therefore full LTO over the merged program. "Aggressive" adds LLVM's
+// Attributor and a larger inliner budget for builds that can afford more
+// compile time. "Minimal" keeps cross-function work to the inexpensive passes
+// (IPSCCP, GlobalDCE) and disables inlining, which bounds compile time and
+// code growth for very large programs.
+enum class IpoMode {
+  Standard,
+  Aggressive,
+  Minimal,
+};
+
+// Returns the spelling accepted on the command line ("standard", "aggressive",
+// "minimal").
+std::string_view ipo_mode_name(IpoMode mode);
+
+// Parses an IPO mode spelling. Returns false for an unknown name.
+bool parse_ipo_mode(std::string_view text, IpoMode& mode);
+
 // Target and optimization settings for one compiled module.
 struct OptimizationOptions {
   OptimizationLevel level = OptimizationLevel::O2;
+
+  // How much interprocedural work the LLVM pipeline may perform.
+  IpoMode ipo = IpoMode::Standard;
 
   // Which target profile the backend should honour. `Portable` ignores the
   // CPU/features fields, `Native` derives them from the host, and `Explicit`
