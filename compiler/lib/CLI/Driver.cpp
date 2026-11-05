@@ -46,7 +46,7 @@ static void print_command_help(string_view cmd) {
               << "  --out-dir <dir>      Directory to place output artifacts\n"
               << "  --module-path <dir>  Extra directory searched for imported modules\n"
               << "  --emit=<kind>        Emit intermediate stage and stop\n"
-              << "                       Kinds: ast, tir, mlir, llvm, llvm-raw, obj\n"
+              << "                       Kinds: ast, layout, tir, mlir, llvm, llvm-raw, obj\n"
               << "  -O<level>            Optimization level: -O0, -O1, -O2, -O3,\n"
               << "                       -Os, -Oz (default: -O2)\n"
               << "  --opt-level=<level>  Long form of -O<level> (0-3, s, z)\n"
@@ -107,6 +107,7 @@ static void print_command_help(string_view cmd) {
 
 static bool parse_emit_kind(string_view str, EmitKind& kind) {
   if (str == "ast")  { kind = EmitKind::Ast; return true; }
+  if (str == "layout") { kind = EmitKind::Layout; return true; }
   if (str == "tir")  { kind = EmitKind::Tir; return true; }
   if (str == "mlir") { kind = EmitKind::Mlir; return true; }
   if (str == "llvm") { kind = EmitKind::Llvm; return true; }
@@ -593,7 +594,7 @@ bool parse_command_line(int argc, const char* const* argv,
       string_view kind_str = string_view(arg).substr(7);
       if (!parse_emit_kind(kind_str, options.emit)) {
         error_message = "invalid emit kind '" + string(kind_str) +
-                        "'; expected ast, tir, mlir, llvm, llvm-raw, or obj";
+                        "'; expected ast, layout, tir, mlir, llvm, llvm-raw, or obj";
         return false;
       }
       options.emit_specified = true;

@@ -82,6 +82,7 @@ add_library(nirqoba_compiler_lib STATIC
   lib/TIR/Verifier.cpp
 
   # Lowering (nrq dialect + TIR→MLIR + passes)
+  lib/Lowering/DataLayout.cpp
   lib/Lowering/NrqDialect.cpp
   lib/Lowering/NrqToLLVMPass.cpp
   lib/Lowering/PassPipeline.cpp
