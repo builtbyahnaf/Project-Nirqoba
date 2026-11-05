@@ -12,11 +12,9 @@
 
 ## Overview
 
-**Nirqoba** is an ambitious, statically typed, high-performance programming language built by Muhammad Tahmid Ahnaf. It is designed to bring general-purpose programming, artificial intelligence, numerical computing, graphics, and systems development into one coherent ecosystem.
+**Nirqoba** is an ambitious, statically typed, high-performance systems and scientific programming language built by Muhammad Tahmid Ahnaf (@builtbyahnaf). It is designed to unify general-purpose software development, numerical computing, artificial intelligence, graphics, and systems programming within a single coherent compiler and runtime ecosystem.
 
-The project aims to combine the readability and developer-friendliness of modern high-level languages with the performance, memory control, and native interoperability expected from systems languages.
-
-Rather than treating AI/ML and scientific computing as external additions, Nirqoba is being designed with these workloads in mind from its foundational architecture.
+Rather than forcing developers to compromise between productive high-level syntax and low-level mechanical sympathy, Nirqoba pairs a clear, structured syntax with native machine code generation via MLIR and LLVM. It provides a unique hybrid memory model: **deterministic ownership and borrowing by default**, coupled with an **opt-in, generational, incremental garbage collector** for complex cyclic graphs and **explicit, configurable allocators** for systems-critical paths.
 
 The long-term goal is simple:
 
@@ -24,290 +22,230 @@ The long-term goal is simple:
 
 ## Vision
 
-Nirqoba is being developed around five fundamental principles:
+Nirqoba is developed around five fundamental principles:
 
-- **Readability:** Expressive syntax that is easy to understand without sacrificing precision.
-- **Performance:** Native compilation and an architecture designed for optimization.
-- **Control:** Flexible memory management, explicit execution policies, and low-level interoperability.
-- **Extensibility:** A foundation capable of supporting advanced numerical, graphical, asynchronous, and GPU-oriented features.
-- **Consistency:** A unified language experience rather than disconnected collections of specialized features.
+- **Readability:** Expressive, predictable syntax featuring explicit types, statement semicolons, lexical scopes, and local type inference without indentation-sensitive pitfalls.
+- **Performance:** Native compilation via MLIR dialects and LLVM PassBuilder optimization pipelines (`-O0` through `-O3`, `-Os`, `-Oz`), hardware-targeted SIMD vectorization, fast-math reduction synthesis, and escape analysis with stack promotion.
+- **Control:** Deterministic ownership by default, compile-time borrow checking with mutable view exclusivity, selectable custom allocators (arena, pool, slab, stack, region), memory pinning/mapping, and an opt-in tracing GC.
+- **Extensibility:** Architectural foundations designed to support advanced numerical abstractions, computational graphs, tensors, asynchronous concurrency, and explicit GPU execution.
+- **Consistency:** A unified language architecture where high-level operations lower into transparent, zero-cost abstractions rather than disconnected feature silos.
 
-## Key Design Goals
+## Current Architectural Reality & Key Design Goals
 
-| Area | Direction |
+| Area | Current Status / Architectural Direction |
 |---|---|
-| Language design | Statically typed, modern, expressive |
-| Compiler infrastructure | MLIR and LLVM |
-| Compilation | Native machine-code generation |
-| Primary platform | Windows x64 initially |
-| Additional platform | Linux |
-| Memory management | Automatic GC by default, with precise alternatives |
-| Concurrency | Async/await, coroutines, structured concurrency |
-| Interoperability | C, C++, and CUDA |
-| Numerical computing | Native tensor and advanced numeric abstractions |
-| AI/ML | Computational graphs, automatic differentiation, data pipelines |
-| Graphics | Native graphics ecosystem integration |
-| GPU execution | Explicit developer-controlled execution |
+| **Language Design** | Statically typed, structured syntax, local type inference (`let` / `var`), records/structs, fixed arrays |
+| **Compiler Infrastructure** | Multi-stage pipeline: Lexer -> Parser -> AST -> TypeChecker (Sema) -> TIR -> MLIR -> LLVM IR |
+| **Optimization Backend** | LLVM PassBuilder pipeline (`-O0` to `-O3`, `-Os`, `-Oz`), MLIR canonicalization, CSE, SCCP, DCE/DSE |
+| **Memory Model** | Hybrid: **Ownership & borrowing by default**; opt-in generational & incremental GC; explicit custom allocators |
+| **Escape Analysis** | Interprocedural pointer & array escape analysis; automatic stack promotion (`alloca_at_entry`) with 16-byte SIMD alignment floors |
+| **Vectorization & SIMD** | Loop vectorization, aligned SIMD codegen (`movaps`), opt-in `--fast-math` reductions (`llvm.vector.reduce.fadd`), and `--remarks` diagnostics |
+| **Target Architecture** | Windows x64 MSVC primary; configurable CPU targets (`--target-cpu`, `--target-features`, `--native`) |
+| **Runtime ABI** | Lightweight native runtime with direct Win32 I/O, TLABs, safepoints, shadow stack with liveness-based root registration |
+| **Concurrency (Planned)** | Structured concurrency, coroutines, low-overhead thread scheduler, thread-safe memory models |
+| **Numerical & AI (Planned)** | First-class tensors, computational graphs, automatic differentiation, reduced precision formats (FP16, BF16, FP8) |
+| **GPU Execution (Planned)** | Explicit CPU-first execution model: developer-managed device selection, memory transfers, and kernel dispatch |
 
 ## What Makes Nirqoba Different?
 
-### 1. Designed for more than general-purpose programming
+### 1. Hybrid Memory Architecture: Ownership by Default, Tracing GC by Choice
 
-Most languages have a primary domain and rely on libraries or external frameworks to expand beyond it.
+In contrast to pure garbage-collected languages or strictly borrow-checked systems, Nirqoba provides a tiered, developer-controlled memory model:
 
-Nirqoba aims to make several domains first-class architectural considerations:
+1. **Deterministic Ownership & Borrowing:** Uniquely owned arrays and allocations (`memory.owned_array<T>(len)`) transfer explicitly on move and deallocate immediately upon leaving lexical scope. Borrowed views (`borrow array_view<T>` and `borrow mut source array_view<T>`) enforce borrow semantics with zero runtime overhead.
+2. **Opt-in Generational & Incremental GC:** Automatic garbage collection starts disabled by default and can be engaged explicitly for dynamic object graphs. The runtime collector features young and old generations, thread-local allocation buffers (TLABs), remembered sets, write barriers, and sliced incremental marking/sweeping overlapping mutator execution.
+3. **Liveness-Aware Shadow Roots:** The compiler performs backward liveness analysis over managed references so GC root frames and write barriers are emitted exclusively across safepoints where values are live.
+4. **Pluggable Explicit Allocators:** Applications can construct and bind custom allocators per-thread or per-operation (`general`, `arena`, `pool`, `slab`, `stack`, `region`, `buddy`, `tlsf`) with fine-grained alignment and profiling options.
 
-- Artificial intelligence and machine learning.
-- Scientific and numerical computing.
-- Large-scale data processing.
-- Graphics and visual applications.
-- General-purpose software development.
-- Systems and low-level programming.
+### 2. Predictable, High-Performance Code Generation
 
-### 2. Readable without being restrictive
+Nirqoba compiles directly to machine code through LLVM and MLIR:
+- **Escape Analysis & Stack Promotion:** Local owned arrays and heap allocations that do not escape their scope are automatically promoted to stack slots in the function entry block, completely eliminating dynamic allocation traffic.
+- **SIMD Vectorization & Optimization Remarks:** Loops over contiguous memory are vectorized with aligned 16-byte stack floors. Developers can observe compiler optimization decisions in real time via `--remarks` or `--remarks=missed`.
+- **Accurate Function Attributes:** The compiler infers whole-module memory effects (`llvm.memory_effects`) and derives `nocapture` and `readonly` attributes from escape fixpoints, enabling LLVM to aggressively hoist loads, eliminate dead stores, and optimize calls.
 
-Nirqoba uses a familiar programming structure with explicit types, braces, semicolons, and readable declarations.
+### 3. Readable Syntax Without Hidden Costs
 
-Example:
+Nirqoba uses explicit, brace-delimited declarations with clear control flow and typing:
 
 ```nirqoba
-f64 function calculate_mean(f64[] values) {
-    if (values.length == 0) {
-        return 0.0;
+// Contiguous owned array processed via borrowed views and loop vectorization
+int function sum_positive(borrow array_view<int> slice) {
+    var total = 0;
+    var i = 0;
+    while (i < slice.length) {
+        if (slice[i] > 0) {
+            total += slice[i];
+        }
+        i += 1;
+    }
+    return total;
+}
+
+int function main() {
+    var numbers = memory.owned_array<int>(64);
+    var i = 0;
+    while (i < 64) {
+        numbers[i] = i - 10;
+        i += 1;
     }
 
-    let total = values.reduce((a, b) => a + b);
-
-    return total / values.length;
+    let view = memory.array_view<int>(numbers, 0, 64);
+    let result = sum_positive(view);
+    print(result);
+    return 0;
 }
 ```
 
-The intended experience is readable, structured, and predictable.
+### 4. Explicit Systems & Heterogeneous Computing Philosophy
 
-### 3. Automatic memory management with developer control
+Nirqoba follows a predictable, CPU-first model:
+- No hidden background runtime threads unless explicitly created.
+- GPU availability does not automatically trigger GPU execution—device selection, buffer transfers, and kernel launches are developer-directed.
+- Direct native interoperability with C/C++ ABIs, DirectX/DXGI device estimation, and memory-mapped file handles without heavy foreign function interfaces.
 
-Nirqoba uses garbage collection by default for ordinary managed objects.
+---
 
-However, developers can choose more precise mechanisms when required:
+## Compiler Architecture
 
-- Deterministic ownership.
-- Borrowing and scoped references.
-- Explicit dynamic allocation.
-- Custom allocator strategies.
-- Memory mapping and pinning.
-- Optional memory profiling and diagnostics.
-
-The objective is to combine developer convenience with low-level control.
-
-### 4. Explicit GPU execution
-
-Nirqoba follows a CPU-first execution model.
-
-GPU availability does not automatically mean GPU execution.
-
-Developers must explicitly request GPU operations, select devices, and manage relevant memory transfers.
-
-This provides predictable execution behavior and avoids unexpected hardware dependencies.
-
-### 5. Native ecosystem interoperability
-
-Nirqoba is not intended to reinvent every existing library.
-
-Its long-term interoperability goals include:
-
-- C libraries and APIs.
-- C++ libraries and APIs.
-- CUDA infrastructure.
-- Native graphics libraries.
-- Existing numerical and scientific computing ecosystems.
-
-## Architecture
-
-The compiler is intended to use a multi-stage architecture built around MLIR and LLVM.
-
-Conceptual compilation pipeline:
+Nirqoba uses a multi-tier compilation pipeline designed to preserve semantic and ownership information through lowering:
 
 ```text
-Nirqoba Source Code
-        |
-        v
-      Lexer
-        |
-        v
-      Parser
-        |
-        v
-       AST
-        |
-        v
-Semantic and Type Analysis
-        |
-        v
-Typed Nirqoba Representation
-        |
-        v
-   Nirqoba MLIR Dialects
-        |
-        v
-Optimization and Lowering
-        |
-        v
-       LLVM
-        |
-        v
- Native Machine Code
-        |
-        v
- Runtime and Standard Library
+       Nirqoba Source (.nrqba)
+                  │
+                  ▼
+          Lexer & Parser
+                  │
+                  ▼
+             AST & CST
+                  │
+                  ▼
+       Semantic Analysis & Types (Sema)
+  (Ownership validation, borrow checking, types)
+                  │
+                  ▼
+      Typed Intermediate Representation (TIR)
+  (Liveness analysis, escape analysis, root summaries)
+                  │
+                  ▼
+             MLIR Dialects
+  (Canonicalization, CSE, SCCP, bounds guards, cleanup)
+                  │
+                  ▼
+                LLVM IR
+  (Function attributes, memory effects, PassBuilder O0-O3)
+                  │
+                  ▼
+         Native Machine Code (.obj / .exe)
+                  │
+                  ▼
+          Nirqoba Native Runtime
+  (TLABs, generational GC, custom allocators, Win32 I/O)
 ```
 
-The compiler architecture must preserve high-level information long enough to support advanced features such as tensors, computational graphs, asynchronous execution, memory management, and GPU operations.
+---
 
-MLIR and LLVM serve as compiler infrastructure. They do not define Nirqoba's language semantics.
+## Development Status & Roadmap
 
-## Development Roadmap
+The language is actively progressing through its architectural milestones. Current active version: **`0.117-beta`** (Phase 6 / Compiler Optimization and Hardening).
 
-Nirqoba is being developed through 25 major phases, preceded by a dedicated Windows distribution milestone.
+| Phase | Description | Status |
+|---|---|---|
+| **Phase 1** | Compiler architecture and executable vertical slice | Completed |
+| **Phase 2** | Primitive types, expressions, and operators | Completed |
+| **Phase 3** | Functions, lexical scoping, and control flow | Completed |
+| **Phase 4** | Collections, records/structs, and direct Win32 I/O | Completed |
+| **Phase 5** | Modules, multi-file builds, and error reporting | Completed |
+| **Phase 6** | Allocator-aware owned arrays, mutable views, and stabilization | Completed |
+| **PO 3.1–3.6** | PassBuilder pipeline, alias analysis, escape analysis, root liveness, SIMD vectorization | Completed |
+| **Phase 6.5–6.9** | Generational incremental GC, explicit allocators, memory profiling | Completed |
+| **Phase 7–9** | Generics, algebraic data types, advanced pattern matching | Planned |
+| **Phase 10–12** | Structured concurrency, async/await, task scheduling | Planned |
+| **Phase 13–15** | C/C++ FFI interoperability and graphics ecosystem | Planned |
+| **Phase 16–18** | Advanced numeric representations (FP16, BF16, FP8), matrix primitives | Planned |
+| **Phase 19–22** | First-class tensors, computational graphs, autodiff | Planned |
+| **Phase 23–24** | GPU runtime and compute kernels | Planned |
+| **Phase 25** | Production distribution tooling and ecosystem | Planned |
 
-| Milestone | Focus |
-|---|---|
-| Phase 1 | Compiler architecture and executable vertical slice |
-| Phase 2 | Primitive types and expressions |
-| Phase 3 | Functions and control flow |
-| Phase 4 | Collections, structured data, and I/O |
-| Phase 5 | Modules, errors, and usable general-purpose language |
-| Phase 6 | Stabilization and regression hardening |
-| Phase 6.5 | Default garbage collection and memory management |
-| Phase 6.7 | Explicit allocation and selectable allocators |
-| Phase 6.9 | Advanced memory utilities |
-| Pre-Phase 7 | Windows compiler, installer, and PATH integration |
-| Phase 7–9 | Algebraic types, generics, ownership, and low-level memory |
-| Phase 10–12 | Async, coroutines, structured concurrency, and streams |
-| Phase 13–15 | C/C++ interoperability and graphics ecosystem |
-| Phase 16–18 | Optimization, SIMD, and advanced numeric types |
-| Phase 19–22 | Tensors, computational graphs, autodiff, and data analysis |
-| Phase 23–24 | GPU runtime and native GPU kernels |
-| Phase 25 | Production tooling and ecosystem |
+---
 
-The first five phases focus on building a usable general-purpose language before introducing the more ambitious domain-specific capabilities.
-
-## Project Structure
-
-The repository is expected to evolve into a structure similar to:
+## Repository Structure
 
 ```text
 Project-Nirqoba/
-│
-├── README.md
-├── ABOUT.md
-├── LICENSE
-├── CONTRIBUTING.md
-│
-├── docs/
-│   ├── language/
-│   ├── compiler/
-│   ├── runtime/
-│   ├── memory/
-│   ├── standard-library/
-│   ├── tutorials/
-│   ├── how-to/
-│   ├── reference/
-│   ├── architecture/
-│   └── installation/
-│
-├── reports/
-│   ├── phase-01.md
-│   ├── phase-02.md
-│   └── ...
-│
-├── compiler/
-├── runtime/
-├── standard-library/
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   ├── regression/
-│   ├── conformance/
-│   └── examples/
-│
-├── tools/
-│
-├── installer/
-│
-├── examples/
-│
-└── scripts/
+├── CMakeLists.txt        # Root build configuration
+├── compiler/             # Frontend, AST, Sema, TIR, MLIR lowering, LLVM codegen, Driver
+│   ├── include/nirqoba/  # Public compiler headers
+│   └── lib/              # AST, Lexer, Parser, Sema, TIR, Lowering, Backend, CLI
+├── runtime/              # Native runtime library
+│   ├── include/          # Public runtime interfaces (gc.h, allocator.h, version.h)
+│   └── src/              # Windows I/O, allocators, generational GC, thread buffers
+├── tests/                # Test suites
+│   ├── unit/             # C++ GoogleTest unit test suite
+│   ├── integration/      # End-to-end positive, negative, and MLIR expectation tests
+│   └── readiness/        # Language readiness audit programs and benchmarks
+├── benchmarks/           # Standardized performance and stress test suites
+├── docs/                 # Architecture, language specifications, and VERSION_LOG.md
+├── reports/              # Phase verification and performance engineering reports
+└── scripts/              # Bootstrap, build (build.ps1), and test (test.ps1) automation
 ```
 
-This is a proposed organization. Actual directories should be created as their corresponding components are implemented.
+---
 
 ## Getting Started
 
-Nirqoba is under development.
+### Prerequisites (Windows x64)
 
-Installation instructions and executable releases will be published when the corresponding compiler and distribution milestones are complete.
+- **Visual Studio 2022** (MSVC C++20 toolchain)
+- **CMake 3.28+** and **Ninja**
+- **LLVM & MLIR 23.1.4 SDK** (prebuilt tarball or local SDK)
+- **Python 3.10+** (for test running and verification)
 
-Until then, the repository should be treated as a language and compiler development project rather than a production-ready programming environment.
+### Building and Testing
 
-Once a usable compiler is available, the intended workflow will look like:
+Run the automated PowerShell build and test scripts from the repository root:
 
 ```powershell
-nirqoba --version
+# Bootstrap toolchain configuration (first time)
+.\scripts\bootstrap.ps1
 
-nirqoba check main.nrqba
+# Build compiler and runtime in RelWithDebInfo
+.\scripts\build.ps1 -Configuration RelWithDebInfo
 
-nirqoba build main.nrqba
-
-nirqoba run main.nrqba
+# Run unit tests and integration test suite
+.\scripts\test.ps1 -Configuration RelWithDebInfo
 ```
 
-## Documentation
+### Compiler CLI Usage
 
-The project documentation will cover:
+```powershell
+# Show version and target configuration
+nirqoba --version
 
-- Language syntax and semantics.
-- Installation and environment setup.
-- Compiler architecture.
-- Runtime architecture.
-- Memory management.
-- Standard-library usage.
-- Practical programming tutorials.
-- Advanced numerical and GPU programming.
-- Troubleshooting and optimization.
+# Compile and run a source file directly
+nirqoba run main.nrqba
 
-Beginning with the usable-language milestone, documentation will include practical instructions, examples, usage patterns, and tips—not just API descriptions.
+# Compile to a native executable with O3 optimizations and vector remarks
+nirqoba build main.nrqba -O3 --remarks=loop-vectorize -o program.exe
 
-## Development Philosophy
+# Enable fast-math for floating-point loop reductions
+nirqoba build main.nrqba -O2 --fast-math -o program.exe
 
-Nirqoba is being developed incrementally, but its architecture is planned with the long-term language in mind.
+# Inspect lowered LLVM IR or MLIR representations
+nirqoba build main.nrqba --emit=llvm
+nirqoba build main.nrqba --emit=mlir
+```
 
-A feature should not require a fundamental redesign of the compiler merely because it introduces a more advanced capability.
+---
 
-Every development phase must include:
+## License & Ownership
 
-- Defined implementation scope.
-- Architecture and specification updates.
-- Relevant automated tests.
-- Regression testing.
-- Technical documentation.
-- A detailed implementation report.
-
-Features must be tested before they are declared complete.
-
-## Contributing
-
-Contribution guidelines will be published as the project structure and development workflow mature.
-
-Until then, all development should follow the repository's `AGENTS.md` instructions and the applicable phase specification.
-
-## License
-
-License information will be specified in the repository's `LICENSE` file.
+- **Author & Technical Authority:** Muhammad Tahmid Ahnaf ([@builtbyahnaf](https://github.com/builtbyahnaf))
+- **License:** See [LICENSE.md](LICENSE.md) for licensing terms.
 
 ---
 
 <p align="center">
-  <strong>Nirqoba</strong>
-  <br>
+  <strong>Nirqoba</strong><br>
   <em>Designed to compute. Built to evolve.</em>
 </p>

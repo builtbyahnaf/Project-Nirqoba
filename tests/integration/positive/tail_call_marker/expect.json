@@ -1,0 +1,8 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O0"],
+  "expect_stdout_contains": [
+    "tail call i64 @is_odd",
+    "tail call i64 @is_even"
+  ]
+}
