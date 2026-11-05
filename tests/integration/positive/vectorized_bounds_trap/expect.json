@@ -1,0 +1,6 @@
+{
+  "mode": "build_and_run",
+  "args": ["-O2", "--", "a", "b", "c"],
+  "expect_exit": 70,
+  "expect_stdout_contains": ["owned array index is outside the array bounds"]
+}

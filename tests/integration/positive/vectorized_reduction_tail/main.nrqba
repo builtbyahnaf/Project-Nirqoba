@@ -1,0 +1,20 @@
+// The trip count comes from the argument list so it cannot be constant-folded
+// and the loop is really vectorized. 34 + 3 arguments = 37 elements, which is
+// not a multiple of the vector width, so the scalar epilogue must be correct.
+int function main(string[] args) {
+    var n = 34 + args.length;
+    var values = memory.owned_array<int>(37);
+    var i = 0;
+    while (i < 37) {
+        values[i] = i * 3;
+        i += 1;
+    }
+    var sum = 0;
+    var j = 0;
+    while (j < n) {
+        sum += values[j];
+        j += 1;
+    }
+    print(sum);
+    return 0;
+}
