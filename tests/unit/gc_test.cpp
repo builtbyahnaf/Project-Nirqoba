@@ -9,6 +9,7 @@
 
 #include "nirqoba/runtime/gc.h"
 #include "nirqoba/runtime/allocator.h"
+#include "nirqoba/runtime/cache_line.h"
 
 using namespace std;
 
@@ -69,6 +70,24 @@ void recurse_with_roots(int depth, uint64_t& live_at_bottom) {
 }
 
 }  // namespace
+
+TEST(GcTest, SharedCountersDoNotShareACacheLine) {
+  // The allocation-path accounting is updated from every mutator thread. If the
+  // padding ever regressed, unrelated shared state would share a line and every
+  // update would invalidate another thread's copy even though the variables are
+  // independent.
+  ASSERT_EQ(nirq::nrq_cache_line_bytes, 64);
+  ASSERT_EQ(alignof(nirq::NrqCacheLineAligned<std::atomic<uint64_t>>), 64);
+  ASSERT_EQ(sizeof(nirq::NrqCacheLineAligned<std::atomic<uint64_t>>), 64);
+
+  nirq::NrqCacheLineAligned<std::atomic<uint64_t>> first;
+  nirq::NrqCacheLineAligned<std::atomic<uint64_t>> second;
+  const auto first_address = reinterpret_cast<uintptr_t>(&first);
+  const auto second_address = reinterpret_cast<uintptr_t>(&second);
+  ASSERT_EQ(first_address % 64, 0);
+  ASSERT_EQ(second_address % 64, 0);
+  ASSERT_TRUE(second_address - first_address >= 64);
+}
 
 TEST(GcTest, PreservesReachableCyclesAndSweepsAfterRootRemoval) {
   nrq_gc_enable();

@@ -11,6 +11,7 @@
 // parked only briefly at cycle boundaries to publish TLabs and prepare roots.
 
 #include "nirqoba/runtime/gc.h"
+#include "nirqoba/runtime/cache_line.h"
 #include "nirqoba/runtime/fatal.h"
 
 #include <algorithm>
@@ -332,10 +333,20 @@ bool reference_diagnostics_enabled = false;
 // works regardless of this state.
 std::atomic<bool> automatic_collection_enabled{false};
 std::atomic<bool> generational_collection_enabled{true};
-std::atomic<size_t> collection_threshold{1024 * 1024};
-std::atomic<size_t> bytes_since_collection{0};
-std::atomic<uint64_t> pending_allocation_bytes{0};
-std::atomic<uint64_t> pending_allocation_count{0};
+// Every GC allocation updates these counters, from every mutator thread, so
+// they are the hottest shared state in the runtime. They sit together on one
+// cache line because they are updated together, and that line is isolated from
+// the collector's own fields so a mutator's accounting does not invalidate the
+// line a collection is reading (false sharing). The residual contention is true
+// sharing: several threads do update these same words, which per-mutator
+// accounting rather than layout has to remove.
+struct alignas(nirq::nrq_cache_line_bytes) AllocationAccounting {
+  std::atomic<size_t> bytes_since_collection{0};
+  std::atomic<uint64_t> pending_allocation_bytes{0};
+  std::atomic<uint64_t> pending_allocation_count{0};
+  std::atomic<size_t> collection_threshold{1024 * 1024};
+};
+AllocationAccounting allocation_accounting;
 nrq_gc_stats statistics{};
 uint64_t minor_collections = 0;
 uint64_t major_collections = 0;
@@ -348,12 +359,13 @@ constexpr size_t kMarkBudget = 64;
 constexpr size_t kSweepBudget = 64;
 constexpr uint8_t kPromotionAge = 2;
 constexpr size_t kMajorCollectionInterval = 8;
-std::atomic<CollectionPhase> collection_phase{CollectionPhase::Idle};
+alignas(nirq::nrq_cache_line_bytes) std::atomic<CollectionPhase> collection_phase{
+    CollectionPhase::Idle};
 // Counts lock-free barrier operations that started while the collector was idle.
 // The collector publishes Preparing and then waits for this counter to reach
 // zero before taking a root snapshot, so a store that began before the phase
 // change is either fully visible to the snapshot or takes the slow barrier path.
-std::atomic<uint64_t> barrier_readers{0};
+alignas(nirq::nrq_cache_line_bytes) std::atomic<uint64_t> barrier_readers{0};
 bool active_collection_is_minor = false;
 uint64_t active_cycle_epoch = 0;
 std::atomic<uint64_t> next_cycle_epoch{1};
@@ -421,10 +433,10 @@ void publish_tlab_locked(MutatorState& mutator) {
     header = next;
   }
   if (mutator.pending_bytes != 0)
-    pending_allocation_bytes.fetch_sub(mutator.pending_bytes,
+    allocation_accounting.pending_allocation_bytes.fetch_sub(mutator.pending_bytes,
                                        std::memory_order_relaxed);
   if (mutator.pending_count != 0)
-    pending_allocation_count.fetch_sub(mutator.pending_count,
+    allocation_accounting.pending_allocation_count.fetch_sub(mutator.pending_count,
                                        std::memory_order_relaxed);
   mutator.pending_objects = nullptr;
   mutator.pending_bytes = 0;
@@ -927,7 +939,7 @@ void finish_cycle_locked(bool young_only) {
     generational_barrier_active.store(false, std::memory_order_release);
   active_mark = MarkContext{};
   collection_phase.store(CollectionPhase::Idle, std::memory_order_release);
-  bytes_since_collection.store(0, std::memory_order_relaxed);
+  allocation_accounting.bytes_since_collection.store(0, std::memory_order_relaxed);
 }
 
 // A registered mutator may request a collection while another thread is already
@@ -1009,8 +1021,8 @@ void maybe_collect_automatically() {
     return;
   const bool should_collect = automatic_collection_enabled.load(
                                   std::memory_order_relaxed) &&
-      bytes_since_collection.load(std::memory_order_relaxed) >=
-          collection_threshold.load(std::memory_order_relaxed);
+      allocation_accounting.bytes_since_collection.load(std::memory_order_relaxed) >=
+          allocation_accounting.collection_threshold.load(std::memory_order_relaxed);
   if (!should_collect) return;
   const bool young_only =
       generational_collection_enabled.load(std::memory_order_relaxed) &&
@@ -1114,7 +1126,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   statistics.allocated_bytes = saturated_add(
       statistics.allocated_bytes, static_cast<uint64_t>(bytes));
   statistics.live_objects = saturated_add(statistics.live_objects, 1);
-  atomic_saturating_add_size(bytes_since_collection, bytes);
+  atomic_saturating_add_size(allocation_accounting.bytes_since_collection, bytes);
   return object;
 }
 
@@ -1247,10 +1259,10 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     nrq_runtime_fatal("GC thread-local allocation accounting overflow");
   thread_mutator.pending_bytes += bytes;
   ++thread_mutator.pending_count;
-  atomic_saturating_add(pending_allocation_bytes,
+  atomic_saturating_add(allocation_accounting.pending_allocation_bytes,
                         static_cast<uint64_t>(bytes));
-  atomic_saturating_add(pending_allocation_count, uint64_t{1});
-  atomic_saturating_add_size(bytes_since_collection, bytes);
+  atomic_saturating_add(allocation_accounting.pending_allocation_count, uint64_t{1});
+  atomic_saturating_add_size(allocation_accounting.bytes_since_collection, bytes);
 
   // During a cycle an unpublished young object is invisible to the marker and
   // to the root barrier. Publish it immediately so a barrier can identify it.
@@ -1752,7 +1764,7 @@ void nrq_gc_safepoint(void) {
 }
 
 void nrq_gc_set_threshold(size_t bytes) {
-  collection_threshold.store(bytes == 0 ? 1 : bytes,
+  allocation_accounting.collection_threshold.store(bytes == 0 ? 1 : bytes,
                              std::memory_order_relaxed);
 }
 
@@ -1761,10 +1773,10 @@ nrq_gc_stats nrq_gc_get_stats(void) {
   nrq_gc_stats result = statistics;
   result.allocated_bytes = saturated_add(
       result.allocated_bytes,
-      pending_allocation_bytes.load(std::memory_order_relaxed));
+      allocation_accounting.pending_allocation_bytes.load(std::memory_order_relaxed));
   result.live_objects = saturated_add(
       result.live_objects,
-      pending_allocation_count.load(std::memory_order_relaxed));
+      allocation_accounting.pending_allocation_count.load(std::memory_order_relaxed));
   return result;
 }
 
