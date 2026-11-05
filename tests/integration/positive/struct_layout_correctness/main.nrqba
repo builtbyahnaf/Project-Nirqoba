@@ -1,0 +1,50 @@
+// Every field must still read back its own value after the physical layout is
+// chosen by the compiler: scalars of mixed width, a nested struct, a fixed
+// array field and a tuple inside a struct. A wrong field offset would swap two
+// values here instead of crashing, so the program prints all of them.
+struct Inner {
+    int high;
+    bool low;
+}
+
+struct Outer {
+    bool flag;
+    Inner inner;
+    char tag;
+    int[3] counts;
+    int total;
+}
+
+struct Pair {
+    int left;
+    int right;
+}
+
+Outer function bump(Outer o, int delta) {
+    o.total = o.total + delta;
+    o.counts[1] = o.counts[1] + delta;
+    o.inner.high = o.inner.high * 2;
+    return o;
+}
+
+int function main(string[] args) {
+    var zero = 0;
+    var o = Outer {
+        flag: args.length > zero,
+        inner: Inner { high: 5, low: true },
+        tag: 'q',
+        counts: [1, 2, 3],
+        total: 10
+    };
+    var p = Pair { left: 4, right: 7 };
+    var bumped = bump(o, 3);
+    print(bumped.total);
+    print(bumped.counts[1]);
+    print(bumped.counts[0] + bumped.counts[2]);
+    print(bumped.inner.high);
+    print(bumped.flag);
+    print(bumped.inner.low);
+    print(bumped.tag);
+    print(p.left * 10 + p.right);
+    return 0;
+}
