@@ -1,0 +1,22 @@
+// `--emit=layout` prints the layout the compiler chose, so the padding a
+// struct costs and the bytes the physical order removed are inspectable. `Wide`
+// interleaves short scalars between wide ones: declaration order costs 32 bytes
+// with 11 bytes of padding, the physical order costs 24.
+struct Wide {
+    bool flag;
+    int first;
+    char tag;
+    int second;
+}
+
+struct Nested {
+    char marker;
+    Wide wide;
+}
+
+int function main(string[] args) {
+    var w = Wide { flag: args.length > 0, first: 1, tag: 'w', second: 2 };
+    var n = Nested { marker: 'n', wide: w };
+    print(n.wide.first + n.wide.second);
+    return 0;
+}

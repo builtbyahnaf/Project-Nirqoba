@@ -17,6 +17,7 @@
 #include "mlir/IR/Location.h"
 
 #include "nirqoba/Diagnostics/Diagnostic.h"
+#include "nirqoba/Lowering/DataLayout.h"
 #include "nirqoba/Lowering/NrqDialect.h"
 #include "nirqoba/Lowering/NrqOps.h"
 #include "nirqoba/Lowering/RuntimeAttributes.h"
@@ -24,70 +25,6 @@
 namespace nirq {
 using namespace std;
 namespace {
-
-static uint64_t type_alignment(const Type& type);
-
-// Nirqoba aggregates are layout-private: the language has no FFI, `sizeof`,
-// unions or type punning, so no code the compiler does not lower itself can
-// observe a struct's byte layout. Fields are therefore stored widest-alignment
-// first (declaration order breaking ties), which removes interior padding and
-// keeps 8-byte fields on naturally aligned offsets. Every consumer of that
-// layout - the LLVM type, GEP indices, aggregate pack/extract order, the size
-// and the GC reference offsets - must go through these helpers so the views
-// cannot drift apart.
-static std::vector<std::size_t> aggregate_physical_order(const Type& type) {
-  std::vector<std::size_t> order;
-  std::vector<uint64_t> alignments;
-  if (type.is_struct()) {
-    for (const auto& field : type.struct_fields()) {
-      alignments.push_back(type_alignment(field.second));
-    }
-  } else if (type.is_tuple()) {
-    for (const Type& field : type.tuple_elements()) {
-      alignments.push_back(type_alignment(field));
-    }
-  } else {
-    return order;
-  }
-  order.resize(alignments.size());
-  for (std::size_t index = 0; index < order.size(); ++index) order[index] = index;
-  std::stable_sort(order.begin(), order.end(), [&](std::size_t lhs, std::size_t rhs) {
-    return alignments[lhs] > alignments[rhs];
-  });
-  return order;
-}
-
-// Declaration index -> index of the same field in the physical layout.
-static int aggregate_physical_index(const Type& type, int declaration_index) {
-  if (declaration_index < 0) return declaration_index;
-  const std::vector<std::size_t> order = aggregate_physical_order(type);
-  for (std::size_t physical = 0; physical < order.size(); ++physical) {
-    if (order[physical] == static_cast<std::size_t>(declaration_index)) {
-      return static_cast<int>(physical);
-    }
-  }
-  return declaration_index;
-}
-
-// Physical index -> declaration index, i.e. the inverse of the above.
-static int aggregate_declaration_index(const Type& type, std::size_t physical_index) {
-  const std::vector<std::size_t> order = aggregate_physical_order(type);
-  if (physical_index >= order.size()) return static_cast<int>(physical_index);
-  return static_cast<int>(order[physical_index]);
-}
-
-// Appends the declaration type of every field, in physical layout order.
-static void for_each_field_in_layout_order(
-    const Type& type, const std::function<void(const Type&)>& visit) {
-  const std::vector<std::size_t> order = aggregate_physical_order(type);
-  for (std::size_t physical : order) {
-    if (type.is_struct()) {
-      visit(type.struct_fields()[physical].second);
-    } else {
-      visit(type.tuple_elements()[physical]);
-    }
-  }
-}
 
 static mlir::Type tir_type_to_mlir(const Type& type, mlir::MLIRContext* ctx,
                                    mlir::Builder& builder) {
@@ -148,50 +85,6 @@ static mlir::Type tir_type_to_mlir(const Type& type, mlir::MLIRContext* ctx,
 
 static mlir::Type llvm_ptr_type(mlir::MLIRContext* ctx) {
   return mlir::LLVM::LLVMPointerType::get(ctx);
-}
-
-static uint64_t type_alignment(const Type& type) {
-  if (type.is_pointer() || type.is_managed_pointer() || type.is_string() ||
-      type.is_dynamic_array() || type.is_owned_array() || type.is_array_view()) return 8;
-  if (type.is_array()) return type_alignment(type.element_type());
-  if (type.is_struct() || type.is_tuple()) {
-    uint64_t alignment = 1;
-    if (type.is_struct()) {
-      for (const auto& field : type.struct_fields())
-        alignment = std::max(alignment, type_alignment(field.second));
-    } else {
-      for (const Type& field : type.tuple_elements())
-        alignment = std::max(alignment, type_alignment(field));
-    }
-    return alignment;
-  }
-  if (type.is_float()) return type.is_f32() ? 4 : 8;
-  if (type.is_integer() || type.is_char())
-    return std::max<uint64_t>(1, std::min<uint64_t>(8, type.bit_width() / 8));
-  return 1;
-}
-
-static uint64_t type_size(const Type& type) {
-  if (type.is_pointer() || type.is_managed_pointer() || type.is_string() ||
-      type.is_dynamic_array()) return 8;
-  if (type.is_owned_array() || type.is_array_view()) return 16;
-  if (type.is_array()) return type.array_length() * type_size(type.element_type());
-  if (type.is_struct() || type.is_tuple()) {
-    uint64_t size = 0;
-    uint64_t aggregate_alignment = 1;
-    for_each_field_in_layout_order(type, [&](const Type& field_type) {
-      const uint64_t alignment = type_alignment(field_type);
-      aggregate_alignment = std::max(aggregate_alignment, alignment);
-      size = (size + alignment - 1) & ~(alignment - 1);
-      size += type_size(field_type);
-    });
-    return (size + aggregate_alignment - 1) & ~(aggregate_alignment - 1);
-  }
-  if (type.is_float()) return type.is_f32() ? 4 : 8;
-  if (type.is_bool()) return 1;
-  if (type.is_integer() || type.is_char())
-    return std::max<uint64_t>(1, type.bit_width() / 8);
-  return 0;
 }
 
 // Promote small, fixed-size owned arrays and raw allocations whose descriptors

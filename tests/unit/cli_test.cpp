@@ -218,6 +218,23 @@ TEST(CliTest, ParsesRemarkModes) {
   }
 }
 
+TEST(CliTest, ParsesLayoutEmitKind) {
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", "--emit=layout"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(4, argv, opts, err));
+    ASSERT_TRUE(opts.emit_specified);
+    ASSERT_EQ(opts.emit, EmitKind::Layout);
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", "--emit=layouts"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_FALSE(parse_command_line(4, argv, opts, err));
+  }
+}
+
 TEST(CliTest, ParsesIpoPolicy) {
   {
     const char* argv[] = {"nirqoba", "build", "main.nrqba"};
