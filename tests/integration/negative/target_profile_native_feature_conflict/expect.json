@@ -1,0 +1,6 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O2", "--native", "--target-features=+avx2"],
+  "expect_exit": 1,
+  "expect_stderr_contains": ["[NRQ5002]", "derives features"]
+}
