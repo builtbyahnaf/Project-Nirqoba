@@ -249,6 +249,59 @@ TEST(CliTest, ParsesIpoPolicy) {
   }
 }
 
+TEST(CliTest, ParsesPgoPolicy) {
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(3, argv, opts, err));
+    ASSERT_EQ(opts.pgo_mode, PgoMode::None);
+    ASSERT_EQ(opts.pgo_cold_mode, PgoColdMode::Default);
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", "--pgo-generate"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(4, argv, opts, err));
+    ASSERT_EQ(opts.pgo_mode, PgoMode::Generate);
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba",
+                          "--pgo-use=build/app.profdata", "--pgo-cold=minsize"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(5, argv, opts, err));
+    ASSERT_EQ(opts.pgo_mode, PgoMode::Use);
+    ASSERT_EQ(opts.pgo_profile_path, "build/app.profdata");
+    ASSERT_EQ(opts.pgo_cold_mode, PgoColdMode::MinSize);
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba",
+                          "--pgo-sample", "app.sample"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(5, argv, opts, err));
+    ASSERT_EQ(opts.pgo_mode, PgoMode::Sample);
+    ASSERT_EQ(opts.pgo_profile_path, "app.sample");
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba",
+                          "--pgo-generate", "--pgo-use=app.profdata"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_FALSE(parse_command_line(5, argv, opts, err));
+    ASSERT_TRUE(err.find("conflicting") != string::npos);
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba",
+                          "--pgo-cold=hot"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_FALSE(parse_command_line(4, argv, opts, err));
+    ASSERT_TRUE(err.find("invalid cold-function mode") != string::npos);
+  }
+}
+
 TEST(CliTest, ParsesFastMath) {
   {
     const char* argv[] = {"nirqoba", "build", "main.nrqba", "--fast-math"};

@@ -52,6 +52,11 @@ static void print_command_help(string_view cmd) {
               << "  --opt-level=<level>  Long form of -O<level> (0-3, s, z)\n"
               << "  --ipo=<mode>         Interprocedural optimization: standard,\n"
               << "                       aggressive, minimal (default: standard)\n"
+              << "  --pgo-generate       Instrument for profile generation\n"
+              << "  --pgo-use=<file>     Optimize with a merged instrumentation profile\n"
+              << "  --pgo-sample=<file>  Optimize with an LLVM sample profile\n"
+              << "  --pgo-cold=<mode>    Cold-function treatment: default, optsize,\n"
+              << "                       minsize, optnone (default: default)\n"
               << "  --target-profile=<p> Target profile: portable, native, explicit\n"
               << "                       (default: inferred; portable without target flags)\n"
               << "  --target <triple>    Explicit target triple (e.g. x86_64-pc-windows-msvc)\n"
@@ -71,6 +76,11 @@ static void print_command_help(string_view cmd) {
               << "  -O<level>            Optimization level (default: -O2)\n"
               << "  --ipo=<mode>         Interprocedural optimization: standard,\n"
               << "                       aggressive, minimal (default: standard)\n"
+              << "  --pgo-generate       Instrument for profile generation\n"
+              << "  --pgo-use=<file>     Optimize with a merged instrumentation profile\n"
+              << "  --pgo-sample=<file>  Optimize with an LLVM sample profile\n"
+              << "  --pgo-cold=<mode>    Cold-function treatment: default, optsize,\n"
+              << "                       minsize, optnone (default: default)\n"
               << "  --target-profile=<p> Target profile: portable, native, explicit\n"
               << "  --target <triple>    Explicit target triple\n"
               << "  --target-cpu <cpu>   Target CPU model, or 'native'\n"
@@ -356,6 +366,81 @@ bool parse_command_line(int argc, const char* const* argv,
       options.ipo_mode = mode;
       continue;
     }
+    if (arg == "--pgo-generate") {
+      if (options.pgo_mode != PgoMode::None &&
+          options.pgo_mode != PgoMode::Generate) {
+        error_message = "conflicting profile-guided optimization options";
+        return false;
+      }
+      options.pgo_mode = PgoMode::Generate;
+      continue;
+    }
+    if (arg == "--pgo-use" || arg.rfind("--pgo-use=", 0) == 0) {
+      string profile_path;
+      if (arg == "--pgo-use") {
+        if (idx >= argc) {
+          error_message = "missing profile after '--pgo-use'";
+          return false;
+        }
+        profile_path = argv[idx++];
+      } else {
+        profile_path = arg.substr(10);
+      }
+      if (profile_path.empty()) {
+        error_message = "empty profile path for '--pgo-use'";
+        return false;
+      }
+      if (options.pgo_mode != PgoMode::None &&
+          options.pgo_mode != PgoMode::Use) {
+        error_message = "conflicting profile-guided optimization options";
+        return false;
+      }
+      options.pgo_mode = PgoMode::Use;
+      options.pgo_profile_path = move(profile_path);
+      continue;
+    }
+    if (arg == "--pgo-sample" || arg.rfind("--pgo-sample=", 0) == 0) {
+      string profile_path;
+      if (arg == "--pgo-sample") {
+        if (idx >= argc) {
+          error_message = "missing profile after '--pgo-sample'";
+          return false;
+        }
+        profile_path = argv[idx++];
+      } else {
+        profile_path = arg.substr(13);
+      }
+      if (profile_path.empty()) {
+        error_message = "empty profile path for '--pgo-sample'";
+        return false;
+      }
+      if (options.pgo_mode != PgoMode::None &&
+          options.pgo_mode != PgoMode::Sample) {
+        error_message = "conflicting profile-guided optimization options";
+        return false;
+      }
+      options.pgo_mode = PgoMode::Sample;
+      options.pgo_profile_path = move(profile_path);
+      continue;
+    }
+    if (arg == "--pgo-cold" || arg.rfind("--pgo-cold=", 0) == 0) {
+      string_view mode;
+      if (arg == "--pgo-cold") {
+        if (idx >= argc) {
+          error_message = "missing mode after '--pgo-cold'";
+          return false;
+        }
+        mode = argv[idx++];
+      } else {
+        mode = string_view(arg).substr(11);
+      }
+      if (!parse_pgo_cold_mode(mode, options.pgo_cold_mode)) {
+        error_message = "invalid cold-function mode '" + string(mode) +
+                        "'; expected default, optsize, minsize, or optnone";
+        return false;
+      }
+      continue;
+    }
     if (arg == "--native") {
       options.target_profile = TargetProfile::Native;
       options.target_profile_specified = true;
@@ -534,6 +619,17 @@ bool parse_command_line(int argc, const char* const* argv,
                                                  : TargetProfile::Portable;
   }
 
+  if (options.pgo_mode == PgoMode::Use &&
+      options.pgo_profile_path.empty()) {
+    error_message = "'--pgo-use' requires a merged profile file";
+    return false;
+  }
+  if (options.pgo_mode == PgoMode::Sample &&
+      options.pgo_profile_path.empty()) {
+    error_message = "'--pgo-sample' requires a sample profile file";
+    return false;
+  }
+
   if (options.source_paths.empty()) {
     error_message = "no source file specified for '" + first + "'";
     return false;
@@ -604,6 +700,9 @@ int run_driver(int argc, const char* const* argv) {
   pipe_opts.verbose = options.verbose;
   pipe_opts.optimization_level = options.optimization_level;
   pipe_opts.ipo_mode = options.ipo_mode;
+  pipe_opts.pgo_mode = options.pgo_mode;
+  pipe_opts.pgo_profile_path = options.pgo_profile_path;
+  pipe_opts.pgo_cold_mode = options.pgo_cold_mode;
   pipe_opts.target_profile = options.target_profile;
   pipe_opts.target_triple = options.target_triple;
   pipe_opts.target_cpu = options.target_cpu;

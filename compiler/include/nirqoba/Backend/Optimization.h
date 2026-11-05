@@ -92,12 +92,61 @@ std::string_view ipo_mode_name(IpoMode mode);
 // Parses an IPO mode spelling. Returns false for an unknown name.
 bool parse_ipo_mode(std::string_view text, IpoMode& mode);
 
+// How the build uses runtime profiles.
+//
+// `Generate` instruments the optimized program so a representative run writes
+// raw profile data. `Use` consumes a merged instrumentation profile and feeds
+// its counts to LLVM's inliner, branch-probability, loop, and code-layout
+// decisions. `Sample` consumes LLVM's sample-profile text format instead.
+// Profiles are opt-in: `None` leaves the generated code identical to a normal
+// build.
+enum class PgoMode {
+  None,
+  Generate,
+  Use,
+  Sample,
+};
+
+// Returns the spelling accepted on the command line ("none", "generate",
+// "use", "sample").
+std::string_view pgo_mode_name(PgoMode mode);
+
+// Parses a PGO mode spelling. Returns false for an unknown name.
+bool parse_pgo_mode(std::string_view text, PgoMode& mode);
+
+// What to do with functions the profile identifies as cold. `Default` keeps
+// LLVM's normal cold-function handling; the size modes mark them so the
+// backend can shrink or skip optimization; `OptNone` keeps the body
+// source-shaped for debuggability.
+enum class PgoColdMode {
+  Default,
+  OptSize,
+  MinSize,
+  OptNone,
+};
+
+// Returns the spelling accepted on the command line ("default", "optsize",
+// "minsize", "optnone").
+std::string_view pgo_cold_mode_name(PgoColdMode mode);
+
+// Parses a cold-function mode spelling. Returns false for an unknown name.
+bool parse_pgo_cold_mode(std::string_view text, PgoColdMode& mode);
+
 // Target and optimization settings for one compiled module.
 struct OptimizationOptions {
   OptimizationLevel level = OptimizationLevel::O2;
 
   // How much interprocedural work the LLVM pipeline may perform.
   IpoMode ipo = IpoMode::Standard;
+
+  // Runtime-profile policy. For `Use` and `Sample`, `pgo_profile_path` names
+  // the merged instrumentation profile or sample-profile file. `Generate`
+  // ignores it and uses the profile runtime's default output name.
+  PgoMode pgo = PgoMode::None;
+  std::string pgo_profile_path;
+
+  // How functions marked cold by the profile are optimized.
+  PgoColdMode pgo_cold = PgoColdMode::Default;
 
   // Which target profile the backend should honour. `Portable` ignores the
   // CPU/features fields, `Native` derives them from the host, and `Explicit`
