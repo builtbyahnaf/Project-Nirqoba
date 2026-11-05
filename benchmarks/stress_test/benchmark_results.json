@@ -1,0 +1,42 @@
+{
+  "01": {
+    "name": "Integer Arithmetic",
+    "langs": {}
+  },
+  "02": {
+    "name": "Float Arithmetic (Leibniz pi)",
+    "langs": {}
+  },
+  "03": {
+    "name": "Bitwise Operations (XorShift)",
+    "langs": {}
+  },
+  "04": {
+    "name": "Fibonacci Recursion fib(40)",
+    "langs": {}
+  },
+  "05": {
+    "name": "Array Traversal (10M ints, 5 passes)",
+    "langs": {}
+  },
+  "06": {
+    "name": "Dynamic Allocation (1M alloc/free)",
+    "langs": {}
+  },
+  "07": {
+    "name": "Ownership Transfer (1M objects)",
+    "langs": {}
+  },
+  "08": {
+    "name": "Sorting (1M ints, quicksort)",
+    "langs": {}
+  },
+  "09": {
+    "name": "Matrix Multiplication (512-512 f64)",
+    "langs": {}
+  },
+  "10": {
+    "name": "String/Byte Processing (10M chars)",
+    "langs": {}
+  }
+}
