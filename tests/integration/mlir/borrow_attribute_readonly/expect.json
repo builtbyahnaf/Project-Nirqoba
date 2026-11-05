@@ -1,8 +1,12 @@
 {
   "mode": "build",
-  "args": ["--emit=llvm"],
+  "args": [
+    "--emit=llvm",
+    "-O0"
+  ],
   "expect_exit": 0,
   "expect_stdout_contains": [
+    "define internal void @copy_scaled(ptr noalias",
     "ptr readonly captures(none)"
   ]
 }

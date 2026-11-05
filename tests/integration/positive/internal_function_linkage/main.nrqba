@@ -1,0 +1,15 @@
+// Only the C entry point needs external linkage: both helpers are reached from
+// this module alone, so their symbols stay local to the object file. `main`
+// stays externally visible because the C runtime starts there.
+int function unused_helper(int value) {
+    return value * 7;
+}
+
+int function used_helper(int value) {
+    return value + 1;
+}
+
+int function main() {
+    print(used_helper(41));
+    return 0;
+}
