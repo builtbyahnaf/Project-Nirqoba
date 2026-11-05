@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.117-beta` |
+| Current Working Version | `0.118-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-05 13:03:14` |
-| Report Entries | `7` |
+| Last Report Update | `2026-11-05 13:24:16` |
+| Report Entries | `8` |
 
 ---
 
@@ -797,6 +797,109 @@ tail-recursion elimination, leaf frame suppression and code-size reduction.
 ---
 
 **End of Entry #007**
+
+## Entry #008 - Target-Aware Code Generation
+
+**Version:** `0.118-beta`  
+**Date:** `2026-11-05 13:24:16`  
+**Scope:** `Phase 6 / Compiler Backend / Target Profiles / CPU Feature Selection / Cross-Target Objects`  
+**Status:** `Completed`
+
+### 1. Overview
+
+This entry implements task P1 3.8 (Target-Aware Code Generation). The backend
+previously treated `--native`, `--target-cpu`, and `--target-features` as
+independent inputs and applied them inside the object emitter. Conflicts could
+survive until code generation, unknown CPUs and features were only warnings, and
+the output did not record which target had produced it.
+
+The implementation introduces three explicit profiles - `portable`, `native`,
+and `explicit` - resolves them once before optimization, validates every CPU,
+feature, and triple, and records the result as `nrqoba.target.*` module flags.
+The same resolved tuple drives the optimizer and the object emitter, so CPU
+features, triple, data layout, and instruction selection cannot disagree.
+
+### 2. Implementation Details
+
+- **What:** Added `TargetProfile` and `TargetConfiguration`. `portable` is the
+  published x86-64 baseline, `native` derives the host triple/CPU/features, and
+  `explicit` uses the requested triple/CPU/features.
+- **What:** Added `resolve_target_configuration()`, which rejects contradictory
+  profile inputs, performs target lookup, validates CPUs with
+  `MCSubtargetInfo::isCPUStringValid`, validates each `+feature`/`-feature`
+  against `getAllProcessorFeatures()`, and reports `NRQ5002` instead of
+  permitting LLVM's "ignoring processor/feature" warning path.
+- **What:** Added CLI support for `--target-profile=<p>`, `--target <triple>`,
+  and `--target-triple`, and normalized `--native`/`--target-cpu=native` to the
+  native profile. Inferred profiles are portable by default and explicit when
+  any target input is supplied.
+- **What:** Changed `create_target_machine` to consume the resolved
+  configuration, install the target machine's data layout and triple into the
+  module, and emit `nrqoba.target.profile`, `.triple`, `.cpu`, and `.features`
+  module flags.
+- **What:** Extended `tests/run_tests.py` with an `assembly_check` mode that
+  object-emits, runs the packaged `llvm-objdump`, and asserts required/forbidden
+  instruction markers.
+- **Where:** `compiler/lib/Backend/TargetInfo.cpp`,
+  `compiler/lib/Backend/ObjectEmitter.cpp`,
+  `compiler/lib/CLI/Driver.cpp`,
+  `compiler/lib/Driver/CompilationPipeline.cpp`.
+- **Verification:** Added 10 unit tests and 12 integration suites covering
+  profile inference, conflict diagnostics, unknown CPUs/features/triples,
+  portable/native/explicit IR metadata, SSE2/AVX2/AVX-512 assembly selection,
+  and Linux ELF object emission. Debug and Release unit suites pass 133/133;
+  integration suites pass 224/224 on both configurations.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `compiler/include/nirqoba/Backend/Optimization.h` | Added `TargetProfile`, name/parser; replaced `host_cpu` with `target_profile` | Give target selection one explicit vocabulary. |
+| `compiler/lib/Backend/TargetInfo.cpp` | Added resolution, host detection, CPU/feature validation, description | Resolve and validate once before code generation. |
+| `compiler/lib/CLI/Driver.cpp` | Added profile/triple options and inference | Keep CLI spellings and defaults predictable. |
+| `compiler/lib/Driver/CompilationPipeline.cpp` | Resolves target before optimization and prints verbose target details | Ensure optimizer and emitter see the same target. |
+| `compiler/lib/Backend/ObjectEmitter.cpp` | Consumes `TargetConfiguration`; adds `nrqoba.target.*` flags | Make codegen and evidence profiled from the same tuple. |
+| `tests/unit/target_test.cpp` | 10 target-resolution tests | Pin profiles, defaults, conflicts, and validation. |
+| `tests/integration/` | 7 positive and 5 negative target suites | Pin instruction selection, metadata, cross-target output, and diagnostics. |
+| `tests/run_tests.py` | Added `assembly_check` | Automate object disassembly assertions. |
+| `README.md` | Documented profiles and examples | Explain portable/native/explicit usage. |
+| `reports/performance/po-17-target-aware-code-generation.md` | Created task report | Record problem, design, correctness, tests, and evidence. |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Unit suite (Debug) | PASS | 133/133 tests. |
+| Unit suite (Release) | PASS | 133/133 tests. |
+| Integration suite (Debug) | PASS | 224/224 cases. |
+| Integration suite (Release) | PASS | 224/224 cases. |
+| Portable instruction baseline | PASS | Object uses `xmm`; `ymm`/`zmm`/VEX forms forbidden by test. |
+| Explicit AVX2 | PASS | `x86-64-v3` object contains `ymm`, no `zmm`. |
+| Explicit AVX-512 | PASS | `znver4` object contains `zmm`. |
+| Native metadata | PASS | Module records `native` and host CPU `alderlake` on the verification host. |
+| Portable metadata | PASS | Module records `portable`, `generic`, empty features. |
+| Cross-target object | PASS | `x86_64-unknown-linux-gnu` object disassembles as `elf64-x86-64` and uses `ymm`. |
+| Conflict diagnostics | PASS | Portable+CPU, native+features, unknown CPU/feature/triple all fail with `NRQ5002`. |
+| Runtime benchmarks | DEFERRED | Section 5 verification requires explicit project-owner permission. |
+
+### 5. Safety and Acceptance
+
+- Portable builds cannot receive a named CPU, feature string, or non-default
+  triple; native builds cannot receive explicit target overrides; explicit
+  builds reject unknown CPUs, features, and triples.
+- The `native` profile is recorded as `native`, so a host-tuned object is
+  distinguishable from a distributable portable object.
+- Data layout and triple come from the same `TargetMachine` used for object
+  emission, preserving ABI, alignment, pointer width, and vector-type
+  consistency.
+- Portable-vs-native-vs-explicit evidence shows 128-bit, 256-bit, and 512-bit
+  vector widths for the same source.
+- Cross-target execution/linking is intentionally limited to IR/object output;
+  executable linking remains Windows-specific.
+
+---
+
+**End of Entry #008**
 
 <!-- REPORT ENTRIES END -->
 
