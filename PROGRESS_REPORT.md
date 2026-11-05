@@ -13,8 +13,8 @@
 | Project | Nirqoba |
 | Current Working Version | `0.117-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-05 11:34:13` |
-| Report Entries | `6` |
+| Last Report Update | `2026-11-05 13:03:14` |
+| Report Entries | `7` |
 
 ---
 
@@ -721,6 +721,82 @@ This entry implements task P0 3.6 (Loop Optimization and SIMD Vectorization) and
 ---
 
 **End of Entry #006**
+
+
+## Entry #007 - Function and Call Optimization
+
+**Version:** `0.117-beta`  
+**Date:** `2026-11-05 13:03:14`  
+**Scope:** `Phase 6 / Compiler Backend / Function Linkage / Tail Calls / Call Lowering`  
+**Status:** `Completed`
+
+### 1. Overview
+
+This entry implements task P1 3.7 (Function and Call Optimization). The lowering
+previously made every generated function externally visible, never marked
+returned calls as tail calls, and materialised a stack slot for every frontend
+local and parameter even when the slot was written once and only read. Those
+three facts blocked LLVM's inliner, dead-function elimination, sibling calls and
+LLVM's choice of an internal calling convention.
+
+The implementation exposes the missing facts to LLVM instead of duplicating its
+optimizations: a pass marks proven tail-position calls, a pass internalises
+every generated function except `main`, and the lowering promotes
+single-assignment slots. LLVM then performs the inlining, constant propagation,
+tail-recursion elimination, leaf frame suppression and code-size reduction.
+
+### 2. Implementation Details
+
+- **What:** Added `MarkTailCallsPass`, which marks a direct call as
+  `tailcallkind::Tail` only when the next operation returns exactly that call's
+  result (or a void call is followed by a void return), caller and callee are
+  both local definitions with identical non-variadic function types, and no GC
+  frame teardown sits between the call and the return.
+- **What:** Added `InternalizeFunctionsPass`, which sets internal linkage on
+  every generated function body except the C entry point `main`. Declarations
+  and `main` keep external linkage.
+- **What:** Added `analyze_promoted_slots`, which removes the alloca, the
+  initialising store and every load for write-once, read-only, address-free
+  slots whose type contains no managed reference. Address-taken slots, assigned
+  parameters/locals and GC-root-bearing aggregates keep their storage.
+- **Where:** `compiler/lib/Lowering/PassPipeline.cpp`,
+  `compiler/lib/Lowering/TirToMlir.cpp`.
+- **Verification:** Added 9 integration suites covering tail markers, deep
+  `-O0` recursion, accumulator recursion, internal linkage, dead-function
+  removal, parameter slot promotion/reassignment, inlining with constant
+  folding, and direct-call argument types. Updated 5 existing IR expectations
+  for the new linkage/tail markers. The full integration suite passes
+  212/212; the unit suite passes.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `compiler/lib/Lowering/PassPipeline.cpp` | Added `MarkTailCallsPass` | LLVM cannot infer the `tail` marker; it is part of the IR contract. |
+| `compiler/lib/Lowering/PassPipeline.cpp` | Added `InternalizeFunctionsPass` | Let LLVM reason about and delete unreachable helpers, and pick an internal calling convention. |
+| `compiler/lib/Lowering/TirToMlir.cpp` | Added single-assignment slot promotion | Remove temporary stack-slot materialisation that survives at `-O0`. |
+| `tests/integration/positive/` | Added 7 new positive suites | Pin linkage, inlining, promotion, and recursion behavior. |
+| `tests/integration/mlir/` | Added 2 new IR suites, updated 5 expectations | Pin `tail` markers, `fastcc`, internal linkage, and direct-call argument types. |
+| `reports/performance/po-16-function-call-optimization.md` | Created task report | Record problem, transformation, correctness argument, tests and evidence. |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Unit suite | PASS | `ctest --preset windows-msvc-dev` 1/1 harness target. |
+| Integration suite | PASS | 212/212 cases after adding 2 new regression suites. |
+| Tail marker at `-O0` | PASS | Mutual recursion prints `tail call i64 @is_odd` / `@is_even`. |
+| Deep recursion at `-O0` | PASS | 250,000 frames print `42`; sibling calls reuse the frame. |
+| Tail recursion at `-O2` | PASS | 250,000 frames print `31250375001`; LLVM forms `tailrecurse` / closed form. |
+| Inlining at `-O2` | PASS | `add_one`/`twice` vanish; `main` prints the folded const `5150`. |
+| Calling convention | PASS | `recursive_numeric_no_gc_frame` emits `define internal fastcc i64 @fib` and `tail call fastcc`. |
+| IR quality | PASS | Entry-block slots 818 -> 646, instructions 5882 -> 5297 on the measured corpus. |
+| Object size | PASS | Call-heavy `-O2` object 638 -> 427 bytes; mutual `-O2` 567 -> 387 bytes. |
+| Runtime benchmarks | DEFERRED | Section 5 verification requires explicit project-owner permission. |
+
+---
+
+**End of Entry #007**
 
 <!-- REPORT ENTRIES END -->
 

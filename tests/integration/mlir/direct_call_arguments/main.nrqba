@@ -1,0 +1,16 @@
+// A direct call passes arguments in the callee's declared types. The only
+// integer conversions in the emitted IR belong to the narrower runtime ABI
+// (`nrq_print_int` takes i64), not to the Nirqoba call itself.
+i32 function add32(i32 a, i32 b) {
+    return a + b;
+}
+
+byte function low_byte(int value) {
+    return value as byte;
+}
+
+int function main() {
+    print(add32(10 as i32, 20 as i32) as int);
+    print(low_byte(300) as int);
+    return 0;
+}
