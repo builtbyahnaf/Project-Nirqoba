@@ -13,8 +13,8 @@
 | Project | Nirqoba |
 | Current Working Version | `0.120-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-05 13:24:16` |
-| Report Entries | `8` |
+| Last Report Update | `2026-11-05 14:40:00` |
+| Report Entries | `9` |
 
 ---
 
@@ -900,6 +900,111 @@ features, triple, data layout, and instruction selection cannot disagree.
 ---
 
 **End of Entry #008**
+
+## Entry #009 - Interprocedural Optimization
+
+**Version:** `0.120-beta`  
+**Date:** `2026-11-05 14:40:00`  
+**Scope:** `Phase 6 / Compiler Backend / Whole-Program LTO / IPO Policy / Cross-Module Inlining / Memory Effects`  
+**Status:** `Completed`
+
+### 1. Overview
+
+This entry implements task P1 3.9 (Interprocedural Optimization). The compiler
+already resolved every imported module before lowering, but it had no explicit
+interprocedural policy, did not record its LTO strategy, could leave unreachable
+helpers behind after the last inlining round, and recomputed function memory
+effects with a whole-module fixpoint that scaled poorly with program size.
+
+The implementation adds `--ipo=standard|aggressive|minimal`, records
+`nrqoba.ipo.*` module flags, guarantees a final `GlobalDCE`, and replaces the
+memory-effect fixpoint with a reverse-call-graph worklist. All ordinary
+interprocedural transforms remain LLVM's; Nirqoba supplies policy, semantic
+facts, internalization, and the scalable whole-program unit.
+
+### 2. Implementation Details
+
+- **What:** Added `IpoMode` (`Standard`, `Aggressive`, `Minimal`),
+  `ipo_mode_name()`, and `parse_ipo_mode()`. Plumbed `--ipo` through
+  `CommandLineOptions`, `PipelineOptions`, and `OptimizationOptions`.
+- **What:** Added `pipeline_tuning_for()`. `aggressive` raises the inliner
+  threshold to at least 400, enables speculative devirtualization, and appends
+  LLVM's `AttributorPass` after the default pipeline. `minimal` sets the
+  inliner threshold to 0. `standard` leaves LLVM's defaults untouched.
+- **What:** Added `nrqoba.ipo.mode` and `nrqoba.ipo.strategy` module flags so an
+  optimized artifact records both the active policy and that it was built as a
+  single whole-program unit.
+- **What:** Appended a guaranteed final `DSEPass` + `ADCEPass` function stage
+  and a module-level `GlobalDCEPass`. Combined with
+  `InternalizeFunctionsPass`, which gives every generated definition except
+  `main` internal linkage, this removes cross-module helpers that inlining made
+  unreachable.
+- **What:** Replaced `InferFunctionMemoryEffectsPass`'s repeated whole-module
+  scan with a chaotic worklist over a reverse call graph. Declarations with
+  known attributes are fixed; unknown declarations force conservative caller
+  summaries; changed summaries enqueue only their direct callers.
+- **Where:** `compiler/include/nirqoba/Backend/Optimization.h`,
+  `compiler/lib/Backend/Optimization.cpp`, `compiler/lib/CLI/Driver.cpp`,
+  `compiler/lib/Driver/CompilationPipeline.cpp`,
+  `compiler/lib/Lowering/PassPipeline.cpp`, `compiler/CMakeLists.txt`.
+- **Verification:** 135/135 unit tests and 231/231 integration cases pass in
+  Debug. Six multi-module suites cover cross-module inlining, module-qualified
+  symbol collisions, global DCE, recursive function specialization,
+  interprocedural memory effects, and interprocedural escape attributes.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `compiler/include/nirqoba/Backend/Optimization.h` | Added `IpoMode`, name/parser, `OptimizationOptions::ipo` | One explicit policy vocabulary. |
+| `compiler/lib/Backend/Optimization.cpp` | IPO tuning, Attributor, `nrqoba.ipo.*` flags, final `GlobalDCE` | Apply and record the whole-program policy. |
+| `compiler/lib/CLI/Driver.cpp` | `--ipo` parsing, help, forwarding | Expose the policy to users. |
+| `compiler/lib/Driver/CompilationPipeline.cpp` | Backend forwarding and verbose `ipo:` line | Make the active policy observable. |
+| `compiler/lib/Lowering/PassPipeline.cpp` | Call-graph worklist for memory effects | Scale analysis to merged multi-module programs. |
+| `compiler/CMakeLists.txt` | Linked LLVM `ipo` component | Provide Attributor and GlobalDCE. |
+| `tests/unit/optimization_test.cpp`, `cli_test.cpp`, `mlir_pipeline_test.cpp` | Policy, CLI, and worklist tests | Pin parsing, forwarding, and caller propagation. |
+| `tests/integration/positive/ipo_*` | Metadata, inlining, symbols, DCE, specialization suites | Prove cross-module behaviour. |
+| `tests/integration/mlir/ipo_cross_module_*` | Memory-effect and escape suites | Prove facts cross module boundaries. |
+| `README.md` | Documented `--ipo` and whole-program LTO | Explain usage and the LTO strategy. |
+| `reports/performance/po-18-interprocedural-optimization.md` | Created PO-18 report | Record design, evidence, and deferred measurements. |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Unit suite (Debug) | PASS | 135/135 tests. |
+| Integration suite (Debug) | PASS | 231/231 cases. |
+| IPO parsing and CLI | PASS | Default `standard`; `--ipo=aggressive`; `--ipo minimal`; invalid modes rejected. |
+| Policy metadata | PASS | `nrqoba.ipo.mode` and `nrqoba.ipo.strategy = whole-program` present. |
+| Cross-module inlining | PASS | Two imported helpers fold to `@nrq_print_int(i64 42)`; definitions removed. |
+| Cross-module symbols | PASS | `alpha.helper` and `beta.helper` stay distinct; program prints `7` and `11`. |
+| Global DCE | PASS | Unused exported `helper.unused` absent from IR. |
+| Function specialization | PASS | `@helper.calc(i64 6)` calls a specialized `range(i64 18, 17)` definition with `memory(none)`. |
+| Interprocedural memory effects | PASS | `@helper.combine` carries `other = none, argMem = none, inaccessibleMem = none`. |
+| Interprocedural escape | PASS | `@helper.copy_scaled` carries `noalias captures(none)` and `readonly captures(none)`. |
+| Runtime benchmarks | DEFERRED | Section 5 verification requires explicit project-owner permission. |
+| Compilation time / peak memory | DEFERRED | Same Section 5 restriction; no numbers claimed. |
+
+### 5. Safety and Acceptance
+
+- The worklist preserves the previous greatest-fixpoint result: optimistic
+  starts, monotone growth, caller revisit on change, and conservative effects
+  for unknown declarations.
+- Internalization applies only to generated definitions other than `main`; runtime
+  declarations and their attributes are untouched.
+- Module-qualified symbols are resolved before lowering, so same-named helpers in
+  different modules cannot collide; the symbol suite executes the result.
+- Devirtualization is documented as not applicable: Nirqoba has no virtual
+  dispatch, traits, interfaces, or first-class function values.
+- Whole-program LTO is the documented equivalent of ThinLTO for this compilation
+  model: imports are merged before LLVM runs, so there is no object-file boundary
+  to recover visibility across.
+- Runtime, compilation-time, and peak-memory measurements remain deferred under
+  the Section 5 policy; no performance claim is made.
+
+---
+
+**End of Entry #009**
 
 <!-- REPORT ENTRIES END -->
 

@@ -36,7 +36,7 @@ Nirqoba is developed around five fundamental principles:
 |---|---|
 | **Language Design** | Statically typed, structured syntax, local type inference (`let` / `var`), records/structs, fixed arrays |
 | **Compiler Infrastructure** | Multi-stage pipeline: Lexer -> Parser -> AST -> TypeChecker (Sema) -> TIR -> MLIR -> LLVM IR |
-| **Optimization Backend** | LLVM PassBuilder pipeline (`-O0` to `-O3`, `-Os`, `-Oz`), MLIR canonicalization, CSE, SCCP, DCE/DSE |
+| **Optimization Backend** | LLVM PassBuilder pipeline (`-O0` to `-O3`, `-Os`, `-Oz`, `--ipo=standard\|aggressive\|minimal`), MLIR canonicalization, CSE, SCCP, DCE/DSE |
 | **Memory Model** | Hybrid: **Ownership & borrowing by default**; opt-in generational & incremental GC; explicit custom allocators |
 | **Escape Analysis** | Interprocedural pointer & array escape analysis; automatic stack promotion (`alloca_at_entry`) with 16-byte SIMD alignment floors |
 | **Vectorization & SIMD** | Loop vectorization, aligned SIMD codegen (`movaps`), opt-in `--fast-math` reductions (`llvm.vector.reduce.fadd`), and `--remarks` diagnostics |
@@ -147,7 +147,7 @@ Nirqoba uses a multi-tier compilation pipeline designed to preserve semantic and
 
 ## Development Status & Roadmap
 
-The language is actively progressing through its architectural milestones. Current active version: **`0.118-beta`** (Phase 6 / Compiler Optimization and Hardening).
+The language is actively progressing through its architectural milestones. Current active version: **`0.120-beta`** (Phase 6 / Compiler Optimization and Hardening).
 
 | Phase | Description | Status |
 |---|---|---|
@@ -238,6 +238,11 @@ nirqoba build main.nrqba -O2 --target-profile=explicit --target x86_64-unknown-l
 # Enable fast-math for floating-point loop reductions
 nirqoba build main.nrqba -O2 --fast-math -o program.exe
 
+# Tune whole-program interprocedural optimization
+nirqoba build main.nrqba -O2 --ipo=standard -o program.exe    # default
+nirqoba build main.nrqba -O2 --ipo=aggressive -o program.exe  # deeper analysis
+nirqoba build main.nrqba -O2 --ipo=minimal -o program.exe     # bounded compile
+
 # Inspect lowered LLVM IR or MLIR representations
 nirqoba build main.nrqba --emit=llvm
 nirqoba build main.nrqba --emit=mlir
@@ -252,6 +257,29 @@ Target profiles are resolved once before optimization and recorded as
   and detected feature set; tuned for this machine only.
 - `explicit`: the CPU, features, and triple you name, for a known deployment
   target. Unknown CPUs or features are rejected instead of silently ignored.
+
+### Interprocedural Optimization
+
+Nirqoba resolves every `import` before lowering and produces one LLVM module,
+so the backend always optimizes the complete program. That merged module is the
+compiler's equivalent of a scalable whole-program LTO unit: cross-module
+inlining, interprocedural constant propagation, function specialization, and
+global dead-code elimination all see every source module without a separate
+link-time step.
+
+`--ipo` controls how much work the backend spends on that unit:
+
+- `standard` (default): LLVM's normal level-dependent inlining and analysis.
+- `aggressive`: raises the inliner budget, enables speculative
+  devirtualization, and runs LLVM's Attributor after inlining for deeper
+  capture, alias, and memory-effect facts. Trades compile time and code size
+  for analysis depth.
+- `minimal`: disables inlining to bound compile time and code growth on very
+  large programs. IPSCCP, global optimization, and global DCE still run.
+
+Every optimized module records its policy and strategy as `nrqoba.ipo.mode` and
+`nrqoba.ipo.strategy` module flags, visible in `--emit=llvm` output. `--verbose`
+prints the active policy before optimization.
 
 ---
 
