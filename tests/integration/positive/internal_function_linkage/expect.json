@@ -1,0 +1,10 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O0"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "define internal i64 @used_helper",
+    "define internal i64 @unused_helper",
+    "define i64 @main"
+  ]
+}
