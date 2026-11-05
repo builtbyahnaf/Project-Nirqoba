@@ -39,3 +39,28 @@ TEST(OptimizationTest, RejectsInvalidLevels) {
   ASSERT_FALSE(parse_optimization_level("fast", parsed));
   ASSERT_EQ(parsed, OptimizationLevel::O2);
 }
+
+TEST(OptimizationTest, ParsesIpoModes) {
+  struct Case {
+    const char* text;
+    IpoMode mode;
+    const char* name;
+  };
+  const Case cases[] = {
+      {"standard", IpoMode::Standard, "standard"},
+      {"aggressive", IpoMode::Aggressive, "aggressive"},
+      {"minimal", IpoMode::Minimal, "minimal"},
+  };
+  for (const Case& test : cases) {
+    IpoMode parsed = IpoMode::Standard;
+    ASSERT_TRUE(parse_ipo_mode(test.text, parsed));
+    ASSERT_EQ(parsed, test.mode);
+    ASSERT_EQ(ipo_mode_name(parsed), string_view(test.name));
+  }
+
+  IpoMode parsed = IpoMode::Standard;
+  ASSERT_FALSE(parse_ipo_mode("", parsed));
+  ASSERT_FALSE(parse_ipo_mode("full", parsed));
+  ASSERT_FALSE(parse_ipo_mode("Standard", parsed));
+  ASSERT_EQ(parsed, IpoMode::Standard);
+}

@@ -55,6 +55,22 @@ bool parse_optimization_level(string_view text, OptimizationLevel& level) {
   return false;
 }
 
+string_view ipo_mode_name(IpoMode mode) {
+  switch (mode) {
+    case IpoMode::Standard: return "standard";
+    case IpoMode::Aggressive: return "aggressive";
+    case IpoMode::Minimal: return "minimal";
+  }
+  return "standard";
+}
+
+bool parse_ipo_mode(string_view text, IpoMode& mode) {
+  if (text == "standard") { mode = IpoMode::Standard; return true; }
+  if (text == "aggressive") { mode = IpoMode::Aggressive; return true; }
+  if (text == "minimal") { mode = IpoMode::Minimal; return true; }
+  return false;
+}
+
 namespace {
 
 llvm::OptimizationLevel llvm_level_for(OptimizationLevel level) {

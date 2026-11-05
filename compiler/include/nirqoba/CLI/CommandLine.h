@@ -34,6 +34,7 @@ struct CommandLineOptions {
   // Compiler optimization and target selection. The defaults preserve a
   // portable release build while allowing debug builds and host tuning.
   OptimizationLevel optimization_level = OptimizationLevel::O2;
+  IpoMode ipo_mode = IpoMode::Standard;
   TargetProfile target_profile = TargetProfile::Portable;
   std::string target_triple;
   std::string target_cpu = "generic";
