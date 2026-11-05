@@ -1,0 +1,11 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O0"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "define internal i32 @add32(i32 %0, i32 %1)",
+    "define internal i8 @low_byte(i64 %0)",
+    "call i32 @add32(i32 10, i32 20)",
+    "call i8 @low_byte(i64 300)"
+  ]
+}
