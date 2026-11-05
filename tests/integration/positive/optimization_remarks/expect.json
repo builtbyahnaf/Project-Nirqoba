@@ -1,0 +1,5 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O2", "--remarks=loop-vectorize"],
+  "expect_stderr_contains": ["vectorized loop"]
+}

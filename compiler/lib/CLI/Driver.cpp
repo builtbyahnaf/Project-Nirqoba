@@ -53,6 +53,9 @@ static void print_command_help(string_view cmd) {
               << "  --target-cpu <cpu>   Target CPU model, or 'native' for the host\n"
               << "  --target-features <f> LLVM target feature string (e.g. +avx2)\n"
               << "  --native             Tune for the host CPU and its features\n"
+              << "  --remarks[=mode]     Print LLVM optimization remarks to stderr;\n"
+              << "                       mode is 'all', 'missed', or a pass name\n"
+              << "                       (e.g. loop-vectorize)\n"
               << "  --verbose            Enable verbose output\n";
   } else if (cmd == "run") {
     cout << "Usage: nirqoba run <file.nrqba>... [options] [-- <args>...]\n\n"
@@ -63,6 +66,9 @@ static void print_command_help(string_view cmd) {
               << "  --target-cpu <cpu>   Target CPU model, or 'native'\n"
               << "  --target-features <f> LLVM target feature string\n"
               << "  --native             Tune for the host CPU\n"
+              << "  --remarks[=mode]     Print LLVM optimization remarks to stderr;\n"
+              << "                       mode is 'all', 'missed', or a pass name\n"
+              << "                       (e.g. loop-vectorize)\n"
               << "  --verbose            Enable verbose output\n";
   } else if (cmd == "check") {
     cout << "Usage: nirqoba check <file.nrqba>... [options]\n\n"
@@ -345,6 +351,31 @@ bool parse_command_line(int argc, const char* const* argv,
       options.target_features = arg.substr(18);
       continue;
     }
+    if (arg == "--remarks") {
+      options.emit_remarks = true;
+      continue;
+    }
+    if (arg.rfind("--remarks=", 0) == 0) {
+      string_view mode = string_view(arg).substr(10);
+      options.emit_remarks = true;
+      if (mode == "all") {
+        options.remarks_missed_only = false;
+        options.remark_filter.clear();
+      } else if (mode == "missed") {
+        options.remarks_missed_only = true;
+        options.remark_filter.clear();
+      } else if (!mode.empty()) {
+        // Any other value narrows reporting to passes whose name contains it,
+        // which is how `--remarks=loop-vectorize` asks a single question.
+        options.remarks_missed_only = false;
+        options.remark_filter = string(mode);
+      } else {
+        error_message = "empty remark mode; expected 'all', 'missed', or a "
+                        "pass name";
+        return false;
+      }
+      continue;
+    }
     if (arg == "-o") {
       if (idx >= argc) {
         error_message = "missing path after '-o'";
@@ -471,6 +502,9 @@ int run_driver(int argc, const char* const* argv) {
   pipe_opts.target_cpu = options.target_cpu;
   pipe_opts.target_features = options.target_features;
   pipe_opts.host_cpu = options.host_cpu;
+  pipe_opts.emit_remarks = options.emit_remarks;
+  pipe_opts.remarks_missed_only = options.remarks_missed_only;
+  pipe_opts.remark_filter = options.remark_filter;
 
   if (options.command == CommandKind::Check) {
     pipe_opts.emit = options.emit_specified ? options.emit : EmitKind::Tir;

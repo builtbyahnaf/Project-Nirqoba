@@ -262,6 +262,11 @@ int run_pipeline(const PipelineOptions& options,
   backend_options.target_cpu = options.target_cpu;
   backend_options.target_features = options.target_features;
   backend_options.host_cpu = options.host_cpu;
+  backend_options.remarks = !options.emit_remarks
+      ? RemarkMode::None
+      : (options.remarks_missed_only ? RemarkMode::Missed
+                                     : RemarkMode::All);
+  backend_options.remark_filter = options.remark_filter;
 
   unique_ptr<llvm::TargetMachine> target_machine =
       create_target_machine(*llvm_module, backend_options, diagnostics);
@@ -273,8 +278,8 @@ int run_pipeline(const PipelineOptions& options,
          << ", cpu " << target_machine->getTargetCPU().str() << ")\n";
   }
 
-  if (!optimize_llvm_module(*llvm_module, *target_machine,
-                            options.optimization_level, diagnostics)) {
+  if (!optimize_llvm_module(*llvm_module, *target_machine, backend_options,
+                            diagnostics)) {
     return fail_with(diagnostics, sources);
   }
 
