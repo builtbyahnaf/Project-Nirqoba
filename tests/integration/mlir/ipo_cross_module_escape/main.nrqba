@@ -1,0 +1,12 @@
+import helper;
+
+int function main() {
+    var source = memory.allocate<int>(1);
+    var target = memory.allocate<int>(1);
+    source[0] = 21;
+    helper.copy_scaled(target, source);
+    print(target[0]);
+    memory.deallocate(source);
+    memory.deallocate(target);
+    return 0;
+}

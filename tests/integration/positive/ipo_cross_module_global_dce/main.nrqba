@@ -1,0 +1,6 @@
+import helper;
+
+int function main() {
+    print(helper.used(41));
+    return 0;
+}

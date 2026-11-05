@@ -1,0 +1,14 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O2"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "@nrq_print_int(i64 42)",
+    "!\"nrqoba.ipo.mode\", !\"standard\"",
+    "!\"nrqoba.ipo.strategy\", !\"whole-program\""
+  ],
+  "expect_stdout_not_contains": [
+    "@helper.scale",
+    "@helper.add"
+  ]
+}

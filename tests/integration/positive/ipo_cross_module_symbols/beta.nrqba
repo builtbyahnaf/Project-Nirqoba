@@ -1,0 +1,9 @@
+module beta;
+
+int function helper() {
+    return 11;
+}
+
+public int function value() {
+    return helper();
+}
