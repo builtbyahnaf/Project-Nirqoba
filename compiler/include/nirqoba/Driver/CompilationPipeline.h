@@ -42,6 +42,9 @@ struct PipelineOptions {
   std::string target_cpu = "generic";
   std::string target_features;
   bool host_cpu = false;
+  bool emit_remarks = false;
+  bool remarks_missed_only = false;
+  std::string remark_filter;
 };
 
 // Runs the compilation pipeline as directed by `options`. Returns 0 on

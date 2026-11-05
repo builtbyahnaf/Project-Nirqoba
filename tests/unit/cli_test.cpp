@@ -136,3 +136,40 @@ TEST(CliTest, ParsesLlvmEmitVariants) {
     ASSERT_EQ(opts.emit, EmitKind::LlvmRaw);
   }
 }
+
+TEST(CliTest, ParsesRemarkModes) {
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", "--remarks"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(4, argv, opts, err));
+    ASSERT_TRUE(opts.emit_remarks);
+    ASSERT_FALSE(opts.remarks_missed_only);
+    ASSERT_TRUE(opts.remark_filter.empty());
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba",
+                          "--remarks=missed"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(4, argv, opts, err));
+    ASSERT_TRUE(opts.emit_remarks);
+    ASSERT_TRUE(opts.remarks_missed_only);
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba",
+                          "--remarks=loop-vectorize"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(4, argv, opts, err));
+    ASSERT_TRUE(opts.emit_remarks);
+    ASSERT_FALSE(opts.remarks_missed_only);
+    ASSERT_EQ(opts.remark_filter, "loop-vectorize");
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", "--remarks="};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_FALSE(parse_command_line(4, argv, opts, err));
+  }
+}
