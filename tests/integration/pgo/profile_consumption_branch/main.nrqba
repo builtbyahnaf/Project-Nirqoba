@@ -1,0 +1,23 @@
+// Branch-heavy workload. The loop executes the first arm about half the time
+// and the third arm rarely, which gives the profile a clear hot edge without
+// depending on timing.
+int function classify(int value) {
+    if (value < 50) {
+        return value * 2;
+    }
+    if (value < 90) {
+        return value + 100;
+    }
+    return value - 90;
+}
+
+int function main() {
+    var total = 0;
+    var i = 0;
+    while (i < 1000) {
+        total += classify(i % 100);
+        i += 1;
+    }
+    print(total);
+    return 0;
+}

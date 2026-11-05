@@ -1,0 +1,15 @@
+{
+  "mode": "pgo_roundtrip",
+  "args": ["-O2", "--pgo-cold=optsize"],
+  "expect_program_exit": 0,
+  "expect_stdout_contains": ["92750"],
+  "expect_ir_contains": [
+    "\"nrqoba.pgo.mode\", !\"use\"",
+    "\"nrqoba.pgo.cold\", !\"optsize\"",
+    "\"ProfileSummary\"",
+    "function_entry_count"
+  ],
+  "expect_ir_not_contains": [
+    "@__profc_main"
+  ]
+}
