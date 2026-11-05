@@ -117,6 +117,15 @@ module {
     llvm.call @opaque() : () -> ()
     llvm.return
   }
+  llvm.func @writer(%p : !llvm.ptr) {
+    %one = llvm.mlir.constant(1 : i64) : i64
+    llvm.store %one, %p : i64, !llvm.ptr
+    llvm.return
+  }
+  llvm.func @propagate_caller(%p : !llvm.ptr) {
+    llvm.call @writer(%p) : (!llvm.ptr) -> ()
+    llvm.return
+  }
 }
 )mlir";
 
@@ -361,6 +370,23 @@ TEST(MlirPipelineTest, InfersFunctionMemoryEffectsFromProvenance) {
   auto caller = fixture.function("opaque_caller");
   ASSERT_TRUE(static_cast<bool>(caller));
   ASSERT_FALSE(static_cast<bool>(caller.getMemoryEffectsAttr()));
+
+  // A caller may be analysed before the callee's write is discovered. The
+  // worklist must revisit it when the callee summary grows, otherwise the
+  // call would be recorded as touching no memory.
+  auto writer = fixture.function("writer");
+  ASSERT_TRUE(static_cast<bool>(writer));
+  auto writer_effects = writer.getMemoryEffectsAttr();
+  ASSERT_TRUE(static_cast<bool>(writer_effects));
+  ASSERT_EQ(writer_effects.getArgMem(), ModRefInfo::Mod);
+  ASSERT_EQ(writer_effects.getOther(), ModRefInfo::NoModRef);
+
+  auto propagate = fixture.function("propagate_caller");
+  ASSERT_TRUE(static_cast<bool>(propagate));
+  auto propagate_effects = propagate.getMemoryEffectsAttr();
+  ASSERT_TRUE(static_cast<bool>(propagate_effects));
+  ASSERT_EQ(propagate_effects.getArgMem(), ModRefInfo::Mod);
+  ASSERT_EQ(propagate_effects.getOther(), ModRefInfo::NoModRef);
 }
 
 TEST(MlirPipelineTest, AllocatesEveryStackSlotInTheEntryBlock) {

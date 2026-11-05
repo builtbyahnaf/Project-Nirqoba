@@ -11,6 +11,7 @@
 #include "mlir/IR/BuiltinDialect.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "mlir/Pass/Pass.h"  // completes mlir::Pass for the unique_ptr created below
@@ -499,37 +500,76 @@ class InferFunctionMemoryEffectsPass
     mlir::ModuleOp module = getOperation();
     llvm::StringMap<MemoryEffectSummary> known;
     llvm::StringSet<> has_known_effects;
-    llvm::SmallVector<mlir::LLVM::LLVMFuncOp> definitions;
+    llvm::StringMap<mlir::LLVM::LLVMFuncOp> definitions;
+    llvm::SmallVector<mlir::LLVM::LLVMFuncOp> worklist;
 
     for (mlir::LLVM::LLVMFuncOp function :
          module.getOps<mlir::LLVM::LLVMFuncOp>()) {
-      MemoryEffectSummary summary;
+      const std::string name = function.getSymName().str();
       if (function.isExternal()) {
+        MemoryEffectSummary summary;
         if (!effects_from_attribute(function.getMemoryEffectsAttr(), summary))
           continue;
-      } else {
-        definitions.push_back(function);
+        known[name] = summary;
+        has_known_effects.insert(name);
+        continue;
       }
-      const std::string name = function.getSymName().str();
-      known[name] = summary;
+
+      // Definitions start at the optimistic empty summary. The worklist below
+      // grows them monotonically, so a recursive function whose calls are
+      // analysed before its body still reaches the correct greatest fixpoint.
+      known[name] = MemoryEffectSummary{};
       has_known_effects.insert(name);
+      definitions[name] = function;
+      worklist.push_back(function);
     }
 
-    bool changed = true;
-    while (changed) {
-      changed = false;
-      for (mlir::LLVM::LLVMFuncOp function : definitions) {
-        const MemoryEffectSummary analyzed =
-            analyze_body(function, known, has_known_effects);
-        MemoryEffectSummary& current = known[function.getSymName()];
-        if (analyzed == current) continue;
-        current = analyzed;
-        changed = true;
+    // Reverse call graph: callee -> callers whose summary may grow when the
+    // callee's effects become less optimistic. Only direct calls to definitions
+    // can change a summary; declarations are fixed by their attributes.
+    llvm::StringMap<llvm::SmallVector<std::string>> callers;
+    for (const auto& entry : definitions) {
+      const std::string caller_name = entry.getKey().str();
+      mlir::LLVM::LLVMFuncOp function = entry.getValue();
+      function.walk([&](mlir::LLVM::CallOp call) {
+        const mlir::FlatSymbolRefAttr callee = call.getCalleeAttr();
+        if (!callee) return;
+        const std::string callee_name = callee.getValue().str();
+        if (definitions.count(callee_name) == 0) return;
+        callers[callee_name].push_back(caller_name);
+      });
+    }
+
+    // Chaotic worklist iteration. Each summary holds six monotone bits, so a
+    // function can change at most six times; a dependency change therefore
+    // re-analyses only the callers that can still learn something instead of
+    // rescanning every body to a global fixpoint.
+    llvm::DenseSet<mlir::Operation*> queued;
+    for (mlir::LLVM::LLVMFuncOp function : worklist)
+      queued.insert(function.getOperation());
+
+    while (!worklist.empty()) {
+      mlir::LLVM::LLVMFuncOp function = worklist.pop_back_val();
+      queued.erase(function.getOperation());
+
+      const std::string name = function.getSymName().str();
+      const MemoryEffectSummary analyzed =
+          analyze_body(function, known, has_known_effects);
+      if (analyzed == known[name]) continue;
+      known[name] = analyzed;
+
+      const auto callers_it = callers.find(name);
+      if (callers_it == callers.end()) continue;
+      for (const std::string& caller_name : callers_it->second) {
+        const auto definition = definitions.find(caller_name);
+        if (definition == definitions.end()) continue;
+        if (!queued.insert(definition->second.getOperation()).second) continue;
+        worklist.push_back(definition->second);
       }
     }
 
-    for (mlir::LLVM::LLVMFuncOp function : definitions)
-      attach_memory_effects(function, known[function.getSymName()]);
+    for (const auto& entry : definitions)
+      attach_memory_effects(entry.getValue(), known[entry.getKey()]);
   }
 };
 
