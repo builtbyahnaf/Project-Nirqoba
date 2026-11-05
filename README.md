@@ -40,7 +40,7 @@ Nirqoba is developed around five fundamental principles:
 | **Memory Model** | Hybrid: **Ownership & borrowing by default**; opt-in generational & incremental GC; explicit custom allocators |
 | **Escape Analysis** | Interprocedural pointer & array escape analysis; automatic stack promotion (`alloca_at_entry`) with 16-byte SIMD alignment floors |
 | **Vectorization & SIMD** | Loop vectorization, aligned SIMD codegen (`movaps`), opt-in `--fast-math` reductions (`llvm.vector.reduce.fadd`), and `--remarks` diagnostics |
-| **Target Architecture** | Windows x64 MSVC primary; configurable CPU targets (`--target-cpu`, `--target-features`, `--native`) |
+| **Target Architecture** | Windows x64 MSVC primary; portable/native/explicit target profiles (`--target-profile`, `--target`, `--target-cpu`, `--target-features`, `--native`) |
 | **Runtime ABI** | Lightweight native runtime with direct Win32 I/O, TLABs, safepoints, shadow stack with liveness-based root registration |
 | **Concurrency (Planned)** | Structured concurrency, coroutines, low-overhead thread scheduler, thread-safe memory models |
 | **Numerical & AI (Planned)** | First-class tensors, computational graphs, automatic differentiation, reduced precision formats (FP16, BF16, FP8) |
@@ -147,7 +147,7 @@ Nirqoba uses a multi-tier compilation pipeline designed to preserve semantic and
 
 ## Development Status & Roadmap
 
-The language is actively progressing through its architectural milestones. Current active version: **`0.117-beta`** (Phase 6 / Compiler Optimization and Hardening).
+The language is actively progressing through its architectural milestones. Current active version: **`0.118-beta`** (Phase 6 / Compiler Optimization and Hardening).
 
 | Phase | Description | Status |
 |---|---|---|
@@ -228,6 +228,13 @@ nirqoba run main.nrqba
 # Compile to a native executable with O3 optimizations and vector remarks
 nirqoba build main.nrqba -O3 --remarks=loop-vectorize -o program.exe
 
+# Tune for this machine (do not ship the result as a universal binary)
+nirqoba build main.nrqba -O2 --native -o program.exe
+
+# Target a known deployment CPU or triple instead
+nirqoba build main.nrqba -O2 --target-profile=explicit --target-cpu=x86-64-v3 -o program.exe
+nirqoba build main.nrqba -O2 --target-profile=explicit --target x86_64-unknown-linux-gnu --emit=obj
+
 # Enable fast-math for floating-point loop reductions
 nirqoba build main.nrqba -O2 --fast-math -o program.exe
 
@@ -235,6 +242,16 @@ nirqoba build main.nrqba -O2 --fast-math -o program.exe
 nirqoba build main.nrqba --emit=llvm
 nirqoba build main.nrqba --emit=mlir
 ```
+
+Target profiles are resolved once before optimization and recorded as
+`nrqoba.target.*` module flags in `--emit=llvm` output:
+
+- `portable` (default): the published x86-64 baseline (`generic` CPU), safe to
+  distribute to any compatible machine.
+- `native` (`--native` or `--target-cpu=native`): the host triple, CPU model,
+  and detected feature set; tuned for this machine only.
+- `explicit`: the CPU, features, and triple you name, for a known deployment
+  target. Unknown CPUs or features are rejected instead of silently ignored.
 
 ---
 
