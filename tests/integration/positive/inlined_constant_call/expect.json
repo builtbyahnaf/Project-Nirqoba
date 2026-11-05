@@ -1,0 +1,12 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O2"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "@nrq_print_int(i64 5150)"
+  ],
+  "expect_stdout_not_contains": [
+    "@add_one",
+    "@twice"
+  ]
+}

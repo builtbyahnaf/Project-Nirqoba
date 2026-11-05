@@ -1,0 +1,15 @@
+// Both helpers are small, internal, and called with a known constant. LLVM
+// should inline them into `main`, propagate the constant through the arithmetic,
+// and stop emitting the now-unreachable definitions.
+int function add_one(int value) {
+    return value + 1;
+}
+
+int function twice(int value) {
+    return add_one(add_one(value));
+}
+
+int function main() {
+    print(twice(5148));
+    return 0;
+}
