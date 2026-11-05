@@ -9,12 +9,15 @@
 #include "llvm/IR/DiagnosticHandler.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/IPO/Attributor.h"
+#include "llvm/Transforms/IPO/GlobalDCE.h"
 #include "llvm/Transforms/Scalar/ADCE.h"
 #include "llvm/Transforms/Scalar/DeadStoreElimination.h"
 
@@ -134,6 +137,41 @@ void apply_size_attributes(llvm::Module& module, OptimizationLevel level) {
   }
 }
 
+// Translates the user-facing IPO policy into the knobs LLVM's PassBuilder
+// exposes. The default (standard) keeps LLVM's own level-dependent cost model;
+// aggressive raises the inliner budget and enables speculative devirtualization;
+// minimal suppresses inlining so a very large merged program does not pay for
+// cross-function cloning. IPSCCP, GlobalOpt, and GlobalDCE still run in every
+// mode, so constant propagation, internalization, and dead-function removal are
+// never silently lost.
+llvm::PipelineTuningOptions pipeline_tuning_for(IpoMode mode) {
+  llvm::PipelineTuningOptions tuning;
+  switch (mode) {
+    case IpoMode::Standard:
+      break;
+    case IpoMode::Aggressive:
+      tuning.InlinerThreshold = std::max(tuning.InlinerThreshold, 400);
+      tuning.DevirtualizeSpeculatively = true;
+      break;
+    case IpoMode::Minimal:
+      tuning.InlinerThreshold = 0;
+      break;
+  }
+  return tuning;
+}
+
+// The front end resolves every imported module into one TIR/MLIR/LLVM module,
+// so the backend always performs whole-program LTO. Recording that fact (and
+// the policy that governed it) keeps an optimized artifact auditable: a build
+// made with --ipo=minimal cannot be mistaken for an aggressive one.
+void add_ipo_module_flags(llvm::Module& module, IpoMode mode) {
+  llvm::LLVMContext& context = module.getContext();
+  module.addModuleFlag(llvm::Module::Error, "nrqoba.ipo.mode",
+                       llvm::MDString::get(context, ipo_mode_name(mode)));
+  module.addModuleFlag(llvm::Module::Error, "nrqoba.ipo.strategy",
+                       llvm::MDString::get(context, "whole-program"));
+}
+
 }  // namespace
 
 bool optimize_llvm_module(llvm::Module& module,
@@ -156,6 +194,7 @@ bool optimize_llvm_module(llvm::Module& module,
   }
 
   apply_size_attributes(module, level);
+  add_ipo_module_flags(module, options.ipo);
 
   // The context outlives this call (the driver creates one per compilation), so
   // installing the handler here needs no restore.
@@ -165,7 +204,8 @@ bool optimize_llvm_module(llvm::Module& module,
                                                   options.remark_filter));
   }
 
-  llvm::PassBuilder pass_builder(&target_machine);
+  llvm::PassBuilder pass_builder(&target_machine,
+                                 pipeline_tuning_for(options.ipo));
   llvm::LoopAnalysisManager loop_analyses;
   llvm::FunctionAnalysisManager function_analyses;
   llvm::CGSCCAnalysisManager cgscc_analyses;
@@ -183,6 +223,16 @@ bool optimize_llvm_module(llvm::Module& module,
       ? pass_builder.buildO0DefaultPipeline(llvm_level)
       : pass_builder.buildPerModuleDefaultPipeline(llvm_level);
 
+  // Aggressive mode asks LLVM's Attributor for a deeper interprocedural
+  // deduction over the final (already inlined) program. Attributor is the
+  // canonical implementation of interprocedural capture, alias, and memory
+  // reasoning; running it only on request keeps the default compile-time
+  // profile unchanged.
+  if (level != OptimizationLevel::O0 &&
+      options.ipo == IpoMode::Aggressive) {
+    pipeline.addPass(llvm::AttributorPass());
+  }
+
   // Guarantee dead-code and dead-store elimination at every optimized level.
   //
   // LLVM's per-module pipeline already contains DCE and DSE, but module-level
@@ -199,6 +249,13 @@ bool optimize_llvm_module(llvm::Module& module,
     final_cleanup.addPass(llvm::ADCEPass());
     pipeline.addPass(
         llvm::createModuleToFunctionPassAdaptor(std::move(final_cleanup)));
+
+    // GlobalDCE removes functions and globals that became unreachable after the
+    // final inlining and cleanup round. Internalization already marked every
+    // generated helper except `main` as module-private, which is what makes
+    // this removal legal; the pass is not a no-op on programs with unused
+    // cross-module helpers.
+    pipeline.addPass(llvm::GlobalDCEPass());
   }
 
   // The new pass manager reports analysis preservation, not failure. Verify the
