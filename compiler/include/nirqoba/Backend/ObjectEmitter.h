@@ -10,6 +10,7 @@
 
 #include "llvm/IR/Module.h"
 #include "nirqoba/Backend/Optimization.h"
+#include "nirqoba/Backend/TargetInfo.h"
 #include "nirqoba/Diagnostics/DiagnosticEngine.h"
 
 namespace llvm {
@@ -18,15 +19,17 @@ class TargetMachine;
 
 namespace nirq {
 
-// Creates the target machine described by `options` and configures
-// `llvm_module` with the matching target triple and data layout.
+// Creates the target machine for an already-resolved target configuration and
+// configures `llvm_module` with the matching target triple, data layout, and
+// `nrqoba.target.*` module flags.
 //
-// Initializes the LLVM target registry on first use. Returns nullptr and
-// records an NRQ5xxx diagnostic when the triple or CPU model cannot be
-// resolved.
+// Call resolve_target_configuration() first: this function trusts `target`
+// and does not re-check the profile/option combinations. Returns nullptr and
+// records an NRQ5xxx diagnostic when the triple cannot be resolved.
 std::unique_ptr<llvm::TargetMachine> create_target_machine(
     llvm::Module& llvm_module,
     const OptimizationOptions& options,
+    const TargetConfiguration& target,
     DiagnosticEngine& diagnostics);
 
 // Writes the object file for `llvm_module` to `output_path` using the code
