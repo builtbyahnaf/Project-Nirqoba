@@ -18,4 +18,9 @@ namespace nirq {
 // the generated Version.h that depends on cmake configuration.
 std::string default_target_triple();
 
+// The triple of the machine running the compiler. The Native profile uses it
+// so host CPU name and host feature set can never be paired with a different
+// architecture.
+std::string host_target_triple();
+
 }  // namespace nirq

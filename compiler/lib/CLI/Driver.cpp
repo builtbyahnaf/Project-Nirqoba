@@ -50,9 +50,12 @@ static void print_command_help(string_view cmd) {
               << "  -O<level>            Optimization level: -O0, -O1, -O2, -O3,\n"
               << "                       -Os, -Oz (default: -O2)\n"
               << "  --opt-level=<level>  Long form of -O<level> (0-3, s, z)\n"
+              << "  --target-profile=<p> Target profile: portable, native, explicit\n"
+              << "                       (default: inferred; portable without target flags)\n"
+              << "  --target <triple>    Explicit target triple (e.g. x86_64-pc-windows-msvc)\n"
               << "  --target-cpu <cpu>   Target CPU model, or 'native' for the host\n"
               << "  --target-features <f> LLVM target feature string (e.g. +avx2)\n"
-              << "  --native             Tune for the host CPU and its features\n"
+              << "  --native             Shorthand for --target-profile=native\n"
               << "  --remarks[=mode]     Print LLVM optimization remarks to stderr;\n"
               << "                       mode is 'all', 'missed', or a pass name\n"
               << "                       (e.g. loop-vectorize)\n"
@@ -64,9 +67,11 @@ static void print_command_help(string_view cmd) {
               << "  --out-dir <dir>      Directory for temporary build artifacts\n"
               << "  --module-path <dir>  Extra directory searched for imported modules\n"
               << "  -O<level>            Optimization level (default: -O2)\n"
+              << "  --target-profile=<p> Target profile: portable, native, explicit\n"
+              << "  --target <triple>    Explicit target triple\n"
               << "  --target-cpu <cpu>   Target CPU model, or 'native'\n"
               << "  --target-features <f> LLVM target feature string\n"
-              << "  --native             Tune for the host CPU\n"
+              << "  --native             Shorthand for --target-profile=native\n"
               << "  --remarks[=mode]     Print LLVM optimization remarks to stderr;\n"
               << "                       mode is 'all', 'missed', or a pass name\n"
               << "                       (e.g. loop-vectorize)\n"
@@ -326,7 +331,48 @@ bool parse_command_line(int argc, const char* const* argv,
       continue;
     }
     if (arg == "--native") {
-      options.host_cpu = true;
+      options.target_profile = TargetProfile::Native;
+      options.target_profile_specified = true;
+      options.native_profile_requested = true;
+      continue;
+    }
+    if (arg == "--target-profile") {
+      if (idx >= argc) {
+        error_message = "missing profile after '--target-profile'";
+        return false;
+      }
+      if (!parse_target_profile(argv[idx++], options.target_profile)) {
+        error_message = "invalid target profile; expected portable, native, or "
+                        "explicit";
+        return false;
+      }
+      options.target_profile_specified = true;
+      continue;
+    }
+    if (arg.rfind("--target-profile=", 0) == 0) {
+      const string_view profile = string_view(arg).substr(17);
+      if (!parse_target_profile(profile, options.target_profile)) {
+        error_message = "invalid target profile '" + string(profile) +
+                        "'; expected portable, native, or explicit";
+        return false;
+      }
+      options.target_profile_specified = true;
+      continue;
+    }
+    if (arg == "--target" || arg == "--target-triple") {
+      if (idx >= argc) {
+        error_message = "missing triple after '" + arg + "'";
+        return false;
+      }
+      options.target_triple = argv[idx++];
+      continue;
+    }
+    if (arg.rfind("--target=", 0) == 0) {
+      options.target_triple = arg.substr(9);
+      continue;
+    }
+    if (arg.rfind("--target-triple=", 0) == 0) {
+      options.target_triple = arg.substr(16);
       continue;
     }
     if (arg == "--target-cpu") {
@@ -334,11 +380,25 @@ bool parse_command_line(int argc, const char* const* argv,
         error_message = "missing CPU model after '--target-cpu'";
         return false;
       }
-      options.target_cpu = argv[idx++];
+      string cpu = argv[idx++];
+      if (cpu == "native") {
+        options.target_profile = TargetProfile::Native;
+        options.target_profile_specified = true;
+        options.native_profile_requested = true;
+      } else {
+        options.target_cpu = move(cpu);
+      }
       continue;
     }
     if (arg.rfind("--target-cpu=", 0) == 0) {
-      options.target_cpu = arg.substr(13);
+      string cpu = arg.substr(13);
+      if (cpu == "native") {
+        options.target_profile = TargetProfile::Native;
+        options.target_profile_specified = true;
+        options.native_profile_requested = true;
+      } else {
+        options.target_cpu = move(cpu);
+      }
       continue;
     }
     if (arg == "--target-features") {
@@ -436,6 +496,18 @@ bool parse_command_line(int argc, const char* const* argv,
     options.source_paths.push_back(move(arg));
   }
 
+  // Infer the profile when the user did not name one. Any explicit target
+  // input means the build is tied to a known deployment target; otherwise the
+  // output stays on the portable x86-64 baseline.
+  if (!options.target_profile_specified) {
+    const bool has_explicit_target =
+        !options.target_triple.empty() ||
+        (!options.target_cpu.empty() && options.target_cpu != "generic") ||
+        !options.target_features.empty();
+    options.target_profile = has_explicit_target ? TargetProfile::Explicit
+                                                 : TargetProfile::Portable;
+  }
+
   if (options.source_paths.empty()) {
     error_message = "no source file specified for '" + first + "'";
     return false;
@@ -505,9 +577,10 @@ int run_driver(int argc, const char* const* argv) {
   pipe_opts.obj_path = obj_file;
   pipe_opts.verbose = options.verbose;
   pipe_opts.optimization_level = options.optimization_level;
+  pipe_opts.target_profile = options.target_profile;
+  pipe_opts.target_triple = options.target_triple;
   pipe_opts.target_cpu = options.target_cpu;
   pipe_opts.target_features = options.target_features;
-  pipe_opts.host_cpu = options.host_cpu;
   pipe_opts.emit_remarks = options.emit_remarks;
   pipe_opts.remarks_missed_only = options.remarks_missed_only;
   pipe_opts.remark_filter = options.remark_filter;
