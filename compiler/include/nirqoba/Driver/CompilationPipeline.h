@@ -39,9 +39,10 @@ struct PipelineOptions {
   EmitKind emit = EmitKind::Exe;
   bool verbose = false;
   OptimizationLevel optimization_level = OptimizationLevel::O2;
+  TargetProfile target_profile = TargetProfile::Portable;
+  std::string target_triple;
   std::string target_cpu = "generic";
   std::string target_features;
-  bool host_cpu = false;
   bool emit_remarks = false;
   bool remarks_missed_only = false;
   std::string remark_filter;

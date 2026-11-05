@@ -34,9 +34,15 @@ struct CommandLineOptions {
   // Compiler optimization and target selection. The defaults preserve a
   // portable release build while allowing debug builds and host tuning.
   OptimizationLevel optimization_level = OptimizationLevel::O2;
+  TargetProfile target_profile = TargetProfile::Portable;
+  std::string target_triple;
   std::string target_cpu = "generic";
   std::string target_features;
-  bool host_cpu = false;
+  // True when the user named a profile (including through --native). The
+  // parser uses this to distinguish an inferred profile from a requested one
+  // when rejecting contradictory flags.
+  bool target_profile_specified = false;
+  bool native_profile_requested = false;
   // `--remarks` prints LLVM optimization remarks (vectorization, unrolling,
   // inlining) to stderr; `--remarks=missed` prints only declined/analysis ones.
   bool emit_remarks = false;

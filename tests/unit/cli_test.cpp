@@ -102,13 +102,13 @@ TEST(CliTest, ParsesOptimizationLevels) {
 
 TEST(CliTest, ParsesTargetSelection) {
   {
-    const char* argv[] = {"nirqoba", "build", "main.nrqba", "--native",
-                          "--target-features=+avx2"};
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", "--native"};
     CommandLineOptions opts;
     std::string err;
-    ASSERT_TRUE(parse_command_line(5, argv, opts, err));
-    ASSERT_TRUE(opts.host_cpu);
-    ASSERT_EQ(opts.target_features, "+avx2");
+    ASSERT_TRUE(parse_command_line(4, argv, opts, err));
+    ASSERT_EQ(opts.target_profile, TargetProfile::Native);
+    ASSERT_TRUE(opts.target_profile_specified);
+    ASSERT_TRUE(opts.native_profile_requested);
   }
   {
     const char* argv[] = {"nirqoba", "build", "main.nrqba",
@@ -117,6 +117,50 @@ TEST(CliTest, ParsesTargetSelection) {
     std::string err;
     ASSERT_TRUE(parse_command_line(4, argv, opts, err));
     ASSERT_EQ(opts.target_cpu, "znver4");
+    ASSERT_EQ(opts.target_profile, TargetProfile::Explicit);
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(3, argv, opts, err));
+    ASSERT_EQ(opts.target_profile, TargetProfile::Portable);
+    ASSERT_FALSE(opts.target_profile_specified);
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba",
+                          "--target-profile=portable"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(4, argv, opts, err));
+    ASSERT_EQ(opts.target_profile, TargetProfile::Portable);
+    ASSERT_TRUE(opts.target_profile_specified);
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba", "--target",
+                          "x86_64-unknown-linux-gnu"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(5, argv, opts, err));
+    ASSERT_EQ(opts.target_triple, "x86_64-unknown-linux-gnu");
+    ASSERT_EQ(opts.target_profile, TargetProfile::Explicit);
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba",
+                          "--target-cpu=native"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(4, argv, opts, err));
+    ASSERT_EQ(opts.target_profile, TargetProfile::Native);
+    ASSERT_TRUE(opts.native_profile_requested);
+  }
+  {
+    const char* argv[] = {"nirqoba", "build", "main.nrqba",
+                          "--target-profile=fastest"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_FALSE(parse_command_line(4, argv, opts, err));
+    ASSERT_TRUE(err.find("invalid target profile") != string::npos);
   }
 }
 

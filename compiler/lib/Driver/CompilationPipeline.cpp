@@ -260,9 +260,10 @@ int run_pipeline(const PipelineOptions& options,
   // costs, vector-width selection, and ABI lowering.
   OptimizationOptions backend_options;
   backend_options.level = options.optimization_level;
+  backend_options.target_profile = options.target_profile;
+  backend_options.target_triple = options.target_triple;
   backend_options.target_cpu = options.target_cpu;
   backend_options.target_features = options.target_features;
-  backend_options.host_cpu = options.host_cpu;
   backend_options.remarks = !options.emit_remarks
       ? RemarkMode::None
       : (options.remarks_missed_only ? RemarkMode::Missed
