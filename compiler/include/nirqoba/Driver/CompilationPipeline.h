@@ -39,6 +39,7 @@ struct PipelineOptions {
   EmitKind emit = EmitKind::Exe;
   bool verbose = false;
   OptimizationLevel optimization_level = OptimizationLevel::O2;
+  IpoMode ipo_mode = IpoMode::Standard;
   TargetProfile target_profile = TargetProfile::Portable;
   std::string target_triple;
   std::string target_cpu = "generic";

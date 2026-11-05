@@ -256,6 +256,7 @@ int run_pipeline(const PipelineOptions& options,
   // costs, vector-width selection, and ABI lowering.
   OptimizationOptions backend_options;
   backend_options.level = options.optimization_level;
+  backend_options.ipo = options.ipo_mode;
   backend_options.target_profile = options.target_profile;
   backend_options.target_triple = options.target_triple;
   backend_options.target_cpu = options.target_cpu;
@@ -285,6 +286,8 @@ int run_pipeline(const PipelineOptions& options,
   if (options.verbose) {
     cerr << "optimization: " << optimization_level_name(options.optimization_level)
          << "\n"
+         << "ipo: " << ipo_mode_name(options.ipo_mode)
+         << " (whole-program lto)\n"
          << "target: " << describe_target_configuration(target_config) << "\n";
   }
 
