@@ -1,0 +1,21 @@
+// A call in tail position must carry the `tail` marker in the emitted IR. The
+// marker is what tells code generation that the caller's frame can be reused,
+// and LLVM cannot recover it on its own at -O0, where no optimization runs.
+int function is_even(int n) {
+    if (n == 0) {
+        return 1;
+    }
+    return is_odd(n - 1);
+}
+
+int function is_odd(int n) {
+    if (n == 0) {
+        return 0;
+    }
+    return is_even(n - 1);
+}
+
+int function main(string[] args) {
+    print(is_even(4 + args.length));
+    return 0;
+}

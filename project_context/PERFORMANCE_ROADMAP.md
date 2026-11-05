@@ -3,7 +3,7 @@
 **Document type:** Authoritative Engineering Specification  
 **Project:** Nirqoba Programming Language  
 **Author & Final Decision Authority:** **Muhammad Tahmid Ahnaf (@builtbyahnaf)**  
-**Status:** Planned  
+**Status:** In Progress (Phase 6 Performance Optimization)  
 **Target:** Stable Version 1.0 and subsequent Version 2.0 development
 
 ---
@@ -92,14 +92,14 @@ The current native compilation architecture must evolve into a proper optimizing
 
 ### Requirements
 
-- [ ] Implement a proper LLVM IR optimization pipeline using LLVM PassBuilder.
-- [ ] Integrate MLIR canonicalization and common subexpression elimination (CSE).
-- [ ] Implement dead-code elimination.
-- [ ] Implement dead-store elimination.
+- [x] Implement a proper LLVM IR optimization pipeline using LLVM PassBuilder.
+- [x] Integrate MLIR canonicalization and common subexpression elimination (CSE).
+- [x] Implement dead-code elimination.
+- [x] Implement dead-store elimination.
 - [x] Implement constant folding.
 - [x] Implement constant propagation.
 - [x] Implement sparse conditional constant propagation.
-- [ ] Implement control-flow simplification.
+- [x] Implement control-flow simplification.
 - [ ] Implement unreachable-block elimination.
 - [ ] Implement function inlining with an appropriate cost model.
 - [ ] Implement interprocedural optimization.
@@ -107,18 +107,18 @@ The current native compilation architecture must evolve into a proper optimizing
 - [ ] Implement loop unrolling with heuristics.
 - [ ] Implement loop strength reduction.
 - [ ] Implement induction-variable simplification.
-- [ ] Implement loop vectorization.
+- [x] Implement loop vectorization.
 - [ ] Implement SLP vectorization.
-- [ ] Implement tail-call optimization where valid.
-- [ ] Implement escape analysis and allocation elimination.
-- [ ] Implement scalar replacement of aggregates.
+- [x] Implement tail-call optimization where valid.
+- [x] Implement escape analysis and allocation elimination.
+- [x] Implement scalar replacement of aggregates.
 - [ ] Implement devirtualization and indirect-call elimination where possible.
 - [ ] Introduce optional ThinLTO or equivalent link-time optimization.
 - [ ] Support optimization profiles: `-O0`, `-O1`, `-O2`, `-O3`, `-Os`, and `-Oz`.
-- [ ] Ensure Nirqoba-specific semantic guarantees are preserved across optimization passes.
-- [ ] Provide LLVM IR inspection.
-- [ ] Provide optimized IR inspection.
-- [ ] Provide optimization remarks and pass diagnostics.
+- [x] Ensure Nirqoba-specific semantic guarantees are preserved across optimization passes.
+- [x] Provide LLVM IR inspection.
+- [x] Provide optimized IR inspection.
+- [x] Provide optimization remarks and pass diagnostics.
 
 ### Acceptance criteria
 
@@ -138,13 +138,13 @@ Nirqoba must generate machine code that takes advantage of the target processor 
 
 ### Requirements
 
-- [ ] Support configurable target CPU architectures and models.
-- [ ] Support CPU feature detection and explicit feature selection.
-- [ ] Provide a portable target profile.
-- [ ] Provide an optional host-tuned target profile.
+- [x] Support configurable target CPU architectures and models.
+- [x] Support CPU feature detection and explicit feature selection.
+- [x] Provide a portable target profile.
+- [x] Provide an optional host-tuned target profile.
 - [ ] Support available SIMD instruction sets, including SSE, AVX2, AVX-512, and ARM NEON where supported.
 - [ ] Integrate target-specific instruction selection through LLVM.
-- [ ] Improve alignment and aliasing information available to the optimizer.
+- [x] Improve alignment and aliasing information available to the optimizer.
 - [ ] Optimize calling conventions and ABI handling.
 - [ ] Reduce unnecessary stack spills and register pressure.
 - [ ] Reduce avoidable function-call overhead.
@@ -224,17 +224,17 @@ Nirqoba aims to support scientific computation, mathematical workloads, data pro
 ### Requirements
 
 - [ ] Define precise floating-point semantics.
-- [ ] Support fused multiply-add when permitted by the selected semantics.
+- [x] Support fused multiply-add when permitted by the selected semantics.
 - [ ] Optimize integer and floating-point arithmetic.
 - [ ] Provide efficient vector and matrix primitives.
 - [ ] Implement SIMD-friendly memory layouts.
 - [ ] Implement optimized numerical operations.
-- [ ] Optimize reductions and common numerical kernels.
-- [ ] Provide explicitly controlled fast-math compilation options.
+- [x] Optimize reductions and common numerical kernels.
+- [x] Provide explicitly controlled fast-math compilation options.
 - [ ] Support f16 and other appropriate reduced-precision formats.
 - [ ] Establish correct semantics for future f8 and f4 types.
 - [ ] Integrate numerical optimization with the CPU target configuration.
-- [ ] Ensure numerical operations can benefit from vectorization.
+- [x] Ensure numerical operations can benefit from vectorization.
 - [ ] Benchmark numerical kernels against optimized C++ and Rust implementations.
 - [ ] Validate numerical accuracy alongside execution speed.
 
@@ -256,13 +256,13 @@ Nirqoba must support efficient memory ownership without introducing unnecessary 
 
 ### Requirements
 
-- [ ] Complete static ownership analysis.
-- [ ] Complete move semantics and ownership transfer.
-- [ ] Implement field-level ownership tracking.
-- [ ] Implement lifetime and escape analysis.
+- [x] Complete static ownership analysis.
+- [x] Complete move semantics and ownership transfer.
+- [x] Implement field-level ownership tracking.
+- [x] Implement lifetime and escape analysis.
 - [ ] Implement interprocedural lifetime analysis where practical.
-- [ ] Support borrowing without runtime borrow-checking overhead when statically provable.
-- [ ] Support mutable borrowing with compile-time exclusivity guarantees.
+- [x] Support borrowing without runtime borrow-checking overhead when statically provable.
+- [x] Support mutable borrowing with compile-time exclusivity guarantees.
 - [ ] Optimize compiler-generated cleanup and destruction.
 - [ ] Ensure early returns and exception paths perform correct cleanup.
 - [ ] Define ownership rules for closures and captured variables.
@@ -297,9 +297,9 @@ Nirqoba's garbage collector must remain a reliable memory-management option with
 - [ ] Implement size-class allocation.
 - [ ] Implement free-slot reuse.
 - [x] Reuse empty pages and partially occupied page regions.
-- [ ] Optimize root-frame registration and cleanup.
-- [ ] Avoid root-frame machinery for functions without managed references.
-- [ ] Implement liveness-aware root maps where practical.
+- [x] Optimize root-frame registration and cleanup.
+- [x] Avoid root-frame machinery for functions without managed references.
+- [x] Implement liveness-aware root maps where practical.
 - [x] Establish explicit safepoints and stop-the-world coordination.
 - [x] Implement write barriers and remembered sets.
 - [x] Implement generational collection with promotion policies.
@@ -332,16 +332,16 @@ Explicit allocation must provide predictable and efficient memory management for
 ### Requirements
 
 - [ ] Optimize allocator fast paths.
-- [ ] Avoid unnecessary allocator-registry lookups.
-- [ ] Reduce synchronization on allocation and deallocation hot paths.
+- [x] Avoid unnecessary allocator-registry lookups.
+- [x] Reduce synchronization on allocation and deallocation hot paths.
 - [ ] Add thread-local allocation caches.
-- [ ] Optimize arena and pool allocation.
+- [x] Optimize arena and pool allocation.
 - [ ] Implement efficient size-class free lists.
 - [ ] Improve slab allocator reuse.
 - [ ] Reduce fragmentation.
 - [ ] Optimize reallocation paths.
 - [ ] Reduce allocator metadata overhead.
-- [ ] Introduce allocator-aware compiler optimizations.
+- [x] Introduce allocator-aware compiler optimizations.
 - [ ] Allow allocation strategies to be selected at compile time where practical.
 - [ ] Benchmark each allocator against platform allocators and equivalent C++/Rust implementations.
 - [ ] Retain appropriate debug safety checks while minimizing unnecessary Release-build overhead.

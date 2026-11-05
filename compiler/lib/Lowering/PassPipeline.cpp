@@ -537,6 +537,59 @@ class InferFunctionMemoryEffectsPass
 // Adds the semantics-preserving MLIR cleanup shared by the pre- and
 // post-lowering stages.
 //
+// LLVM cannot infer a tail call: the `tail` marker is part of the IR contract,
+// and only the lowering knows that a call's result is returned unchanged. A
+// marked call lets code generation reuse the caller's frame (a sibling call)
+// instead of growing the stack, which is what makes deep recursion through a
+// chain of calls finish. At -O2 LLVM's own pipelines recover the information, so
+// this pass matters most at -O0, where no optimization runs to find it, and it
+// is cheap everywhere else.
+//
+// A call is marked only when the operation after it is a `return` of exactly
+// that value (or a void call followed by a void return) and the callee has the
+// caller's prototype. The adjacency requirement also excludes functions that
+// must tear down a GC root frame after the call: that teardown is a call, so the
+// user call is no longer in tail position and marking it would be a lie.
+class MarkTailCallsPass
+    : public mlir::PassWrapper<MarkTailCallsPass,
+                               mlir::OperationPass<>> {
+ public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MarkTailCallsPass)
+
+  llvm::StringRef getArgument() const final { return "mark-tail-calls"; }
+  llvm::StringRef getDescription() const final {
+    return "Mark calls whose result is returned unchanged as tail calls";
+  }
+
+  void runOnOperation() override {
+    getOperation()->walk([&](mlir::LLVM::CallOp call) {
+      if (call.getTailCallKind() !=
+          mlir::LLVM::tailcallkind::TailCallKind::None)
+        return;
+      auto ret = mlir::dyn_cast_or_null<mlir::LLVM::ReturnOp>(
+          call->getNextNode());
+      if (!ret) return;
+      const bool forwards_result =
+          call.getNumResults() == 1 && ret.getNumOperands() == 1 &&
+          ret.getOperand(0) == call.getResult();
+      const bool forwards_nothing =
+          call.getNumResults() == 0 && ret.getNumOperands() == 0;
+      if (!forwards_result && !forwards_nothing) return;
+
+      auto caller = call->getParentOfType<mlir::LLVM::LLVMFuncOp>();
+      if (!caller || caller.isExternal()) return;
+      auto callee = mlir::SymbolTable::lookupNearestSymbolFrom<
+          mlir::LLVM::LLVMFuncOp>(call, call.getCalleeAttr());
+      if (!callee || callee.isExternal()) return;
+      if (callee.getFunctionType() != caller.getFunctionType()) return;
+      if (callee.getCConv() != caller.getCConv()) return;
+      if (callee.getFunctionType().isVarArg()) return;
+
+      call.setTailCallKind(mlir::LLVM::tailcallkind::TailCallKind::Tail);
+    });
+  }
+};
+
 // The canonicalizer folds constants, removes trivially dead operations whose
 // results are unused, and simplifies control flow. SCCP then propagates known
 // constants through SSA values, block arguments, and conditional control flow,
@@ -592,7 +645,13 @@ void build_lowering_pipeline(mlir::PassManager& pm, bool optimize) {
     add_cleanup_passes(pm);
   }
 
-  // Step 4: Describe the memory each generated function actually touches. This
+  // Step 4: Expose tail calls. Like memory effects below, the marker describes
+  // the program rather than a pass run, so it is added at every level: without
+  // it, -O0 cannot turn a returned call into a sibling call and deep recursion
+  // exhausts the stack.
+  pm.addPass(std::make_unique<MarkTailCallsPass>());
+
+  // Step 5: Describe the memory each generated function actually touches. This
   // runs last so it sees the final body. It runs at every optimization level:
   // the attribute is a property of the program, not of a pass run.
   pm.addPass(std::make_unique<InferFunctionMemoryEffectsPass>());
