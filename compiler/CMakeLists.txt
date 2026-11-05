@@ -34,7 +34,7 @@ add_public_tablegen_target(NrqDialectTableGen)
 
 # LLVM components the compiler needs for Phase 1.
 nirqoba_llvm_components(NIRQOBA_LLVM_LIBS
-  core support target passes x86codegen x86asmparser x86desc x86info
+  core support target passes ipo x86codegen x86asmparser x86desc x86info
 )
 
 # MLIR libraries needed for the nrq dialect, lowering, and LLVM IR export.
