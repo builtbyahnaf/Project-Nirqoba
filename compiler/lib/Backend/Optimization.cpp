@@ -6,7 +6,9 @@
 #include <vector>
 
 #include "llvm/IR/Attributes.h"
+#include "llvm/IR/DiagnosticHandler.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
@@ -70,6 +72,41 @@ llvm::OptimizationLevel llvm_level_for(OptimizationLevel level) {
   return llvm::OptimizationLevel::O2;
 }
 
+// Enables LLVM's optimization remarks through the context's diagnostic handler.
+//
+// Passes consult these predicates (through OptimizationRemarkEmitter) before
+// formatting a remark, so overriding them is what makes `--remarks` work. The
+// handler deliberately does not intercept `handleDiagnostics`: returning false
+// from it lets LLVMContext print the remark with its normal "remark: <location>:"
+// formatting to stderr, which keeps the compiler's own diagnostics untouched.
+class RemarkDiagnosticHandler final : public llvm::DiagnosticHandler {
+ public:
+  RemarkDiagnosticHandler(RemarkMode mode, llvm::StringRef filter)
+      : mode_(mode), filter_(filter) {}
+
+  bool isAnalysisRemarkEnabled(llvm::StringRef pass) const override {
+    return enabled(pass);
+  }
+  bool isMissedOptRemarkEnabled(llvm::StringRef pass) const override {
+    return enabled(pass);
+  }
+  bool isPassedOptRemarkEnabled(llvm::StringRef pass) const override {
+    return mode_ == RemarkMode::All && matches(pass);
+  }
+  bool isAnyRemarkEnabled() const override { return mode_ != RemarkMode::None; }
+
+ private:
+  bool matches(llvm::StringRef pass) const {
+    return filter_.empty() || pass.contains(filter_);
+  }
+  bool enabled(llvm::StringRef pass) const {
+    return mode_ != RemarkMode::None && matches(pass);
+  }
+
+  RemarkMode mode_;
+  llvm::StringRef filter_;
+};
+
 void apply_size_attributes(llvm::Module& module, OptimizationLevel level) {
   if (level != OptimizationLevel::Os && level != OptimizationLevel::Oz) return;
   const llvm::Attribute::AttrKind kind = level == OptimizationLevel::Os
@@ -85,8 +122,9 @@ void apply_size_attributes(llvm::Module& module, OptimizationLevel level) {
 
 bool optimize_llvm_module(llvm::Module& module,
                           llvm::TargetMachine& target_machine,
-                          OptimizationLevel level,
+                          const OptimizationOptions& options,
                           DiagnosticEngine& diagnostics) {
+  const OptimizationLevel level = options.level;
   if (level < OptimizationLevel::O0 || level > OptimizationLevel::Oz) {
     diagnostics.error(diag::kInternalError, SourceLocation{},
                       "internal: invalid optimization level");
@@ -102,6 +140,14 @@ bool optimize_llvm_module(llvm::Module& module,
   }
 
   apply_size_attributes(module, level);
+
+  // The context outlives this call (the driver creates one per compilation), so
+  // installing the handler here needs no restore.
+  if (options.remarks != RemarkMode::None) {
+    module.getContext().setDiagnosticHandler(
+        std::make_unique<RemarkDiagnosticHandler>(options.remarks,
+                                                  options.remark_filter));
+  }
 
   llvm::PassBuilder pass_builder(&target_machine);
   llvm::LoopAnalysisManager loop_analyses;

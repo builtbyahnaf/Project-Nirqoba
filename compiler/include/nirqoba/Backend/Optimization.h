@@ -37,6 +37,18 @@ std::string_view optimization_level_name(OptimizationLevel level);
 // `-O<level>` and `--opt-level=<level>`.
 bool parse_optimization_level(std::string_view text, OptimizationLevel& level);
 
+// Which LLVM optimization remarks to print on stderr.
+//
+// Remarks are LLVM's structured account of what a pass did, or why it declined
+// to transform a loop (for example "loop not vectorized: ..."). They are
+// diagnostic-only: they never influence the generated code, so enabling them
+// cannot change an object file.
+enum class RemarkMode {
+  None,    // silent (default)
+  All,     // transformations performed plus missed/analysis explanations
+  Missed,  // missed/analysis explanations only
+};
+
 // Target and optimization settings for one compiled module.
 struct OptimizationOptions {
   OptimizationLevel level = OptimizationLevel::O2;
@@ -49,6 +61,13 @@ struct OptimizationOptions {
   std::string target_cpu = "generic";
   std::string target_features;
   bool host_cpu = false;
+
+  // Optimization-remark reporting, selected by `--remarks`.
+  RemarkMode remarks = RemarkMode::None;
+  // When non-empty, remarks are only emitted by passes whose name contains
+  // this text (for example "loop-vectorize"), mirroring clang's `-Rpass=<regex>`
+  // narrowing without pulling a regular-expression engine into the driver.
+  std::string remark_filter;
 };
 
 // Runs the LLVM PassBuilder pipeline for `level` on `module`.
@@ -57,9 +76,14 @@ struct OptimizationOptions {
 // vectorization, and cost modelling. The module must already have its data
 // layout and target triple set from the same target machine. Returns false for
 // an invalid level or when the input/output module fails LLVM verification.
+//
+// When `options.remarks` is not `RemarkMode::None`, LLVM's optimization
+// remarks for this run are printed to stderr. Remarks are requested through the
+// module's LLVMContext, so they live as long as that context; callers create
+// one context per compilation.
 bool optimize_llvm_module(llvm::Module& module,
                           llvm::TargetMachine& target_machine,
-                          OptimizationLevel level,
+                          const OptimizationOptions& options,
                           DiagnosticEngine& diagnostics);
 
 }  // namespace nirq

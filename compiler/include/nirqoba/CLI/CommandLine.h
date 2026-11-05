@@ -37,6 +37,11 @@ struct CommandLineOptions {
   std::string target_cpu = "generic";
   std::string target_features;
   bool host_cpu = false;
+  // `--remarks` prints LLVM optimization remarks (vectorization, unrolling,
+  // inlining) to stderr; `--remarks=missed` prints only declined/analysis ones.
+  bool emit_remarks = false;
+  bool remarks_missed_only = false;
+  std::string remark_filter;
   std::vector<std::string> trailing_args;  // For `nirqoba run ... -- args`
 };
 
