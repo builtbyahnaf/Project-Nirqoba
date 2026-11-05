@@ -7,6 +7,7 @@ Uses only the Python standard library.
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,21 @@ def run_command(cmd, cwd=None):
         text=True,
     )
     return proc.returncode, proc.stdout, proc.stderr
+
+
+def find_llvm_objdump(compiler_exe):
+    """Locates llvm-objdump next to the compiler or in the packaged toolchain."""
+    candidates = [
+        compiler_exe.parent / "llvm-objdump.exe",
+        compiler_exe.resolve().parents[3] / "toolchain" / "llvm-23.1.4" / "bin" / "llvm-objdump.exe",
+    ]
+    on_path = shutil.which("llvm-objdump")
+    if on_path:
+        candidates.append(Path(on_path))
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def check_coff_header(obj_path):
@@ -65,6 +81,9 @@ def run_case(case_dir, compiler_exe, temp_dir):
         cmd.extend(extra_args)
     elif mode == "check":
         cmd.extend(["check", str(source_file)])
+        cmd.extend(extra_args)
+    elif mode in ("assembly_check", "target_assembly"):
+        cmd.extend(["build", str(source_file), "--out-dir", str(temp_dir)])
         cmd.extend(extra_args)
     elif mode == "raw":
         cmd.extend(extra_args)
@@ -115,6 +134,31 @@ def run_case(case_dir, compiler_exe, temp_dir):
         valid, msg = check_coff_header(obj_file)
         if not valid:
             return False, f"COFF header check failed: {msg}"
+
+    # Disassemble the object to prove the selected profile controls instruction
+    # selection. Portable must stay on the baseline; explicit wides must use
+    # the wider registers they requested.
+    if mode in ("assembly_check", "target_assembly"):
+        obj_file = temp_dir / f"{source_file.stem}.obj"
+        if not obj_file.exists():
+            return False, f"Expected object file '{obj_file}' was not produced"
+
+        objdump = find_llvm_objdump(compiler_exe)
+        if objdump is None:
+            return False, "llvm-objdump was not found next to the compiler or in the toolchain"
+
+        dump_code, dump, dump_err = run_command(
+            [str(objdump), "-d", "--no-show-raw-insn", str(obj_file)]
+        )
+        if dump_code != 0:
+            return False, f"llvm-objdump failed: {dump_err}"
+
+        for needle in spec.get("expect_asm_contains", []):
+            if needle not in dump:
+                return False, f"Disassembly does not contain '{needle}'.\nGot:\n{dump}"
+        for needle in spec.get("expect_asm_not_contains", []):
+            if needle in dump:
+                return False, f"Disassembly unexpectedly contains '{needle}'.\nGot:\n{dump}"
 
     return True, "PASSED"
 

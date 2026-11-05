@@ -1,0 +1,11 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O2", "--target-profile=portable"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "!\"nrqoba.target.profile\", !\"portable\"",
+    "!\"nrqoba.target.cpu\", !\"generic\"",
+    "<2 x double>"
+  ],
+  "expect_stdout_not_contains": ["\"nrqoba.target.profile\", !\"native\""]
+}

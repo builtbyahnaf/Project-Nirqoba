@@ -1,0 +1,11 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O2", "--target-profile=explicit", "--target-cpu=x86-64-v3"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "!\"nrqoba.target.profile\", !\"explicit\"",
+    "!\"nrqoba.target.cpu\", !\"x86-64-v3\"",
+    "<4 x double>"
+  ],
+  "expect_stdout_not_contains": ["\"nrqoba.target.cpu\", !\"generic\""]
+}
