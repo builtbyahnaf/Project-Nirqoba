@@ -22,6 +22,7 @@
 #include "llvm/Target/TargetMachine.h"
 
 #include "nirqoba/Backend/ObjectEmitter.h"
+#include "nirqoba/Backend/TargetInfo.h"
 #include "nirqoba/Diagnostics/Diagnostic.h"
 #include "nirqoba/Diagnostics/DiagnosticRenderer.h"
 #include "nirqoba/Driver/LinkerEnvironment.h"
@@ -251,11 +252,6 @@ int run_pipeline(const PipelineOptions& options,
     return fail_with(diagnostics, sources);
   }
 
-  if (options.emit == EmitKind::LlvmRaw) {
-    llvm_module->print(llvm::outs(), nullptr);
-    return 0;
-  }
-
   // Configure the target before optimizing: target IR analyses drive inline
   // costs, vector-width selection, and ABI lowering.
   OptimizationOptions backend_options;
@@ -269,6 +265,17 @@ int run_pipeline(const PipelineOptions& options,
       : (options.remarks_missed_only ? RemarkMode::Missed
                                      : RemarkMode::All);
   backend_options.remark_filter = options.remark_filter;
+
+  TargetConfiguration target_config;
+  if (!resolve_target_configuration(backend_options, target_config,
+                                    diagnostics)) {
+    return fail_with(diagnostics, sources);
+  }
+
+  if (options.emit == EmitKind::LlvmRaw) {
+    llvm_module->print(llvm::outs(), nullptr);
+    return 0;
+  }
 
   unique_ptr<llvm::TargetMachine> target_machine =
       create_target_machine(*llvm_module, backend_options, diagnostics);
