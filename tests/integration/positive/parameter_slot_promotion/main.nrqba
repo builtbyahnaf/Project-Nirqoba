@@ -1,0 +1,16 @@
+// Neither function assigns its parameters, so every parameter slot is pure
+// spill: the incoming arguments are used directly and the function needs no
+// stack frame at all, even at -O0.
+int function double_it(int value) {
+    return value * 2;
+}
+
+int function add3(int a, int b, int c) {
+    return a + b + c;
+}
+
+int function main() {
+    print(double_it(21));
+    print(add3(1, 2, 3));
+    return 0;
+}
