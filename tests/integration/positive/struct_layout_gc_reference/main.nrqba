@@ -1,0 +1,41 @@
+// A struct that holds managed references is laid out by the same physical
+// order, so the GC reference offsets must follow the reordered fields. `tag`
+// and `visited` are declared before `child`, which pushes the single reference
+// to the end of the physical layout; a stale offset would either trace a scalar
+// as a pointer or miss the reference and collect a node that is still
+// reachable. A collection runs in the middle of the chain build.
+struct Node {
+    int tag;
+    bool visited;
+    managed<Node> child;
+}
+
+int function main() {
+    gc.set_threshold(4096);
+    gc.enable();
+    var head = array.allocate<Node>(1);
+    head[0].tag = 1;
+    head[0].visited = true;
+    var cursor = head;
+    var built = 1;
+    while (built < 32) {
+        var next = array.allocate<Node>(1);
+        next[0].tag = cursor[0].tag + 1;
+        next[0].visited = false;
+        cursor[0].child = next;
+        cursor = next;
+        built += 1;
+    }
+    gc.collect();
+    var total = 0;
+    var walk = head;
+    var remaining = 32;
+    while (remaining > 0) {
+        total += walk[0].tag;
+        walk = walk[0].child;
+        remaining -= 1;
+    }
+    gc.disable();
+    print(total);
+    return 0;
+}

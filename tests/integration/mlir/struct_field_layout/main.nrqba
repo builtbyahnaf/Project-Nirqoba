@@ -1,0 +1,32 @@
+// A struct is layout-private: no FFI, `sizeof` or type punning can observe it,
+// so the compiler stores fields widest-alignment first. `flag` and `tag` are
+// declared first but padded to the end, and the two i64 fields sit at offsets 0
+// and 8 with no interior padding: 24 bytes instead of the declaration-order
+// 32.
+struct Sample {
+    bool flag;
+    int count;
+    char tag;
+    int total;
+}
+
+// Nested aggregates are laid out by the same rule, and every struct passed by
+// value carries the physical layout in its parameter type.
+Sample function bump(Sample s, int delta) {
+    s.total = s.total + delta;
+    s.count = s.count + 1;
+    return s;
+}
+
+bool function flag_of(Sample s) {
+    return s.flag;
+}
+
+int function main(string[] args) {
+    var s = Sample { flag: args.length > 0, count: 1, tag: 'x', total: 2 };
+    var t = bump(s, 3);
+    if (flag_of(t)) {
+        print(t.total + t.count);
+    }
+    return 0;
+}
