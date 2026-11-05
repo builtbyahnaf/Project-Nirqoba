@@ -1,7 +1,10 @@
 #include "nirqoba/Backend/Optimization.h"
 
 #include <algorithm>
+#include <filesystem>
+#include <optional>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -15,6 +18,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/PGOOptions.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/IPO/GlobalDCE.h"
@@ -208,6 +212,84 @@ void add_ipo_module_flags(llvm::Module& module, IpoMode mode) {
                        llvm::MDString::get(context, "whole-program"));
 }
 
+// Records which profile policy produced the artifact. The profile path itself
+// is deliberately not embedded: an absolute build-machine path makes otherwise
+// identical objects differ, and the mode plus the profile summary metadata are
+// the facts a consumer needs.
+void add_pgo_module_flags(llvm::Module& module,
+                          const OptimizationOptions& options) {
+  if (options.pgo == PgoMode::None) return;
+  llvm::LLVMContext& context = module.getContext();
+  module.addModuleFlag(llvm::Module::Error, "nrqoba.pgo.mode",
+                       llvm::MDString::get(context, pgo_mode_name(options.pgo)));
+  module.addModuleFlag(
+      llvm::Module::Error, "nrqoba.pgo.cold",
+      llvm::MDString::get(context, pgo_cold_mode_name(options.pgo_cold)));
+}
+
+llvm::PGOOptions::ColdFuncOpt llvm_cold_mode_for(PgoColdMode mode) {
+  switch (mode) {
+    case PgoColdMode::Default: return llvm::PGOOptions::ColdFuncOpt::Default;
+    case PgoColdMode::OptSize: return llvm::PGOOptions::ColdFuncOpt::OptSize;
+    case PgoColdMode::MinSize: return llvm::PGOOptions::ColdFuncOpt::MinSize;
+    case PgoColdMode::OptNone: return llvm::PGOOptions::ColdFuncOpt::OptNone;
+  }
+  return llvm::PGOOptions::ColdFuncOpt::Default;
+}
+
+// PassBuilder owns the ordering of profile passes: generation instruments the
+// optimized body and lowers counters, while use annotates the module before
+// inlining so every later decision sees branch weights and entry counts.
+std::optional<llvm::PGOOptions> pgo_options_for(
+    const OptimizationOptions& options) {
+  if (options.pgo == PgoMode::None) return std::nullopt;
+  llvm::PGOOptions::PGOAction action = llvm::PGOOptions::NoAction;
+  std::string profile_file = options.pgo_profile_path;
+  switch (options.pgo) {
+    case PgoMode::None:
+      return std::nullopt;
+    case PgoMode::Generate:
+      action = llvm::PGOOptions::IRInstr;
+      // Empty means the profile runtime's default output name.
+      profile_file.clear();
+      break;
+    case PgoMode::Use:
+      action = llvm::PGOOptions::IRUse;
+      break;
+    case PgoMode::Sample:
+      action = llvm::PGOOptions::SampleUse;
+      break;
+  }
+  return llvm::PGOOptions(profile_file, "", "", "", action,
+                          llvm::PGOOptions::NoCSAction,
+                          llvm_cold_mode_for(options.pgo_cold));
+}
+
+// A profile file is an input, so a missing or empty file must be a compiler
+// diagnostic rather than a silent fallback to a profile-less build. LLVM's
+// loader would otherwise warn and continue, making the result indistinguishable
+// from an unprofiled build.
+bool validate_pgo_profile(const OptimizationOptions& options,
+                          DiagnosticEngine& diagnostics) {
+  if (options.pgo != PgoMode::Use && options.pgo != PgoMode::Sample) {
+    return true;
+  }
+  std::error_code error;
+  const std::filesystem::path path(options.pgo_profile_path);
+  if (options.pgo_profile_path.empty() ||
+      !std::filesystem::exists(path, error) ||
+      std::filesystem::is_directory(path, error) ||
+      std::filesystem::file_size(path, error) == 0) {
+    diagnostics.error(
+        diag::kPgoProfileMissing, SourceLocation{},
+        "profile '" + options.pgo_profile_path +
+            "' was not found, is a directory, or is empty; generate a profile "
+            "and merge it before using --pgo-use/--pgo-sample (NRQ5009)");
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 bool optimize_llvm_module(llvm::Module& module,
@@ -229,8 +311,11 @@ bool optimize_llvm_module(llvm::Module& module,
     return false;
   }
 
+  if (!validate_pgo_profile(options, diagnostics)) return false;
+
   apply_size_attributes(module, level);
   add_ipo_module_flags(module, options.ipo);
+  add_pgo_module_flags(module, options);
 
   // The context outlives this call (the driver creates one per compilation), so
   // installing the handler here needs no restore.
@@ -241,7 +326,8 @@ bool optimize_llvm_module(llvm::Module& module,
   }
 
   llvm::PassBuilder pass_builder(&target_machine,
-                                 pipeline_tuning_for(options.ipo));
+                                 pipeline_tuning_for(options.ipo),
+                                 pgo_options_for(options));
   llvm::LoopAnalysisManager loop_analyses;
   llvm::FunctionAnalysisManager function_analyses;
   llvm::CGSCCAnalysisManager cgscc_analyses;

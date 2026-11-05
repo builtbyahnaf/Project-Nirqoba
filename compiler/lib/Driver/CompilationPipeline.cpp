@@ -81,6 +81,36 @@ string locate_runtime_lib() {
   return {};
 }
 
+// Finds the LLVM profile runtime. The main LLVM SDK ships compiler headers and
+// libraries but not compiler-rt, so PGO builds look in the packaged clang
+// toolchain as well. The search is limited to the expected
+// <toolchain>/<name>/lib/clang/<version>/lib/windows/ layout; iterating the
+// whole toolchain would make every PGO link scan thousands of headers.
+string locate_profile_runtime_lib() {
+  vector<fs::path> roots;
+  const fs::path exe_dir = get_executable_dir();
+  roots.push_back(exe_dir / ".." / ".." / "toolchain");
+  roots.push_back(fs::path("toolchain"));
+
+  for (const fs::path& root : roots) {
+    std::error_code error;
+    if (!fs::exists(root, error)) continue;
+    for (const fs::directory_entry& toolchain :
+         fs::directory_iterator(root, error)) {
+      if (!toolchain.is_directory()) continue;
+      const fs::path clang_root = toolchain.path() / "lib" / "clang";
+      if (!fs::exists(clang_root, error)) continue;
+      for (const fs::directory_entry& version :
+           fs::directory_iterator(clang_root, error)) {
+        const fs::path library = version.path() / "lib" / "windows" /
+                                 "clang_rt.profile-x86_64.lib";
+        if (fs::exists(library, error)) return library.string();
+      }
+    }
+  }
+  return {};
+}
+
 bool ends_with(string_view str, string_view suffix) {
   return str.size() >= suffix.size() &&
          str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
@@ -356,6 +386,23 @@ int run_pipeline(const PipelineOptions& options,
     "kernel32.lib",
     "dxgi.lib",
   };
+
+  // Instrumented objects reference __llvm_profile_* and the profile runtime
+  // owns the raw-counter buffer and its atexit writer. The compiler-rt archive
+  // must be linked explicitly; unlike clang, Nirqoba invokes the linker
+  // directly and has no driver to add it.
+  if (options.pgo_mode == PgoMode::Generate) {
+    const string profile_runtime = locate_profile_runtime_lib();
+    if (profile_runtime.empty()) {
+      diagnostics.error(
+          diag::kToolchainUnavailable, SourceLocation{},
+          "cannot find clang_rt.profile-x86_64.lib for --pgo-generate; "
+          "re-run scripts/bootstrap.ps1 so the packaged LLVM toolchain "
+          "contains compiler-rt (NRQ5003)");
+      return fail_with(diagnostics, sources);
+    }
+    link_args.push_back(profile_runtime);
+  }
 
   for (const auto& lib_dir : linker_env.lib_dirs) {
     link_args.push_back("/LIBPATH:" + lib_dir);
