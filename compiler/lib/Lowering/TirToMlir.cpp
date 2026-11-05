@@ -1413,6 +1413,38 @@ class FunctionTranslator {
     return values_[static_cast<std::size_t>(v.id)];
   }
 
+  // Alignment of every pointer whose origin this function knows: frame slots,
+  // stack-placed array storage and the element pointers derived from them. A
+  // pointer with no entry has unknown provenance and keeps the conservative
+  // default, because a value loaded from memory or received as a parameter can
+  // point anywhere.
+  void record_pointer_alignment(const tir::Value& value, uint64_t alignment) {
+    if (!value.is_valid() || alignment <= 1) return;
+    pointer_alignment_[value.id] = alignment;
+  }
+
+  uint64_t known_pointer_alignment(const tir::Value& value) const {
+    if (!value.is_valid()) return 1;
+    const auto found = pointer_alignment_.find(value.id);
+    return found == pointer_alignment_.end() ? 1 : found->second;
+  }
+
+  // States the alignment of a memory access. A `T`-typed location is always
+  // naturally aligned: the language has no pointer casts, type punning, unions
+  // or FFI, so the compiler and the runtime are the only creators of typed
+  // storage, and both lay aggregates out with natural alignment. That makes the
+  // accessed type's alignment a valid floor, which the default the LLVM dialect
+  // would otherwise assume (4 bytes) is not. Provenance can only raise it: a
+  // slot is aligned more generously than its type needs.
+  template <typename AccessOp>
+  void apply_access_alignment(AccessOp access, const tir::Value& pointer,
+                              const Type& accessed_type) {
+    const uint64_t natural = std::max<uint64_t>(1, type_alignment(accessed_type));
+    const uint64_t known = known_pointer_alignment(pointer);
+    const uint64_t alignment = std::max(natural, known);
+    if (alignment > 1) access.setAlignment(alignment);
+  }
+
   // `--fast-math` opts into reassociation and FMA contraction for floating-point
   // arithmetic. Strict IEEE ordering stays the default, because reassociation
   // changes the result of a sum. With the flag LLVM may reassociate an
@@ -1940,6 +1972,7 @@ class FunctionTranslator {
           diag_.error("NRQ4005", op.location, "internal: no entry block for a stack slot");
           return false;
         }
+        record_pointer_alignment(op.result, type_alignment(op.result.type));
         std::vector<uint64_t> root_offsets;
         collect_managed_reference_offsets(op.result.type, 0, root_offsets);
         if (!root_offsets.empty()) {
@@ -1971,7 +2004,9 @@ class FunctionTranslator {
             gc_roots_.unobserved_addresses.count(op.lhs.id) != 0;
         if (op.operand.type.is_managed_pointer()) {
           if (unobserved) {
-            builder_.create<mlir::LLVM::StoreOp>(loc, val, ptr);
+            apply_access_alignment(
+                builder_.create<mlir::LLVM::StoreOp>(loc, val, ptr),
+                op.lhs, op.operand.type);
             return true;
           }
           auto store_fn = ensure_runtime_fn(module_, builder_, "nrq_gc_root_store",
@@ -1980,7 +2015,9 @@ class FunctionTranslator {
           builder_.create<mlir::LLVM::CallOp>(loc, store_fn,
                                               mlir::ValueRange{ptr, val});
         } else if (!collect_has_managed_reference(op.operand.type) || unobserved) {
-          builder_.create<mlir::LLVM::StoreOp>(loc, val, ptr);
+          apply_access_alignment(
+              builder_.create<mlir::LLVM::StoreOp>(loc, val, ptr),
+              op.lhs, op.operand.type);
         } else {
           // The barrier needs the value in memory. Allocating at entry rather
           // than here keeps a store inside a loop from growing the frame once
@@ -2018,8 +2055,9 @@ class FunctionTranslator {
           diag_.error("NRQ4005", op.location, "internal: load of unsupported type");
           return false;
         }
-        mlir::Value loaded = builder_.create<mlir::LLVM::LoadOp>(loc, elem_type, ptr).getResult();
-        set(op.result, loaded);
+        auto load = builder_.create<mlir::LLVM::LoadOp>(loc, elem_type, ptr);
+        apply_access_alignment(load, op.lhs, op.result.type);
+        set(op.result, load.getResult());
         return true;
       }
 
@@ -3450,6 +3488,7 @@ class FunctionTranslator {
         mlir::Type arr_mlir = tir_type_to_mlir(op.result.type, ctx_, builder_);
         if (!arr_mlir) return true;
         set(op.result, alloca_at_entry(arr_mlir, loc));
+        record_pointer_alignment(op.result, type_alignment(op.result.type));
         return true;
       }
 
@@ -3498,6 +3537,23 @@ class FunctionTranslator {
                   loc, llvm_ptr_type(ctx_), pointee_type, base_ptr,
                   mlir::ValueRange{zero, idx}).getResult();
         set(op.result, gep);
+        // A field or element sits at a multiple of its own alignment inside a
+        // naturally aligned aggregate, so the derived pointer keeps the smaller
+        // of the base's alignment and the member's.
+        const uint64_t base_alignment = known_pointer_alignment(op.lhs);
+        const uint64_t member_alignment = type_alignment(op.result.type);
+        const bool array_element = op.lhs.type.is_array() ||
+                                   op.lhs.type.is_owned_array() ||
+                                   op.lhs.type.is_array_view();
+        if (base_alignment > 1) {
+          record_pointer_alignment(op.result,
+                                   std::min(base_alignment, member_alignment));
+        } else if (array_element) {
+          // Element `k` sits at `k * stride`, and every element type's size is
+          // a multiple of its alignment, so an element pointer is aligned even
+          // when the array's own base pointer came from somewhere unknown.
+          record_pointer_alignment(op.result, member_alignment);
+        }
         return true;
       }
 
@@ -3599,9 +3655,14 @@ class FunctionTranslator {
           mlir::Value pointer = builder_.create<mlir::LLVM::GEPOp>(
               loc, llvm_ptr_type(ctx_), element_type, data,
               mlir::ValueRange{index}).getResult();
-          mlir::Value element = builder_.create<mlir::LLVM::LoadOp>(
-              loc, element_type, pointer).getResult();
-          set(op.result, element);
+          auto element = builder_.create<mlir::LLVM::LoadOp>(
+              loc, element_type, pointer);
+          // The element sits at `index * stride`, so it is aligned as long as
+          // the data pointer is, which the runtime and the compiler guarantee.
+          const uint64_t element_alignment =
+              std::max<uint64_t>(1, type_alignment(op.result.type));
+          if (element_alignment > 1) element.setAlignment(element_alignment);
+          set(op.result, element.getResult());
           return true;
         }
         if (!op.lhs.type.is_dynamic_array()) {
@@ -3649,6 +3710,7 @@ class FunctionTranslator {
   DiagnosticEngine& diag_;
   bool fast_math_ = false;
   std::unordered_map<int, StackAllocationLayout> stack_allocations_;
+  std::unordered_map<int, uint64_t> pointer_alignment_;
   GcRootPlan gc_roots_;
   bool uses_gc_mutator_ = false;
   bool needs_gc_root_frame_ = false;

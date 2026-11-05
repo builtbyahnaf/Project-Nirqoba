@@ -1,0 +1,22 @@
+// Every access states the alignment of the type it touches instead of the
+// 4-byte default the LLVM dialect would otherwise assume: an i64 slot or field
+// is `align 8`, and so is an element of an owned array.
+struct Sample {
+    bool flag;
+    int count;
+    char tag;
+    int total;
+}
+
+Sample function bump(Sample s, int delta) {
+    s.total = s.total + delta;
+    s.count = s.count + 1;
+    return s;
+}
+
+int function main(string[] args) {
+    var s = Sample { flag: args.length > 0, count: 1, tag: 'x', total: 2 };
+    var t = bump(s, 3);
+    print(t.total + t.count);
+    return 0;
+}
