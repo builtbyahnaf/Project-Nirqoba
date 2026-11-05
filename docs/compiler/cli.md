@@ -3,7 +3,7 @@
 ## Commands
 
 ```text
-nirqoba build <file.nrqba>... [--out-dir DIR] [-o PATH] [--module-path DIR] [--emit=ast|tir|mlir|llvm|obj] [--verbose]
+nirqoba build <file.nrqba>... [--out-dir DIR] [-o PATH] [--module-path DIR] [--emit=ast|layout|tir|mlir|llvm|obj] [--verbose]
 nirqoba run   <file.nrqba>... [--out-dir DIR] [--module-path DIR] [--verbose] [-- <args>...]
 nirqoba check <file.nrqba>... [--module-path DIR] [--emit=ast|tir]
 nirqoba version | --version
@@ -31,6 +31,30 @@ public int function calculate_area(int width, int height) {
     return width * height;
 }
 ```
+
+### Aggregate layout
+
+`--emit=layout` prints the byte layout the compiler chose for every struct the
+program mentions, without generating any code:
+
+```text
+$ nirqoba build main.nrqba --emit=layout
+struct Wide {
+  size 24 align 8 padding 3 elements_per_cache_line 3 declared 32
+  first : int @ 0 (8 bytes, align 8)
+  second : int @ 8 (8 bytes, align 8)
+  tag : char @ 16 (4 bytes, align 4)
+  flag : bool @ 20 (1 bytes, align 1)
+}
+```
+
+Fields are stored widest-alignment first, with declaration order breaking ties:
+a struct's layout is unobservable in Nirqoba (no FFI, `sizeof`, unions or type
+punning), so the compiler is free to remove interior padding. `declared` is the
+size the same fields would have cost in declaration order, and
+`elements_per_cache_line` is how many elements of the type fit in a 64-byte
+x86-64 cache line. Both are useful when ordering fields of a struct that will be
+stored in an array.
 
 ### Standard library builtins
 
