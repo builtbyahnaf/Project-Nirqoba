@@ -176,6 +176,66 @@ def run_pgo_roundtrip(case_dir, source_file, compiler_exe, temp_dir, spec):
     return check_outputs(spec, run_out, run_err, "profile-optimized run")
 
 
+def run_pgo_sample(case_dir, source_file, compiler_exe, temp_dir, spec):
+    """Builds with a checked-in sample profile and verifies consumption.
+
+    Sample profiles come from external samplers (perf, ETW, Instruments), so the
+    fixture is checked in rather than generated. The test still proves the
+    compiler loads the profile, records the sample mode, and preserves the
+    program's observable behaviour.
+    """
+    profile_file = spec.get("profile_file", "app.sample")
+    sample_path = case_dir / profile_file
+    if not sample_path.exists():
+        return False, f"Sample profile '{sample_path}' does not exist"
+
+    extra_args = spec.get("args", [])
+    sample_dir = temp_dir / f"pgo_sample_{case_dir.name}"
+    sample_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Inspect the optimized IR to prove the profile was consumed.
+    code, ir, err = run_command(
+        [str(compiler_exe), "build", str(source_file),
+         "--out-dir", str(sample_dir), "--emit=llvm",
+         f"--pgo-sample={sample_path}"] + extra_args
+    )
+    if code != 0:
+        return False, (
+            f"Sample-profile IR build failed with exit {code}.\n"
+            f"Stderr: {err}\nStdout: {ir}"
+        )
+    for needle in spec.get("expect_ir_contains", []):
+        if needle not in ir:
+            return False, f"Sample-profile IR does not contain '{needle}'.\nGot:\n{ir}"
+    for needle in spec.get("expect_ir_not_contains", []):
+        if needle in ir:
+            return False, f"Sample-profile IR unexpectedly contains '{needle}'.\nGot:\n{ir}"
+
+    # 2. Build and run the real program with the same profile.
+    code, out, err = run_command(
+        [str(compiler_exe), "build", str(source_file),
+         "--out-dir", str(sample_dir), f"--pgo-sample={sample_path}"] + extra_args
+    )
+    if code != 0:
+        return False, (
+            f"Sample-profile build failed with exit {code}.\n"
+            f"Stderr: {err}\nStdout: {out}"
+        )
+
+    executable = sample_dir / f"{source_file.stem}.exe"
+    if not executable.exists():
+        return False, f"Sample-profile build did not produce '{executable}'"
+
+    expected_program_exit = spec.get("expect_program_exit", 0)
+    code, run_out, run_err = run_command([str(executable)], cwd=str(sample_dir))
+    if code != expected_program_exit:
+        return False, (
+            f"Sample-profile program exited with {code}, expected "
+            f"{expected_program_exit}.\nStderr: {run_err}\nStdout: {run_out}"
+        )
+    return check_outputs(spec, run_out, run_err, "sample-profile run")
+
+
 def run_case(case_dir, compiler_exe, temp_dir):
     expect_path = case_dir / "expect.json"
     if not expect_path.exists():
@@ -198,6 +258,8 @@ def run_case(case_dir, compiler_exe, temp_dir):
 
     if mode == "pgo_roundtrip":
         return run_pgo_roundtrip(case_dir, source_file, compiler_exe, temp_dir, spec)
+    if mode == "pgo_sample":
+        return run_pgo_sample(case_dir, source_file, compiler_exe, temp_dir, spec)
 
     cmd = [str(compiler_exe)]
 

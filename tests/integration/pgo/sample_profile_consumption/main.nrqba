@@ -1,0 +1,24 @@
+// Two paths with very different sample counts. The checked-in sample profile
+// says hot_path is entered 1000 times and cold_path once, which is the shape a
+// sampling profiler reports for this program.
+int function hot_path(int value) {
+    return value * 3 + 1;
+}
+
+int function cold_path(int value) {
+    return value % 97 + 11;
+}
+
+int function main() {
+    var total = 0;
+    var i = 0;
+    while (i < 1000) {
+        total += hot_path(i);
+        if (i == 999) {
+            total += cold_path(total);
+        }
+        i += 1;
+    }
+    print(total);
+    return 0;
+}

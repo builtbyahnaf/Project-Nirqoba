@@ -1,0 +1,15 @@
+{
+  "mode": "pgo_sample",
+  "profile_file": "app.sample",
+  "args": ["-O2"],
+  "expect_program_exit": 0,
+  "expect_stdout_contains": ["1499585"],
+  "expect_ir_contains": [
+    "\"nrqoba.pgo.mode\", !\"sample\"",
+    "\"ProfileFormat\", !\"SampleProfile\"",
+    "\"NumFunctions\""
+  ],
+  "expect_ir_not_contains": [
+    "@__profc_main"
+  ]
+}
