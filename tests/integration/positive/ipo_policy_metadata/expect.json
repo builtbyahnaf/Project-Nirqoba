@@ -1,0 +1,9 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm", "-O2", "--ipo=aggressive"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "!\"nrqoba.ipo.mode\", !\"aggressive\"",
+    "!\"nrqoba.ipo.strategy\", !\"whole-program\""
+  ]
+}
