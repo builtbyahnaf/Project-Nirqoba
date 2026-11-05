@@ -74,6 +74,42 @@ bool parse_ipo_mode(string_view text, IpoMode& mode) {
   return false;
 }
 
+string_view pgo_mode_name(PgoMode mode) {
+  switch (mode) {
+    case PgoMode::None: return "none";
+    case PgoMode::Generate: return "generate";
+    case PgoMode::Use: return "use";
+    case PgoMode::Sample: return "sample";
+  }
+  return "none";
+}
+
+bool parse_pgo_mode(string_view text, PgoMode& mode) {
+  if (text == "none") { mode = PgoMode::None; return true; }
+  if (text == "generate") { mode = PgoMode::Generate; return true; }
+  if (text == "use") { mode = PgoMode::Use; return true; }
+  if (text == "sample") { mode = PgoMode::Sample; return true; }
+  return false;
+}
+
+string_view pgo_cold_mode_name(PgoColdMode mode) {
+  switch (mode) {
+    case PgoColdMode::Default: return "default";
+    case PgoColdMode::OptSize: return "optsize";
+    case PgoColdMode::MinSize: return "minsize";
+    case PgoColdMode::OptNone: return "optnone";
+  }
+  return "default";
+}
+
+bool parse_pgo_cold_mode(string_view text, PgoColdMode& mode) {
+  if (text == "default") { mode = PgoColdMode::Default; return true; }
+  if (text == "optsize") { mode = PgoColdMode::OptSize; return true; }
+  if (text == "minsize") { mode = PgoColdMode::MinSize; return true; }
+  if (text == "optnone") { mode = PgoColdMode::OptNone; return true; }
+  return false;
+}
+
 namespace {
 
 llvm::OptimizationLevel llvm_level_for(OptimizationLevel level) {

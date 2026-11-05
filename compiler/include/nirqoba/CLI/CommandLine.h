@@ -35,6 +35,9 @@ struct CommandLineOptions {
   // portable release build while allowing debug builds and host tuning.
   OptimizationLevel optimization_level = OptimizationLevel::O2;
   IpoMode ipo_mode = IpoMode::Standard;
+  PgoMode pgo_mode = PgoMode::None;
+  std::string pgo_profile_path;
+  PgoColdMode pgo_cold_mode = PgoColdMode::Default;
   TargetProfile target_profile = TargetProfile::Portable;
   std::string target_triple;
   std::string target_cpu = "generic";

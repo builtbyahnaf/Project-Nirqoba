@@ -257,6 +257,9 @@ int run_pipeline(const PipelineOptions& options,
   OptimizationOptions backend_options;
   backend_options.level = options.optimization_level;
   backend_options.ipo = options.ipo_mode;
+  backend_options.pgo = options.pgo_mode;
+  backend_options.pgo_profile_path = options.pgo_profile_path;
+  backend_options.pgo_cold = options.pgo_cold_mode;
   backend_options.target_profile = options.target_profile;
   backend_options.target_triple = options.target_triple;
   backend_options.target_cpu = options.target_cpu;
@@ -287,8 +290,15 @@ int run_pipeline(const PipelineOptions& options,
     cerr << "optimization: " << optimization_level_name(options.optimization_level)
          << "\n"
          << "ipo: " << ipo_mode_name(options.ipo_mode)
-         << " (whole-program lto)\n"
-         << "target: " << describe_target_configuration(target_config) << "\n";
+         << " (whole-program lto)\n";
+    if (options.pgo_mode != PgoMode::None) {
+      cerr << "pgo: " << pgo_mode_name(options.pgo_mode);
+      if (!options.pgo_profile_path.empty()) {
+        cerr << " (profile: " << options.pgo_profile_path << ")";
+      }
+      cerr << " (cold: " << pgo_cold_mode_name(options.pgo_cold_mode) << ")\n";
+    }
+    cerr << "target: " << describe_target_configuration(target_config) << "\n";
   }
 
   if (!optimize_llvm_module(*llvm_module, *target_machine, backend_options,

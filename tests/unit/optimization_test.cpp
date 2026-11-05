@@ -64,3 +64,53 @@ TEST(OptimizationTest, ParsesIpoModes) {
   ASSERT_FALSE(parse_ipo_mode("Standard", parsed));
   ASSERT_EQ(parsed, IpoMode::Standard);
 }
+
+TEST(OptimizationTest, ParsesPgoModes) {
+  struct Case {
+    const char* text;
+    PgoMode mode;
+    const char* name;
+  };
+  const Case cases[] = {
+      {"none", PgoMode::None, "none"},
+      {"generate", PgoMode::Generate, "generate"},
+      {"use", PgoMode::Use, "use"},
+      {"sample", PgoMode::Sample, "sample"},
+  };
+  for (const Case& test : cases) {
+    PgoMode parsed = PgoMode::None;
+    ASSERT_TRUE(parse_pgo_mode(test.text, parsed));
+    ASSERT_EQ(parsed, test.mode);
+    ASSERT_EQ(pgo_mode_name(parsed), string_view(test.name));
+  }
+
+  PgoMode parsed = PgoMode::None;
+  ASSERT_FALSE(parse_pgo_mode("profile", parsed));
+  ASSERT_FALSE(parse_pgo_mode("Use", parsed));
+  ASSERT_EQ(parsed, PgoMode::None);
+}
+
+TEST(OptimizationTest, ParsesPgoColdModes) {
+  struct Case {
+    const char* text;
+    PgoColdMode mode;
+    const char* name;
+  };
+  const Case cases[] = {
+      {"default", PgoColdMode::Default, "default"},
+      {"optsize", PgoColdMode::OptSize, "optsize"},
+      {"minsize", PgoColdMode::MinSize, "minsize"},
+      {"optnone", PgoColdMode::OptNone, "optnone"},
+  };
+  for (const Case& test : cases) {
+    PgoColdMode parsed = PgoColdMode::Default;
+    ASSERT_TRUE(parse_pgo_cold_mode(test.text, parsed));
+    ASSERT_EQ(parsed, test.mode);
+    ASSERT_EQ(pgo_cold_mode_name(parsed), string_view(test.name));
+  }
+
+  PgoColdMode parsed = PgoColdMode::Default;
+  ASSERT_FALSE(parse_pgo_cold_mode("cold", parsed));
+  ASSERT_FALSE(parse_pgo_cold_mode("OptSize", parsed));
+  ASSERT_EQ(parsed, PgoColdMode::Default);
+}
