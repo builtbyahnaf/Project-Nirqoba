@@ -6,11 +6,22 @@
 
 ---
 
-## Version 0.195-beta (dev)
+## Version 0.201-beta (dev)
+
+### Summary of Changes (since `0.195-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.195-beta release.*
+
+---
+
+## Version 0.195-beta
 
 ### Summary of Changes (since `0.192-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.192-beta release.*
+#### 1. Transfer-Pin Delta Lifecycle (PO-27 §2.1)
+- **Retirement:** a delta that cancels out clears its slot instead of leaving an entry that describes nothing but still matches later handoffs.
+- **Reuse:** empty slots are reused before the high-water count grows, so returning and releasing distinct objects no longer pushes every handoff past the thirty-second onto the collector mutex; `nrq_gc_transfer_pin_fallbacks()` reports the genuine full-buffer cases.
+- **Ordering:** a fallback settles the mutator's buffered deltas under the collector mutex before applying its own operation, so a release can no longer erase an entry a buffered pin had not reached yet and leave the object pinned for the life of the process.
 
 ---
 
