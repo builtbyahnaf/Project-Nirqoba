@@ -687,22 +687,30 @@ class SlotIndex {
     return nullptr;
   }
 
-  void erase(void* slot) {
-    if (!slot || entries_.empty()) return;
+  // Drop `count` registrations of `slot`, tombstoning the entry only when the
+  // last one goes away. One probe chain settles the removal instead of a lookup
+  // followed by a separate erase probe.
+  bool release(void* slot, uint32_t count) {
+    if (!slot || entries_.empty()) return false;
     const size_t mask = entries_.size() - 1;
     size_t index = hash(slot) & mask;
     for (size_t probes = 0; probes < entries_.size(); ++probes) {
       Entry& entry = entries_[index];
-      if (entry.slot == nullptr) return;
+      if (entry.slot == nullptr) return false;
       if (entry.slot == slot) {
-        entry = Entry{};
-        entry.slot = kTombstone;
-        --size_;
-        ++tombstones_;
-        return;
+        if (count >= entry.state.count) {
+          entry = Entry{};
+          entry.slot = kTombstone();
+          --size_;
+          ++tombstones_;
+        } else {
+          entry.state.count -= count;
+        }
+        return true;
       }
       index = (index + 1) & mask;
     }
+    return false;
   }
 
   size_t size() const { return size_; }
@@ -2261,11 +2269,48 @@ void add_slot_state(ShadowStack& stack, void* slot, const RootInfo& info,
   ++found->count;
 }
 
-void remove_slot_state(ShadowStack& stack, void* slot) {
-  SlotState* found = stack.slot_states.find(slot);
-  if (!found)
+void remove_slot_state(ShadowStack& stack, void* slot, uint32_t count = 1) {
+  if (!stack.slot_states.release(slot, count))
     nrq_runtime_fatal("GC root slot registration bookkeeping is inconsistent");
-  if (--found->count == 0) stack.slot_states.erase(slot);
+}
+
+// Frame ends usually release a handful of roots, and a frame can name the same
+// slot more than once. Counting them first means each distinct slot probes the
+// index once for the whole frame. Frames larger than this batch fall back to one
+// release per registration, which is still a single probe chain each.
+constexpr size_t kMaxBatchedSlotRemovals = 32;
+
+struct PendingSlotRemoval {
+  void* slot = nullptr;
+  uint32_t count = 0;
+};
+
+void remove_frame_slots(ShadowStack& stack, size_t first, size_t end) {
+  PendingSlotRemoval batch[kMaxBatchedSlotRemovals];
+  size_t batch_size = 0;
+  bool overflowed = false;
+  for (size_t index = first; index < end; ++index) {
+    void* slot = stack.roots[index].slot;
+    size_t position = 0;
+    while (position < batch_size && batch[position].slot != slot) ++position;
+    if (position == batch_size) {
+      if (batch_size == kMaxBatchedSlotRemovals) {
+        overflowed = true;
+        break;
+      }
+      batch[batch_size].slot = slot;
+      batch[batch_size].count = 0;
+      ++batch_size;
+    }
+    ++batch[position].count;
+  }
+  if (overflowed) {
+    for (size_t index = first; index < end; ++index)
+      remove_slot_state(stack, stack.roots[index].slot);
+    return;
+  }
+  for (size_t position = 0; position < batch_size; ++position)
+    remove_slot_state(stack, batch[position].slot, batch[position].count);
 }
 
 bool shadow_has_pointer_root(ShadowStack& stack, void* slot) {
@@ -2588,8 +2633,7 @@ void nrq_gc_root_frame_end(uint64_t marker) {
   // path are proportional to the number of roots the frame leaves behind, not
   // to all roots still active on the thread.
   auto remove_owned_roots = [&]() {
-    for (size_t index = target_depth; index < stack.roots.size(); ++index)
-      remove_slot_state(stack, stack.roots[index].slot);
+    remove_frame_slots(stack, target_depth, stack.roots.size());
     stack.roots.resize(target_depth);
   };
 
