@@ -1,0 +1,8 @@
+{
+  "mode": "build_and_run",
+  "expect_stdout_contains": ["13"],
+  "expect_ir_counts": {
+    "call void @nrq_gc_root_copy": 0,
+    "call void @nrq_gc_root_store": 2
+  }
+}

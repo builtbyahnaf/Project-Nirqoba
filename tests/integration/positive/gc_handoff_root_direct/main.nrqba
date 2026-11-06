@@ -1,0 +1,19 @@
+struct Node {
+    int value;
+}
+
+managed<Node> function make(int seed) {
+    var node = array.allocate<Node>(1);
+    node[0].value = seed;
+    return node;
+}
+
+int function take(managed<Node> node) {
+    gc.collect();
+    return node[0].value;
+}
+
+int function main() {
+    print(take(make(13)));
+    return 0;
+}

@@ -1819,21 +1819,39 @@ class FunctionTranslator {
     if (offsets.empty() || !value) return;
     mlir::Type value_type = tir_type_to_mlir(type, ctx_, builder_);
     if (!value_type) return;
-    mlir::Value slot = alloca_at_entry(value_type, loc);
-    builder_.create<mlir::LLVM::StoreOp>(loc, value, slot);
-    if (keep_root) {
-      mlir::Value root_slot = alloca_at_entry(value_type, loc);
-      register_gc_root(root_slot, type, loc);
-      auto copy = ensure_runtime_fn(
-          module_, builder_, "nrq_gc_root_copy",
+    // A managed reference is itself the payload of the barrier, so the root that
+    // owns it can receive the reference directly. Staging it in another slot and
+    // copying eight bytes out of that slot cost an alloca, a store and a copy
+    // call for a value the barrier can take as an argument.
+    const bool direct_pointer_root = keep_root && type.is_managed_pointer() &&
+                                    offsets.size() == 1 && offsets[0] == 0;
+    mlir::Value slot;
+    if (direct_pointer_root) {
+      slot = alloca_at_entry(value_type, loc);
+      register_gc_root(slot, type, loc);
+      auto store_fn = ensure_runtime_fn(
+          module_, builder_, "nrq_gc_root_store",
           mlir::LLVM::LLVMVoidType::get(ctx_),
-          {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_), builder_.getI64Type()});
-      mlir::Value byte_count = builder_.create<mlir::LLVM::ConstantOp>(
-          loc, builder_.getI64Type(),
-          builder_.getI64IntegerAttr(static_cast<int64_t>(type_size(type)))).getResult();
-      builder_.create<mlir::LLVM::CallOp>(
-          loc, copy, mlir::ValueRange{root_slot, slot, byte_count});
-      slot = root_slot;
+          {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)});
+      builder_.create<mlir::LLVM::CallOp>(loc, store_fn,
+                                          mlir::ValueRange{slot, value});
+    } else {
+      slot = alloca_at_entry(value_type, loc);
+      builder_.create<mlir::LLVM::StoreOp>(loc, value, slot);
+      if (keep_root) {
+        mlir::Value root_slot = alloca_at_entry(value_type, loc);
+        register_gc_root(root_slot, type, loc);
+        auto copy = ensure_runtime_fn(
+            module_, builder_, "nrq_gc_root_copy",
+            mlir::LLVM::LLVMVoidType::get(ctx_),
+            {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_), builder_.getI64Type()});
+        mlir::Value byte_count = builder_.create<mlir::LLVM::ConstantOp>(
+            loc, builder_.getI64Type(),
+            builder_.getI64IntegerAttr(static_cast<int64_t>(type_size(type)))).getResult();
+        builder_.create<mlir::LLVM::CallOp>(
+            loc, copy, mlir::ValueRange{root_slot, slot, byte_count});
+        slot = root_slot;
+      }
     }
     auto unpin = ensure_runtime_fn(
         module_, builder_, "nrq_gc_unpin",
