@@ -1,0 +1,10 @@
+{
+  "mode": "build_and_run",
+  "expect_stdout": "45\n",
+  "expect_ir_counts": {
+    "call void @nrq_gc_root_register_frame(ptr": 0,
+    "call void @nrq_gc_root_register_typed(": 0,
+    "call void @nrq_gc_mutator_enter()": 0,
+    "call void @nrq_gc_safepoint()": 0
+  }
+}
