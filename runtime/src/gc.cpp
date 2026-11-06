@@ -278,6 +278,50 @@ static_assert(sizeof(ObjectHeader) == 96,
 static_assert(alignof(ObjectHeader) == alignof(std::max_align_t),
               "ObjectHeader must keep payloads max_align_t aligned");
 
+// Marking keeps a FIFO ring of pending headers. Contiguous storage avoids
+// chasing the intrusive list through the heap and visits a graph level by
+// level, which keeps related objects close in time. Objects beyond the ring
+// capacity spill to the header's mark_next link, so the worklist never
+// allocates auxiliary heap storage.
+class MarkWorklist {
+ public:
+  static constexpr size_t kInlineCapacity = 256;
+
+  bool empty() const { return count_ == 0 && overflow_ == nullptr; }
+
+  void push(ObjectHeader* header) {
+    if (!header) return;
+    header->mark_next = nullptr;
+    if (count_ < kInlineCapacity) {
+      inline_[(head_ + count_) % kInlineCapacity] = header;
+      ++count_;
+      return;
+    }
+    header->mark_next = overflow_;
+    overflow_ = header;
+  }
+
+  ObjectHeader* pop() {
+    if (count_ != 0) {
+      ObjectHeader* header = inline_[head_];
+      head_ = (head_ + 1) % kInlineCapacity;
+      --count_;
+      return header;
+    }
+    if (!overflow_) return nullptr;
+    ObjectHeader* header = overflow_;
+    overflow_ = header->mark_next;
+    header->mark_next = nullptr;
+    return header;
+  }
+
+ private:
+  std::array<ObjectHeader*, kInlineCapacity> inline_{};
+  size_t head_ = 0;
+  size_t count_ = 0;
+  ObjectHeader* overflow_ = nullptr;
+};
+
 // The collector needs exact-address lookup while marking, but only allocation
 // mutates this table. Open addressing keeps pointer metadata contiguous and
 // avoids one node allocation per managed object.
@@ -593,7 +637,7 @@ std::atomic<size_t> minor_collections_since_major{0};
 // allocation-free; an oversized fan-out resolves the overflow immediately.
 constexpr size_t kReferenceBatchCapacity = 128;
 struct MarkContext {
-  ObjectHeader* pending = nullptr;
+  MarkWorklist worklist;
   bool young_only = false;
   std::array<void*, kReferenceBatchCapacity> references{};
   size_t reference_count = 0;
@@ -756,8 +800,7 @@ void enqueue_header_locked(ObjectHeader* header, MarkContext& context) {
     return;
   if (context.young_only && !header->young) return;
   header->marked = true;
-  header->mark_next = context.pending;
-  context.pending = header;
+  context.worklist.push(header);
 }
 
 void resolve_reference_locked(void* object, MarkContext& context) {
@@ -1028,17 +1071,15 @@ void buffer_remembered(void* object) {
 
 bool mark_slice_locked(size_t budget) {
   size_t steps = 0;
-  while (active_mark.pending && steps < budget) {
-    ObjectHeader* header = active_mark.pending;
-    active_mark.pending = header->mark_next;
-    header->mark_next = nullptr;
+  while (!active_mark.worklist.empty() && steps < budget) {
+    ObjectHeader* header = active_mark.worklist.pop();
     ++steps;
     if (active_mark.young_only && !header->young) continue;
     trace_children(header, enqueue_reference, &active_mark);
     flush_reference_batch_locked(active_mark);
   }
   flush_reference_batch_locked(active_mark);
-  return active_mark.pending == nullptr && active_mark.reference_count == 0;
+  return active_mark.worklist.empty() && active_mark.reference_count == 0;
 }
 
 bool sweep_chunk_locked(size_t budget) {
