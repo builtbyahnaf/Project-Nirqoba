@@ -1082,6 +1082,41 @@ TEST(GcTest, PageLocalDiscoveryResolvesOnlyPublishedObjectStarts) {
   nrq_gc_enable();
 }
 
+TEST(GcTest, CollectionThresholdFollowsTheLiveHeap) {
+  nrq_gc_disable();
+  nrq_gc_set_adaptive(1);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_policy_is_adaptive(), int32_t{1});
+  ASSERT_TRUE(nrq_gc_policy_adaptation_count() > 0);
+  // With nothing live the trigger sits at its floor instead of the old fixed
+  // one-megabyte default.
+  ASSERT_EQ(nrq_gc_get_threshold(), size_t{512 * 1024});
+
+  // A large live object must raise the trigger above its own size, otherwise the
+  // collector would immediately collect again having reclaimed nothing.
+  void* live = nrq_gc_allocate(8 * 1024 * 1024, nullptr);
+  ASSERT_NE(live, nullptr);
+  nrq_gc_root_register(&live);
+  nrq_gc_collect();
+  const size_t adapted = nrq_gc_get_threshold();
+  ASSERT_TRUE(adapted >= size_t{8 * 1024 * 1024});
+  ASSERT_TRUE(adapted > size_t{512 * 1024});
+
+  // An explicit threshold is a policy decision: adaptation stops and the value
+  // survives later cycles.
+  nrq_gc_set_threshold(4096);
+  ASSERT_EQ(nrq_gc_policy_is_adaptive(), int32_t{0});
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_threshold(), size_t{4096});
+
+  nrq_gc_root_unregister(&live);
+  live = nullptr;
+  nrq_gc_collect();
+  // Back to adaptive selection so later tests see the default policy.
+  nrq_gc_set_adaptive(1);
+  ASSERT_EQ(nrq_gc_get_threshold(), size_t{512 * 1024});
+}
+
 TEST(GcTest, ObjectIndexOnlyTracksPagesWithoutStartMetadata) {
   // Every allocation used to pay a hash insert and every reclamation a hash
   // erase. Small objects are found through their page's start bitmap, so the

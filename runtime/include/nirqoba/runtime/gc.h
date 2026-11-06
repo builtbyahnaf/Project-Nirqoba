@@ -94,7 +94,21 @@ uint64_t nrq_gc_get_major_collection_count(void);
 void nrq_gc_mutator_enter(void);
 void nrq_gc_mutator_leave(void);
 void nrq_gc_safepoint(void);
+// Sets an explicit automatic-collection trigger in bytes and stops the collector
+// from adapting the trigger to the heap.
 void nrq_gc_set_threshold(size_t bytes);
+// Reads the current automatic-collection trigger. After each cycle the collector
+// sets it to the live heap plus headroom, unless a program pinned it with
+// nrq_gc_set_threshold.
+size_t nrq_gc_get_threshold(void);
+// Enables (or freezes) adaptive trigger selection. Freezing keeps the current
+// value; enabling recomputes it from the live heap immediately.
+void nrq_gc_set_adaptive(int32_t enabled);
+int32_t nrq_gc_policy_is_adaptive(void);
+// Diagnostics: how many times the trigger was recomputed, and how many bytes the
+// last completed cycle reclaimed.
+uint64_t nrq_gc_policy_adaptation_count(void);
+uint64_t nrq_gc_last_reclaimed_bytes(void);
 struct nrq_gc_stats nrq_gc_get_stats(void);
 // Reports the per-object metadata bytes the collector charges for every managed
 // allocation. Exposed so the layout can be audited by tests and tooling.

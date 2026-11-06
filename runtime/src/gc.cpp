@@ -632,6 +632,23 @@ struct alignas(nirq::nrq_cache_line_bytes) AllocationAccounting {
   std::atomic<size_t> collection_threshold{1024 * 1024};
 };
 AllocationAccounting allocation_accounting;
+// Adaptive heap-growth policy. The trigger is not a constant: after every cycle
+// the collector knows how much of the heap survived, so it can set the next
+// trigger from the live set instead of collecting on a fixed byte count that is
+// either wasteful for a small heap or far too eager for a large one. The policy
+// is disabled as soon as a program sets its own threshold.
+constexpr size_t kMinimumCollectionHeadroom = 512 * 1024;
+struct CollectionPolicy {
+  bool adaptive = true;
+  size_t last_reclaimed_bytes = 0;
+  size_t adaptations = 0;
+};
+CollectionPolicy collection_policy;
+// Live bytes of the published heap, maintained incrementally by publication and
+// reclamation. finish_cycle used to recompute this by walking every live object.
+size_t live_heap_bytes = 0;
+// Live bytes at the start of the cycle in progress, used to measure survival.
+size_t cycle_start_live_bytes = 0;
 nrq_gc_stats statistics{};
 uint64_t minor_collections = 0;
 uint64_t major_collections = 0;
@@ -737,6 +754,7 @@ void publish_tlab_locked(MutatorState& mutator) {
     statistics.allocated_bytes = saturated_add(
         statistics.allocated_bytes, static_cast<uint64_t>(header->size));
     statistics.live_objects = saturated_add(statistics.live_objects, 1);
+    live_heap_bytes = saturated_add(live_heap_bytes, header->size);
     header = next;
   }
   flush_mutator_accounting_locked(mutator);
@@ -1158,6 +1176,9 @@ bool sweep_chunk_locked(size_t budget) {
       statistics.collected_bytes = saturated_add(
           statistics.collected_bytes, static_cast<uint64_t>(header->size));
       if (statistics.live_objects != 0) --statistics.live_objects;
+      live_heap_bytes = live_heap_bytes > header->size
+                            ? live_heap_bytes - header->size
+                            : 0;
       if (!header->page || header->page->live_objects == 0)
         nrq_runtime_fatal("GC page live-object count underflow");
       --header->page->live_objects;
@@ -1260,6 +1281,32 @@ void recycle_page(std::unique_ptr<GcPage> page) {
   }
 }
 
+// Choose the next automatic-collection trigger from what the finished cycle
+// observed. The trigger is an allocation budget, so it is expressed as the live
+// heap plus headroom: no headroom would make the collector run again as soon as
+// anything is allocated, and unbounded headroom would grow the heap forever.
+// Headroom is at least a fixed minimum and otherwise half the live heap, so the
+// budget scales with the program's actual working set, and a cycle that barely
+// reclaimed anything (a mostly live heap) gets more room next time instead of
+// being repeated for almost no gain.
+void adapt_collection_policy_locked() {
+  const size_t live = live_heap_bytes;
+  const size_t before = cycle_start_live_bytes;
+  collection_policy.last_reclaimed_bytes =
+      before > live ? before - live : 0;
+  if (!collection_policy.adaptive) return;
+
+  size_t headroom = std::max(kMinimumCollectionHeadroom, live / 2);
+  const bool heap_is_mostly_live = before != 0 && live > (before / 8) * 7;
+  if (heap_is_mostly_live) headroom += live / 2;
+  size_t threshold = live + headroom;
+  if (threshold < live) threshold = live;  // saturating add of a huge heap
+
+  allocation_accounting.collection_threshold.store(threshold,
+                                                  std::memory_order_relaxed);
+  ++collection_policy.adaptations;
+}
+
 void prepare_cycle_locked(bool young_only) {
   for (MutatorState* mutator : mutators)
     if (mutator) publish_tlab_locked(*mutator);
@@ -1287,6 +1334,7 @@ void prepare_cycle_locked(bool young_only) {
   }
 
   sweep_list = nullptr;
+  cycle_start_live_bytes = live_heap_bytes;
   active_cycle_epoch = next_cycle_epoch.fetch_add(1) + 1;
   active_collection_is_minor = young_only;
   active_mark = MarkContext{};
@@ -1333,11 +1381,10 @@ void finish_cycle_locked(bool young_only) {
     major_collections = saturated_add(major_collections, 1);
     minor_collections_since_major.store(0, std::memory_order_relaxed);
   }
-  statistics.allocated_bytes = 0;
-  for (ObjectHeader* header = objects; header; header = header->next) {
-    statistics.allocated_bytes = saturated_add(
-        statistics.allocated_bytes, static_cast<uint64_t>(header->size));
-  }
+  // The live heap size is maintained by publication and reclamation, so this
+  // reports it directly instead of walking every live object each cycle.
+  statistics.allocated_bytes = live_heap_bytes;
+  adapt_collection_policy_locked();
   // Do not clear the remembered set here. A major collection erases promoted
   // survivors as it sweeps, while young objects allocated during the cycle
   // remain young and may be referenced only by old objects; their remembered
@@ -1541,6 +1588,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   statistics.allocated_bytes = saturated_add(
       statistics.allocated_bytes, static_cast<uint64_t>(bytes));
   statistics.live_objects = saturated_add(statistics.live_objects, 1);
+  live_heap_bytes = saturated_add(live_heap_bytes, bytes);
   atomic_saturating_add_size(allocation_accounting.bytes_since_collection, bytes);
   return object;
 }
@@ -2189,8 +2237,42 @@ void nrq_gc_safepoint(void) {
 }
 
 void nrq_gc_set_threshold(size_t bytes) {
+  // An explicit threshold is a policy decision by the program, so automatic
+  // adaptation stops here until it is turned back on.
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  collection_policy.adaptive = false;
+  collection_policy.adaptations = 0;
   allocation_accounting.collection_threshold.store(bytes == 0 ? 1 : bytes,
-                             std::memory_order_relaxed);
+                                                   std::memory_order_relaxed);
+}
+
+size_t nrq_gc_get_threshold(void) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  return allocation_accounting.collection_threshold.load(
+      std::memory_order_relaxed);
+}
+
+void nrq_gc_set_adaptive(int32_t enabled) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  collection_policy.adaptive = enabled != 0;
+  // Re-enabling starts from the current live set instead of waiting for the next
+  // cycle to correct a threshold the program may have pinned long ago.
+  if (collection_policy.adaptive) adapt_collection_policy_locked();
+}
+
+int32_t nrq_gc_policy_is_adaptive(void) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  return collection_policy.adaptive ? 1 : 0;
+}
+
+uint64_t nrq_gc_policy_adaptation_count(void) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  return collection_policy.adaptations;
+}
+
+uint64_t nrq_gc_last_reclaimed_bytes(void) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  return collection_policy.last_reclaimed_bytes;
 }
 
 size_t nrq_gc_object_header_bytes(void) { return sizeof(ObjectHeader); }
