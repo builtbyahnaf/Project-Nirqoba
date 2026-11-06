@@ -1564,6 +1564,7 @@ class FunctionTranslator {
     builder_.create<mlir::LLVM::CondBrOp>(loc, due, poll_block, target);
     builder_.setInsertionPointToStart(poll_block);
     emit_safepoint_call(loc);
+    reload_safepoint_counter(loc);
     builder_.create<mlir::LLVM::BrOp>(loc, target);
     return true;
   }
@@ -1578,6 +1579,7 @@ class FunctionTranslator {
     builder_.create<mlir::LLVM::CondBrOp>(loc, due, poll_block, continue_block);
     builder_.setInsertionPointToStart(poll_block);
     emit_safepoint_call(loc);
+    reload_safepoint_counter(loc);
     builder_.create<mlir::LLVM::BrOp>(loc, continue_block);
     builder_.setInsertionPointToStart(continue_block);
   }
@@ -1594,13 +1596,21 @@ class FunctionTranslator {
     };
     mlir::Value current = builder_.create<mlir::LLVM::LoadOp>(
         loc, i64, counter).getResult();
-    mlir::Value next = builder_.create<mlir::LLVM::AddOp>(
+    mlir::Value next = builder_.create<mlir::LLVM::SubOp>(
         loc, current, constant(1)).getResult();
-    mlir::Value masked = builder_.create<mlir::LLVM::AndOp>(
-        loc, next, constant(kSafepointInterval - 1)).getResult();
-    builder_.create<mlir::LLVM::StoreOp>(loc, masked, counter);
+    builder_.create<mlir::LLVM::StoreOp>(loc, next, counter);
     return builder_.create<mlir::LLVM::ICmpOp>(
-        loc, mlir::LLVM::ICmpPredicate::eq, masked, constant(0)).getResult();
+        loc, mlir::LLVM::ICmpPredicate::eq, next, constant(0)).getResult();
+  }
+
+  // Reloads the countdown so the next poll is again kSafepointInterval crossings
+  // away. Only the polled path runs this, which is one crossing in the interval.
+  void reload_safepoint_counter(mlir::Location loc) {
+    mlir::Value counter = safepoint_counter_slot(loc);
+    mlir::Value interval = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI64Type(),
+        builder_.getI64IntegerAttr(kSafepointInterval)).getResult();
+    builder_.create<mlir::LLVM::StoreOp>(loc, interval, counter);
   }
 
   void emit_safepoint_call(mlir::Location loc) {
@@ -1617,9 +1627,11 @@ class FunctionTranslator {
     mlir::Value slot = alloca_at_entry(i64, loc);
     mlir::OpBuilder::InsertionGuard guard(builder_);
     builder_.setInsertionPointAfter(slot.getDefiningOp());
-    mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
-        loc, i64, builder_.getI64IntegerAttr(0)).getResult();
-    builder_.create<mlir::LLVM::StoreOp>(loc, zero, slot);
+    // The counter counts down, so a fresh activation starts one interval away
+    // from its first poll.
+    mlir::Value initial = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, i64, builder_.getI64IntegerAttr(kSafepointInterval)).getResult();
+    builder_.create<mlir::LLVM::StoreOp>(loc, initial, slot);
     safepoint_counter_ = slot;
     return slot;
   }
