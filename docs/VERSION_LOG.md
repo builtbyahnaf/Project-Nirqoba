@@ -6,11 +6,25 @@
 
 ---
 
-## Version 0.147-beta (dev)
+## Version 0.153-beta (dev)
+
+### Summary of Changes (since `0.147-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.147-beta release.*
+
+---
+
+## Version 0.147-beta
 
 ### Summary of Changes (since `0.141-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.141-beta release.*
+#### 1. Runtime Synchronization and GC Protocol Optimization (PO-23)
+- **Per-Mutator Barrier Counters:** Each mutator publishes its own barrier depth on its own cache line, so a store barrier never invalidates another thread's counter and the collector polls registered mutators directly instead of maintaining a shared reader count.
+- **Flat Root-Slot Index:** Active root slots live in one open-addressing table per thread instead of a hash node per slot, so a registration or a frame-end removal touches a single cache line and never allocates.
+- **Mutex-Free Root Fast Paths:** Registration and frame end skip the shadow-stack mutex because the collector can only read a stack while its owner is parked, and reference diagnostics is the one other reader, so those paths take the mutex only while diagnostics are enabled.
+- **Buffered Handoff Pins:** A managed return records a signed transfer-pin delta in the returning thread's own buffer, folded into the pin table when a cycle is prepared, so helper-heavy call chains no longer serialize on the collector mutex.
+- **Single Published Store-Barrier Switch:** Generational tracking publishes one derived switch with conservative ordering, and aggregate stores read it once per store instead of twice per machine word.
+- **Documentation:** Added `reports/performance/po-23-runtime-synchronization.md` with the transformation description, structural evidence, and remaining opportunities.
 
 ---
 
