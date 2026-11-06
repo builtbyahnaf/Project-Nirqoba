@@ -1082,6 +1082,36 @@ TEST(GcTest, PageLocalDiscoveryResolvesOnlyPublishedObjectStarts) {
   nrq_gc_enable();
 }
 
+TEST(GcTest, WideReferenceBatchesPreserveEveryChild) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+
+  constexpr size_t kChildren = 512;
+  const size_t pointer_offset = 0;
+  auto* array = static_cast<void**>(nrq_gc_allocate_array_typed(
+      kChildren, sizeof(void*), &pointer_offset, 1));
+  ASSERT_NE(array, nullptr);
+  for (size_t index = 0; index < kChildren; ++index) {
+    void* child = nrq_gc_allocate(24, nullptr);
+    ASSERT_NE(child, nullptr);
+    nrq_gc_root_store(&array[index], child);
+  }
+  void* root = array;
+  nrq_gc_root_register(&root);
+
+  // 512 children exceed the inline reference batch several times. The overflow
+  // path must resolve references immediately, and the overflow must not drop a
+  // child from the mark pass.
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + kChildren + 1);
+
+  nrq_gc_root_unregister(&root);
+  root = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+}
+
 TEST(GcTest, DuplicateRootRegistrationsInConcurrentCollectionStayConsistent) {
   nrq_gc_disable();
   nrq_gc_collect();

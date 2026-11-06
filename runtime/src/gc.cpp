@@ -587,9 +587,16 @@ bool active_collection_is_minor = false;
 uint64_t active_cycle_epoch = 0;
 std::atomic<uint64_t> next_cycle_epoch{1};
 std::atomic<size_t> minor_collections_since_major{0};
+// A trace callback may visit many references. Resolve them in a short
+// contiguous batch after the callback returns instead of interleaving a page
+// lookup with every callback invocation. The inline array keeps the hot path
+// allocation-free; an oversized fan-out resolves the overflow immediately.
+constexpr size_t kReferenceBatchCapacity = 128;
 struct MarkContext {
   ObjectHeader* pending = nullptr;
   bool young_only = false;
+  std::array<void*, kReferenceBatchCapacity> references{};
+  size_t reference_count = 0;
 };
 MarkContext active_mark;
 // During the sweep phase the snapshot list is detached from the allocation
@@ -753,20 +760,37 @@ void enqueue_header_locked(ObjectHeader* header, MarkContext& context) {
   context.pending = header;
 }
 
-void enqueue_reference(void* object, void* opaque_context) {
+void resolve_reference_locked(void* object, MarkContext& context) {
   if (!object) return;
-  auto* context = static_cast<MarkContext*>(opaque_context);
   ObjectHeader* found = find_object_locked(object);
   // Roots may refer to static/native objects. Only collector-owned objects
   // enter the intrusive mark stack, so marking never allocates auxiliary heap.
-  enqueue_header_locked(found, *context);
+  enqueue_header_locked(found, context);
+}
+
+void flush_reference_batch_locked(MarkContext& context) {
+  for (size_t index = 0; index < context.reference_count; ++index)
+    resolve_reference_locked(context.references[index], context);
+  context.reference_count = 0;
+}
+
+void enqueue_reference(void* object, void* opaque_context) {
+  if (!object) return;
+  auto* context = static_cast<MarkContext*>(opaque_context);
+  if (context->reference_count < kReferenceBatchCapacity) {
+    context->references[context->reference_count++] = object;
+    return;
+  }
+  resolve_reference_locked(object, *context);
 }
 
 void mark_value_locked(void* object) {
+  // Barriers resolve immediately: they run between marking slices and must be
+  // visible before the collector can decide that marking is complete.
   if (!object || collection_phase.load(std::memory_order_relaxed) ==
                      CollectionPhase::Idle)
     return;
-  enqueue_reference(object, &active_mark);
+  resolve_reference_locked(object, active_mark);
 }
 
 void mark_root_values_locked(void* storage, const RootInfo& root) {
@@ -852,6 +876,7 @@ void enqueue_roots_locked(MarkContext& context) {
     for (ObjectHeader* header : remembered_young)
       enqueue_header_locked(header, context);
   }
+  flush_reference_batch_locked(context);
 }
 
 void remember_reference(void* object, void* opaque_context) {
@@ -1010,8 +1035,10 @@ bool mark_slice_locked(size_t budget) {
     ++steps;
     if (active_mark.young_only && !header->young) continue;
     trace_children(header, enqueue_reference, &active_mark);
+    flush_reference_batch_locked(active_mark);
   }
-  return active_mark.pending == nullptr;
+  flush_reference_batch_locked(active_mark);
+  return active_mark.pending == nullptr && active_mark.reference_count == 0;
 }
 
 bool sweep_chunk_locked(size_t budget) {
