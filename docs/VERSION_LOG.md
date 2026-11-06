@@ -6,11 +6,29 @@
 
 ---
 
-## Version 0.192-beta (dev)
+## Version 0.195-beta (dev)
+
+### Summary of Changes (since `0.192-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.192-beta release.*
+
+---
+
+## Version 0.192-beta
 
 ### Summary of Changes (since `0.186-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.186-beta release.*
+#### 1. Safepoint Poll Bound
+- **Comparison:** the countdown is tested at or below zero instead of for equality, so a counter that reaches zero off the polled path or wraps past it can no longer stop a loop from observing collection requests.
+- **Evidence:** `tests/integration/positive/gc_safepoint_bound` asserts one polled back edge and the comparison in the optimized module while the program allocates past the poll interval.
+
+#### 2. Root Publication Edges
+- **Never dropped:** a type the lowering reports as managed always publishes an offset; a layout walk that returned nothing now registers offset 0 instead of silently skipping the root, with a debug assertion covering the disagreement.
+- **Complete elision:** `tests/integration/positive/gc_root_elision_owned` requires no descriptor, no mutator entry and no poll for a program with no managed storage.
+- **Every level:** `tests/integration/positive/gc_root_at_O0` requires the frame call at `-O0`.
+
+#### 3. Documented Invariants
+- **Runtime ABI:** `docs/architecture/06-runtime.md` now states the three root-completeness invariants and the poll bound, each naming the artifact that fails when it is broken.
 
 ---
 
