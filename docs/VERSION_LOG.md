@@ -6,11 +6,23 @@
 
 ---
 
-## Version 0.136-beta (dev)
+## Version 0.141-beta (dev)
 
 ### Summary of Changes (since `0.131-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.131-beta release.*
+#### 1. Advanced Memory Optimizations (PO-21)
+- **Leaner Object Header:** The managed-object header fits in 96 bytes, and the payload address is derived from the page bump allocator instead of being stored.
+- **Per-Mutator Allocation Accounting:** Allocation counters are batched per mutator and published at TLAB publication or batch thresholds, so the fast path never touches a shared atomic.
+- **Bounded Page Recycling:** Emptied pages return to a bounded pool and are reused instead of allocating fresh storage for every collection boundary.
+- **Cheaper Reference Diagnostics:** The reference-count query compares each visited reference against a single target instead of building a map of the heap.
+
+#### 2. Advanced Garbage Collection Algorithms (PO-22)
+- **Breadth-First Marking:** The mark stack is a fixed FIFO ring that keeps the frontier contiguous instead of an intrusive list threaded through object headers, and it still never allocates.
+- **Page-Local Object Discovery:** Reference resolution validates addresses against page start bitmaps, and the global object index now only tracks pages without start metadata (large objects), removing a hash insert and erase per ordinary allocation.
+- **Cycle State in the Mark Context:** Marking reads its epoch and phase from the cycle's own context rather than shared atomics, and addresses already rejected by page metadata no longer fall through to a hash probe.
+- **Flat Remembered Set:** An object's remembered-set membership lives in a header flag, so deduplication is a flag test and minor collections scan one contiguous array instead of a hash set.
+- **Adaptive Collection Trigger:** The automatic-collection trigger follows the live heap (live bytes plus half as headroom, doubled when a cycle reclaims little) instead of a fixed one megabyte, and the live heap size is maintained incrementally rather than recomputed by walking every object at each cycle boundary.
+- **Documentation:** Added `reports/performance/po-22-advanced-gc-algorithms.md` with the transformation description, structural evidence, and remaining opportunities.
 
 ---
 
