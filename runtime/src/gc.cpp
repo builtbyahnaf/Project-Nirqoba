@@ -506,6 +506,11 @@ struct MutatorState {
   unsigned char* tlab_end = nullptr;
   uint64_t tlab_generation = 0;
   ObjectHeader* pending_objects = nullptr;
+  // Depth of lock-free barrier regions this thread is currently inside. Each
+  // mutator owns its own cache line, so a thread's store barrier never
+  // invalidates another thread's copy; the collector reads the counters only
+  // when it needs the handshake, and only over mutators that are registered.
+  alignas(nirq::nrq_cache_line_bytes) std::atomic<uint32_t> barrier_depth{0};
   // Per-mutator allocation accounting. The owner updates these while
   // allocating; the collector reads them with gc_mutex held when publishing or
   // when reporting statistics, so the fast path never touches a global counter.
@@ -700,11 +705,6 @@ constexpr size_t kMinimumMinorInterval = 2;
 constexpr size_t kMaximumMinorInterval = 32;
 alignas(nirq::nrq_cache_line_bytes) std::atomic<CollectionPhase> collection_phase{
     CollectionPhase::Idle};
-// Counts lock-free barrier operations that started while the collector was idle.
-// The collector publishes Preparing and then waits for this counter to reach
-// zero before taking a root snapshot, so a store that began before the phase
-// change is either fully visible to the snapshot or takes the slow barrier path.
-alignas(nirq::nrq_cache_line_bytes) std::atomic<uint64_t> barrier_readers{0};
 bool active_collection_is_minor = false;
 // Live bytes observed after the most recent full collection, and the kind of
 // cycle the next automatic collection should run. Both are planned while the
@@ -842,22 +842,47 @@ void resume_mutators() {
   mutator_condition.notify_all();
 }
 
+// Enter a lock-free barrier region. Only a registered mutator can be counted and
+// therefore only a registered mutator may run the fast path; a thread that never
+// entered the runtime is invisible to the handshake, so it has to use the paths
+// guarded by gc_mutex. The increment is on the calling thread's own line, which
+// turns what used to be a contended read-modify-write on shared state into a
+// private one.
 bool begin_fast_barrier() {
-  barrier_readers.fetch_add(1, std::memory_order_acq_rel);
+  if (thread_mutator.depth == 0) return false;
+  thread_mutator.barrier_depth.fetch_add(1, std::memory_order_acq_rel);
   if (collection_phase.load(std::memory_order_acquire) ==
       CollectionPhase::Idle)
     return true;
-  barrier_readers.fetch_sub(1, std::memory_order_release);
+  thread_mutator.barrier_depth.fetch_sub(1, std::memory_order_release);
   return false;
 }
 
 void end_fast_barrier() {
-  barrier_readers.fetch_sub(1, std::memory_order_release);
+  thread_mutator.barrier_depth.fetch_sub(1, std::memory_order_release);
 }
 
+// Wait until every registered mutator has left its barrier regions. The
+// collector publishes Preparing first, so a mutator that observes the phase
+// change retreats to the serialized path and never enters a new region; the loop
+// only has to wait out the regions that were already in flight, and a mutator
+// inside one finishes it before it can reach a safepoint.
 void wait_for_fast_barriers() {
-  while (barrier_readers.load(std::memory_order_acquire) != 0)
+  for (;;) {
+    bool busy = false;
+    {
+      std::lock_guard<std::mutex> lock(mutator_mutex);
+      for (const MutatorState* mutator : mutators) {
+        if (mutator &&
+            mutator->barrier_depth.load(std::memory_order_acquire) != 0) {
+          busy = true;
+          break;
+        }
+      }
+    }
+    if (!busy) return;
     std::this_thread::yield();
+  }
 }
 
 void trace_children(ObjectHeader* header, nrq_gc_visit_fn visit,
@@ -1521,7 +1546,8 @@ void plan_next_cycle_locked() {
 void begin_cycle(bool young_only) {
   // Publish the transition before parking so new fast-path stores fall back to
   // the synchronized barrier. In-flight fast stores finish before the root
-  // snapshot; barrier_readers is the handshake that makes that visible.
+  // snapshot; the per-mutator barrier depth is the handshake that makes that
+  // visible.
   {
     std::lock_guard<std::mutex> lock(gc_mutex);
     // A concurrent promotion can turn a reachable object old while mutators

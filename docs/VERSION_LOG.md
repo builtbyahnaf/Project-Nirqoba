@@ -6,7 +6,15 @@
 
 ---
 
-## Version 0.141-beta (dev)
+## Version 0.147-beta (dev)
+
+### Summary of Changes (since `0.141-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.141-beta release.*
+
+---
+
+## Version 0.141-beta
 
 ### Summary of Changes (since `0.131-beta`):
 
