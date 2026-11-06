@@ -269,6 +269,10 @@ struct alignas(std::max_align_t) ObjectHeader {
   nrq_gc_trace_fn trace = nullptr;
   bool marked = false;
   bool young = true;
+  // Set while this object is listed in the remembered set. Deduplication is a
+  // flag test instead of a hash lookup, and the entry itself lives in one
+  // contiguous vector that minor collections scan in address order of insertion.
+  bool remembered = false;
   uint8_t age = 0;
   uint64_t birth_epoch = 0;
   ReferenceLayout reference_offsets;
@@ -671,10 +675,12 @@ MarkContext active_mark;
 // list. New allocations are therefore never inserted into a list the sweeper
 // is traversing, and GC barriers can publish new marks between sweep slices.
 ObjectHeader* sweep_list = nullptr;
-// Old objects are not traced during a minor collection. This set records young
-// objects referenced by old objects; the root-store/root-copy barriers insert
-// here, and a minor collection treats the set as additional roots.
-std::unordered_set<ObjectHeader*> remembered_young;
+// Old objects are not traced during a minor collection. This list records young
+// objects referenced by old objects; the root-store/root-copy barriers append
+// here, and a minor collection treats the list as additional roots. Entries are
+// unique because an object's `remembered` flag gates insertion, so the list
+// needs no hashing on the barrier path and scans one contiguous array.
+std::vector<ObjectHeader*> remembered_young;
 // A thread may buffer a reference to an object that is still in another
 // mutator's unpublished TLAB. These raw addresses are retried after all TLABs
 // are published at the next cycle boundary; they are never dereferenced.
@@ -946,16 +952,43 @@ void enqueue_roots_locked(MarkContext& context) {
   flush_reference_batch_locked(context);
 }
 
+// Append a young object to the remembered set unless its flag says it is
+// already there. The flag is what makes the flat list a set, so a repeated
+// old-to-young store costs one bool test instead of a hash probe.
+void add_remembered_locked(ObjectHeader* header) {
+  if (!header || header->remembered) return;
+  header->remembered = true;
+  try {
+    remembered_young.push_back(header);
+  } catch (...) {
+    header->remembered = false;
+    nrq_runtime_fatal("GC remembered-set insertion failed");
+  }
+}
+
+// Drop entries whose object was reclaimed or promoted since insertion. The list
+// is only traversed between this point and the end of the cycle, so a stale
+// entry is never dereferenced; compaction also releases the vector's capacity
+// when the remembered set shrinks permanently.
+void compact_remembered_locked() {
+  remembered_young.erase(
+      std::remove_if(remembered_young.begin(), remembered_young.end(),
+                     [](ObjectHeader* header) {
+                       return !header || !header->remembered;
+                     }),
+      remembered_young.end());
+  if (remembered_young.capacity() > 1024 &&
+      remembered_young.size() * 4 < remembered_young.capacity())
+    std::vector<ObjectHeader*>(remembered_young.begin(), remembered_young.end())
+        .swap(remembered_young);
+}
+
 void remember_reference(void* object, void* opaque_context) {
   (void)opaque_context;
   if (!object) return;
   ObjectHeader* found = find_object_locked(object);
   if (!found || !found->young) return;
-  try {
-    remembered_young.insert(found);
-  } catch (...) {
-    nrq_runtime_fatal("GC remembered-set insertion failed");
-  }
+  add_remembered_locked(found);
 }
 
 void remember_young_locked(void* object) {
@@ -964,13 +997,7 @@ void remember_young_locked(void* object) {
       !object)
     return;
   ObjectHeader* found = find_object_locked(object);
-  if (found && found->young) {
-    try {
-      remembered_young.insert(found);
-    } catch (...) {
-      nrq_runtime_fatal("GC remembered-set insertion failed");
-    }
-  }
+  if (found && found->young) add_remembered_locked(found);
 }
 
 void remember_children_locked(ObjectHeader* header) {
@@ -982,11 +1009,7 @@ void defer_remembered_locked(void* object) {
     return;
   ObjectHeader* found = find_object_locked(object);
   if (found && found->young) {
-    try {
-      remembered_young.insert(found);
-    } catch (...) {
-      nrq_runtime_fatal("GC remembered-set insertion failed");
-    }
+    add_remembered_locked(found);
     return;
   }
   if (!found) {
@@ -1004,11 +1027,7 @@ void drain_remembered_locked(MutatorState& mutator, bool defer_unresolved) {
     if (!object) continue;
     ObjectHeader* found = find_object_locked(object);
     if (found && found->young) {
-      try {
-        remembered_young.insert(found);
-      } catch (...) {
-        nrq_runtime_fatal("GC remembered-set insertion failed");
-      }
+      add_remembered_locked(found);
     } else if (!found && defer_unresolved) {
       try {
         unresolved_remembered.insert(object);
@@ -1053,11 +1072,7 @@ void resolve_unresolved_remembered_locked() {
   for (void* object : unresolved_remembered) {
     ObjectHeader* found = find_object_locked(object);
     if (!found || !found->young) continue;
-    try {
-      remembered_young.insert(found);
-    } catch (...) {
-      nrq_runtime_fatal("GC remembered-set insertion failed");
-    }
+    add_remembered_locked(found);
   }
   unresolved_remembered.clear();
 }
@@ -1133,7 +1148,7 @@ bool sweep_chunk_locked(size_t budget) {
             header->page->storage);
         clear_object_start(*header->page, offset);
       }
-      remembered_young.erase(header);
+      header->remembered = false;
       if (!header->young) {
         const size_t old_count =
             old_object_count.load(std::memory_order_relaxed);
@@ -1167,7 +1182,7 @@ bool sweep_chunk_locked(size_t budget) {
             old_object_count.fetch_add(1, std::memory_order_relaxed);
             generational_barrier_active.store(true, std::memory_order_release);
             remember_children_locked(header);
-            remembered_young.erase(header);
+            header->remembered = false;
           }
         }
       } else {
@@ -1177,7 +1192,7 @@ bool sweep_chunk_locked(size_t budget) {
           generational_barrier_active.store(true, std::memory_order_release);
         }
         header->age = 0;
-        remembered_young.erase(header);
+        header->remembered = false;
       }
     }
   }
@@ -1277,6 +1292,10 @@ void prepare_cycle_locked(bool young_only) {
   active_mark = MarkContext{};
   active_mark.young_only = young_only;
   active_mark.epoch = active_cycle_epoch;
+  // Reclaimed and promoted objects cleared their own flag during the previous
+  // cycle. Drop those entries now, before anything traverses the list, so the
+  // traversal never observes an address whose object is gone.
+  compact_remembered_locked();
   enqueue_roots_locked(active_mark);
   collection_phase.store(CollectionPhase::Marking, std::memory_order_release);
 }
