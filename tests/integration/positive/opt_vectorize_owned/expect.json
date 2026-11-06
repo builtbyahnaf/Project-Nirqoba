@@ -1,0 +1,8 @@
+{
+  "mode": "build_and_run",
+  "expect_stdout_contains": ["105"],
+  "expect_optimized_ir_contains": [
+    "vector.body",
+    "%n.vec"
+  ]
+}
