@@ -1,0 +1,21 @@
+struct Node {
+    int value;
+}
+
+int function inner(int seed) {
+    var node = array.allocate<Node>(1);
+    node[0].value = seed;
+    gc.collect();
+    return node[0].value;
+}
+
+int function middle(managed<Node> node, int seed) {
+    return inner(seed + node[0].value);
+}
+
+int function main() {
+    var node = array.allocate<Node>(1);
+    node[0].value = 5;
+    print(middle(node, 1));
+    return 0;
+}
