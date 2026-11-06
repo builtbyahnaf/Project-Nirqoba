@@ -2505,6 +2505,107 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
   }
 }
 
+void nrq_gc_root_register_frame(void* const* slots, size_t slot_count,
+                                const size_t* descriptor) {
+  if (slot_count == 0) return;
+  if (!slots || !descriptor)
+    nrq_runtime_fatal("GC frame root registration received an invalid descriptor");
+  if (descriptor[0] != slot_count)
+    nrq_runtime_fatal(
+        "GC frame root registration descriptor does not match its slot count");
+
+  // Validate the entire table before publishing any root: a malformed
+  // descriptor must fail with the frame untouched, not halfway registered.
+  size_t cursor = 1;
+  for (size_t index = 0; index < slot_count; ++index) {
+    if (!slots[index])
+      nrq_runtime_fatal("GC frame root registration contains a null slot");
+    const size_t object_size = descriptor[cursor++];
+    const size_t reference_count = descriptor[cursor++];
+    if (object_size == 0 || reference_count == 0)
+      nrq_runtime_fatal("GC frame root registration contains an empty root");
+    for (size_t reference = 0; reference < reference_count; ++reference) {
+      const size_t offset = descriptor[cursor + reference];
+      if (offset > object_size || sizeof(void*) > object_size - offset)
+        nrq_runtime_fatal(
+            "GC frame root registration contains an out-of-range pointer offset");
+    }
+    cursor += reference_count;
+  }
+
+  ShadowStack& stack = ensure_shadow_stack();
+  // One reservation for the frame keeps a wide activation from growing the
+  // vector root by root; the per-root metadata itself stays allocation-free for
+  // every layout that fits the inline offset storage.
+  auto reserve_roots = [&]() {
+    try {
+      stack.roots.reserve(stack.roots.size() + slot_count);
+    } catch (...) {
+      nrq_runtime_fatal("GC frame root registration failed to reserve roots");
+    }
+  };
+  // Reads one slot's metadata out of the descriptor, advancing the cursor, and
+  // pushes it. The cursor walks the table once, so a wide frame costs one pass.
+  auto push_root = [&](void* slot, size_t& cursor) {
+    RootInfo info;
+    info.object_size = descriptor[cursor++];
+    const size_t reference_count = descriptor[cursor++];
+    try {
+      info.reference_offsets.assign(descriptor + cursor, reference_count);
+    } catch (...) {
+      nrq_runtime_fatal("GC root registration failed to allocate root metadata");
+    }
+    cursor += reference_count;
+    const bool is_ptr_root = is_pointer_root(info);
+    try {
+      stack.roots.push_back(ShadowRoot{slot, std::move(info)});
+      add_slot_state(stack, slot, stack.roots.back().info, is_ptr_root);
+    } catch (...) {
+      nrq_runtime_fatal("GC root registration failed to track the current thread");
+    }
+  };
+
+  if (begin_fast_barrier()) {
+    if (diagnostics_reading_roots()) {
+      std::lock_guard<std::mutex> stack_lock(stack.mutex);
+      reserve_roots();
+      size_t cursor = 1;
+      for (size_t index = 0; index < slot_count; ++index)
+        push_root(slots[index], cursor);
+    } else {
+      reserve_roots();
+      size_t cursor = 1;
+      for (size_t index = 0; index < slot_count; ++index)
+        push_root(slots[index], cursor);
+    }
+    end_fast_barrier();
+    return;
+  }
+
+  std::lock_guard<std::mutex> heap_lock(gc_mutex);
+  {
+    std::lock_guard<std::mutex> stack_lock(stack.mutex);
+    const CollectionPhase phase =
+        collection_phase.load(std::memory_order_acquire);
+    reserve_roots();
+    size_t cursor = 1;
+    for (size_t index = 0; index < slot_count; ++index) {
+      // Mark exactly the roots the single-slot path marks: a root pushed while a
+      // snapshot is already running has to behave as if it had been part of it.
+      if (phase == CollectionPhase::Marking ||
+          phase == CollectionPhase::Sweeping) {
+        RootInfo info;
+        info.object_size = descriptor[cursor];
+        const size_t reference_count = descriptor[cursor + 1];
+        info.reference_offsets.assign(descriptor + cursor + 2,
+                                      reference_count);
+        mark_root_values_locked(slots[index], info);
+      }
+      push_root(slots[index], cursor);
+    }
+  }
+}
+
 void nrq_gc_root_register_array(void* data, size_t count, size_t element_size,
                                 const size_t* reference_offsets,
                                 size_t reference_count) {

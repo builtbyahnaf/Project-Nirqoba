@@ -1080,6 +1080,49 @@ TEST(GcTest, DuplicateRootSlotRegistrationsPreserveOuterOwners) {
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
 }
 
+// A frame descriptor registers a whole activation at once. It must behave like
+// the per-slot entry point for every slot it names: the roots keep their
+// referents alive across a collection, duplicates still count per registration,
+// and frame end releases all of them.
+TEST(GcTest, FrameRootRegistrationPublishesEverySlot) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+
+  auto* first = nrq_gc_allocate_array(1, sizeof(uint64_t), nullptr);
+  auto* second = nrq_gc_allocate_array(1, sizeof(uint64_t), nullptr);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+
+  // The descriptor carries the layouts; the call carries the slot addresses,
+  // which is the only part an activation computes.
+  void* root0 = nullptr;
+  void* root1 = nullptr;
+  void* slots[2] = {&root0, &root1};
+  // descriptor[0] = slot count, then (object_size, reference_count, offsets...)
+  // per slot: one pointer-rooted value each.
+  const size_t descriptor[] = {2, sizeof(void*), 1, 0, sizeof(void*), 1, 0};
+  const uint64_t marker = nrq_gc_root_frame_begin();
+  nrq_gc_root_register_frame(slots, 2, descriptor);
+  nrq_gc_root_store(static_cast<void**>(slots[0]), first);
+  nrq_gc_root_store(static_cast<void**>(slots[1]), second);
+
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{2});
+
+  // A rooted allocation from either slot resolves through the same index the
+  // single-slot path maintains, so the frame really did register both.
+  ASSERT_NE(nrq_gc_allocate_array_typed_rooted(
+                static_cast<void**>(slots[0]), 1, sizeof(uint64_t), nullptr, 0),
+            nullptr);
+  nrq_gc_root_store(static_cast<void**>(slots[0]), first);
+
+  nrq_gc_root_frame_end(marker);
+  root0 = nullptr;
+  root1 = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
 TEST(GcTest, EarlyReturnUnwindsRootFrameAndReleasesRoots) {
   nrq_gc_disable();
   nrq_gc_collect();
