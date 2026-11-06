@@ -498,6 +498,19 @@ std::mutex collection_cycle_mutex;
 
 enum class CollectionPhase { Idle, Preparing, Marking, Sweeping };
 constexpr size_t kRememberedBufferCapacity = 64;
+constexpr size_t kTransferPinBufferCapacity = 32;
+
+// A pending transfer-pin adjustment. Managed returns hand one pin off per call;
+// routing every one of them through the global pin table would take the
+// collector mutex on every callee return. A registered mutator instead records a
+// signed delta in its own buffer, and the collector folds the deltas into the
+// table when it prepares a cycle. Deltas are matched per object, so a handoff
+// that is released before the next cycle leaves no trace at all.
+struct TransferPinDelta {
+  void* object = nullptr;
+  int64_t delta = 0;
+};
+
 struct MutatorState {
   size_t depth = 0;
   bool parked = false;
@@ -522,7 +535,13 @@ struct MutatorState {
   // collector drains every registered mutator after parking them.
   void* remembered[kRememberedBufferCapacity]{};
   size_t remembered_count = 0;
+  // Transfer-pin deltas this thread has recorded but not yet folded into the
+  // global pin table. Owner-only; the collector reads it after parking.
+  TransferPinDelta transfer_pins[kTransferPinBufferCapacity]{};
+  size_t transfer_pin_count = 0;
 };
+void drain_transfer_pins_locked(MutatorState& mutator);
+
 std::mutex mutator_mutex;
 std::condition_variable mutator_condition;
 std::vector<MutatorState*> mutators;
@@ -1264,6 +1283,7 @@ ThreadGcStateCleanup::~ThreadGcStateCleanup() {
       std::lock_guard<std::mutex> heap_lock(gc_mutex);
       publish_tlab_locked(thread_mutator);
       drain_remembered_locked(thread_mutator, /*defer_unresolved=*/true);
+      drain_transfer_pins_locked(thread_mutator);
     }
     auto found = std::find(mutators.begin(), mutators.end(), &thread_mutator);
     if (found != mutators.end()) mutators.erase(found);
@@ -1608,6 +1628,56 @@ void adapt_collection_policy_locked() {
   ++collection_policy.adaptations;
 }
 
+ObjectHeader* find_pending_header(MutatorState& mutator, void* object);
+
+TransferPinDelta* find_transfer_delta(MutatorState& mutator, void* object) {
+  for (size_t index = 0; index < mutator.transfer_pin_count; ++index)
+    if (mutator.transfer_pins[index].object == object)
+      return &mutator.transfer_pins[index];
+  return nullptr;
+}
+
+// Fold a mutator's buffered transfer-pin deltas into the global pin table. Called
+// with gc_mutex held, either by the collector after parking the mutator or by the
+// mutator itself, so the buffer cannot be written while it is being read.
+void drain_transfer_pins_locked(MutatorState& mutator) {
+  for (size_t index = 0; index < mutator.transfer_pin_count; ++index) {
+    const TransferPinDelta& entry = mutator.transfer_pins[index];
+    if (!entry.object || entry.delta == 0) continue;
+    if (entry.delta > 0) {
+      // A pin of a not-yet-published object is legitimate: cycle preparation
+      // publishes every TLAB before this drain runs. Anything else is a pin of a
+      // pointer the heap does not own, which the buffered path can only detect
+      // here, so it is recorded as a rejection instead of being counted.
+      if (!find_object_locked(entry.object) &&
+          !find_pending_header(mutator, entry.object)) {
+        pin_violations =
+            saturated_add(pin_violations, static_cast<uint64_t>(entry.delta));
+        continue;
+      }
+      try {
+        size_t& count = pinned_objects[entry.object];
+        const uint64_t total =
+            static_cast<uint64_t>(count) + static_cast<uint64_t>(entry.delta);
+        if (total > static_cast<uint64_t>(SIZE_MAX))
+          nrq_runtime_fatal("GC transfer pin count overflow");
+        count = static_cast<size_t>(total);
+      } catch (...) {
+        nrq_runtime_fatal("GC transfer pin registration failed");
+      }
+      continue;
+    }
+    auto found = pinned_objects.find(entry.object);
+    if (found == pinned_objects.end()) continue;  // nothing left to release
+    const uint64_t release = static_cast<uint64_t>(-entry.delta);
+    if (release >= static_cast<uint64_t>(found->second))
+      pinned_objects.erase(found);
+    else
+      found->second -= static_cast<size_t>(release);
+  }
+  mutator.transfer_pin_count = 0;
+}
+
 void prepare_cycle_locked(bool young_only) {
   for (MutatorState* mutator : mutators)
     if (mutator) publish_tlab_locked(*mutator);
@@ -1618,6 +1688,10 @@ void prepare_cycle_locked(bool young_only) {
   for (MutatorState* mutator : mutators)
     if (mutator) drain_remembered_locked(*mutator, /*defer_unresolved=*/false);
   resolve_unresolved_remembered_locked();
+  // Buffered transfer pins are invisible until they reach the table, so fold them
+  // in before the cycle enumerates pinned roots.
+  for (MutatorState* mutator : mutators)
+    if (mutator) drain_transfer_pins_locked(*mutator);
 
   // No mutator can be inside an allocator while stop_mutators() has everyone
   // parked. Invalidate stale TLAB cursors before reclaiming empty pages.
@@ -2575,6 +2649,9 @@ void nrq_gc_mutator_leave(void) {
     std::lock_guard<std::mutex> heap_lock(gc_mutex);
     publish_tlab_locked(thread_mutator);
     drain_remembered_locked(thread_mutator, /*defer_unresolved=*/true);
+    // A thread that leaves the registry is never visited by cycle preparation
+    // again, so its buffered handoffs have to be settled here.
+    drain_transfer_pins_locked(thread_mutator);
   }
   thread_mutator.parked = false;
   auto found = std::find(mutators.begin(), mutators.end(), &thread_mutator);
@@ -2732,6 +2809,10 @@ void* nrq_gc_pin(void* object) {
 
 uint64_t nrq_gc_pin_count(void) {
   std::lock_guard<std::mutex> lock(gc_mutex);
+  // Fold in this thread's buffered deltas so a query made right after a managed
+  // return reflects it. Other threads' buffers stay private until the next cycle;
+  // they are only ever folded while their owner is parked or holding this lock.
+  drain_transfer_pins_locked(thread_mutator);
   return static_cast<uint64_t>(pinned_objects.size());
 }
 
@@ -2746,6 +2827,26 @@ int32_t nrq_gc_is_enabled(void) {
 
 void nrq_gc_unpin(void* object) {
   if (!object) return;
+  // Releasing a pin this thread buffered cancels it here, and releasing a pin the
+  // table already knows about is queued as a negative delta. Either way the
+  // collector mutex stays out of the path.
+  if (begin_fast_barrier()) {
+    MutatorState& mutator = thread_mutator;
+    TransferPinDelta* pending = find_transfer_delta(mutator, object);
+    if (pending && pending->delta > 0) {
+      --pending->delta;
+      end_fast_barrier();
+      return;
+    }
+    if (!pending && mutator.transfer_pin_count < kTransferPinBufferCapacity) {
+      mutator.transfer_pins[mutator.transfer_pin_count].object = object;
+      mutator.transfer_pins[mutator.transfer_pin_count].delta = -1;
+      ++mutator.transfer_pin_count;
+      end_fast_barrier();
+      return;
+    }
+    end_fast_barrier();
+  }
   std::lock_guard<std::mutex> lock(gc_mutex);
   auto found = pinned_objects.find(object);
   if (found == pinned_objects.end()) return;
@@ -2754,6 +2855,31 @@ void nrq_gc_unpin(void* object) {
 
 void* nrq_gc_pin_transfer(void* object) {
   if (!object) return nullptr;
+  // Registered mutators record the handoff in their own buffer instead of taking
+  // the collector mutex. The buffer is folded into the pin table during cycle
+  // preparation, before pinned roots are enumerated, so a buffered pin protects
+  // its referent for exactly the collections a table pin would. Validity of the
+  // pointer is checked at that point; code generation only ever transfers managed
+  // results.
+  if (begin_fast_barrier()) {
+    MutatorState& mutator = thread_mutator;
+    TransferPinDelta* pending = find_transfer_delta(mutator, object);
+    if (pending) {
+      ++pending->delta;
+      end_fast_barrier();
+      return object;
+    }
+    if (mutator.transfer_pin_count < kTransferPinBufferCapacity) {
+      mutator.transfer_pins[mutator.transfer_pin_count].object = object;
+      mutator.transfer_pins[mutator.transfer_pin_count].delta = 1;
+      ++mutator.transfer_pin_count;
+      end_fast_barrier();
+      return object;
+    }
+    // The buffer is full. Leave the barrier region before taking the collector
+    // mutex, because a collector holding it waits for barrier regions to drain.
+    end_fast_barrier();
+  }
   std::lock_guard<std::mutex> lock(gc_mutex);
   // A managed return usually refers to an object that is still in this
   // thread's unpublished TLAB. Publishing the whole pending batch here would

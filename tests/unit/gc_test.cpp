@@ -382,6 +382,34 @@ TEST(GcTest, TransferPinsSupportBalancedManagedReturnHandoffs) {
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
 }
 
+TEST(GcTest, BufferedTransferPinsCancelAndSurviveCollection) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  nrq_gc_mutator_enter();
+  // A handoff that is released before the next cycle cancels inside the
+  // mutator's own buffer, so it never reaches the pin table.
+  void* balanced = nrq_gc_allocate(24, nullptr);
+  ASSERT_NE(balanced, nullptr);
+  for (int index = 0; index < 4; ++index)
+    nrq_gc_pin_transfer(balanced);
+  for (int index = 0; index < 4; ++index) nrq_gc_unpin(balanced);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+
+  // A handoff that outlives the cycle has to be folded into the pin table during
+  // cycle preparation, before the cycle decides what is reachable.
+  void* held = nrq_gc_allocate(24, nullptr);
+  ASSERT_NE(held, nullptr);
+  for (int index = 0; index < 8; ++index)
+    ASSERT_TRUE(nrq_gc_pin_transfer(held) == held);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{1});
+  for (int index = 0; index < 8; ++index) nrq_gc_unpin(held);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+  nrq_gc_mutator_leave();
+}
+
 TEST(GcTest, ReferenceDiagnosticsCountHeapAndRootReferencesWhenEnabled) {
   nrq_gc_enable();
   nrq_gc_collect();
