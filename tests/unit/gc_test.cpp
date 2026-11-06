@@ -410,6 +410,25 @@ TEST(GcTest, BufferedTransferPinsCancelAndSurviveCollection) {
   nrq_gc_mutator_leave();
 }
 
+TEST(GcTest, WideRootFrameReleasesEveryRegistration) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  // More slots in one frame than the batched removal path holds, so the frame end
+  // has to release every registration either way.
+  constexpr size_t kWide = 64;
+  std::vector<void*> slots(kWide, nullptr);
+  const uint64_t wide = nrq_gc_root_frame_begin();
+  for (void*& slot : slots) nrq_gc_root_register(&slot);
+  nrq_gc_root_register(&slots[0]);  // and one slot registered twice
+  nrq_gc_root_frame_end(wide);
+
+  // Every registration the frame owned is gone, so the slots can be registered
+  // again from scratch without any bookkeeping complaint.
+  const uint64_t again = nrq_gc_root_frame_begin();
+  for (void*& slot : slots) nrq_gc_root_register(&slot);
+  nrq_gc_root_frame_end(again);
+}
+
 TEST(GcTest, ReferenceDiagnosticsCountHeapAndRootReferencesWhenEnabled) {
   nrq_gc_enable();
   nrq_gc_collect();
