@@ -6,11 +6,24 @@
 
 ---
 
-## Version 0.176-beta (dev)
+## Version 0.181-beta (dev)
+
+### Summary of Changes (since `0.176-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.176-beta release.*
+
+---
+
+## Version 0.176-beta
 
 ### Summary of Changes (since `0.171-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.171-beta release.*
+#### 1. Optimizer Evidence Matrix
+- **Inlining:** `tests/integration/positive/opt_inlining` proves a scalar helper and a GC-registering helper both disappear into their caller while a real loop survives.
+- **Loop-Invariant Hoisting:** `tests/integration/positive/opt_licm` asserts LLVM's hoisting remark for arithmetic that the source computes inside the loop.
+- **Loop Vectorization:** `tests/integration/positive/opt_vectorize_owned` requires a vectorized body and vector trip count for an owned-array loop.
+- **Justified Absence:** `tests/integration/positive/opt_vectorize_managed_blocked` records that a managed loop keeps its safepoint poll and is therefore not vectorized.
+- **Rationale:** PO-7 asks whether the generated IR gives LLVM enough information, not for hand-written replacements of LLVM's own passes. Each claim is now backed by an artifact on the optimized module.
 
 ---
 
