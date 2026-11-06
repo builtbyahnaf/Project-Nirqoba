@@ -1105,6 +1105,54 @@ TEST(GcTest, YoungChurnDoesNotForceRepeatedFullCollections) {
   nrq_gc_set_generational(1);
 }
 
+TEST(GcTest, MergedFreeRunsServeThreadLocalReserves) {
+  // A whole cohort of objects dying at once leaves a run of adjacent dead
+  // spans. Coalescing turns that into one region large enough to host a
+  // thread-local reservation, so the page keeps serving new allocations even
+  // though its bump cursor has already passed the run.
+  nrq_gc_disable();
+  nrq_gc_set_generational(1);
+  nrq_gc_collect();
+  const uint64_t baseline_reuse = nrq_gc_span_reuse_count();
+
+  // A survivor every twenty-fifth object keeps every page alive, so the dead
+  // runs inside those pages are what the next allocations have to work with.
+  std::vector<void*> roots;
+  roots.reserve(32);
+  std::vector<void*> doomed;
+  doomed.reserve(400);
+  for (int index = 0; index < 400; ++index) {
+    if (index % 25 == 0) {
+      roots.push_back(nrq_gc_allocate(1024, nullptr));
+      ASSERT_NE(roots.back(), nullptr);
+      nrq_gc_root_register(&roots.back());
+    }
+    void* object = nrq_gc_allocate(1024, nullptr);
+    ASSERT_NE(object, nullptr);
+    doomed.push_back(object);
+  }
+  doomed.clear();
+  nrq_gc_collect();
+  const size_t pages_after_reclaim = nrq_gc_page_count();
+
+  nrq_gc_mutator_enter();
+  for (int index = 0; index < 2000; ++index) {
+    void* object = nrq_gc_allocate(64, nullptr);
+    ASSERT_NE(object, nullptr);
+  }
+  nrq_gc_mutator_leave();
+  for (void*& root : roots) nrq_gc_root_unregister(&root);
+  roots.clear();
+
+  // The new objects fit inside the coalesced runs, so the pages that served them
+  // are the pages that already existed.
+  ASSERT_TRUE(nrq_gc_span_reuse_count() - baseline_reuse >= 40);
+  ASSERT_EQ(nrq_gc_page_count(), pages_after_reclaim);
+
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
 TEST(GcTest, CollectionThresholdFollowsTheLiveHeap) {
   nrq_gc_disable();
   nrq_gc_set_adaptive(1);
