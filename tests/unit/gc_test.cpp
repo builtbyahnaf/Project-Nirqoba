@@ -292,6 +292,38 @@ TEST(GcTest, BumpRegionsAlignMixedObjectSizesAndReclaimEmptyPages) {
   nrq_gc_enable();
 }
 
+TEST(GcTest, EmptiedPagesAreRecycledAcrossCollections) {
+  nrq_gc_disable();
+  nrq_gc_set_threshold(1024 * 1024 * 1024);
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+  const uint64_t reuse_before = nrq_gc_page_reuse_count();
+
+  constexpr size_t kObjectCount = 2048;
+  for (size_t index = 0; index < kObjectCount; ++index)
+    ASSERT_NE(nrq_gc_allocate(48, nullptr), nullptr);
+  ASSERT_TRUE(nrq_gc_page_count() > 0);
+
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+  // The first sweep retires the emptied pages; the next cycle boundary recycles
+  // them, when every mutator is parked and no cursor can still point into them.
+  nrq_gc_collect();
+  ASSERT_TRUE(nrq_gc_recycled_page_count() > 0);
+  ASSERT_EQ(nrq_gc_page_count(), size_t{0});
+
+  // A second allocation wave should take the retained pages instead of asking
+  // the process heap for new ones.
+  for (size_t index = 0; index < kObjectCount; ++index)
+    ASSERT_NE(nrq_gc_allocate(48, nullptr), nullptr);
+  ASSERT_TRUE(nrq_gc_page_reuse_count() > reuse_before);
+  ASSERT_TRUE(nrq_gc_page_count() > 0);
+
+  nrq_gc_collect();
+  nrq_gc_set_threshold(1024 * 1024);
+  nrq_gc_enable();
+}
+
 TEST(GcTest, AllocationPageCacheIsInvalidatedAfterCollection) {
   nrq_gc_disable();
   nrq_gc_collect();

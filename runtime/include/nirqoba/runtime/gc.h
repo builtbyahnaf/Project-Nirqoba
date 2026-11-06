@@ -99,6 +99,13 @@ struct nrq_gc_stats nrq_gc_get_stats(void);
 // Reports the per-object metadata bytes the collector charges for every managed
 // allocation. Exposed so the layout can be audited by tests and tooling.
 size_t nrq_gc_object_header_bytes(void);
+// Page-pool diagnostics. `nrq_gc_page_count` counts active bump pages,
+// `nrq_gc_recycled_page_count` counts empty pages retained for reuse, and
+// `nrq_gc_page_reuse_count` counts how often a retained page was handed back
+// out instead of allocating fresh storage.
+size_t nrq_gc_page_count(void);
+size_t nrq_gc_recycled_page_count(void);
+uint64_t nrq_gc_page_reuse_count(void);
 uint64_t nrq_gc_get_allocated_bytes(void);
 uint64_t nrq_gc_get_collected_bytes(void);
 uint64_t nrq_gc_get_collection_count(void);
