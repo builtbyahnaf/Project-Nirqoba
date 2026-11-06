@@ -1,5 +1,12 @@
 {
   "mode": "build_and_run",
   "expect_exit": 73,
-  "expect_stdout": ""
+  "expect_stdout": "",
+  "expect_ir_counts": {
+    "@nrq_gc_layout_8 = private constant": 1,
+    "call void @nrq_gc_root_register_array(ptr": 1
+  },
+  "expect_ir_not_contains": [
+    "alloca [1 x i64]"
+  ]
 }
