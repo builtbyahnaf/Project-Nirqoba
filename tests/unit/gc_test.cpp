@@ -1518,3 +1518,52 @@ TEST(GcTest, TransferPinDeltasCancelWithoutLeavingPins) {
   nrq_gc_collect();
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
 }
+
+TEST(GcTest, TransferPinBufferReusesSlotsForReleasedHandoffs) {
+  nrq_gc_enable();
+  nrq_gc_collect();
+  // The buffered delta path only runs for a thread inside a mutator region, and a
+  // collection between these steps would drain the buffer the test is about.
+  nrq_gc_mutator_enter();
+  nrq_gc_disable();
+  const uint64_t baseline_fallbacks = nrq_gc_transfer_pin_fallbacks();
+  const uint64_t baseline_violations = nrq_gc_pin_violations();
+
+  // Objects are allocated once so the handoff cycles run without an allocation in
+  // between, which is the shape the buffer sees when a helper returns and the
+  // caller releases at once.
+  std::vector<void*> objects;
+  for (int index = 0; index < 200; ++index) {
+    auto* node = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+    ASSERT_NE(node, nullptr);
+    objects.push_back(node);
+  }
+
+  for (void* node : objects) {
+    ASSERT_TRUE(nrq_gc_pin_transfer(node) == node);
+    nrq_gc_unpin(node);
+  }
+  ASSERT_EQ(nrq_gc_transfer_pin_fallbacks() - baseline_fallbacks,
+            uint64_t{0});
+  ASSERT_EQ(nrq_gc_pin_count(), uint64_t{0});
+
+  // A buffer genuinely full of live deltas may fall back, and correctness has to
+  // hold either way: every retained handoff keeps its object alive until released.
+  std::vector<void*> retained;
+  for (size_t index = 0; index < 40; ++index)
+    retained.push_back(nrq_gc_pin_transfer(objects[index]));
+  ASSERT_TRUE(nrq_gc_transfer_pin_fallbacks() > baseline_fallbacks);
+
+  nrq_gc_enable();
+  nrq_gc_collect();
+  // Only the retained handoffs are still protected; the released ones were
+  // collectable the whole time.
+  ASSERT_EQ(nrq_gc_get_live_objects(), static_cast<uint64_t>(retained.size()));
+  ASSERT_EQ(nrq_gc_pin_violations() - baseline_violations, uint64_t{0});
+
+  for (void* node : retained) nrq_gc_unpin(node);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+  ASSERT_EQ(nrq_gc_pin_violations() - baseline_violations, uint64_t{0});
+  nrq_gc_mutator_leave();
+}
