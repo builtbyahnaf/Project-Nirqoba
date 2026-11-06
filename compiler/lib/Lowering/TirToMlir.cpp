@@ -1792,21 +1792,46 @@ class FunctionTranslator {
         mlir::ValueRange{slot, object_size, offsets_slot, reference_count});
   }
 
-  // One read-only table per frame describing every root layout the activation
-  // registers. The table is interned per module, so two functions that register
-  // the same layouts share it and an activation pays no stores for metadata.
-  mlir::Value frame_root_descriptor(llvm::ArrayRef<PendingGcRoot> roots,
-                                    mlir::Location loc) {
+  // The layout words of a frame descriptor and the derived per-root reference
+  // counts, computed once. The emitter and the descriptor builder used to walk
+  // the same types separately, so the words a frame publishes and the counts it
+  // believes could drift apart; a single derivation makes an incomplete
+  // descriptor impossible rather than unlikely.
+  struct FrameRootLayout {
     llvm::SmallVector<int64_t, 8> words;
-    words.push_back(static_cast<int64_t>(roots.size()));
+    std::vector<std::size_t> reference_counts;
+    bool valid = false;
+  };
+
+  FrameRootLayout build_frame_root_layout(llvm::ArrayRef<PendingGcRoot> roots) {
+    FrameRootLayout layout;
+    layout.words.push_back(static_cast<int64_t>(roots.size()));
+    layout.reference_counts.reserve(roots.size());
     for (const PendingGcRoot& root : roots) {
       std::vector<uint64_t> offsets;
       collect_managed_reference_offsets(root.type, 0, offsets);
-      words.push_back(static_cast<int64_t>(type_size(root.type)));
-      words.push_back(static_cast<int64_t>(offsets.size()));
+      if (offsets.empty()) return layout;
+      layout.words.push_back(static_cast<int64_t>(type_size(root.type)));
+      layout.words.push_back(static_cast<int64_t>(offsets.size()));
+      layout.reference_counts.push_back(offsets.size());
       for (uint64_t offset : offsets)
-        words.push_back(static_cast<int64_t>(offset));
+        layout.words.push_back(static_cast<int64_t>(offset));
     }
+    // Every root contributes its size word, its count word and its offsets.
+    std::size_t described = 1;
+    for (std::size_t count : layout.reference_counts) described += 2 + count;
+    layout.valid = layout.reference_counts.size() == roots.size() &&
+                   described == static_cast<std::size_t>(layout.words.size());
+    return layout;
+  }
+
+  // One read-only table per frame describing every root layout the activation
+  // registers. The table is interned per module, so two functions that register
+  // the same layouts share it and an activation pays no stores for metadata.
+  mlir::Value frame_root_descriptor(const FrameRootLayout& layout,
+                                    mlir::Location loc) {
+    if (!layout.valid) return {};
+    const llvm::SmallVector<int64_t, 8>& words = layout.words;
     std::string name = "nrq_gc_roots";
     for (int64_t word : words) name += "_" + std::to_string(word);
     if (!module_.lookupSymbol<mlir::LLVM::GlobalOp>(name)) {
@@ -1832,13 +1857,12 @@ class FunctionTranslator {
   bool emit_gc_frame_root_registration(llvm::ArrayRef<PendingGcRoot> roots) {
     if (roots.size() < 2 || entry_block_ == nullptr) return false;
     for (const PendingGcRoot& root : roots) {
-      std::vector<uint64_t> offsets;
-      collect_managed_reference_offsets(root.type, 0, offsets);
-      if (offsets.empty() || !tir_type_to_mlir(root.type, ctx_, builder_))
-        return false;
+      if (!tir_type_to_mlir(root.type, ctx_, builder_)) return false;
     }
+    FrameRootLayout layout = build_frame_root_layout(roots);
+    if (!layout.valid) return false;
     mlir::Location loc = roots.front().loc;
-    mlir::Value descriptor = frame_root_descriptor(roots, loc);
+    mlir::Value descriptor = frame_root_descriptor(layout, loc);
     if (!descriptor) return false;
     auto slots_type = mlir::LLVM::LLVMArrayType::get(
         llvm_ptr_type(ctx_), static_cast<unsigned>(roots.size()));
