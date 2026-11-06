@@ -6,11 +6,38 @@
 
 ---
 
-## Version 0.127-beta (dev)
+## Version 0.136-beta (dev)
+
+### Summary of Changes (since `0.131-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.131-beta release.*
+
+---
+
+## Version 0.131-beta
+
+### Summary of Changes (since `0.127-beta`):
+
+#### 1. Aggregate Layout Optimization & CLI Reporting (PO-20)
+- **Widest-Alignment-First Field Ordering:** Struct fields are now laid out in descending alignment order (widest alignment first), minimizing padding and reducing aggregate size. The layout pass operates on the MLIR `nrq` dialect before lowering to LLVM.
+- **Accurate Access Alignment Metadata:** Every memory access (`load`, `store`, `gep`) now carries precise alignment metadata reflecting the true field offset and type alignment, enabling LLVM to select optimal vector instructions and avoid unnecessary `memcpy`/`memmove` sequences.
+- **Allocation-Path Counter Isolation:** Runtime allocation-path profiling counters are placed on dedicated cache lines, eliminating false sharing between threads and ensuring accurate per-path allocation statistics under contention.
+- **Layout Inspection CLI (`--emit=layout`):** Added `--emit=layout` flag to report computed struct layout (field offsets, sizes, alignments, total size, padding) as JSON or text, enabling developers to inspect and verify aggregate memory layout without compiling to object code.
+- **Layout Verification Tests:** Added integration tests validating field ordering, offset computation, padding minimization, and alignment metadata propagation through lowering.
+- **Documentation:** Added `reports/performance/po-20-layout.md` with layout algorithm description, IR evidence, and CLI usage examples.
+
+---
+
+## Version 0.127-beta
 
 ### Summary of Changes (since `0.123-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.123-beta release.*
+#### 1. Profile-Guided Optimization (PO-19)
+- **PGO CLI Controls (`--pgo`):** Added compiler flags `--pgo=generate` and `--pgo=use` to instrument binaries with profile counters and consume merged `.profdata` during optimization. Instrumentation is driven by LLVM's PGO pipeline (`InstrProf`) and linked via `clang_rt.profile` on Windows.
+- **Profile Generation & Linking:** Binaries built with `--pgo=generate` emit raw profile data (`default.profraw`) at exit. The `llvm-profdata merge` step produces a combined `.profdata` consumed by `--pgo=use` to guide inlining, branch weighting, and hot/cold partitioning.
+- **Sample Profile Round-Trip Verification:** Added integration tests verifying profile generation, merging, and consumption produce stable optimization decisions across rebuilds (`pgo_generate`, `pgo_use`, `pgo_roundtrip`).
+- **Workload Coverage:** Profile quality validated across compute kernels (matmul, fib), allocator stress, and string processing workloads. Profile-guided inlining reduces code size in cold paths while accelerating hot loops.
+- **Documentation:** Added `reports/performance/po-19-pgo.md` with IR evidence, build instructions, and correctness verification methodology.
 
 ---
 
