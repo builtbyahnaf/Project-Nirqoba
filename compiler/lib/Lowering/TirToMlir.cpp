@@ -1400,6 +1400,17 @@ class FunctionTranslator {
     for (std::size_t index = 0; index < operations.size(); ++index) {
       current_operation_index_ = index;
       const tir::Op& op = operations[index];
+      // Forwarded values are only valid until the next call (which may publish,
+      // move or collect what the slot holds) or the next control-flow join (whose
+      // incoming edges this single-block map does not describe).
+      if (op.kind == tir::OpKind::Call || op.kind == tir::OpKind::Label ||
+          op.kind == tir::OpKind::Branch ||
+          op.kind == tir::OpKind::BranchCond) {
+        forwarded_root_values_.clear();
+      }
+      // A write to any address ends value forwarding, because the address
+      // arithmetic behind a derived pointer is not tracked here.
+      if (op.kind == tir::OpKind::Store) forwarded_root_values_.clear();
       if (!translate_op(op)) return false;
     }
     attach_cold_blocks();
@@ -2028,6 +2039,7 @@ class FunctionTranslator {
             apply_access_alignment(
                 builder_.create<mlir::LLVM::StoreOp>(loc, val, ptr),
                 op.lhs, op.operand.type);
+            forwarded_root_values_.erase(op.lhs.id);
             return true;
           }
           auto store_fn = ensure_runtime_fn(module_, builder_, "nrq_gc_root_store",
@@ -2035,7 +2047,13 @@ class FunctionTranslator {
                                             {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)});
           builder_.create<mlir::LLVM::CallOp>(loc, store_fn,
                                               mlir::ValueRange{ptr, val});
+          // The barrier writes exactly this reference into the slot before it
+          // returns, so a later load of the same address can use the value
+          // directly. Without this the emitted code reloads the pointer it just
+          // stored, and the call in between stops LLVM from forwarding it.
+          forwarded_root_values_[op.lhs.id] = val;
         } else if (!collect_has_managed_reference(op.operand.type) || unobserved) {
+          forwarded_root_values_.erase(op.lhs.id);
           apply_access_alignment(
               builder_.create<mlir::LLVM::StoreOp>(loc, val, ptr),
               op.lhs, op.operand.type);
@@ -2067,6 +2085,11 @@ class FunctionTranslator {
         if (auto promoted = promoted_slots_.slots.find(op.lhs.id);
             promoted != promoted_slots_.slots.end()) {
           set(op.result, get(tir::Value{promoted->second}));
+          return true;
+        }
+        if (auto forwarded = forwarded_root_values_.find(op.lhs.id);
+            forwarded != forwarded_root_values_.end()) {
+          set(op.result, forwarded->second);
           return true;
         }
         mlir::Value ptr = get(op.lhs);
@@ -3744,6 +3767,14 @@ class FunctionTranslator {
     mlir::Value initial_value;
   };
   std::vector<PendingGcRoot> pending_gc_roots_;
+  // Reference most recently stored through the write barrier into a stack
+  // address, keyed by the TIR address value. `nrq_gc_root_store` writes the
+  // reference into the slot before returning, so a load of the same address in
+  // the same straight-line region can use the value instead of reloading it, and
+  // LLVM cannot make that substitution itself because a call sits in between.
+  // Calls and control-flow joins clear the map: only straight-line reasoning is
+  // sound here.
+  std::unordered_map<int, mlir::Value> forwarded_root_values_;
   std::vector<mlir::Value> values_;
   std::unordered_map<int, mlir::Block*> label_blocks_;
   std::unordered_map<std::string, std::string> string_literals_;
