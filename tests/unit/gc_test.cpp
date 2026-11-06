@@ -429,6 +429,30 @@ TEST(GcTest, WideRootFrameReleasesEveryRegistration) {
   nrq_gc_root_frame_end(again);
 }
 
+TEST(GcTest, RootStoreSkipsIdenticalAndNullBarrierWork) {
+  nrq_gc_enable();
+  nrq_gc_collect();
+  auto* node = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(node, nullptr);
+  ASSERT_TRUE(nrq_gc_pin(node) == node);
+  void* slot = nullptr;
+  nrq_gc_root_register(&slot);
+  nrq_gc_root_store(&slot, node);
+  // Rewriting the identical referent is not observable, so the root keeps the
+  // object alive exactly as it did after the first store.
+  nrq_gc_root_store(&slot, node);
+  nrq_gc_collect();
+  const uint64_t referenced = nrq_gc_get_live_objects();
+  // Clearing the root needs no remembered-set work, and the object dies once the
+  // pin is gone too.
+  nrq_gc_root_store(&slot, nullptr);
+  nrq_gc_unpin(node);
+  nrq_gc_root_unregister(&slot);
+  nrq_gc_collect();
+  ASSERT_EQ(referenced, uint64_t{1});
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
 TEST(GcTest, ReferenceDiagnosticsCountHeapAndRootReferencesWhenEnabled) {
   nrq_gc_enable();
   nrq_gc_collect();

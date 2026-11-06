@@ -2587,12 +2587,19 @@ void nrq_gc_root_unregister(void** slot) {
 
 void nrq_gc_root_store(void** slot, void* value) {
   if (!slot) return;
+  // Rewriting the referent a root already holds creates no new edge, so the store
+  // is not observable by the collector and needs neither the barrier nor the
+  // handshake. A snapshot-at-the-beginning marker would only re-mark a value the
+  // slot never stopped holding.
+  if (*slot == value) return;
   // Language-generated stores execute inside a registered mutator. The fast
   // path is just a pointer store plus a reader-count handshake; the collector
   // waits for in-flight readers before snapshotting roots.
   if (thread_mutator.depth != 0 && begin_fast_barrier()) {
     *slot = value;
-    buffer_remembered(value);
+    // Clearing a root cannot create an old-to-young edge, so only a non-null
+    // referent is worth recording.
+    if (value) buffer_remembered(value);
     end_fast_barrier();
     return;
   }
