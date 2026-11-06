@@ -441,6 +441,7 @@ TEST(GcTest, FrameRootRegistrationHandlesWideMixedLayouts) {
   std::vector<void*> slots(kSlots, nullptr);
   std::vector<size_t> descriptor;
   descriptor.push_back(kSlots);
+  descriptor.push_back(0);  // total word count, patched once the roots are laid out.
   for (size_t index = 0; index < kSlots; ++index) {
     slots[index] = roots[index].data();
     if (index % 2 == 0) {
@@ -455,6 +456,7 @@ TEST(GcTest, FrameRootRegistrationHandlesWideMixedLayouts) {
       descriptor.push_back(sizeof(void*) * 2);
     }
   }
+  descriptor[1] = descriptor.size();
 
   const uint64_t marker = nrq_gc_root_frame_begin();
   nrq_gc_root_register_frame(slots.data(), kSlots, descriptor.data());
@@ -1150,9 +1152,10 @@ TEST(GcTest, FrameRootRegistrationPublishesEverySlot) {
   void* root0 = nullptr;
   void* root1 = nullptr;
   void* slots[2] = {&root0, &root1};
-  // descriptor[0] = slot count, then (object_size, reference_count, offsets...)
-  // per slot: one pointer-rooted value each.
-  const size_t descriptor[] = {2, sizeof(void*), 1, 0, sizeof(void*), 1, 0};
+  // descriptor[0] = slot count, descriptor[1] = total word count, then
+  // (object_size, reference_count, offsets...) per slot: one pointer-rooted value
+  // each.
+  const size_t descriptor[] = {2, 7, sizeof(void*), 1, 0, sizeof(void*), 1, 0};
   const uint64_t marker = nrq_gc_root_frame_begin();
   nrq_gc_root_register_frame(slots, 2, descriptor);
   nrq_gc_root_store(static_cast<void**>(slots[0]), first);
