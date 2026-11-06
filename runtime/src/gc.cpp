@@ -259,8 +259,12 @@ struct MutatorState {
   unsigned char* tlab_end = nullptr;
   uint64_t tlab_generation = 0;
   ObjectHeader* pending_objects = nullptr;
-  size_t pending_bytes = 0;
-  size_t pending_count = 0;
+  // Per-mutator allocation accounting. The owner updates these while
+  // allocating; the collector reads them with gc_mutex held when publishing or
+  // when reporting statistics, so the fast path never touches a global counter.
+  std::atomic<size_t> pending_bytes{0};
+  std::atomic<size_t> pending_count{0};
+  size_t unflushed_bytes = 0;
   // Old-to-young stores buffer raw referents so ordinary stores do not need the
   // collector mutex. The owner drains this buffer at a safepoint/leave; the
   // collector drains every registered mutator after parking them.
@@ -359,10 +363,13 @@ std::atomic<bool> generational_collection_enabled{true};
 // line a collection is reading (false sharing). The residual contention is true
 // sharing: several threads do update these same words, which per-mutator
 // accounting rather than layout has to remove.
+// Every GC allocation used to update global atomics. Now each mutator batches
+// its unflushed byte count locally and contributes it to this line only when a
+// TLAB is published or a batch of this size accumulates. The counters therefore
+// stay on one isolated line without becoming a per-allocation rendezvous point.
+constexpr size_t kAccountingBatchBytes = 16 * 1024;
 struct alignas(nirq::nrq_cache_line_bytes) AllocationAccounting {
   std::atomic<size_t> bytes_since_collection{0};
-  std::atomic<uint64_t> pending_allocation_bytes{0};
-  std::atomic<uint64_t> pending_allocation_count{0};
   std::atomic<size_t> collection_threshold{1024 * 1024};
 };
 AllocationAccounting allocation_accounting;
@@ -427,11 +434,13 @@ void atomic_saturating_add_size(std::atomic<size_t>& target, size_t amount) {
       std::memory_order_relaxed, std::memory_order_relaxed)) {}
 }
 
-void atomic_saturating_add(std::atomic<uint64_t>& target, uint64_t amount) {
-  uint64_t current = target.load(std::memory_order_relaxed);
-  while (!target.compare_exchange_weak(
-      current, saturated_add(current, amount), std::memory_order_relaxed,
-      std::memory_order_relaxed)) {}
+// Fold a mutator's locally batched allocation bytes into the shared trigger
+// counter. Callers hold gc_mutex.
+void flush_mutator_accounting_locked(MutatorState& mutator) {
+  if (mutator.unflushed_bytes == 0) return;
+  atomic_saturating_add_size(allocation_accounting.bytes_since_collection,
+                             mutator.unflushed_bytes);
+  mutator.unflushed_bytes = 0;
 }
 
 void publish_tlab_locked(MutatorState& mutator) {
@@ -451,15 +460,10 @@ void publish_tlab_locked(MutatorState& mutator) {
     statistics.live_objects = saturated_add(statistics.live_objects, 1);
     header = next;
   }
-  if (mutator.pending_bytes != 0)
-    allocation_accounting.pending_allocation_bytes.fetch_sub(mutator.pending_bytes,
-                                       std::memory_order_relaxed);
-  if (mutator.pending_count != 0)
-    allocation_accounting.pending_allocation_count.fetch_sub(mutator.pending_count,
-                                       std::memory_order_relaxed);
+  flush_mutator_accounting_locked(mutator);
   mutator.pending_objects = nullptr;
-  mutator.pending_bytes = 0;
-  mutator.pending_count = 0;
+  mutator.pending_bytes.store(0, std::memory_order_relaxed);
+  mutator.pending_count.store(0, std::memory_order_relaxed);
 }
 
 bool collection_is_requested() {
@@ -1206,6 +1210,23 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
   return true;
 }
 
+void account_tlab_allocation(MutatorState& mutator, size_t bytes) {
+  const size_t previous = mutator.pending_bytes.fetch_add(
+      bytes, std::memory_order_relaxed);
+  if (previous > SIZE_MAX - bytes ||
+      mutator.pending_count.fetch_add(1, std::memory_order_relaxed) == SIZE_MAX)
+    nrq_runtime_fatal("GC thread-local allocation accounting overflow");
+  if (bytes > SIZE_MAX - mutator.unflushed_bytes)
+    nrq_runtime_fatal("GC thread-local batch accounting overflow");
+  mutator.unflushed_bytes += bytes;
+  const size_t threshold =
+      allocation_accounting.collection_threshold.load(std::memory_order_relaxed);
+  const size_t batch = std::min(kAccountingBatchBytes, threshold == 0 ? 1 : threshold);
+  if (mutator.unflushed_bytes < batch) return;
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  flush_mutator_accounting_locked(mutator);
+}
+
 void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
                     const size_t* reference_offsets, size_t reference_count,
                     bool& handled) {
@@ -1271,15 +1292,7 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   header->birth_epoch = next_cycle_epoch.load(std::memory_order_relaxed);
   header->tlab_next = thread_mutator.pending_objects;
   thread_mutator.pending_objects = header;
-  if (bytes > SIZE_MAX - thread_mutator.pending_bytes ||
-      thread_mutator.pending_count == SIZE_MAX)
-    nrq_runtime_fatal("GC thread-local allocation accounting overflow");
-  thread_mutator.pending_bytes += bytes;
-  ++thread_mutator.pending_count;
-  atomic_saturating_add(allocation_accounting.pending_allocation_bytes,
-                        static_cast<uint64_t>(bytes));
-  atomic_saturating_add(allocation_accounting.pending_allocation_count, uint64_t{1});
-  atomic_saturating_add_size(allocation_accounting.bytes_since_collection, bytes);
+  account_tlab_allocation(thread_mutator, bytes);
 
   // During a cycle an unpublished young object is invisible to the marker and
   // to the root barrier. Publish it immediately so a barrier can identify it.
@@ -1788,14 +1801,26 @@ void nrq_gc_set_threshold(size_t bytes) {
 size_t nrq_gc_object_header_bytes(void) { return sizeof(ObjectHeader); }
 
 nrq_gc_stats nrq_gc_get_stats(void) {
+  // The registered-mutator vector is mutated under mutator_mutex. Take it
+  // before gc_mutex to match the enter/leave lock order; taking only gc_mutex
+  // would race a concurrent registration.
+  std::lock_guard<std::mutex> registry_lock(mutator_mutex);
   std::lock_guard<std::mutex> lock(gc_mutex);
   nrq_gc_stats result = statistics;
-  result.allocated_bytes = saturated_add(
-      result.allocated_bytes,
-      allocation_accounting.pending_allocation_bytes.load(std::memory_order_relaxed));
-  result.live_objects = saturated_add(
-      result.live_objects,
-      allocation_accounting.pending_allocation_count.load(std::memory_order_relaxed));
+  // Unpublished TLAB objects are not in `statistics` yet, but they are live.
+  // Sum the per-mutator batches instead of maintaining a global pending pair
+  // that every allocation would have to update.
+  uint64_t pending_bytes = 0;
+  uint64_t pending_count = 0;
+  for (const MutatorState* mutator : mutators) {
+    if (!mutator) continue;
+    pending_bytes = saturated_add(
+        pending_bytes, mutator->pending_bytes.load(std::memory_order_relaxed));
+    pending_count = saturated_add(
+        pending_count, mutator->pending_count.load(std::memory_order_relaxed));
+  }
+  result.allocated_bytes = saturated_add(result.allocated_bytes, pending_bytes);
+  result.live_objects = saturated_add(result.live_objects, pending_count);
   return result;
 }
 
