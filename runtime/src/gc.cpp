@@ -88,11 +88,15 @@ class ReferenceLayout {
 };
 
 struct alignas(std::max_align_t) ObjectHeader {
-  ObjectHeader* next = nullptr;
+  // An object is linked exactly once. While it is still in its owning mutator's
+  // unpublished TLAB batch it uses `tlab_next`; once published it uses `next`.
+  // The two lists never overlap, so the links share one pointer-sized slot.
+  union {
+    ObjectHeader* next;
+    ObjectHeader* tlab_next;
+  };
   ObjectHeader* mark_next = nullptr;
-  ObjectHeader* tlab_next = nullptr;
   GcPage* page = nullptr;
-  void* object = nullptr;
   size_t size = 0;
   size_t element_size = 0;
   nrq_gc_trace_fn trace = nullptr;
@@ -101,7 +105,22 @@ struct alignas(std::max_align_t) ObjectHeader {
   uint8_t age = 0;
   uint64_t birth_epoch = 0;
   ReferenceLayout reference_offsets;
+
+  // The payload immediately follows the header. It is not stored: the page
+  // bump allocator always places a header `sizeof(ObjectHeader)` bytes before
+  // its object, so the address is pure arithmetic.
+  void* payload() const {
+    return const_cast<ObjectHeader*>(this) + 1;
+  }
 };
+
+// Managed allocation cost includes one header per object. Keep the header at
+// six pointer words plus the flags/epoch and reference layout; a regression
+// here silently raises the cost of every small allocation.
+static_assert(sizeof(ObjectHeader) == 96,
+              "ObjectHeader metadata must stay within 96 bytes");
+static_assert(alignof(ObjectHeader) == alignof(std::max_align_t),
+              "ObjectHeader must keep payloads max_align_t aligned");
 
 // The collector needs exact-address lookup while marking, but only allocation
 // mutates this table. Open addressing keeps pointer metadata contiguous and
@@ -419,7 +438,7 @@ void publish_tlab_locked(MutatorState& mutator) {
   ObjectHeader* header = mutator.pending_objects;
   while (header) {
     ObjectHeader* next = header->tlab_next;
-    if (!object_index.insert(header->object, header))
+    if (!object_index.insert(header->payload(), header))
       nrq_runtime_fatal("GC failed to publish a thread-local allocation");
     header->tlab_next = nullptr;
     header->next = objects;
@@ -501,9 +520,9 @@ void wait_for_fast_barriers() {
 void trace_children(ObjectHeader* header, nrq_gc_visit_fn visit,
                     void* context) {
   if (header->trace)
-    header->trace(header->object, header->size, visit, context);
+    header->trace(header->payload(), header->size, visit, context);
   if (header->reference_offsets.empty() || header->element_size == 0) return;
-  const auto* bytes = static_cast<const unsigned char*>(header->object);
+  const auto* bytes = static_cast<const unsigned char*>(header->payload());
   for (size_t base = 0; base + header->element_size <= header->size;
        base += header->element_size) {
     for (size_t offset_index = 0;
@@ -807,7 +826,7 @@ bool sweep_chunk_locked(size_t budget) {
 
     const bool collectable = !active_collection_is_minor || header->young;
     if (!header->marked && collectable) {
-      object_index.erase(header->object);
+      object_index.erase(header->payload());
       remembered_young.erase(header);
       if (!header->young) {
         const size_t old_count =
@@ -1101,7 +1120,6 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
         }
       }
     }
-    header->object = object;
     header->size = bytes;
     header->element_size = element_size;
     header->trace = trace;
@@ -1241,7 +1259,6 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     header->~ObjectHeader();
     return nullptr;
   }
-  header->object = object;
   header->size = bytes;
   header->element_size = element_size;
   header->trace = trace;
@@ -1349,7 +1366,7 @@ bool shadow_has_pointer_root(ShadowStack& stack, void* slot) {
 ObjectHeader* find_pending_header(MutatorState& mutator, void* object) {
   for (ObjectHeader* header = mutator.pending_objects; header;
        header = header->tlab_next) {
-    if (header->object == object) return header;
+    if (header->payload() == object) return header;
   }
   return nullptr;
 }
@@ -1768,6 +1785,8 @@ void nrq_gc_set_threshold(size_t bytes) {
                              std::memory_order_relaxed);
 }
 
+size_t nrq_gc_object_header_bytes(void) { return sizeof(ObjectHeader); }
+
 nrq_gc_stats nrq_gc_get_stats(void) {
   std::lock_guard<std::mutex> lock(gc_mutex);
   nrq_gc_stats result = statistics;
@@ -1884,9 +1903,9 @@ int64_t nrq_gc_get_ref_count(void* object) {
     std::unordered_map<void*, uint64_t> counts;
     for (ObjectHeader* header = objects; header; header = header->next) {
       if (header->trace)
-        header->trace(header->object, header->size, count_reference, &counts);
+        header->trace(header->payload(), header->size, count_reference, &counts);
       if (!header->reference_offsets.empty() && header->element_size != 0) {
-        const auto* bytes = static_cast<const unsigned char*>(header->object);
+        const auto* bytes = static_cast<const unsigned char*>(header->payload());
         for (size_t base = 0; base + header->element_size <= header->size;
              base += header->element_size) {
           for (size_t offset_index = 0;
