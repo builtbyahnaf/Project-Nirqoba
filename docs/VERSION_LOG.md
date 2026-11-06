@@ -6,11 +6,23 @@
 
 ---
 
-## Version 0.201-beta (dev)
+## Version 0.206-beta (dev)
+
+### Summary of Changes (since `0.201-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.201-beta release.*
+
+---
+
+## Version 0.201-beta
 
 ### Summary of Changes (since `0.195-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.195-beta release.*
+#### 1. Mutator Regions Follow the Call Graph (PO-27 §2.2)
+- **Propagation:** a function needs a region when it holds a managed value or calls one that does, resolved to a fixed point over direct calls. A driver loop that only calls an allocating helper keeps one region instead of entering and leaving per iteration; runtime entry points are not propagated, so querying or toggling collection still needs no region.
+- **Recursion:** region elision now resolves from the optimistic direction and narrows, so a direct or mutually recursive group entered once from `main` shares the outer region instead of duplicating it on every activation.
+- **Entry wrapper:** the wrapper the C runtime calls opens and closes the region, and the elision pass sees func-level as well as LLVM calls, so everything under `main` runs in one region.
+- **Evidence:** `tests/integration/positive/gc_region_transitive`, `gc_region_recursive` and `gc_region_mutual` assert one enter and one leave for the whole program, with the safepoint poll still present in the loops that may allocate.
 
 ---
 
