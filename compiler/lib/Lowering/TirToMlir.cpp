@@ -1330,6 +1330,13 @@ static SlotPromotion analyze_promoted_slots(const tir::Function& function) {
   return promotion;
 }
 
+struct PendingGcRoot {
+  mlir::Value slot;
+  Type type;
+  mlir::Location loc;
+  mlir::Value initial_value;
+};
+
 class FunctionTranslator {
  public:
   FunctionTranslator(mlir::ModuleOp module,
@@ -1672,14 +1679,27 @@ class FunctionTranslator {
     mlir::Operation* frame_begin = gc_root_frame_marker_.getDefiningOp();
     if (!frame_begin) return;
     builder_.setInsertionPointAfter(frame_begin);
+    // A slot must never hold a stale pointer when it becomes visible to a
+    // collection, so every slot is cleared before any of them is published.
     for (const PendingGcRoot& root : pending_gc_roots_) {
       mlir::Type value_type = tir_type_to_mlir(root.type, ctx_, builder_);
       if (!value_type) continue;
       mlir::Value zero = builder_.create<mlir::LLVM::ZeroOp>(
           root.loc, value_type).getResult();
       builder_.create<mlir::LLVM::StoreOp>(root.loc, zero, root.slot);
-      emit_gc_root_registration(root.slot, root.type, root.loc);
+    }
+    // One call publishes the activation's whole root set: the descriptor is a
+    // read-only table describing the layouts, the argument array carries the
+    // slot addresses a single activation computes. A lone root keeps the
+    // direct call, where the batched form's array would cost more than it saves.
+    if (!emit_gc_frame_root_registration(pending_gc_roots_)) {
+      for (const PendingGcRoot& root : pending_gc_roots_)
+        emit_gc_root_registration(root.slot, root.type, root.loc);
+    }
+    for (const PendingGcRoot& root : pending_gc_roots_) {
       if (root.initial_value) {
+        mlir::Type value_type = tir_type_to_mlir(root.type, ctx_, builder_);
+        if (!value_type) continue;
         // A parameter that is a single managed reference is published as that
         // reference: the barrier takes it directly, so the activation needs no
         // staging slot and no byte copy to initialise its root.
@@ -1770,6 +1790,81 @@ class FunctionTranslator {
         builder_.getI64IntegerAttr(static_cast<int64_t>(offsets.size()))).getResult();
     builder_.create<mlir::LLVM::CallOp>(loc, register_fn,
         mlir::ValueRange{slot, object_size, offsets_slot, reference_count});
+  }
+
+  // One read-only table per frame describing every root layout the activation
+  // registers. The table is interned per module, so two functions that register
+  // the same layouts share it and an activation pays no stores for metadata.
+  mlir::Value frame_root_descriptor(llvm::ArrayRef<PendingGcRoot> roots,
+                                    mlir::Location loc) {
+    llvm::SmallVector<int64_t, 8> words;
+    words.push_back(static_cast<int64_t>(roots.size()));
+    for (const PendingGcRoot& root : roots) {
+      std::vector<uint64_t> offsets;
+      collect_managed_reference_offsets(root.type, 0, offsets);
+      words.push_back(static_cast<int64_t>(type_size(root.type)));
+      words.push_back(static_cast<int64_t>(offsets.size()));
+      for (uint64_t offset : offsets)
+        words.push_back(static_cast<int64_t>(offset));
+    }
+    std::string name = "nrq_gc_roots";
+    for (int64_t word : words) name += "_" + std::to_string(word);
+    if (!module_.lookupSymbol<mlir::LLVM::GlobalOp>(name)) {
+      auto array_type = mlir::LLVM::LLVMArrayType::get(
+          builder_.getI64Type(), static_cast<unsigned>(words.size()));
+      auto initializer = mlir::DenseIntElementsAttr::get(
+          mlir::RankedTensorType::get({static_cast<int64_t>(words.size())},
+                                      builder_.getI64Type()),
+          words);
+      mlir::OpBuilder::InsertionGuard guard(builder_);
+      builder_.setInsertionPointToStart(module_.getBody());
+      builder_.create<mlir::LLVM::GlobalOp>(loc, array_type, /*isConstant=*/true,
+                                           mlir::LLVM::Linkage::Private, name,
+                                           initializer, /*alignment=*/8);
+    }
+    return builder_.create<mlir::LLVM::AddressOfOp>(
+        loc, llvm_ptr_type(ctx_), name).getResult();
+  }
+
+  // Publishes every pending root of this activation with one call: the
+  // descriptor carries the layouts, a stack array carries the slot addresses.
+  // Returns false when the caller has to fall back to per-slot registration.
+  bool emit_gc_frame_root_registration(llvm::ArrayRef<PendingGcRoot> roots) {
+    if (roots.size() < 2 || entry_block_ == nullptr) return false;
+    for (const PendingGcRoot& root : roots) {
+      std::vector<uint64_t> offsets;
+      collect_managed_reference_offsets(root.type, 0, offsets);
+      if (offsets.empty() || !tir_type_to_mlir(root.type, ctx_, builder_))
+        return false;
+    }
+    mlir::Location loc = roots.front().loc;
+    mlir::Value descriptor = frame_root_descriptor(roots, loc);
+    if (!descriptor) return false;
+    auto slots_type = mlir::LLVM::LLVMArrayType::get(
+        llvm_ptr_type(ctx_), static_cast<unsigned>(roots.size()));
+    mlir::Value slots = alloca_at_entry(slots_type, loc);
+    if (!slots) return false;
+    mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
+    for (std::size_t index = 0; index < roots.size(); ++index) {
+      mlir::Value position = builder_.create<mlir::LLVM::ConstantOp>(
+          loc, builder_.getI64Type(),
+          builder_.getI64IntegerAttr(static_cast<int64_t>(index))).getResult();
+      mlir::Value element = builder_.create<mlir::LLVM::GEPOp>(
+          loc, llvm_ptr_type(ctx_), slots_type, slots,
+          mlir::ValueRange{zero, position}).getResult();
+      builder_.create<mlir::LLVM::StoreOp>(loc, roots[index].slot, element);
+    }
+    auto register_fn = ensure_runtime_fn(
+        module_, builder_, "nrq_gc_root_register_frame",
+        mlir::LLVM::LLVMVoidType::get(ctx_),
+        {llvm_ptr_type(ctx_), builder_.getI64Type(), llvm_ptr_type(ctx_)});
+    mlir::Value count = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI64Type(),
+        builder_.getI64IntegerAttr(static_cast<int64_t>(roots.size()))).getResult();
+    builder_.create<mlir::LLVM::CallOp>(
+        loc, register_fn, mlir::ValueRange{slots, count, descriptor});
+    return true;
   }
 
   void emit_gc_array_root_registration(mlir::Value data, mlir::Value count,
@@ -3810,12 +3905,6 @@ class FunctionTranslator {
   bool needs_gc_root_frame_ = false;
   std::unordered_map<int, std::size_t> label_positions_;
   mlir::Block* entry_block_;
-  struct PendingGcRoot {
-    mlir::Value slot;
-    Type type;
-    mlir::Location loc;
-    mlir::Value initial_value;
-  };
   std::vector<PendingGcRoot> pending_gc_roots_;
   // Reference most recently stored through the write barrier into a stack
   // address, keyed by the TIR address value. `nrq_gc_root_store` writes the
