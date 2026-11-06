@@ -1,0 +1,12 @@
+{
+  "mode": "build_and_run",
+  "expect_stdout_contains": ["3"],
+  "expect_optimized_ir_not_contains": [
+    "dead_branch_helper",
+    "1234",
+    "999"
+  ],
+  "expect_optimized_ir_counts": {
+    "define noundef i64 @main()": 1
+  }
+}
