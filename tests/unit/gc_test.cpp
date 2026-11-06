@@ -1082,6 +1082,29 @@ TEST(GcTest, PageLocalDiscoveryResolvesOnlyPublishedObjectStarts) {
   nrq_gc_enable();
 }
 
+TEST(GcTest, YoungChurnDoesNotForceRepeatedFullCollections) {
+  // Every eighth automatic cycle used to be a full collection regardless of what
+  // the heap looked like. A workload that only produces young garbage must now
+  // be served by young collections, with full cycles reserved for heap growth.
+  nrq_gc_enable();
+  nrq_gc_set_generational(1);
+  nrq_gc_set_threshold(1024);
+  nrq_gc_collect();
+  const uint64_t minor_baseline = nrq_gc_get_minor_collection_count();
+  const uint64_t major_baseline = nrq_gc_get_major_collection_count();
+
+  for (int index = 0; index < 20000; ++index) {
+    void* object = nrq_gc_allocate(64, nullptr);
+    ASSERT_NE(object, nullptr);
+  }
+
+  const uint64_t minors = nrq_gc_get_minor_collection_count() - minor_baseline;
+  const uint64_t majors = nrq_gc_get_major_collection_count() - major_baseline;
+  ASSERT_TRUE(minors > 5);
+  ASSERT_TRUE(majors * 5 <= minors);
+  nrq_gc_set_generational(1);
+}
+
 TEST(GcTest, CollectionThresholdFollowsTheLiveHeap) {
   nrq_gc_disable();
   nrq_gc_set_adaptive(1);

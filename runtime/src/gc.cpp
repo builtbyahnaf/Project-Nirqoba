@@ -660,7 +660,14 @@ uint64_t major_collections = 0;
 constexpr size_t kMarkBudget = 64;
 constexpr size_t kSweepBudget = 64;
 constexpr uint8_t kPromotionAge = 2;
-constexpr size_t kMajorCollectionInterval = 8;
+// A full collection is worth its cost only when it can reclaim something a young
+// collection cannot: unreachable old objects. Those are invisible to minors, so
+// they show up as heap growth the program did not ask for. The collector
+// therefore runs a full cycle once the live heap has grown by half since the
+// last one, with a floor so consecutive full cycles cannot happen and a ceiling
+// so a heap that never grows is still checked periodically.
+constexpr size_t kMinimumMinorInterval = 2;
+constexpr size_t kMaximumMinorInterval = 32;
 alignas(nirq::nrq_cache_line_bytes) std::atomic<CollectionPhase> collection_phase{
     CollectionPhase::Idle};
 // Counts lock-free barrier operations that started while the collector was idle.
@@ -669,6 +676,11 @@ alignas(nirq::nrq_cache_line_bytes) std::atomic<CollectionPhase> collection_phas
 // change is either fully visible to the snapshot or takes the slow barrier path.
 alignas(nirq::nrq_cache_line_bytes) std::atomic<uint64_t> barrier_readers{0};
 bool active_collection_is_minor = false;
+// Live bytes observed after the most recent full collection, and the kind of
+// cycle the next automatic collection should run. Both are planned while the
+// heap lock is held and published for the triggered collection to consume.
+size_t live_heap_bytes_at_last_major = 0;
+std::atomic<bool> next_cycle_is_major{false};
 uint64_t active_cycle_epoch = 0;
 std::atomic<uint64_t> next_cycle_epoch{1};
 std::atomic<size_t> minor_collections_since_major{0};
@@ -1348,6 +1360,29 @@ void prepare_cycle_locked(bool young_only) {
   collection_phase.store(CollectionPhase::Marking, std::memory_order_release);
 }
 
+// Decide whether the next automatic collection must be a full cycle. Young
+// objects that die are reclaimed by minors, so the only signal a minor cannot
+// act on is old garbage, which keeps the live heap growing without the program
+// retaining more data. Callers hold gc_mutex.
+void plan_next_cycle_locked() {
+  if (!generational_collection_enabled.load(std::memory_order_relaxed)) {
+    next_cycle_is_major.store(true, std::memory_order_relaxed);
+    return;
+  }
+  const size_t minors = minor_collections_since_major.load(std::memory_order_relaxed);
+  bool major = false;
+  if (minors >= kMaximumMinorInterval) {
+    major = true;
+  } else if (minors >= kMinimumMinorInterval) {
+    const size_t baseline = live_heap_bytes_at_last_major;
+    const size_t growth = live_heap_bytes > baseline ? live_heap_bytes - baseline : 0;
+    const size_t growth_limit =
+        std::max(kMinimumCollectionHeadroom, baseline / 2);
+    major = growth >= growth_limit;
+  }
+  next_cycle_is_major.store(major, std::memory_order_relaxed);
+}
+
 void begin_cycle(bool young_only) {
   // Publish the transition before parking so new fast-path stores fall back to
   // the synchronized barrier. In-flight fast stores finish before the root
@@ -1385,6 +1420,8 @@ void finish_cycle_locked(bool young_only) {
   // reports it directly instead of walking every live object each cycle.
   statistics.allocated_bytes = live_heap_bytes;
   adapt_collection_policy_locked();
+  if (!young_only) live_heap_bytes_at_last_major = live_heap_bytes;
+  plan_next_cycle_locked();
   // Do not clear the remembered set here. A major collection erases promoted
   // survivors as it sweeps, while young objects allocated during the cycle
   // remain young and may be referenced only by old objects; their remembered
@@ -1481,8 +1518,7 @@ void maybe_collect_automatically() {
   if (!should_collect) return;
   const bool young_only =
       generational_collection_enabled.load(std::memory_order_relaxed) &&
-      minor_collections_since_major.load(std::memory_order_relaxed) <
-          kMajorCollectionInterval;
+      !next_cycle_is_major.load(std::memory_order_relaxed);
   run_collection(young_only);
 }
 
