@@ -1293,8 +1293,39 @@ bool sweep_chunk_locked(size_t budget) {
 // Callers hold gc_mutex. A page whose span list is full keeps the space
 // unusable, which is exactly the behaviour of the bump allocator.
 void release_span_locked(GcPage& page, size_t offset, size_t span) {
-  if (span == 0 || page.free_span_count >= GcPage::kMaxFreeSpans) return;
-  page.free_spans[page.free_span_count++] = GcPage::FreeSpan{offset, span};
+  if (span == 0) return;
+  // Runs are kept ordered by offset and always merged with a neighbour they
+  // touch. Sweeping visits objects in list order, not address order, so a run
+  // that is freed in pieces has to coalesce back into one region; otherwise the
+  // largest reusable block in a page would be a single object.
+  size_t index = 0;
+  while (index < page.free_span_count && page.free_spans[index].offset < offset)
+    ++index;
+  if (index > 0) {
+    GcPage::FreeSpan& previous = page.free_spans[index - 1];
+    if (previous.offset + previous.span == offset) {
+      previous.span += span;
+      page.free_span_bytes += span;
+      if (index < page.free_span_count &&
+          previous.offset + previous.span == page.free_spans[index].offset) {
+        previous.span += page.free_spans[index].span;
+        page.free_spans[index] = page.free_spans[--page.free_span_count];
+      }
+      return;
+    }
+  }
+  if (index < page.free_span_count &&
+      offset + span == page.free_spans[index].offset) {
+    page.free_spans[index].offset = offset;
+    page.free_spans[index].span += span;
+    page.free_span_bytes += span;
+    return;
+  }
+  if (page.free_span_count >= GcPage::kMaxFreeSpans) return;
+  for (size_t move = page.free_span_count; move > index; --move)
+    page.free_spans[move] = page.free_spans[move - 1];
+  page.free_spans[index] = GcPage::FreeSpan{offset, span};
+  ++page.free_span_count;
   page.free_span_bytes += span;
 }
 
@@ -1319,7 +1350,11 @@ GcPage* take_free_span_locked(size_t span, size_t& offset) {
         candidate.offset += span;
         candidate.span -= span;
       } else {
-        page->free_spans[index] = page->free_spans[--page->free_span_count];
+        // Runs are ordered by offset, so removal shifts the tail down instead of
+        // swapping the last run into the hole.
+        for (size_t move = index; move + 1 < page->free_span_count; ++move)
+          page->free_spans[move] = page->free_spans[move + 1];
+        --page->free_span_count;
       }
       recycled_span_reuse_count = saturated_add(recycled_span_reuse_count, 1);
       return page;
@@ -1749,6 +1784,21 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     mutator.tlab_cursor = nullptr;
     mutator.tlab_end = nullptr;
     mutator.tlab_generation = gc_page_generation;
+  }
+  // A merged run of reclaimed space can host a whole thread-local reservation.
+  // Taking it here is what turns a fragmented page back into a usable bump
+  // region instead of leaving it permanently half empty.
+  {
+    size_t run_offset = 0;
+    if (GcPage* reused = take_free_span_locked(kGcTlabBytes, run_offset)) {
+      mutator.tlab_page = reused;
+      mutator.tlab_cursor = reused->storage + run_offset;
+      mutator.tlab_end = mutator.tlab_cursor + kGcTlabBytes;
+      mutator.tlab_generation = gc_page_generation;
+      thread_allocation_page = reused;
+      thread_allocation_generation = gc_page_generation;
+      return true;
+    }
   }
   GcPage* page = nullptr;
   size_t available = 0;
