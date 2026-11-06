@@ -431,6 +431,32 @@ TEST(GcTest, ConcurrentAllocationIsSerializedAndReclaimed) {
   nrq_gc_set_threshold(1024 * 1024);
 }
 
+TEST(GcTest, UnpublishedTlabAllocationsRemainVisibleInStats) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const nrq_gc_stats before = nrq_gc_get_stats();
+
+  nrq_gc_mutator_enter();
+  void* first = nrq_gc_allocate(24, nullptr);
+  void* second = nrq_gc_allocate(32, nullptr);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+
+  // Both objects are still in this thread's unpublished TLAB batch. Statistics
+  // must aggregate the per-mutator counters rather than require a global update
+  // on the allocation fast path.
+  const nrq_gc_stats during = nrq_gc_get_stats();
+  ASSERT_EQ(during.live_objects, before.live_objects + 2);
+  ASSERT_EQ(during.allocated_bytes, before.allocated_bytes + 56);
+
+  nrq_gc_mutator_leave();
+  const nrq_gc_stats after = nrq_gc_get_stats();
+  ASSERT_EQ(after.live_objects, before.live_objects + 2);
+  ASSERT_EQ(after.allocated_bytes, before.allocated_bytes + 56);
+  nrq_gc_collect();
+  nrq_gc_enable();
+}
+
 TEST(GcTest, RootStoreSynchronizesConcurrentMutationAndCollection) {
   nrq_gc_disable();
   nrq_gc_collect();
