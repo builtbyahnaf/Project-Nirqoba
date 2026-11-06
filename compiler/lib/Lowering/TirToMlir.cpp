@@ -1667,6 +1667,19 @@ class FunctionTranslator {
       builder_.create<mlir::LLVM::StoreOp>(root.loc, zero, root.slot);
       emit_gc_root_registration(root.slot, root.type, root.loc);
       if (root.initial_value) {
+        // A parameter that is a single managed reference is published as that
+        // reference: the barrier takes it directly, so the activation needs no
+        // staging slot and no byte copy to initialise its root.
+        if (root.type.is_managed_pointer()) {
+          auto store_fn = ensure_runtime_fn(
+              module_, builder_, "nrq_gc_root_store",
+              mlir::LLVM::LLVMVoidType::get(ctx_),
+              {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)});
+          builder_.create<mlir::LLVM::CallOp>(
+              root.loc, store_fn,
+              mlir::ValueRange{root.slot, root.initial_value});
+          continue;
+        }
         mlir::Value initial_slot = alloca_at_entry(value_type, root.loc);
         if (!initial_slot) continue;
         builder_.create<mlir::LLVM::StoreOp>(root.loc, root.initial_value,
