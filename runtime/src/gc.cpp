@@ -900,7 +900,28 @@ std::unordered_set<void*> unresolved_remembered;
 // keeps the idle fast path allocation-only for young workloads without
 // weakening generational tracking once an old generation exists.
 std::atomic<bool> generational_barrier_active{false};
+// Single published switch for the store barrier: true exactly when generational
+// tracking is enabled and remembered-set recording is required. Mutators test
+// this one acquire load instead of the two flags it is derived from. It is
+// rewritten by refresh_store_barrier() wherever either input changes, and by the
+// mutator that allocates the first object of an old generation.
+std::atomic<bool> store_barrier_active{false};
 std::atomic<size_t> old_object_count{0};
+
+// Every writer of either input publishes the combined switch around its own flag
+// store: raised before `generational_barrier_active`, lowered after it, and
+// raised before generational collection is enabled. A mutator that observes a
+// stale value therefore records remembered-set entries it did not have to, never
+// skips one it needed.
+void raise_store_barrier() {
+  store_barrier_active.store(true, std::memory_order_release);
+  generational_barrier_active.store(true, std::memory_order_release);
+}
+
+void lower_store_barrier() {
+  generational_barrier_active.store(false, std::memory_order_release);
+  store_barrier_active.store(false, std::memory_order_release);
+}
 
 uint64_t saturated_add(uint64_t left, uint64_t right) {
   return right > UINT64_MAX - left ? UINT64_MAX : left + right;
@@ -1313,24 +1334,10 @@ void resolve_unresolved_remembered_locked() {
 
 void buffer_remembered(void* object);
 
-void buffer_pointer_words(void* storage, size_t bytes) {
-  if (!generational_collection_enabled.load(std::memory_order_relaxed) ||
-      !generational_barrier_active.load(std::memory_order_acquire))
-    return;
-  auto* address = static_cast<unsigned char*>(storage);
-  for (size_t offset = 0; offset + sizeof(void*) <= bytes;
-       offset += sizeof(void*)) {
-    void* reference = nullptr;
-    std::memcpy(&reference, address + offset, sizeof(reference));
-    buffer_remembered(reference);
-  }
-}
-
-void buffer_remembered(void* object) {
-  if (!object ||
-      !generational_collection_enabled.load(std::memory_order_relaxed) ||
-      !generational_barrier_active.load(std::memory_order_acquire))
-    return;
+// Append a referent to the thread's remembered buffer. The caller has already
+// checked the published barrier switch, so this is the only work a barrier does.
+void append_remembered(void* object) {
+  if (!object) return;
   MutatorState& mutator = thread_mutator;
   if (mutator.remembered_count < kRememberedBufferCapacity) {
     mutator.remembered[mutator.remembered_count++] = object;
@@ -1340,6 +1347,25 @@ void buffer_remembered(void* object) {
   publish_tlab_locked(mutator);
   drain_remembered_locked(mutator, /*defer_unresolved=*/true);
   defer_remembered_locked(object);
+}
+
+void buffer_pointer_words(void* storage, size_t bytes) {
+  // One acquire load covers the whole store: the switch is read here instead of
+  // once per machine word. A switch that drops mid-loop only leaves extra
+  // entries, which the next drain discards unless they name young objects.
+  if (!store_barrier_active.load(std::memory_order_acquire)) return;
+  auto* address = static_cast<unsigned char*>(storage);
+  for (size_t offset = 0; offset + sizeof(void*) <= bytes;
+       offset += sizeof(void*)) {
+    void* reference = nullptr;
+    std::memcpy(&reference, address + offset, sizeof(reference));
+    append_remembered(reference);
+  }
+}
+
+void buffer_remembered(void* object) {
+  if (!store_barrier_active.load(std::memory_order_acquire)) return;
+  append_remembered(object);
 }
 
 bool mark_slice_locked(size_t budget) {
@@ -1458,8 +1484,7 @@ bool sweep_chunk_locked(size_t budget) {
   // One release store per chunk is enough: the flag only has to be visible
   // before any mutator can publish an old-to-young edge, and mutators cannot run
   // new statements while this chunk holds the heap lock.
-  if (promotion_raised_barrier)
-    generational_barrier_active.store(true, std::memory_order_release);
+  if (promotion_raised_barrier) raise_store_barrier();
   return sweep_list == nullptr;
 }
 
@@ -1756,7 +1781,7 @@ void begin_cycle(bool young_only) {
     // A concurrent promotion can turn a reachable object old while mutators
     // run, so enable remembered-set recording for the whole cycle. The flag is
     // lowered again if the cycle finishes with no old objects.
-    generational_barrier_active.store(true, std::memory_order_release);
+    raise_store_barrier();
     collection_phase.store(CollectionPhase::Preparing,
                            std::memory_order_release);
   }
@@ -1792,7 +1817,7 @@ void finish_cycle_locked(bool young_only) {
   // entries must survive into the next minor collection.
   if (generational_collection_enabled.load(std::memory_order_relaxed) &&
       old_object_count.load(std::memory_order_relaxed) == 0)
-    generational_barrier_active.store(false, std::memory_order_release);
+    lower_store_barrier();
   active_mark = MarkContext{};
   collection_phase.store(CollectionPhase::Idle, std::memory_order_release);
   allocation_accounting.bytes_since_collection.store(0, std::memory_order_relaxed);
@@ -1978,7 +2003,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     header->young = generational_collection_enabled.load(std::memory_order_relaxed);
     if (!header->young) {
       old_object_count.fetch_add(1, std::memory_order_relaxed);
-      generational_barrier_active.store(true, std::memory_order_release);
+      raise_store_barrier();
     }
     header->age = 0;
     header->birth_epoch = next_cycle_epoch.load(std::memory_order_relaxed);
@@ -2158,7 +2183,7 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   header->young = generational_collection_enabled.load(std::memory_order_relaxed);
   if (!header->young) {
     old_object_count.fetch_add(1, std::memory_order_relaxed);
-    generational_barrier_active.store(true, std::memory_order_release);
+    raise_store_barrier();
   }
   header->age = 0;
   header->birth_epoch = next_cycle_epoch.load(std::memory_order_relaxed);
@@ -2605,8 +2630,15 @@ void nrq_gc_collect_minor(void) {
 }
 
 void nrq_gc_set_generational(int32_t enabled) {
-  generational_collection_enabled.store(enabled != 0,
-                                        std::memory_order_relaxed);
+  if (enabled) {
+    // Raise the derived switch first: a mutator that still sees the switch raised
+    // after generations are turned off only records extra entries.
+    store_barrier_active.store(true, std::memory_order_release);
+    generational_collection_enabled.store(true, std::memory_order_relaxed);
+    return;
+  }
+  store_barrier_active.store(false, std::memory_order_release);
+  generational_collection_enabled.store(false, std::memory_order_relaxed);
 }
 
 int32_t nrq_gc_is_generational(void) {
