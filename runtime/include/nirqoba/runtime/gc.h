@@ -46,6 +46,19 @@ void nrq_gc_root_register(void** slot);
 void nrq_gc_root_register_typed(void* slot, size_t object_size,
                                 const size_t* reference_offsets,
                                 size_t reference_count);
+// Registers every ordinary root of one activation in a single call. `slots`
+// holds the activation's slot addresses; `descriptor` is the read-only frame
+// descriptor generated for that function, laid out as
+//
+//   descriptor[0]                  number of slots (must equal slot_count)
+//   descriptor[1 + 2i]             object size of slot i
+//   descriptor[2 + 2i]             reference count of slot i
+//   ...                            slot i's reference offsets, in order
+//
+// The whole table is validated before any root is published, and the slots are
+// pushed under one barrier region instead of one per root.
+void nrq_gc_root_register_frame(void* const* slots, size_t slot_count,
+                                const size_t* descriptor);
 // Registers an externally owned contiguous array as a root region. Offsets are
 // relative to each element and are repeated count times with element_size as
 // the stride. The caller must unregister the data address before freeing it.
