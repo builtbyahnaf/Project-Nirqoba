@@ -52,7 +52,18 @@ struct GcPage {
   // stop-the-world cycle boundary, when no mutator can still be inside an
   // allocator or holding a TLAB cursor into the page.
   bool retired = false;
+  // Set when this page cannot be found through the page directory, either
+  // because its start bitmap was not allocated or because indexing it failed.
+  // Objects in such a page are tracked by the global object index instead.
+  bool use_object_index = false;
 };
+
+// Small pages are discoverable from their own start bitmap, so their objects
+// never touch the global index. Only pages without start metadata (large-object
+// pages, or a page whose directory insertion failed) need the exact index.
+bool page_uses_index(const GcPage* page) {
+  return !page || page->use_object_index || !page->object_starts;
+}
 
 // Maps page-aligned storage to its page. Small pages are aligned to
 // kGcPageBytes, so every address in a page has the same chunk key and the
@@ -327,6 +338,10 @@ class MarkWorklist {
 // avoids one node allocation per managed object.
 class ObjectIndex {
  public:
+  // Number of exact address entries. Small objects are found through their
+  // page's start bitmap, so this only grows with large-object pages.
+  size_t size() const { return size_; }
+
   ObjectHeader* find(void* object) const {
     if (!object || entries_.empty()) return nullptr;
     const size_t mask = entries_.size() - 1;
@@ -384,21 +399,22 @@ class ObjectIndex {
     return false;
   }
 
-  void erase(void* object) {
-    if (!object || entries_.empty()) return;
+  bool erase(void* object) {
+    if (!object || entries_.empty()) return false;
     const size_t mask = entries_.size() - 1;
     size_t index = hash(object) & mask;
     for (size_t probes = 0; probes < entries_.size(); ++probes) {
       Entry& entry = entries_[index];
-      if (entry.object == nullptr) return;
+      if (entry.object == nullptr) return false;
       if (entry.object == object) {
         entry = Entry{tombstone_key(), nullptr};
         --size_;
         ++tombstones_;
-        return;
+        return true;
       }
       index = (index + 1) & mask;
     }
+    return false;
   }
 
  private:
@@ -697,9 +713,10 @@ void publish_tlab_locked(MutatorState& mutator) {
   ObjectHeader* header = mutator.pending_objects;
   while (header) {
     ObjectHeader* next = header->tlab_next;
-    if (!object_index.insert(header->payload(), header))
-      nrq_runtime_fatal("GC failed to publish a thread-local allocation");
-    if (header->page && header->page->object_starts) {
+    if (page_uses_index(header->page)) {
+      if (!object_index.insert(header->payload(), header))
+        nrq_runtime_fatal("GC failed to publish a thread-local allocation");
+    } else {
       const size_t offset = static_cast<size_t>(
           static_cast<unsigned char*>(header->payload()) -
           header->page->storage);
@@ -1108,13 +1125,14 @@ bool sweep_chunk_locked(size_t budget) {
 
     const bool collectable = !active_collection_is_minor || header->young;
     if (!header->marked && collectable) {
-      if (header->page && header->page->object_starts) {
+      if (page_uses_index(header->page)) {
+        object_index.erase(header->payload());
+      } else {
         const size_t offset = static_cast<size_t>(
             static_cast<unsigned char*>(header->payload()) -
             header->page->storage);
         clear_object_start(*header->page, offset);
       }
-      object_index.erase(header->payload());
       remembered_young.erase(header);
       if (!header->young) {
         const size_t old_count =
@@ -1443,7 +1461,9 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
                           std::align_val_t{kGcPageBytes});
       return nullptr;
     }
-    page_directory.insert(page);
+    // A page that cannot be indexed by address is still usable; its objects
+    // are tracked through the exact object index instead.
+    if (!page_directory.insert(page)) page->use_object_index = true;
   }
   thread_allocation_page = page;
   thread_allocation_generation = gc_page_generation;
@@ -1483,11 +1503,12 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     header->age = 0;
     header->birth_epoch = next_cycle_epoch.load(std::memory_order_relaxed);
     header->next = objects;
-    if (!object_index.insert(object, header)) {
-      rollback_reservation();
-      return nullptr;
-    }
-    if (page->object_starts) {
+    if (page_uses_index(page)) {
+      if (!object_index.insert(object, header)) {
+        rollback_reservation();
+        return nullptr;
+      }
+    } else {
       const size_t offset = static_cast<size_t>(
           static_cast<unsigned char*>(object) - page->storage);
       mark_object_start(*page, offset);
@@ -1548,7 +1569,9 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
                           std::align_val_t{kGcPageBytes});
       return false;
     }
-    page_directory.insert(page);
+    // A page that cannot be indexed by address is still usable; its objects
+    // are tracked through the exact object index instead.
+    if (!page_directory.insert(page)) page->use_object_index = true;
     available = page->capacity;
   }
   const size_t reserve = std::min(kGcTlabBytes, available);
@@ -2166,6 +2189,11 @@ size_t nrq_gc_recycled_page_count(void) {
 uint64_t nrq_gc_page_reuse_count(void) {
   std::lock_guard<std::mutex> lock(gc_mutex);
   return recycled_page_reuse_count;
+}
+
+size_t nrq_gc_object_index_entries(void) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  return object_index.size();
 }
 
 int32_t nrq_gc_pointer_is_managed(void* object) {

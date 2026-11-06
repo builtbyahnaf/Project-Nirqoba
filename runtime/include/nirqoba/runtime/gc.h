@@ -106,6 +106,10 @@ size_t nrq_gc_object_header_bytes(void);
 size_t nrq_gc_page_count(void);
 size_t nrq_gc_recycled_page_count(void);
 uint64_t nrq_gc_page_reuse_count(void);
+// Reports how many objects are tracked by the exact address index. Objects that
+// live in a page with start metadata are discovered without the index, so this
+// stays proportional to the number of large-object pages rather than the heap.
+size_t nrq_gc_object_index_entries(void);
 // Reports whether an address is the exact start of a published managed object.
 // Interior pointers, stale addresses, and arbitrary invalid references report 0.
 // This exposes the collector's object-discovery path for auditing and tests.
