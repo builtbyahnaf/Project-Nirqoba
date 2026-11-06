@@ -1153,6 +1153,16 @@ bool mark_slice_locked(size_t budget) {
 
 bool sweep_chunk_locked(size_t budget) {
   size_t steps = 0;
+  // Promotion and reclamation both move objects between generations. The
+  // generation counters used to be updated with one atomic per object, which
+  // meant two shared read-modify-write operations for every survivor and one for
+  // every reclaimed old object. They are accumulated here and applied once per
+  // chunk; every other reader of these counters holds gc_mutex, which this
+  // function holds for the whole chunk, so no one can observe the intermediate
+  // value.
+  size_t reclaimed_old = 0;
+  size_t promoted_young = 0;
+  bool promotion_raised_barrier = false;
   while (sweep_list && steps < budget) {
     ObjectHeader* header = sweep_list;
     sweep_list = header->next;
@@ -1179,12 +1189,7 @@ bool sweep_chunk_locked(size_t budget) {
         clear_object_start(*header->page, offset);
       }
       header->remembered = false;
-      if (!header->young) {
-        const size_t old_count =
-            old_object_count.load(std::memory_order_relaxed);
-        if (old_count != 0)
-          old_object_count.store(old_count - 1, std::memory_order_relaxed);
-      }
+      if (!header->young) ++reclaimed_old;
       statistics.collected_bytes = saturated_add(
           statistics.collected_bytes, static_cast<uint64_t>(header->size));
       if (statistics.live_objects != 0) --statistics.live_objects;
@@ -1212,8 +1217,8 @@ bool sweep_chunk_locked(size_t budget) {
           if (header->age >= kPromotionAge) {
             header->young = false;
             header->age = 0;
-            old_object_count.fetch_add(1, std::memory_order_relaxed);
-            generational_barrier_active.store(true, std::memory_order_release);
+            ++promoted_young;
+            promotion_raised_barrier = true;
             remember_children_locked(header);
             header->remembered = false;
           }
@@ -1221,14 +1226,31 @@ bool sweep_chunk_locked(size_t budget) {
       } else {
         if (header->young) {
           header->young = false;
-          old_object_count.fetch_add(1, std::memory_order_relaxed);
-          generational_barrier_active.store(true, std::memory_order_release);
+          ++promoted_young;
+          promotion_raised_barrier = true;
         }
         header->age = 0;
         header->remembered = false;
       }
     }
   }
+
+  if (reclaimed_old != 0) {
+    const size_t current = old_object_count.load(std::memory_order_relaxed);
+    old_object_count.store(current > reclaimed_old ? current - reclaimed_old : 0,
+                           std::memory_order_relaxed);
+  }
+  if (promoted_young != 0) {
+    const size_t current = old_object_count.load(std::memory_order_relaxed);
+    old_object_count.store(
+        current > SIZE_MAX - promoted_young ? SIZE_MAX : current + promoted_young,
+        std::memory_order_relaxed);
+  }
+  // One release store per chunk is enough: the flag only has to be visible
+  // before any mutator can publish an old-to-young edge, and mutators cannot run
+  // new statements while this chunk holds the heap lock.
+  if (promotion_raised_barrier)
+    generational_barrier_active.store(true, std::memory_order_release);
   return sweep_list == nullptr;
 }
 
