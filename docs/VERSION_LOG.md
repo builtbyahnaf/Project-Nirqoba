@@ -6,11 +6,22 @@
 
 ---
 
-## Version 0.186-beta (dev)
+## Version 0.192-beta (dev)
+
+### Summary of Changes (since `0.186-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.186-beta release.*
+
+---
+
+## Version 0.186-beta
 
 ### Summary of Changes (since `0.181-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.181-beta release.*
+#### 1. Root Registration Completeness
+- **One layout walk:** the frame descriptor's words and its validity check come from a single derivation, so the table an activation publishes always matches the roots it was built from.
+- **Self-describing tables:** a descriptor now carries its own word count, and the runtime rejects a truncated table before publishing anything, including on the marking path where the roots are marked from the table itself.
+- **Late and nested slots:** `tests/integration/positive/gc_root_completeness` collects between declarations and asserts one descriptor holding a slot declared after a collection plus a nested aggregate layout.
 
 ---
 
