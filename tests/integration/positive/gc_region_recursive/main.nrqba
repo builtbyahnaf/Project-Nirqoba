@@ -1,0 +1,15 @@
+managed<int> function build_depth(int depth) {
+    var node = array.allocate<int>(1);
+    node[0] = depth;
+    if (depth > 0) {
+        var child = build_depth(depth - 1);
+        node[0] = node[0] + child[0];
+    }
+    return node;
+}
+
+int function main() {
+    var root = build_depth(3);
+    print(root[0]);
+    return 0;
+}
