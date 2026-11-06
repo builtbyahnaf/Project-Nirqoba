@@ -607,13 +607,19 @@ void mark_root_values_locked(void* storage, const RootInfo& root) {
   }
 }
 
-void count_reference(void* object, void* opaque_context) {
+struct ReferenceCountTarget {
+  void* object = nullptr;
+  uint64_t count = 0;
+};
+
+// The diagnostic API asks about one object at a time. Comparing each visited
+// reference against that target avoids building a map of every object in the
+// heap and keeps the walk allocation-free.
+void count_reference_to_target(void* object, void* opaque_context) {
   if (!object) return;
-  auto* counts = static_cast<std::unordered_map<void*, uint64_t>*>(opaque_context);
-  if (object_index.find(object)) {
-    uint64_t& count = (*counts)[object];
-    count = saturated_add(count, 1);
-  }
+  auto* target = static_cast<ReferenceCountTarget*>(opaque_context);
+  if (object == target->object)
+    target->count = saturated_add(target->count, 1);
 }
 
 void enqueue_root_locked(void* root_storage, const RootInfo& root,
@@ -1992,14 +1998,17 @@ void nrq_gc_ref_count_stop(void) {
 
 int64_t nrq_gc_get_ref_count(void* object) {
   std::lock_guard<std::mutex> lock(gc_mutex);
-  if (thread_mutator.depth != 0) publish_tlab_locked(thread_mutator);
+  // Diagnostics are off in normal execution. Return before publishing a TLAB
+  // batch or scanning the heap, so a disabled query stays a single lock.
   if (!reference_diagnostics_enabled) return -1;
+  if (thread_mutator.depth != 0) publish_tlab_locked(thread_mutator);
   if (!object || !object_index.find(object)) return 0;
   try {
-    std::unordered_map<void*, uint64_t> counts;
+    ReferenceCountTarget target{object, 0};
     for (ObjectHeader* header = objects; header; header = header->next) {
       if (header->trace)
-        header->trace(header->payload(), header->size, count_reference, &counts);
+        header->trace(header->payload(), header->size, count_reference_to_target,
+                      &target);
       if (!header->reference_offsets.empty() && header->element_size != 0) {
         const auto* bytes = static_cast<const unsigned char*>(header->payload());
         for (size_t base = 0; base + header->element_size <= header->size;
@@ -2009,7 +2018,7 @@ int64_t nrq_gc_get_ref_count(void* object) {
             const size_t offset = header->reference_offsets[offset_index];
             void* reference = nullptr;
             std::memcpy(&reference, bytes + base + offset, sizeof(reference));
-            count_reference(reference, &counts);
+            count_reference_to_target(reference, &target);
           }
         }
       }
@@ -2023,7 +2032,7 @@ int64_t nrq_gc_get_ref_count(void* object) {
           for (size_t offset : root.second.reference_offsets) {
             void* reference = nullptr;
             std::memcpy(&reference, element_bytes + offset, sizeof(reference));
-            count_reference(reference, &counts);
+            count_reference_to_target(reference, &target);
           }
         }
       } else {
@@ -2032,7 +2041,7 @@ int64_t nrq_gc_get_ref_count(void* object) {
               sizeof(void*) > root.second.object_size - offset) continue;
           void* reference = nullptr;
           std::memcpy(&reference, bytes + offset, sizeof(reference));
-          count_reference(reference, &counts);
+          count_reference_to_target(reference, &target);
         }
       }
     }
@@ -2049,7 +2058,7 @@ int64_t nrq_gc_get_ref_count(void* object) {
             for (size_t offset : root.info.reference_offsets) {
               void* reference = nullptr;
               std::memcpy(&reference, element_bytes + offset, sizeof(reference));
-              count_reference(reference, &counts);
+              count_reference_to_target(reference, &target);
             }
           }
         } else {
@@ -2059,17 +2068,15 @@ int64_t nrq_gc_get_ref_count(void* object) {
               continue;
             void* reference = nullptr;
             std::memcpy(&reference, bytes + offset, sizeof(reference));
-            count_reference(reference, &counts);
+            count_reference_to_target(reference, &target);
           }
         }
       }
     }
-    for (const auto& pinned : pinned_objects) {
-      uint64_t& count = counts[pinned.first];
-      count = saturated_add(count, static_cast<uint64_t>(pinned.second));
-    }
-    auto found = counts.find(object);
-    return found == counts.end() ? 0 : static_cast<int64_t>(found->second);
+    auto pinned = pinned_objects.find(object);
+    if (pinned != pinned_objects.end())
+      target.count = saturated_add(target.count, pinned->second);
+    return static_cast<int64_t>(target.count);
   } catch (...) {
     return -1;
   }
