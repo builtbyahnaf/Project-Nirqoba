@@ -1,0 +1,13 @@
+{
+  "mode": "build_and_run",
+  "expect_stdout_contains": ["21"],
+  "expect_ir_counts": {
+    "call void @nrq_gc_root_register_frame(ptr": 1,
+    "call void @nrq_gc_root_register_typed(": 0,
+    "@nrq_gc_roots_4_8_1_0_8_1_0_8_1_0_16_2_0_8 = private constant": 1,
+    "call void @nrq_gc_mutator_enter()": 1
+  },
+  "expect_ir_not_contains": [
+    "alloca [1 x i64]"
+  ]
+}
