@@ -6,7 +6,15 @@
 
 ---
 
-## Version 0.171-beta (dev)
+## Version 0.176-beta (dev)
+
+### Summary of Changes (since `0.171-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.171-beta release.*
+
+---
+
+## Version 0.171-beta
 
 ### Summary of Changes (since `0.168-beta`):
 
@@ -14,6 +22,13 @@
 - **Frame Root Descriptors:** A function's root set is a compile-time fact, so the lowering emits one read-only descriptor per root set and publishes every root of an activation with a single `nrq_gc_root_register_frame` call instead of one call per slot. Descriptors are interned per module, so functions that register the same layouts share one table in `.rodata`.
 - **One Barrier Region Per Activation:** Registration now reserves the frame's roots once and takes a single barrier region, with the whole descriptor validated before any slot is published. Per-slot duplicate counts, in-flight snapshot marking and root frames are unchanged, and a lone root keeps the direct call.
 - **Evidence:** `tests/integration/positive/gc_frame_roots` asserts one call and one shared descriptor for four slots of three layouts; `GcTest.FrameRootRegistrationHandlesWideMixedLayouts` covers frames that cross the inline layout storage.
+
+#### 2. Shared Layout Descriptors Across Array Paths
+- **One Descriptor Per Element Layout:** Managed array allocation, array root registration and array reference clearing each materialised the element layout in a stack array, one store per offset, on every call. All three now pass the interned read-only descriptor the scalar root paths use, so a managed array allocation site carries no layout stores at all.
+
+#### 3. Optimized-Module Test Assertions
+- **Assertions on LLVM Output:** Integration fixtures can now assert on the module that leaves the LLVM pipeline (`expect_optimized_ir_*`), which is the only way to prove that a transform LLVM owns actually ran rather than merely being reachable.
+- **Unreachable Code Evidence:** `tests/integration/positive/opt_unreachable_code` proves a folded-away branch and the helper reachable only through it are both absent from the optimized module.
 
 ---
 
