@@ -2505,6 +2505,9 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
   }
 }
 
+// Word 0 is the slot count and word 1 is the table's own length.
+constexpr size_t kFrameRootHeaderWords = 2;
+
 void nrq_gc_root_register_frame(void* const* slots, size_t slot_count,
                                 const size_t* descriptor) {
   if (slot_count == 0) return;
@@ -2513,10 +2516,17 @@ void nrq_gc_root_register_frame(void* const* slots, size_t slot_count,
   if (descriptor[0] != slot_count)
     nrq_runtime_fatal(
         "GC frame root registration descriptor does not match its slot count");
+  // The table states its own length, so a truncated descriptor is rejected
+  // before the walk can read past it. A table with no room for its own header or
+  // for the roots it claims is malformed in the same way.
+  const size_t word_count = descriptor[1];
+  if (word_count < 2 || word_count < 2 + 2 * slot_count)
+    nrq_runtime_fatal(
+        "GC frame root registration descriptor is shorter than its roots");
 
   // Validate the entire table before publishing any root: a malformed
   // descriptor must fail with the frame untouched, not halfway registered.
-  size_t cursor = 1;
+  size_t cursor = 2;
   for (size_t index = 0; index < slot_count; ++index) {
     if (!slots[index])
       nrq_runtime_fatal("GC frame root registration contains a null slot");
@@ -2532,6 +2542,10 @@ void nrq_gc_root_register_frame(void* const* slots, size_t slot_count,
     }
     cursor += reference_count;
   }
+  // The words the roots described have to account for the whole table.
+  if (cursor != word_count)
+    nrq_runtime_fatal(
+        "GC frame root registration descriptor length does not match its roots");
 
   ShadowStack& stack = ensure_shadow_stack();
   // One reservation for the frame keeps a wide activation from growing the
@@ -2569,12 +2583,12 @@ void nrq_gc_root_register_frame(void* const* slots, size_t slot_count,
     if (diagnostics_reading_roots()) {
       std::lock_guard<std::mutex> stack_lock(stack.mutex);
       reserve_roots();
-      size_t cursor = 1;
+      size_t cursor = kFrameRootHeaderWords;
       for (size_t index = 0; index < slot_count; ++index)
         push_root(slots[index], cursor);
     } else {
       reserve_roots();
-      size_t cursor = 1;
+      size_t cursor = kFrameRootHeaderWords;
       for (size_t index = 0; index < slot_count; ++index)
         push_root(slots[index], cursor);
     }
@@ -2588,7 +2602,7 @@ void nrq_gc_root_register_frame(void* const* slots, size_t slot_count,
     const CollectionPhase phase =
         collection_phase.load(std::memory_order_acquire);
     reserve_roots();
-    size_t cursor = 1;
+    size_t cursor = kFrameRootHeaderWords;
     for (size_t index = 0; index < slot_count; ++index) {
       // Mark exactly the roots the single-slot path marks: a root pushed while a
       // snapshot is already running has to behave as if it had been part of it.
