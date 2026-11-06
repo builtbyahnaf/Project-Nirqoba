@@ -147,7 +147,7 @@ Nirqoba uses a multi-tier compilation pipeline designed to preserve semantic and
 
 ## Development Status & Roadmap
 
-The language is actively progressing through its architectural milestones. Current active version: **`0.181-beta`** (Phase 6 / Compiler Optimization and Hardening).
+The language is actively progressing through its architectural milestones. Current active version: **`0.186-beta`** (Phase 6 / Compiler Optimization and Hardening).
 
 | Phase | Description | Status |
 |---|---|---|
