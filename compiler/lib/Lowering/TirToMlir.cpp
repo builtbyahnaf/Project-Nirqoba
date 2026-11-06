@@ -960,6 +960,46 @@ static CollectionSummary summarize_collections(const tir::Module& module) {
   return summary;
 }
 
+// Which functions have to run inside a mutator region. Holding a managed value is
+// one reason; calling a function that may allocate or collect is another, and it is
+// the one that matters for batching: a loop in a non-managed helper that calls an
+// allocating function five hundred thousand times would otherwise enter and leave
+// the protocol on every iteration, and each leave publishes whatever the TLAB holds.
+//
+// This is deliberately not the root-frame question. A function can need a region
+// while needing no root frame, and a function that only queries GC state still
+// needs neither.
+static std::unordered_set<std::string> summarize_mutator_regions(
+    const tir::Module& module) {
+  std::unordered_set<std::string> regions;
+  for (const auto& function : module.functions())
+    if (function_uses_gc(*function)) regions.insert(function->name());
+
+  // Least fixpoint over direct calls. A function that calls a region-needing
+  // function joins, so a caller that reaches an allocation only through a helper
+  // keeps one region open across the whole call, and a recursive or mutually
+  // recursive group converges because membership only grows.
+  //
+  // Calls to runtime entry points are not propagated. Querying GC state, toggling
+  // collection or collecting explicitly needs no region of its own; the function
+  // that allocates the value does, and it holds a managed value by definition.
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (const auto& function : module.functions()) {
+      if (regions.count(function->name()) != 0) continue;
+      for (const tir::Op& op : function->operations()) {
+        if (op.kind != tir::OpKind::Call) continue;
+        if (regions.count(op.callee) == 0) continue;
+        regions.insert(function->name());
+        changed = true;
+        break;
+      }
+    }
+  }
+  return regions;
+}
+
 // Backward liveness over TIR values. The CFG is implicit in the operation
 // stream: labels split blocks, branches carry the edges, and an operation
 // without a terminator falls through to its successor.
@@ -1347,13 +1387,14 @@ class FunctionTranslator {
                      mlir::OpBuilder& builder,
                      mlir::MLIRContext* ctx,
                      DiagnosticEngine& diag,
-                     bool fast_math)
+                     bool fast_math,
+                     bool needs_mutator_region)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
         builder_(builder), ctx_(ctx), diag_(diag), fast_math_(fast_math),
         stack_allocations_(
             analyze_stack_allocations(tir_fn, borrowed_summary)),
         gc_roots_(analyze_gc_root_plan(tir_fn, collections)),
-        uses_gc_mutator_(function_uses_gc(tir_fn)),
+        uses_gc_mutator_(needs_mutator_region),
         needs_gc_root_frame_(uses_gc_mutator_ && gc_roots_.needs_root_frame),
         promoted_slots_(analyze_promoted_slots(tir_fn)) {
     const std::vector<tir::Op>& operations = tir_fn_.operations();
@@ -3995,6 +4036,8 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
   const BorrowedEscapeSummary borrowed_summary =
       summarize_borrowed_parameters(tir_module);
   const CollectionSummary collections = summarize_collections(tir_module);
+  const std::unordered_set<std::string> mutator_regions =
+      summarize_mutator_regions(tir_module);
 
   for (const auto& tir_fn : tir_module.functions()) {
     mlir::Type ret_type;
@@ -4101,9 +4144,10 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
       func_op.setArgAttrsAttr(builder.getArrayAttr(argument_attrs));
     }
 
-    FunctionTranslator translator(*module, *tir_fn, borrowed_summary,
-                                  collections, func_op, builder, &context,
-                                  diagnostics, fast_math);
+    FunctionTranslator translator(
+        *module, *tir_fn, borrowed_summary, collections, func_op, builder,
+        &context, diagnostics, fast_math,
+        mutator_regions.count(tir_fn->name()) != 0);
     if (!translator.translate()) return nullptr;
 
     builder.setInsertionPointAfter(func_op);
