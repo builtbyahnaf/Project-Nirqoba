@@ -1546,8 +1546,9 @@ class FunctionTranslator {
   // Back edges poll the safepoint so another thread can snapshot this thread's
   // roots. Polling on every crossing made an allocation-free loop pay a runtime
   // call per iteration, so the poll is throttled by a scalar counter kept in an
-  // entry-block slot: the loop carries an add, an and and a store, and the call
-  // runs once every kSafepointInterval crossings. A collection requested by
+  // entry-block slot that counts down: the loop carries a subtract, a compare
+  // and a store, and the call runs once every kSafepointInterval crossings, where
+  // the countdown is reloaded on the polled path only. A collection requested by
   // another thread is therefore observed within that many iterations, which
   // bounds the pause latency without paying for a call per iteration.
   static constexpr int64_t kSafepointInterval = 64;
@@ -1869,6 +1870,12 @@ class FunctionTranslator {
     auto unpin = ensure_runtime_fn(
         module_, builder_, "nrq_gc_unpin",
         mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
+    if (direct_pointer_root) {
+      // The root holds exactly the value that was just published into it, so the
+      // release needs no reload of the slot it was stored into.
+      builder_.create<mlir::LLVM::CallOp>(loc, unpin, mlir::ValueRange{value});
+      return;
+    }
     for (uint64_t offset : offsets) {
       mlir::Value byte_offset = builder_.create<mlir::LLVM::ConstantOp>(
           loc, builder_.getI64Type(),
