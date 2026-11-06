@@ -1050,6 +1050,38 @@ TEST(GcTest, ThreadTerminationWithActiveRootFramesRemovesDanglingRoots) {
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
 }
 
+TEST(GcTest, PageLocalDiscoveryResolvesOnlyPublishedObjectStarts) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+
+  nrq_gc_mutator_enter();
+  auto* object = static_cast<unsigned char*>(nrq_gc_allocate(64, nullptr));
+  ASSERT_NE(object, nullptr);
+  ASSERT_EQ(nrq_gc_pointer_is_managed(object), int32_t{0});
+  nrq_gc_mutator_leave();
+
+  // Leaving the mutator publishes the TLAB batch, which also installs the
+  // page-local object-start bit.
+  ASSERT_EQ(nrq_gc_pointer_is_managed(object), int32_t{1});
+  ASSERT_EQ(nrq_gc_pointer_is_managed(object + 1), int32_t{0});
+  ASSERT_EQ(nrq_gc_pointer_is_managed(object + alignof(std::max_align_t)),
+            int32_t{0});
+  ASSERT_EQ(nrq_gc_pointer_is_managed(nullptr), int32_t{0});
+  ASSERT_EQ(nrq_gc_pointer_is_managed(reinterpret_cast<void*>(uintptr_t{0x10})),
+            int32_t{0});
+
+  // Large-object pages are not bitmap-indexed; they must keep working through
+  // the exact ObjectIndex fallback.
+  void* large = nrq_gc_allocate(128 * 1024, nullptr);
+  ASSERT_NE(large, nullptr);
+  ASSERT_EQ(nrq_gc_pointer_is_managed(large), int32_t{1});
+
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_pointer_is_managed(object), int32_t{0});
+  ASSERT_EQ(nrq_gc_pointer_is_managed(large), int32_t{0});
+  nrq_gc_enable();
+}
+
 TEST(GcTest, DuplicateRootRegistrationsInConcurrentCollectionStayConsistent) {
   nrq_gc_disable();
   nrq_gc_collect();
