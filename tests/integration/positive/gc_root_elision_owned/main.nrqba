@@ -1,0 +1,22 @@
+// A program with no managed storage must not enter the mutator protocol at all:
+// elision has to be complete, not a frame that registers nothing.
+int function sum_owned(int count) {
+    var values = memory.owned_array<int>(count);
+    var index = 0;
+    while (index < count) {
+        values[index] = index + 1;
+        index += 1;
+    }
+    var total = 0;
+    index = 0;
+    while (index < count) {
+        total = total + values[index];
+        index += 1;
+    }
+    return total;
+}
+
+int function main(string[] args) {
+    print(sum_owned(args.length + 9));
+    return 0;
+}
