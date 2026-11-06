@@ -693,9 +693,22 @@ class ElideNestedMutatorRegionsPass
 
   void runOnOperation() override {
     mlir::ModuleOp module = getOperation();
-    llvm::StringMap<mlir::LLVM::LLVMFuncOp> defined;
+    // Both function kinds appear here: lowered functions are LLVM func ops, while
+    // the generated entry wrapper is a func-level op. The wrapper is an externally
+    // enterable path like any other, so leaving it out of the graph would make every
+    // function it reaches look unreachable through calls.
+    llvm::StringMap<mlir::Operation*> defined;
+    llvm::StringSet<> externally_linked;
     module.walk([&](mlir::LLVM::LLVMFuncOp function) {
-      if (!function.isExternal()) defined[function.getSymName()] = function;
+      if (function.isExternal()) return;
+      defined[function.getSymName()] = function.getOperation();
+      if (function.getLinkage() != mlir::LLVM::Linkage::Internal)
+        externally_linked.insert(function.getSymName());
+    });
+    module.walk([&](mlir::func::FuncOp function) {
+      if (function.isExternal()) return;
+      defined[function.getSymName()] = function.getOperation();
+      externally_linked.insert(function.getSymName());
     });
     if (defined.empty()) return;
 
@@ -706,6 +719,17 @@ class ElideNestedMutatorRegionsPass
       address_taken.insert(address.getGlobalName());
     });
 
+    // The callee a call names, whichever dialect the call is expressed in.
+    auto call_target = [](mlir::Operation* op) -> llvm::StringRef {
+      if (auto call = mlir::dyn_cast<mlir::LLVM::CallOp>(op)) {
+        auto callee = call.getCallee();
+        return callee ? *callee : llvm::StringRef();
+      }
+      if (auto call = mlir::dyn_cast<mlir::func::CallOp>(op))
+        return call.getCallee();
+      return llvm::StringRef();
+    };
+
     // Reverse call graph over definitions in this module. Indirect calls cannot
     // name a callee, so they are covered by the address-taken rule instead. A
     // function only provides a region to its callees if it opens one itself: a
@@ -714,14 +738,17 @@ class ElideNestedMutatorRegionsPass
     llvm::StringMap<llvm::SmallVector<llvm::StringRef, 4>> callers;
     llvm::StringSet<> opens_region;
     for (auto& entry : defined) {
-      entry.second.walk([&](mlir::LLVM::CallOp call) {
-        auto callee = call.getCallee();
-        if (!callee) return;
-        if (*callee == "nrq_gc_mutator_enter") {
+      entry.second->walk([&](mlir::Operation* nested) {
+        if (!mlir::isa<mlir::LLVM::CallOp>(nested) &&
+            !mlir::isa<mlir::func::CallOp>(nested))
+          return;
+        llvm::StringRef callee = call_target(nested);
+        if (callee.empty()) return;
+        if (callee == "nrq_gc_mutator_enter") {
           opens_region.insert(entry.first());
           return;
         }
-        if (defined.count(*callee)) callers[*callee].push_back(entry.first());
+        if (defined.count(callee)) callers[callee].push_back(entry.first());
       });
     }
 
@@ -733,7 +760,7 @@ class ElideNestedMutatorRegionsPass
       if (address_taken.count(name)) return true;
       auto function = defined.find(name);
       if (function == defined.end()) return true;
-      return function->second.getLinkage() != mlir::LLVM::Linkage::Internal;
+      return externally_linked.count(name) != 0;
     };
 
     // Greatest fixpoint: start from every region-opening function that can be
@@ -776,13 +803,14 @@ class ElideNestedMutatorRegionsPass
     for (auto& entry : defined) {
       if (!inside_region.count(entry.first())) continue;
       llvm::SmallVector<mlir::Operation*, 4> region_calls;
-      entry.second.walk([&](mlir::LLVM::CallOp call) {
-        auto callee = call.getCallee();
-        if (!callee) return;
-        if (*callee != "nrq_gc_mutator_enter" &&
-            *callee != "nrq_gc_mutator_leave")
+      entry.second->walk([&](mlir::Operation* nested) {
+        if (!mlir::isa<mlir::LLVM::CallOp>(nested) &&
+            !mlir::isa<mlir::func::CallOp>(nested))
           return;
-        region_calls.push_back(call.getOperation());
+        llvm::StringRef callee = call_target(nested);
+        if (callee != "nrq_gc_mutator_enter" && callee != "nrq_gc_mutator_leave")
+          return;
+        region_calls.push_back(nested);
       });
       for (mlir::Operation* call : region_calls) call->erase();
     }

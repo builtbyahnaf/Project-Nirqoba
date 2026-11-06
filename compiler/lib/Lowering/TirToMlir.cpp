@@ -3966,6 +3966,7 @@ class FunctionTranslator {
 static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
                                const tir::Function& user_main,
                                llvm::StringRef user_symbol,
+                               bool callee_needs_region,
                                DiagnosticEngine& diagnostics) {
   mlir::MLIRContext* ctx = module.getContext();
   mlir::Location loc = mlir::UnknownLoc::get(ctx);
@@ -3993,6 +3994,17 @@ static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
       loc, args_build,
       mlir::ValueRange{entry->getArgument(0), entry->getArgument(1)}).getResult();
 
+  // This wrapper is entered by the C runtime, so it is the outermost place a
+  // managed program can start. Opening the region here is what lets the callee and
+  // everything it calls run inside one region instead of each activation entering
+  // and leaving the protocol on its own.
+  if (callee_needs_region) {
+    auto enter = ensure_runtime_fn(
+        module, builder, "nrq_gc_mutator_enter",
+        mlir::LLVM::LLVMVoidType::get(ctx), {});
+    builder.create<mlir::LLVM::CallOp>(loc, enter, mlir::ValueRange{});
+  }
+
   mlir::Value exit_code;
   if (user_ret) {
     mlir::Value result = builder.create<mlir::func::CallOp>(
@@ -4017,6 +4029,14 @@ static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
         loc, i32, builder.getI32IntegerAttr(0)).getResult();
   }
 
+  if (callee_needs_region) {
+    // Leaving publishes what the region accumulated, which is exactly the TLAB
+    // batching the region exists for.
+    auto leave = ensure_runtime_fn(
+        module, builder, "nrq_gc_mutator_leave",
+        mlir::LLVM::LLVMVoidType::get(ctx), {});
+    builder.create<mlir::LLVM::CallOp>(loc, leave, mlir::ValueRange{});
+  }
   builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange{exit_code});
   return true;
 }
@@ -4153,7 +4173,9 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     builder.setInsertionPointAfter(func_op);
 
     if (is_entry_with_args &&
-        !emit_entry_wrapper(*module, builder, *tir_fn, symbol, diagnostics)) {
+        !emit_entry_wrapper(*module, builder, *tir_fn, symbol,
+                            mutator_regions.count(tir_fn->name()) != 0,
+                            diagnostics)) {
       return nullptr;
     }
   }
