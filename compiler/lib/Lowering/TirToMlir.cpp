@@ -1676,6 +1676,43 @@ class FunctionTranslator {
     pending_gc_roots_.clear();
   }
 
+  // A reference-offset array is a constant that describes a type, not a value
+  // this activation computes. Materialising it in a stack slot cost an alloca and
+  // one store per offset on every registration, in every function that registers
+  // the same layout. Each distinct layout is instead emitted once per module as a
+  // private read-only array and registrations pass its address, so repeated
+  // registrations of a layout share one descriptor in .rdata and cost no code.
+  mlir::Value reference_layout_descriptor(llvm::ArrayRef<uint64_t> offsets,
+                                         mlir::Location loc) {
+    std::string name = "nrq_gc_layout";
+    for (uint64_t offset : offsets)
+      name += "_" + std::to_string(offset);
+    if (module_.lookupSymbol<mlir::LLVM::GlobalOp>(name))
+      return builder_.create<mlir::LLVM::AddressOfOp>(
+          loc, llvm_ptr_type(ctx_), name).getResult();
+    auto array_type = mlir::LLVM::LLVMArrayType::get(
+        builder_.getI64Type(), static_cast<unsigned>(offsets.size()));
+    llvm::SmallVector<int64_t, 4> values;
+    for (uint64_t offset : offsets)
+      values.push_back(static_cast<int64_t>(offset));
+    auto initializer = mlir::DenseIntElementsAttr::get(
+        mlir::RankedTensorType::get({static_cast<int64_t>(offsets.size())},
+                                    builder_.getI64Type()),
+        values);
+    {
+      mlir::OpBuilder::InsertionGuard guard(builder_);
+      builder_.setInsertionPointToStart(module_.getBody());
+      if (!module_.lookupSymbol<mlir::LLVM::GlobalOp>(name))
+        builder_.create<mlir::LLVM::GlobalOp>(loc, array_type,
+                                              /*isConstant=*/true,
+                                              mlir::LLVM::Linkage::Private,
+                                              name, initializer,
+                                              /*alignment=*/8);
+    }
+    return builder_.create<mlir::LLVM::AddressOfOp>(
+        loc, llvm_ptr_type(ctx_), name).getResult();
+  }
+
   void emit_gc_root_registration(mlir::Value slot, const Type& value_type,
                                  mlir::Location loc) {
     std::vector<uint64_t> offsets;
@@ -1686,24 +1723,8 @@ class FunctionTranslator {
                                          mlir::LLVM::LLVMVoidType::get(ctx_),
                                          {llvm_ptr_type(ctx_), builder_.getI64Type(),
                                           llvm_ptr_type(ctx_), builder_.getI64Type()});
-    auto offsets_type = mlir::LLVM::LLVMArrayType::get(
-        builder_.getI64Type(), static_cast<unsigned>(offsets.size()));
-    mlir::Value offsets_slot = alloca_at_entry(offsets_type, loc);
+    mlir::Value offsets_slot = reference_layout_descriptor(offsets, loc);
     if (!offsets_slot) return;
-    mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
-        loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
-    for (std::size_t index = 0; index < offsets.size(); ++index) {
-      mlir::Value index_value = builder_.create<mlir::LLVM::ConstantOp>(
-          loc, builder_.getI64Type(),
-          builder_.getI64IntegerAttr(static_cast<int64_t>(index))).getResult();
-      mlir::Value field_slot = builder_.create<mlir::LLVM::GEPOp>(
-          loc, llvm_ptr_type(ctx_), offsets_type, offsets_slot,
-          mlir::ValueRange{zero, index_value}).getResult();
-      mlir::Value offset_value = builder_.create<mlir::LLVM::ConstantOp>(
-          loc, builder_.getI64Type(),
-          builder_.getI64IntegerAttr(static_cast<int64_t>(offsets[index]))).getResult();
-      builder_.create<mlir::LLVM::StoreOp>(loc, offset_value, field_slot);
-    }
     mlir::Value object_size = builder_.create<mlir::LLVM::ConstantOp>(
         loc, builder_.getI64Type(),
         builder_.getI64IntegerAttr(type_size(value_type))).getResult();
