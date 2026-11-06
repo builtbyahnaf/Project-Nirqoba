@@ -1,0 +1,25 @@
+struct Leaf {
+    int value;
+}
+
+struct Branch {
+    managed<Leaf> first;
+    managed<Leaf> second;
+}
+
+int function deep(int seed) {
+    var early = array.allocate<Leaf>(1);
+    early[0].value = seed;
+    gc.collect();
+    var branch = Branch { first: early, second: early };
+    gc.collect();
+    var late = array.allocate<Leaf>(1);
+    late[0].value = seed * 3;
+    gc.collect();
+    return branch.first[0].value + branch.second[0].value + late[0].value;
+}
+
+int function main() {
+    print(deep(7));
+    return 0;
+}
