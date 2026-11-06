@@ -1,0 +1,28 @@
+struct Node {
+    int value;
+}
+
+int function add_pair(int left, int right) {
+    return left + right;
+}
+
+managed<Node> function build_node(int seed) {
+    var node = array.allocate<Node>(1);
+    node[0].value = seed;
+    return node;
+}
+
+int function fold(int count) {
+    var total = 0;
+    var i = 0;
+    while (i < count) {
+        total = add_pair(total, build_node(i)[0].value);
+        i += 1;
+    }
+    return total;
+}
+
+int function main(string[] args) {
+    print(fold(args.length + 4));
+    return 0;
+}
