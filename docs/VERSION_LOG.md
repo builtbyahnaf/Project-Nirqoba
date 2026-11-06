@@ -6,11 +6,20 @@
 
 ---
 
-## Version 0.206-beta (dev)
+## Version 0.212-beta (dev)
+
+### Summary of Changes (since `0.206-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.206-beta release.*
+
+---
+
+## Version 0.206-beta
 
 ### Summary of Changes (since `0.201-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.201-beta release.*
+*Released after the mutator-region work. See the 0.201-beta section for the changes it
+contains and the PO-27 status report for the open items.*
 
 ---
 
