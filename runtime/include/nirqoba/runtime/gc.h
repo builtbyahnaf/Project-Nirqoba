@@ -51,8 +51,10 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
 // descriptor generated for that function, laid out as
 //
 //   descriptor[0]                  number of slots (must equal slot_count)
-//   descriptor[1 + 2i]             object size of slot i
-//   descriptor[2 + 2i]             reference count of slot i
+//   descriptor[1]                  total word count, including the two header
+//                                  words, so a truncated table is detectable
+//   descriptor[2 + 2i]             object size of slot i
+//   descriptor[3 + 2i]             reference count of slot i
 //   ...                            slot i's reference offsets, in order
 //
 // The whole table is validated before any root is published, and the slots are

@@ -10,7 +10,7 @@
     "call void @nrq_gc_mutator_leave()": 1,
     "call void @nrq_gc_root_register_frame(ptr": 2,
     "call void @nrq_gc_root_register_typed(": 0,
-    "@nrq_gc_roots_2_8_1_0_8_1_0 = private constant": 1
+    "@nrq_gc_roots_2_8_8_1_0_8_1_0 = private constant": 1
   },
   "expect_ir_not_contains": [
     "alloca [1 x i64]"
