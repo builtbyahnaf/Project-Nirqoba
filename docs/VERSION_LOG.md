@@ -6,11 +6,21 @@
 
 ---
 
-## Version 0.181-beta (dev)
+## Version 0.186-beta (dev)
+
+### Summary of Changes (since `0.181-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.181-beta release.*
+
+---
+
+## Version 0.181-beta
 
 ### Summary of Changes (since `0.176-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.176-beta release.*
+#### 1. Optimizer Evidence Matrix Recorded
+- **Report:** `reports/performance/po-26-optimizer-evidence.md` maps every requested transform to its owner, its artifact and its verdict, including the one deferred item (SLP) and the two IR properties that limit LLVM.
+- **Roadmap:** the optimization roadmap now names the owner and evidence artifact for each transform it lists, so a future cycle does not re-implement a pass the pipeline already runs.
 
 ---
 
