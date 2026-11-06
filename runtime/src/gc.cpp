@@ -281,9 +281,20 @@ thread_local bool thread_is_collector = false;
 thread_local MutatorState thread_mutator;
 ObjectHeader* objects = nullptr;
 ObjectIndex object_index;
-std::vector<std::unique_ptr<GcPage>> gc_pages;
 constexpr size_t kGcPageBytes = 64 * 1024;
 constexpr size_t kGcTlabBytes = 4 * 1024;
+std::vector<std::unique_ptr<GcPage>> gc_pages;
+// Empty pages keep their backing storage across cycles. Reusing them avoids an
+// operator new / operator delete pair for every page a churn-heavy workload
+// frees at each cycle boundary. The pool is bounded so idle programs do not
+// retain an unbounded amount of address space.
+std::vector<std::unique_ptr<GcPage>> recycled_pages;
+constexpr size_t kMaxRecycledPages = 64;
+// Large-object pages can be much bigger than kGcPageBytes. Retaining a pool of
+// them would make the page-count bound meaningless, so only ordinary-sized
+// pages are recycled and oversized pages return to the process heap.
+constexpr size_t kMaxRecycledPageBytes = 2 * kGcPageBytes;
+uint64_t recycled_page_reuse_count = 0;
 // Cache the current bump page per allocating thread. Collection increments the
 // generation so a thread that resumes after another thread reclaimed its page
 // discards the stale pointer before dereferencing it.
@@ -882,6 +893,56 @@ bool sweep_chunk_locked(size_t budget) {
   return sweep_list == nullptr;
 }
 
+// Take a page of at least `capacity` bytes from the recycle pool, or create a
+// fresh one. The caller inherits storage ownership and must either publish the
+// page into gc_pages or release the storage explicitly.
+std::unique_ptr<GcPage> acquire_page(size_t capacity) {
+  for (auto entry = recycled_pages.begin(); entry != recycled_pages.end();
+       ++entry) {
+    if ((*entry)->capacity < capacity) continue;
+    std::unique_ptr<GcPage> page = std::move(*entry);
+    recycled_pages.erase(entry);
+    page->used = 0;
+    page->live_objects = 0;
+    page->retired = false;
+    recycled_page_reuse_count = saturated_add(recycled_page_reuse_count, 1);
+    return page;
+  }
+  void* storage = ::operator new(capacity, std::nothrow);
+  if (!storage) return nullptr;
+  try {
+    auto page = std::make_unique<GcPage>();
+    page->storage = static_cast<unsigned char*>(storage);
+    page->capacity = capacity;
+    return page;
+  } catch (...) {
+    ::operator delete(storage);
+    return nullptr;
+  }
+}
+
+// Return an empty page to the bounded recycle pool, or release its storage when
+// the pool is full. Must be called with gc_mutex held at a cycle boundary, when
+// no mutator can still hold a cursor into the page.
+void recycle_page(std::unique_ptr<GcPage> page) {
+  if (!page) return;
+  if (recycled_pages.size() >= kMaxRecycledPages ||
+      page->capacity < kGcPageBytes ||
+      page->capacity > kMaxRecycledPageBytes) {
+    ::operator delete(page->storage);
+    return;
+  }
+  page->used = 0;
+  page->live_objects = 0;
+  page->retired = false;
+  GcPage* raw = page.get();
+  try {
+    recycled_pages.push_back(std::move(page));
+  } catch (...) {
+    ::operator delete(raw->storage);
+  }
+}
+
 void prepare_cycle_locked(bool young_only) {
   for (MutatorState* mutator : mutators)
     if (mutator) publish_tlab_locked(*mutator);
@@ -898,8 +959,9 @@ void prepare_cycle_locked(bool young_only) {
   ++gc_page_generation;
   for (auto page = gc_pages.begin(); page != gc_pages.end();) {
     if ((*page)->live_objects == 0) {
-      ::operator delete((*page)->storage);
+      auto empty_page = std::move(*page);
       page = gc_pages.erase(page);
+      recycle_page(std::move(empty_page));
     } else {
       (*page)->retired = false;
       ++page;
@@ -1084,16 +1146,13 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   }
   if (!page) {
     const size_t capacity = std::max(kGcPageBytes, span);
-    void* storage = ::operator new(capacity, std::nothrow);
-    if (!storage) return nullptr;
+    auto new_page = acquire_page(capacity);
+    if (!new_page) return nullptr;
+    page = new_page.get();
     try {
-      auto new_page = std::make_unique<GcPage>();
-      new_page->storage = static_cast<unsigned char*>(storage);
-      new_page->capacity = capacity;
-      page = new_page.get();
       gc_pages.push_back(std::move(new_page));
     } catch (...) {
-      ::operator delete(storage);
+      if (new_page) ::operator delete(new_page->storage);
       return nullptr;
     }
   }
@@ -1184,19 +1243,16 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
   }
   if (!page) {
     const size_t capacity = std::max(kGcPageBytes, kGcTlabBytes);
-    void* storage = ::operator new(capacity, std::nothrow);
-    if (!storage) return false;
+    auto new_page = acquire_page(capacity);
+    if (!new_page) return false;
+    page = new_page.get();
     try {
-      auto new_page = std::make_unique<GcPage>();
-      new_page->storage = static_cast<unsigned char*>(storage);
-      new_page->capacity = capacity;
-      page = new_page.get();
       gc_pages.push_back(std::move(new_page));
-      available = capacity;
     } catch (...) {
-      ::operator delete(storage);
+      if (new_page) ::operator delete(new_page->storage);
       return false;
     }
+    available = page->capacity;
   }
   const size_t reserve = std::min(kGcTlabBytes, available);
   if (reserve < minimum_span) return false;
@@ -1799,6 +1855,21 @@ void nrq_gc_set_threshold(size_t bytes) {
 }
 
 size_t nrq_gc_object_header_bytes(void) { return sizeof(ObjectHeader); }
+
+size_t nrq_gc_page_count(void) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  return gc_pages.size();
+}
+
+size_t nrq_gc_recycled_page_count(void) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  return recycled_pages.size();
+}
+
+uint64_t nrq_gc_page_reuse_count(void) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  return recycled_page_reuse_count;
+}
 
 nrq_gc_stats nrq_gc_get_stats(void) {
   // The registered-mutator vector is mutated under mutator_mutex. Take it
