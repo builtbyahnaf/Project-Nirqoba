@@ -608,6 +608,126 @@ struct SlotState {
   ReferenceLayout layout;
   bool pointer_root = false;
 };
+// Thread-local index of active root slots. It answers the three questions the
+// shadow stack needs -- how many registrations a slot currently has, whether a
+// repeated registration agrees with the first one, and whether the slot is a
+// plain pointer root -- without allocating a hash node per slot. Entries live in
+// one power-of-two table with linear probing, so a registration or a frame-end
+// removal touches a single cache line, and the table is only ever used by the
+// thread that owns the shadow stack.
+class SlotIndex {
+ public:
+  SlotState* find(void* slot) {
+    if (entries_.empty() || !slot) return nullptr;
+    const size_t mask = entries_.size() - 1;
+    size_t index = hash(slot) & mask;
+    for (size_t probes = 0; probes < entries_.size(); ++probes) {
+      Entry& entry = entries_[index];
+      if (entry.slot == nullptr) return nullptr;
+      if (entry.slot == slot) return &entry.state;
+      index = (index + 1) & mask;
+    }
+    return nullptr;
+  }
+
+  // Returns the state for `slot`, default constructed when absent. The caller
+  // fills it in; the state is never reallocated afterwards.
+  SlotState* insert(void* slot) {
+    if (!slot) return nullptr;
+    if (entries_.empty() || size_ + tombstones_ + 1 >=
+            entries_.size() - entries_.size() / 4) {
+      if (!rehash(entries_.empty() ? 16 : entries_.size() * 2)) return nullptr;
+    }
+    const size_t mask = entries_.size() - 1;
+    size_t index = hash(slot) & mask;
+    size_t tombstone = entries_.size();
+    for (size_t probes = 0; probes < entries_.size(); ++probes) {
+      Entry& entry = entries_[index];
+      if (entry.slot == slot) return &entry.state;
+      if (entry.slot == kTombstone && tombstone == entries_.size())
+        tombstone = index;
+      if (entry.slot == nullptr) {
+        if (tombstone != entries_.size()) {
+          index = tombstone;
+          --tombstones_;
+        }
+        entries_[index] = Entry{};
+        entries_[index].slot = slot;
+        ++size_;
+        return &entries_[index].state;
+      }
+      index = (index + 1) & mask;
+    }
+    if (tombstone != entries_.size()) {
+      entries_[tombstone] = Entry{};
+      entries_[tombstone].slot = slot;
+      --tombstones_;
+      ++size_;
+      return &entries_[tombstone].state;
+    }
+    return nullptr;
+  }
+
+  void erase(void* slot) {
+    if (!slot || entries_.empty()) return;
+    const size_t mask = entries_.size() - 1;
+    size_t index = hash(slot) & mask;
+    for (size_t probes = 0; probes < entries_.size(); ++probes) {
+      Entry& entry = entries_[index];
+      if (entry.slot == nullptr) return;
+      if (entry.slot == slot) {
+        entry = Entry{};
+        entry.slot = kTombstone;
+        --size_;
+        ++tombstones_;
+        return;
+      }
+      index = (index + 1) & mask;
+    }
+  }
+
+  size_t size() const { return size_; }
+
+ private:
+  struct Entry {
+    void* slot = nullptr;
+    SlotState state;
+  };
+  static void* kTombstone() { return reinterpret_cast<void*>(uintptr_t{1}); }
+
+  static size_t hash(void* slot) {
+    uint64_t value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(slot));
+    value ^= value >> 30;
+    value *= UINT64_C(0xbf58476d1ce4e5b9);
+    value ^= value >> 27;
+    value *= UINT64_C(0x94d049bb133111eb);
+    value ^= value >> 31;
+    return static_cast<size_t>(value);
+  }
+
+  bool rehash(size_t capacity) {
+    try {
+      std::vector<Entry> replacement(capacity);
+      for (Entry& entry : entries_) {
+        if (!entry.slot || entry.slot == kTombstone()) continue;
+        const size_t mask = capacity - 1;
+        size_t index = hash(entry.slot) & mask;
+        while (replacement[index].slot != nullptr) index = (index + 1) & mask;
+        replacement[index] = std::move(entry);
+      }
+      entries_.swap(replacement);
+      tombstones_ = 0;
+      return true;
+    } catch (...) {
+      return false;
+    }
+  }
+
+  std::vector<Entry> entries_;
+  size_t size_ = 0;
+  size_t tombstones_ = 0;
+};
+
 struct ShadowStack {
   std::mutex mutex;
   std::vector<ShadowRoot> roots;
@@ -621,7 +741,7 @@ struct ShadowStack {
   // never read by the collector. It replaces both the old full-root scan used
   // for duplicate-layout validation and the pointer-root set that was rebuilt
   // on every frame end.
-  std::unordered_map<void*, SlotState> slot_states;
+  SlotIndex slot_states;
 };
 std::vector<ShadowStack*> shadow_stacks;
 thread_local ShadowStack* thread_shadow_stack = nullptr;
@@ -2012,37 +2132,38 @@ bool is_pointer_root(const RootInfo& root) {
 
 void add_slot_state(ShadowStack& stack, void* slot, const RootInfo& info,
                     bool pointer_root) {
-  auto found = stack.slot_states.find(slot);
-  if (found == stack.slot_states.end()) {
-    SlotState state;
-    state.count = 1;
-    state.object_size = info.object_size;
-    state.layout.assign(info.reference_offsets.begin(),
-                        info.reference_offsets.size());
-    state.pointer_root = pointer_root;
-    stack.slot_states.emplace(slot, std::move(state));
+  SlotState* found = stack.slot_states.find(slot);
+  if (!found) {
+    SlotState* state = stack.slot_states.insert(slot);
+    if (!state)
+      nrq_runtime_fatal("GC root slot index failed to grow");
+    state->count = 1;
+    state->object_size = info.object_size;
+    state->layout.assign(info.reference_offsets.begin(),
+                         info.reference_offsets.size());
+    state->pointer_root = pointer_root;
     return;
   }
-  if (found->second.object_size != info.object_size ||
-      !found->second.layout.matches(info.reference_offsets.begin(),
-                                    info.reference_offsets.size()) ||
-      found->second.pointer_root != pointer_root)
+  if (found->object_size != info.object_size ||
+      !found->layout.matches(info.reference_offsets.begin(),
+                             info.reference_offsets.size()) ||
+      found->pointer_root != pointer_root)
     nrq_runtime_fatal(
         "GC root slot was registered with an incompatible layout");
-  ++found->second.count;
+  ++found->count;
 }
 
 void remove_slot_state(ShadowStack& stack, void* slot) {
-  auto found = stack.slot_states.find(slot);
-  if (found == stack.slot_states.end())
+  SlotState* found = stack.slot_states.find(slot);
+  if (!found)
     nrq_runtime_fatal("GC root slot registration bookkeeping is inconsistent");
-  if (--found->second.count == 0) stack.slot_states.erase(found);
+  if (--found->count == 0) stack.slot_states.erase(slot);
 }
 
 bool shadow_has_pointer_root(ShadowStack& stack, void* slot) {
   // O(1) lookup in the per-thread slot index. Never read by the collector.
-  auto found = stack.slot_states.find(slot);
-  return found != stack.slot_states.end() && found->second.pointer_root;
+  const SlotState* found = stack.slot_states.find(slot);
+  return found != nullptr && found->pointer_root;
 }
 
 ObjectHeader* find_pending_header(MutatorState& mutator, void* object) {
