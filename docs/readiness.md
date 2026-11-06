@@ -1,7 +1,7 @@
 # Language Readiness Audit and Benchmark
 
 **Audit date:** 2026-11-01
-**Compiler:** Nirqoba 0.153-beta (Phase 6), LLVM/MLIR 23.1.4, `x86_64-pc-windows-msvc`
+**Compiler:** Nirqoba 0.158-beta (Phase 6), LLVM/MLIR 23.1.4, `x86_64-pc-windows-msvc`
 **Build:** RelWithDebInfo (`build/msvc-dev`)
 **Host:** Windows x64, Intel Family 6 Model 154, 8+ logical cores
 **Corpus:** `tests/readiness/` — 13 programs, 5 gap probes, 4 benchmarks
