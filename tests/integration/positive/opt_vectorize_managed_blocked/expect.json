@@ -1,0 +1,10 @@
+{
+  "mode": "build_and_run",
+  "expect_stdout_contains": ["105"],
+  "expect_optimized_ir_contains": [
+    "call void @nrq_gc_safepoint()"
+  ],
+  "expect_optimized_ir_not_contains": [
+    "vector.body"
+  ]
+}

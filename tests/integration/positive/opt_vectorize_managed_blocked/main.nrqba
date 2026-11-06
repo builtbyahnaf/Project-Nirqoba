@@ -1,0 +1,20 @@
+int function sum_managed(int count) {
+    var values = array.allocate<int>(count);
+    var i = 0;
+    while (i < count) {
+        values[i] = i * 5;
+        i += 1;
+    }
+    var total = 0;
+    i = 0;
+    while (i < count) {
+        total = total + values[i];
+        i += 1;
+    }
+    return total;
+}
+
+int function main(string[] args) {
+    print(sum_managed(args.length + 7));
+    return 0;
+}
