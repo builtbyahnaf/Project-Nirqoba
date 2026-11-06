@@ -162,6 +162,12 @@ void* nrq_gc_pin_transfer(void* object);
 // which makes excessive pinning observable from the language without failing
 // the program.
 uint64_t nrq_gc_pin_count(void);
+// Pins and unpins that found no reusable transfer-pin slot and therefore had to
+// take the collector mutex. The buffered path reuses retired slots, so this stays
+// at zero for a workload that returns and releases one handoff at a time, however
+// many distinct objects it walks through.
+uint64_t nrq_gc_transfer_pin_fallbacks(void);
+
 uint64_t nrq_gc_pin_violations(void);
 // Reports whether automatic collection is currently enabled. Explicit
 // collection stays available in both states.
