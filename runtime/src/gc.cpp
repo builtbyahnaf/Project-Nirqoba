@@ -764,7 +764,16 @@ std::unordered_map<void*, size_t> pinned_objects;
 // of failing the process.
 constexpr size_t kMaxPinsPerObject = 16;
 uint64_t pin_violations = 0;
-bool reference_diagnostics_enabled = false;
+// Reference diagnostics is the only reader that can look at a shadow stack while
+// the collector is idle: during a collection every registered mutator is parked
+// before roots are enumerated, so a running mutator's stack cannot be read. The
+// fast paths therefore take the stack mutex only when a diagnostic query is
+// possible, and plain, owner-only access otherwise.
+std::atomic<bool> reference_diagnostics_enabled{false};
+
+bool diagnostics_reading_roots() {
+  return reference_diagnostics_enabled.load(std::memory_order_acquire);
+}
 // Collection is an explicit opt-in policy. Programs using the GC domain may
 // call gc.enable() to request automatic triggers; explicit gc.collect() always
 // works regardless of this state.
@@ -2293,11 +2302,13 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
     }
   };
 
-  // Fast path: no collector mutex. The reader count keeps a snapshot from
-  // starting between the root being published and the phase check.
+  // Fast path: no collector mutex, and no stack mutex unless a diagnostic query
+  // could be reading this stack right now.
   if (begin_fast_barrier()) {
-    {
+    if (diagnostics_reading_roots()) {
       std::lock_guard<std::mutex> stack_lock(stack.mutex);
+      push_root();
+    } else {
       push_root();
     }
     end_fast_barrier();
@@ -2487,8 +2498,12 @@ void nrq_gc_root_frame_end(uint64_t marker) {
   // roots under stack.mutex. Use the fast barrier when idle so the collector
   // cannot begin a snapshot between the resize and this function returning.
   if (begin_fast_barrier()) {
-    std::lock_guard<std::mutex> lock(stack.mutex);
-    remove_owned_roots();
+    if (diagnostics_reading_roots()) {
+      std::lock_guard<std::mutex> lock(stack.mutex);
+      remove_owned_roots();
+    } else {
+      remove_owned_roots();
+    }
     end_fast_barrier();
     return;
   }
@@ -2764,20 +2779,25 @@ void* nrq_gc_pin_transfer(void* object) {
 }
 
 void nrq_gc_ref_count_start(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
-  reference_diagnostics_enabled = true;
+  // Mutators check this before touching their shadow stack without its mutex, so
+  // it has to be published before the next query reads any stack.
+  reference_diagnostics_enabled.store(true, std::memory_order_release);
 }
 
 void nrq_gc_ref_count_stop(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
-  reference_diagnostics_enabled = false;
+  reference_diagnostics_enabled.store(false, std::memory_order_release);
 }
 
 int64_t nrq_gc_get_ref_count(void* object) {
+  // Diagnostics are off in normal execution, so a disabled query touches nothing.
+  if (!diagnostics_reading_roots()) return -1;
+  // The query reads shadow stacks, and a mutator that entered its root fast path
+  // before the flag became visible is still inside a lock-free region. Drain
+  // those regions first: mutators that observe the flag afterwards take the
+  // stack mutex themselves. The mutator registry is taken before the heap lock
+  // to keep the documented lock order.
+  wait_for_fast_barriers();
   std::lock_guard<std::mutex> lock(gc_mutex);
-  // Diagnostics are off in normal execution. Return before publishing a TLAB
-  // batch or scanning the heap, so a disabled query stays a single lock.
-  if (!reference_diagnostics_enabled) return -1;
   if (thread_mutator.depth != 0) publish_tlab_locked(thread_mutator);
   if (!object || !find_object_locked(object)) return 0;
   try {
