@@ -3102,6 +3102,7 @@ int32_t nrq_gc_is_enabled(void) {
 
 void nrq_gc_unpin(void* object) {
   if (!object) return;
+  bool buffer_fell_back = false;
   // Releasing a pin this thread buffered cancels it here, and releasing a pin the
   // table already knows about is queued as a negative delta. Either way the
   // collector mutex stays out of the path.
@@ -3123,10 +3124,16 @@ void nrq_gc_unpin(void* object) {
         return;
       }
       transfer_pin_fallbacks.fetch_add(1, std::memory_order_relaxed);
+      // The buffer holds this thread's earlier deltas. Applying this release to the
+      // table first would let an earlier buffered pin arrive afterwards and leave the
+      // object pinned with nothing left to release, so the buffer is settled in order
+      // before the new operation.
+      buffer_fell_back = true;
     }
     end_fast_barrier();
   }
   std::lock_guard<std::mutex> lock(gc_mutex);
+  if (buffer_fell_back) drain_transfer_pins_locked(thread_mutator);
   auto found = pinned_objects.find(object);
   if (found == pinned_objects.end()) return;
   if (--found->second == 0) pinned_objects.erase(found);
@@ -3134,6 +3141,7 @@ void nrq_gc_unpin(void* object) {
 
 void* nrq_gc_pin_transfer(void* object) {
   if (!object) return nullptr;
+  bool buffer_fell_back = false;
   // Registered mutators record the handoff in their own buffer instead of taking
   // the collector mutex. The buffer is folded into the pin table during cycle
   // preparation, before pinned roots are enumerated, so a buffered pin protects
@@ -3160,9 +3168,11 @@ void* nrq_gc_pin_transfer(void* object) {
     // Every slot holds a live delta. Leave the barrier region before taking the
     // collector mutex, because a collector holding it waits for barrier regions to
     // drain.
+    buffer_fell_back = true;
     end_fast_barrier();
   }
   std::lock_guard<std::mutex> lock(gc_mutex);
+  if (buffer_fell_back) drain_transfer_pins_locked(thread_mutator);
   // A managed return usually refers to an object that is still in this
   // thread's unpublished TLAB. Publishing the whole pending batch here would
   // defeat TLAB batching for every helper that returns a managed pointer. The

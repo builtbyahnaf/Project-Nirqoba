@@ -1567,3 +1567,43 @@ TEST(GcTest, TransferPinBufferReusesSlotsForReleasedHandoffs) {
   ASSERT_EQ(nrq_gc_pin_violations() - baseline_violations, uint64_t{0});
   nrq_gc_mutator_leave();
 }
+
+TEST(GcTest, TransferPinFallbackSettlesBufferedDeltasFirst) {
+  nrq_gc_enable();
+  nrq_gc_collect();
+  nrq_gc_mutator_enter();
+  nrq_gc_disable();
+  const uint64_t baseline_violations = nrq_gc_pin_violations();
+
+  // Fill the delta buffer with live pins, then release one of them. The release
+  // finds no free slot and has to settle the buffer before touching the table;
+  // applying it first would let the buffered pin of the same object land afterwards
+  // and leave it pinned with no release left.
+  std::vector<void*> objects;
+  for (int index = 0; index < 33; ++index) {
+    auto* node = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+    ASSERT_NE(node, nullptr);
+    objects.push_back(node);
+  }
+  // Thirty-two pins fit the buffer; the thirty-third is the fallback that makes the
+  // table and the buffer disagree about ordering. The pin count is not read here
+  // because asking for it drains this thread's buffer.
+  for (void* node : objects) ASSERT_TRUE(nrq_gc_pin_transfer(node) == node);
+
+  nrq_gc_unpin(objects[0]);
+  nrq_gc_enable();
+  nrq_gc_collect();
+
+  // Exactly the 32 still-pinned handoffs survive, plus nothing for the released one.
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{32});
+  ASSERT_EQ(nrq_gc_pin_count(), uint64_t{32});
+  ASSERT_EQ(nrq_gc_pin_violations() - baseline_violations, uint64_t{0});
+
+  for (size_t index = 1; index < objects.size(); ++index)
+    nrq_gc_unpin(objects[index]);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+  ASSERT_EQ(nrq_gc_pin_count(), uint64_t{0});
+  ASSERT_EQ(nrq_gc_pin_violations() - baseline_violations, uint64_t{0});
+  nrq_gc_mutator_leave();
+}
