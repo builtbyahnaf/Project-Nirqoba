@@ -1606,8 +1606,13 @@ class FunctionTranslator {
     mlir::Value next = builder_.create<mlir::LLVM::SubOp>(
         loc, current, constant(1)).getResult();
     builder_.create<mlir::LLVM::StoreOp>(loc, next, counter);
+    // Signed less-or-equal, not equality: a counter that reached zero without
+    // taking the polled path, or wrapped past it, would never compare equal again
+    // and the loop would stop observing collection requests for good. A bound
+    // has to hold for every counter value, not just the ones this emission
+    // intended.
     return builder_.create<mlir::LLVM::ICmpOp>(
-        loc, mlir::LLVM::ICmpPredicate::eq, next, constant(0)).getResult();
+        loc, mlir::LLVM::ICmpPredicate::sle, next, constant(0)).getResult();
   }
 
   // Reloads the countdown so the next poll is again kSafepointInterval crossings
@@ -1667,7 +1672,17 @@ class FunctionTranslator {
                         mlir::Value initial_value = {}) {
     std::vector<uint64_t> offsets;
     collect_managed_reference_offsets(value_type, 0, offsets);
-    if (offsets.empty()) return;
+    if (offsets.empty()) {
+      // The two answers this lowering can give about a type must agree: a type
+      // that reports no reference here must also report none to
+      // function_uses_gc, which decides whether the activation registers at all.
+      // If they ever disagree, registering offset 0 keeps a live object alive
+      // instead of letting it be swept; dropping the root would be silent.
+      assert(!collect_has_managed_reference(value_type) &&
+             "managed type lost its reference offsets");
+      if (!collect_has_managed_reference(value_type)) return;
+      offsets.push_back(0);
+    }
     pending_gc_roots_.push_back(
         PendingGcRoot{slot, value_type, loc, initial_value});
   }
@@ -1805,7 +1820,10 @@ class FunctionTranslator {
 
   FrameRootLayout build_frame_root_layout(llvm::ArrayRef<PendingGcRoot> roots) {
     FrameRootLayout layout;
+    // Word 0 is the slot count and word 1 is the total word count, so the
+    // consumer can reject a table that ends early instead of reading past it.
     layout.words.push_back(static_cast<int64_t>(roots.size()));
+    layout.words.push_back(0);  // patched once every root is described.
     layout.reference_counts.reserve(roots.size());
     for (const PendingGcRoot& root : roots) {
       std::vector<uint64_t> offsets;
@@ -1817,8 +1835,9 @@ class FunctionTranslator {
       for (uint64_t offset : offsets)
         layout.words.push_back(static_cast<int64_t>(offset));
     }
+    layout.words[1] = static_cast<int64_t>(layout.words.size());
     // Every root contributes its size word, its count word and its offsets.
-    std::size_t described = 1;
+    std::size_t described = 2;
     for (std::size_t count : layout.reference_counts) described += 2 + count;
     layout.valid = layout.reference_counts.size() == roots.size() &&
                    described == static_cast<std::size_t>(layout.words.size());
