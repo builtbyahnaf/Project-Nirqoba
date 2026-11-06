@@ -6,11 +6,34 @@
 
 ---
 
-## Version 0.168-beta (dev)
+## Version 0.171-beta (dev)
+
+### Summary of Changes (since `0.168-beta`):
+
+#### 1. Batched Root Publication
+- **Frame Root Descriptors:** A function's root set is a compile-time fact, so the lowering emits one read-only descriptor per root set and publishes every root of an activation with a single `nrq_gc_root_register_frame` call instead of one call per slot. Descriptors are interned per module, so functions that register the same layouts share one table in `.rodata`.
+- **One Barrier Region Per Activation:** Registration now reserves the frame's roots once and takes a single barrier region, with the whole descriptor validated before any slot is published. Per-slot duplicate counts, in-flight snapshot marking and root frames are unchanged, and a lone root keeps the direct call.
+- **Evidence:** `tests/integration/positive/gc_frame_roots` asserts one call and one shared descriptor for four slots of three layouts; `GcTest.FrameRootRegistrationHandlesWideMixedLayouts` covers frames that cross the inline layout storage.
+
+---
+
+## Version 0.168-beta
 
 ### Summary of Changes (since `0.162-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.162-beta release.*
+#### 1. Write Barrier and Codegen Protocol Optimization (PO-24)
+- **Forward References Through Write Barrier:** References stored through the write barrier are now forwarded directly to the remembered set without an intermediate root-store round trip, eliminating a redundant store and a cache-line bounce per mutator store.
+- **Single Read-Only Descriptor Per Reference Layout:** The backend emits one shared descriptor per distinct reference layout instead of one per store site, reducing metadata size and enabling the collector to switch on the descriptor rather than recomputing layout.
+- **Elide Redundant Mutator Regions:** A call that does not change the active mutator region now reuses the caller's established region instead of emitting a fresh `mutator_begin`/`mutator_end` pair, cutting protocol overhead in call chains.
+- **Integration Assertions for GC Protocol:** Added integration test assertions that verify the exact sequence of emitted GC protocol operations (`mutator_begin`, `mutator_end`, `root_store`, `root_load`, `write_barrier`), so regressions in protocol emission are caught at test time rather than through runtime misbehavior.
+- **Documentation:** Added `reports/performance/po-24-write-barrier-codegen.md` with the transformation description, IR evidence, and remaining opportunities.
+
+#### 2. Compiler-Assisted Runtime Optimizations (PO-25)
+- **Publish Managed References Directly to Roots:** The lowering path for managed references now emits a root-store at the definition site and skips the intermediate buffer, so the collector sees the reference immediately without a second store.
+- **Initialize Parameter Roots with the Barrier Itself:** A reference parameter is rooted by the incoming barrier write rather than by a separate `root_store`, eliminating a redundant operation at function entry.
+- **Unpin the Just-Published Reference:** After a managed reference is published to its root slot, the lowering immediately emits a matching `root_unpin` for the temporary, keeping the pin table accurate without a dedicated cleanup pass.
+- **Throttle Safepoint Polls with a Countdown:** The safepoint poll on loop back-edges now runs once per 64 iterations via a register-promoted countdown instead of a branch on every iteration, removing the poll overhead from hot loops.
+- **Documentation:** Added `reports/performance/po-25-compiler-assisted-runtime.md` with the lowering transformations, IR evidence, and remaining opportunities.
 
 ---
 
