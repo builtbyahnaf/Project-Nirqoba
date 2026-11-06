@@ -315,6 +315,36 @@ def run_case(case_dir, compiler_exe, temp_dir):
             if needle not in out:
                 return False, f"MLIR output does not contain expected snippet: '{needle}'"
 
+    # Code generation fixtures can assert on the IR the compiler produced. The
+    # check builds again with --emit=llvm-raw, which stops before LLVM's own
+    # passes could inline or delete the operations under test, so a count here
+    # describes what lowering emitted rather than what survived optimization.
+    asserts_ir = (spec.get("expect_ir_counts") or
+                  spec.get("expect_ir_contains") is not None or
+                  spec.get("expect_ir_not_contains") is not None)
+    if asserts_ir and mode in ("build", "build_and_run", "assembly_check", "target_assembly"):
+        ir_code, ir_out, ir_err = run_command(
+            [str(compiler_exe), "build", str(source_file),
+             "--out-dir", str(temp_dir), "--emit=llvm-raw"] + extra_args
+        )
+        if ir_code != 0:
+            return False, (
+                f"IR emission failed with exit {ir_code}.\nStderr: {ir_err}\nStdout: {ir_out}"
+            )
+        for needle in spec.get("expect_ir_contains", []):
+            if needle not in ir_out:
+                return False, f"Emitted IR does not contain '{needle}'.\nGot:\n{ir_out}"
+        for needle in spec.get("expect_ir_not_contains", []):
+            if needle in ir_out:
+                return False, f"Emitted IR unexpectedly contains '{needle}'.\nGot:\n{ir_out}"
+        for needle, expected in spec.get("expect_ir_counts", {}).items():
+            actual = ir_out.count(needle)
+            if actual != expected:
+                return False, (
+                    f"Emitted IR contains '{needle}' {actual} time(s), expected "
+                    f"{expected}.\nGot:\n{ir_out}"
+                )
+
     # Special check for COFF object header if requested
     if spec.get("check_coff_header", False):
         stem = source_file.stem
