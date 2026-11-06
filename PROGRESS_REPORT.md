@@ -13,8 +13,8 @@
 | Project | Nirqoba |
 | Current Working Version | `0.127-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-05 14:30:00` |
-| Report Entries | `10` |
+| Last Report Update | `2026-11-06 10:45:00` |
+| Report Entries | `11` |
 
 ---
 
@@ -1100,6 +1100,87 @@ therefore all profile-blind.
 ---
 
 **End of Entry #010**
+
+---
+
+## Entry #011 - Advanced Memory Optimizations
+
+**Version:** `0.127-beta`  
+**Date:** `2026-11-06 10:45:00`  
+**Scope:** `Phase 6 / Runtime / Object Headers / Per-Mutator Accounting / Page Reuse / Reference Diagnostics`  
+**Status:** `Completed`
+
+### 1. Problem Identified
+
+The runtime already provided TLABs, generational and incremental GC, shadow
+roots, pinning, and explicit arena/pool/slab/buddy/free-list/TLSF allocators.
+Four fixed costs remained on the allocation and collection paths:
+
+- Every managed object carried a 112-byte header before its payload.
+- Every allocation performed three process-wide atomic updates, which PO-20
+  isolated on a cache line but could not de-contend.
+- Every cycle freed all empty pages and the next allocation wave re-created
+  them.
+- Reference diagnostics published a TLAB batch before checking whether the
+  feature was enabled, and the enabled path built a full heap map for a
+  one-object query.
+
+### 2. Implementation Details
+
+- Packed `ObjectHeader` from 112 to 96 bytes by unioning the mutually exclusive
+  `next` and `tlab_next` links and deriving the payload address from the header.
+- Moved allocation accounting into `MutatorState`. Pending byte/object counters
+  are relaxed atomics read by `nrq_gc_get_stats` under `gc_mutex`; the collection
+  trigger is folded from a local batch at TLAB publication or at
+  `min(16 KiB, threshold)`.
+- Added a bounded page-recycle pool. Empty pages are retained at a parked cycle
+  boundary and handed back out by `acquire_page` instead of re-entering the
+  process heap.
+- Reworked `nrq_gc_get_ref_count` to return before publishing when diagnostics
+  are disabled and to compare visited references against one target instead of
+  building an `unordered_map`.
+- Added `nrq_gc_object_header_bytes`, `nrq_gc_page_count`,
+  `nrq_gc_recycled_page_count`, and `nrq_gc_page_reuse_count` for auditing.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `runtime/src/gc.cpp` | 96-byte header, per-mutator accounting, page recycle pool, target-only ref diagnostics | Remove fixed allocation and collection costs |
+| `runtime/include/nirqoba/runtime/gc.h` | Header-size and page-pool diagnostics | Make the improvements auditable |
+| `tests/unit/gc_test.cpp` | Four new regression tests | Pin header size, stats, page reuse, and ref-count behavior |
+| `reports/performance/po-21-advanced-memory-optimizations.md` | Created PO-21 report | Record design, evidence, and deferred measurements |
+| `README.md` | Documented compact headers, batched accounting, and page recycling | Keep the runtime description current |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Unit suite (Debug) | PASS | 144/144 tests. |
+| Integration suite (Debug) | PASS | 241/241 cases. |
+| Header size | PASS | `GcTest.ObjectHeaderStaysWithinItsMetadataBudget` pins 96 bytes and alignment. |
+| Per-mutator statistics | PASS | Unpublished TLAB objects appear in `live_objects` and `allocated_bytes`. |
+| Page recycling | PASS | Emptied pages are retained and reused on the next allocation wave. |
+| Reference diagnostics | PASS | Exactly 32 referrers counted while 64 unrelated objects are ignored. |
+| Runtime performance / compilation time / peak memory | DEFERRED | Section 5 verification requires explicit project-owner permission. |
+
+### 5. Safety and Acceptance
+
+- Reachability, ownership, borrowing, and lifetime rules are unchanged. Page
+  recycling still waits for the parked-mutator boundary that the previous delete
+  path used.
+- TLAB objects remain invisible to the marker until the same safepoint that
+  publishes them; the new accounting is published with the same batch.
+- The page pool is bounded at 64 pages, so a program that stops allocating does
+  not retain unbounded storage.
+- Reference diagnostics remain read-only and still report `-1` when disabled or
+  when the walk fails.
+- Runtime timing, compilation time, and peak memory remain deferred under the
+  Section 5 policy; no performance claim is made.
+
+---
+
+**End of Entry #011**
 
 <!-- REPORT ENTRIES END -->
 
