@@ -1,0 +1,27 @@
+// Mutual recursion: neither function can prove coverage from the other, and only
+// the outer region established at entry makes their pairs redundant.
+managed<int> function even_step(int depth) {
+    var cell = array.allocate<int>(1);
+    cell[0] = depth;
+    if (depth <= 0) {
+        return cell;
+    }
+    var next = odd_step(depth - 1);
+    return next;
+}
+
+managed<int> function odd_step(int depth) {
+    var cell = array.allocate<int>(1);
+    cell[0] = depth;
+    if (depth <= 0) {
+        return cell;
+    }
+    var next = even_step(depth - 1);
+    return next;
+}
+
+int function main() {
+    var result = even_step(4);
+    print(result[0]);
+    return 0;
+}
