@@ -429,6 +429,58 @@ TEST(GcTest, WideRootFrameReleasesEveryRegistration) {
   nrq_gc_root_frame_end(again);
 }
 
+TEST(GcTest, FrameRootRegistrationHandlesWideMixedLayouts) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  // Alternating narrow and wide layouts: the wide one exceeds the inline offset
+  // storage of ReferenceLayout, so the frame path has to reproduce the overflow
+  // representation the single-slot path builds.
+  constexpr size_t kSlots = 16;
+  std::vector<std::array<void*, 4>> roots(kSlots);
+  for (auto& root : roots) root.fill(nullptr);
+  std::vector<void*> slots(kSlots, nullptr);
+  std::vector<size_t> descriptor;
+  descriptor.push_back(kSlots);
+  for (size_t index = 0; index < kSlots; ++index) {
+    slots[index] = roots[index].data();
+    if (index % 2 == 0) {
+      descriptor.push_back(sizeof(void*));
+      descriptor.push_back(1);
+      descriptor.push_back(0);
+    } else {
+      descriptor.push_back(sizeof(void*) * 3);
+      descriptor.push_back(3);
+      descriptor.push_back(0);
+      descriptor.push_back(sizeof(void*));
+      descriptor.push_back(sizeof(void*) * 2);
+    }
+  }
+
+  const uint64_t marker = nrq_gc_root_frame_begin();
+  nrq_gc_root_register_frame(slots.data(), kSlots, descriptor.data());
+
+  // One object per slot: the narrow ones through the first reference, the wide
+  // ones through their last, so a layout that lost an offset shows up as a
+  // swept object.
+  std::vector<void*> objects;
+  for (size_t index = 0; index < kSlots; ++index) {
+    auto* object = nrq_gc_allocate_array(1, sizeof(uint64_t), nullptr);
+    ASSERT_NE(object, nullptr);
+    objects.push_back(object);
+    auto** target = reinterpret_cast<void**>(
+        roots[index].data() + (index % 2 == 0 ? 0 : 2));
+    nrq_gc_root_store(target, object);
+  }
+
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), static_cast<uint64_t>(kSlots));
+
+  nrq_gc_root_frame_end(marker);
+  for (auto& root : roots) root.fill(nullptr);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
 TEST(GcTest, RootStoreSkipsIdenticalAndNullBarrierWork) {
   nrq_gc_enable();
   nrq_gc_collect();
