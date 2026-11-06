@@ -502,6 +502,10 @@ ObjectHeader* find_object_locked(void* object) {
           return header;
       }
     }
+    // The address lies inside a page whose start bitmap is authoritative, so a
+    // cleared slot is a decisive miss: interior pointers, stale addresses and
+    // garbage all end here without paying for a hash probe of the global index.
+    return nullptr;
   }
   return object_index.find(static_cast<void*>(object));
 }
@@ -639,6 +643,10 @@ constexpr size_t kReferenceBatchCapacity = 128;
 struct MarkContext {
   MarkWorklist worklist;
   bool young_only = false;
+  // The cycle's birth epoch, copied from active_cycle_epoch when the context is
+  // prepared. Every reference resolution compares against this copy instead of
+  // the global, which keeps the marking path off shared state entirely.
+  uint64_t epoch = 0;
   std::array<void*, kReferenceBatchCapacity> references{};
   size_t reference_count = 0;
 };
@@ -794,10 +802,9 @@ void enqueue_header_locked(ObjectHeader* header, MarkContext& context) {
   if (!header || header->marked) return;
   // Objects born during this cycle are retained by the sweep's birth-epoch
   // check. Marking them would leave a mark bit that the snapshot never clears.
-  if (collection_phase.load(std::memory_order_relaxed) !=
-          CollectionPhase::Idle &&
-      header->birth_epoch >= active_cycle_epoch)
-    return;
+  // The epoch comes from the context, so the hot path never loads the shared
+  // cycle state.
+  if (header->birth_epoch >= context.epoch) return;
   if (context.young_only && !header->young) return;
   header->marked = true;
   context.worklist.push(header);
@@ -1251,6 +1258,7 @@ void prepare_cycle_locked(bool young_only) {
   active_collection_is_minor = young_only;
   active_mark = MarkContext{};
   active_mark.young_only = young_only;
+  active_mark.epoch = active_cycle_epoch;
   enqueue_roots_locked(active_mark);
   collection_phase.store(CollectionPhase::Marking, std::memory_order_release);
 }
