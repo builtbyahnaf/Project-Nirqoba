@@ -661,6 +661,119 @@ class InternalizeFunctionsPass
   }
 };
 
+// A mutator region is the span in which a thread holds a GC registration:
+// `nrq_gc_mutator_enter` establishes it and `nrq_gc_mutator_leave` ends it. Every
+// generated function that can touch a managed value used to open its own nested
+// region, which is pure overhead for a callee: its caller already holds the
+// region, so the callee's enter/leave only bumps and restores a nesting counter
+// that no collection can observe in between (the region never drops to zero).
+//
+// This pass removes the pair from functions that provably always run inside an
+// established region. A function establishes its own region when it can be
+// entered from outside the module's own calls: the C entry point, a function with
+// public linkage, or a function whose address is taken (a callback, which the
+// runtime or native code may invoke at any time). Every other function is only
+// reached through direct calls, so it is covered once each of its callers runs
+// inside a region - a fixed point that starts from the functions that establish
+// one. Recursion never qualifies until the recursive cycle has an outside entry
+// point, which keeps the analysis conservative.
+class ElideNestedMutatorRegionsPass
+    : public mlir::PassWrapper<ElideNestedMutatorRegionsPass,
+                               mlir::OperationPass<mlir::ModuleOp>> {
+ public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ElideNestedMutatorRegionsPass)
+
+  llvm::StringRef getArgument() const final {
+    return "elide-nested-mutator-regions";
+  }
+  llvm::StringRef getDescription() const final {
+    return "Drop mutator enter/leave pairs for functions that always run "
+           "inside an established mutator region";
+  }
+
+  void runOnOperation() override {
+    mlir::ModuleOp module = getOperation();
+    llvm::StringMap<mlir::LLVM::LLVMFuncOp> defined;
+    module.walk([&](mlir::LLVM::LLVMFuncOp function) {
+      if (!function.isExternal()) defined[function.getSymName()] = function;
+    });
+    if (defined.empty()) return;
+
+    // Every symbol a function could be entered through without a direct call to
+    // it: its address was taken somewhere in the module.
+    llvm::StringSet<> address_taken;
+    module.walk([&](mlir::LLVM::AddressOfOp address) {
+      address_taken.insert(address.getGlobalName());
+    });
+
+    // Reverse call graph over definitions in this module. Indirect calls cannot
+    // name a callee, so they are covered by the address-taken rule instead. A
+    // function only provides a region to its callees if it opens one itself: a
+    // function that never touches a managed value emits no enter/leave, so its
+    // callees still have to establish their own.
+    llvm::StringMap<llvm::SmallVector<llvm::StringRef, 4>> callers;
+    llvm::StringSet<> opens_region;
+    for (auto& entry : defined) {
+      entry.second.walk([&](mlir::LLVM::CallOp call) {
+        auto callee = call.getCallee();
+        if (!callee) return;
+        if (*callee == "nrq_gc_mutator_enter") {
+          opens_region.insert(entry.first());
+          return;
+        }
+        if (defined.count(*callee)) callers[*callee].push_back(entry.first());
+      });
+    }
+
+    // A function that opens a region and can be entered from outside the
+    // module's own calls establishes the region for everything it calls.
+    auto establishes_region = [&](llvm::StringRef name) {
+      if (!opens_region.count(name)) return false;
+      if (name == "main") return true;
+      if (address_taken.count(name)) return true;
+      auto function = defined.find(name);
+      if (function == defined.end()) return true;
+      return function->second.getLinkage() != mlir::LLVM::Linkage::Internal;
+    };
+
+    llvm::StringSet<> inside_region;
+    for (bool changed = true; changed;) {
+      changed = false;
+      for (auto& entry : defined) {
+        llvm::StringRef name = entry.first();
+        if (!opens_region.count(name)) continue;
+        if (inside_region.count(name) || establishes_region(name)) continue;
+        auto found = callers.find(name);
+        if (found == callers.end() || found->second.empty()) continue;
+        bool covered = true;
+        for (llvm::StringRef caller : found->second) {
+          if (establishes_region(caller) || inside_region.count(caller)) continue;
+          covered = false;
+          break;
+        }
+        if (!covered) continue;
+        inside_region.insert(name);
+        changed = true;
+      }
+    }
+    if (inside_region.empty()) return;
+
+    for (auto& entry : defined) {
+      if (!inside_region.count(entry.first())) continue;
+      llvm::SmallVector<mlir::Operation*, 4> region_calls;
+      entry.second.walk([&](mlir::LLVM::CallOp call) {
+        auto callee = call.getCallee();
+        if (!callee) return;
+        if (*callee != "nrq_gc_mutator_enter" &&
+            *callee != "nrq_gc_mutator_leave")
+          return;
+        region_calls.push_back(call.getOperation());
+      });
+      for (mlir::Operation* call : region_calls) call->erase();
+    }
+  }
+};
+
 // The canonicalizer folds constants, removes trivially dead operations whose
 // results are unused, and simplifies control flow. SCCP then propagates known
 // constants through SSA values, block arguments, and conditional control flow,
@@ -728,7 +841,13 @@ void build_lowering_pipeline(mlir::PassManager& pm, bool optimize) {
   // emitting them.
   pm.addPass(std::make_unique<InternalizeFunctionsPass>());
 
-  // Step 6: Describe the memory each generated function actually touches. This
+  // Step 6: Remove nested mutator regions from functions that can only run
+  // inside a region their caller already established. This runs after
+  // internalization so the analysis can see which functions are actually
+  // reachable only through this module's own calls.
+  if (optimize) pm.addPass(std::make_unique<ElideNestedMutatorRegionsPass>());
+
+  // Step 7: Describe the memory each generated function actually touches. This
   // runs last so it sees the final body. It runs at every optimization level:
   // the attribute is a property of the program, not of a pass run.
   pm.addPass(std::make_unique<InferFunctionMemoryEffectsPass>());
