@@ -120,6 +120,10 @@ size_t nrq_gc_object_header_bytes(void);
 size_t nrq_gc_page_count(void);
 size_t nrq_gc_recycled_page_count(void);
 uint64_t nrq_gc_page_reuse_count(void);
+// Counts allocations that reused space freed by an earlier sweep inside an
+// existing page instead of advancing that page's bump cursor. Together with the
+// page counts this makes reclamation locality observable.
+uint64_t nrq_gc_span_reuse_count(void);
 // Reports how many objects are tracked by the exact address index. Objects that
 // live in a page with start metadata are discovered without the index, so this
 // stays proportional to the number of large-object pages rather than the heap.

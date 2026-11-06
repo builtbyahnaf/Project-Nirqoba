@@ -1140,6 +1140,51 @@ TEST(GcTest, CollectionThresholdFollowsTheLiveHeap) {
   ASSERT_EQ(nrq_gc_get_threshold(), size_t{512 * 1024});
 }
 
+TEST(GcTest, ReclaimedSpansAreReusedBeforePagesGrow) {
+  // A bump allocator cannot move backwards, so a page holding a mix of
+  // short- and long-lived objects used to be abandoned with most of it dead.
+  // Space freed by a sweep is now reusable, which keeps the heap inside the
+  // pages it already has.
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const size_t baseline_pages = nrq_gc_page_count();
+  const uint64_t baseline_reuse = nrq_gc_span_reuse_count();
+
+  std::vector<void*> objects;
+  objects.reserve(200);
+  for (int index = 0; index < 200; ++index) {
+    void* object = nrq_gc_allocate(1024, nullptr);
+    ASSERT_NE(object, nullptr);
+    objects.push_back(object);
+  }
+  std::vector<void*> roots;
+  roots.reserve(32);
+  for (size_t index = 0; index < objects.size(); index += 10) {
+    roots.push_back(objects[index]);
+    nrq_gc_root_register(&roots.back());
+  }
+
+  // Reclaim the nine out of ten objects that nothing references.
+  nrq_gc_collect();
+  const size_t pages_after_reclaim = nrq_gc_page_count();
+
+  for (int index = 0; index < 180; ++index) {
+    void* replacement = nrq_gc_allocate(1024, nullptr);
+    ASSERT_NE(replacement, nullptr);
+    ASSERT_EQ(nrq_gc_pointer_is_managed(replacement), int32_t{1});
+  }
+  // The replacements fit in the reclaimed space, so the heap needs no new page.
+  ASSERT_TRUE(nrq_gc_span_reuse_count() - baseline_reuse >= 150);
+  ASSERT_EQ(nrq_gc_page_count(), pages_after_reclaim);
+  ASSERT_TRUE(pages_after_reclaim > baseline_pages);
+
+  for (void*& root : roots) nrq_gc_root_unregister(&root);
+  roots.clear();
+  objects.clear();
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
 TEST(GcTest, ObjectIndexOnlyTracksPagesWithoutStartMetadata) {
   // Every allocation used to pay a hash insert and every reclamation a hash
   // erase. Small objects are found through their page's start bitmap, so the

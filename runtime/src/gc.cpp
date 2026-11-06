@@ -56,7 +56,22 @@ struct GcPage {
   // because its start bitmap was not allocated or because indexing it failed.
   // Objects in such a page are tracked by the global object index instead.
   bool use_object_index = false;
+  // Runs of storage whose object was reclaimed during a sweep. A bump allocator
+  // can only move forward, so without these a page that churned through a mix of
+  // short- and long-lived objects had to be abandoned while most of it was dead
+  // space. Reuse is first-fit within the page and requires no allocation: a fixed
+  // array keeps the bookkeeping inline, and a page that fills it simply behaves
+  // like the bump allocator it used to be.
+  struct FreeSpan {
+    size_t offset = 0;
+    size_t span = 0;
+  };
+  static constexpr size_t kMaxFreeSpans = 96;
+  std::array<FreeSpan, kMaxFreeSpans> free_spans{};
+  size_t free_span_count = 0;
+  size_t free_span_bytes = 0;
 };
+
 
 // Small pages are discoverable from their own start bitmap, so their objects
 // never touch the global index. Only pages without start metadata (large-object
@@ -292,6 +307,18 @@ static_assert(sizeof(ObjectHeader) == 96,
               "ObjectHeader metadata must stay within 96 bytes");
 static_assert(alignof(ObjectHeader) == alignof(std::max_align_t),
               "ObjectHeader must keep payloads max_align_t aligned");
+// Storage a managed object occupies, header included, rounded up to the payload
+// alignment the bump allocator uses.
+size_t object_span_bytes(size_t payload_bytes) {
+  constexpr size_t alignment = alignof(std::max_align_t);
+  const size_t raw = sizeof(ObjectHeader) + payload_bytes;
+  return (raw + alignment - 1) & ~(alignment - 1);
+}
+
+// Reclaimed storage is tracked per page so later allocations can reuse it;
+// defined with the page pool below, declared here because sweeping reaches them.
+void release_span_locked(GcPage& page, size_t offset, size_t span);
+GcPage* take_free_span_locked(size_t span, size_t& offset);
 
 // Marking keeps a FIFO ring of pending headers. Contiguous storage avoids
 // chasing the intrusive list through the heap and visits a graph level by
@@ -543,6 +570,9 @@ constexpr size_t kMaxRecycledPages = 64;
 // pages are recycled and oversized pages return to the process heap.
 constexpr size_t kMaxRecycledPageBytes = 2 * kGcPageBytes;
 uint64_t recycled_page_reuse_count = 0;
+// Counts allocations served from space freed by an earlier sweep rather than
+// from a page's untouched tail.
+uint64_t recycled_span_reuse_count = 0;
 // Cache the current bump page per allocating thread. Collection increments the
 // generation so a thread that resumes after another thread reclaimed its page
 // discards the stale pointer before dereferencing it.
@@ -1180,14 +1210,19 @@ bool sweep_chunk_locked(size_t budget) {
 
     const bool collectable = !active_collection_is_minor || header->young;
     if (!header->marked && collectable) {
+      const size_t object_offset = static_cast<size_t>(
+          static_cast<unsigned char*>(header->payload()) -
+          header->page->storage);
       if (page_uses_index(header->page)) {
         object_index.erase(header->payload());
       } else {
-        const size_t offset = static_cast<size_t>(
-            static_cast<unsigned char*>(header->payload()) -
-            header->page->storage);
-        clear_object_start(*header->page, offset);
+        clear_object_start(*header->page, object_offset);
       }
+      // The object's storage becomes reusable space in its own page instead of
+      // being lost to the bump cursor.
+      release_span_locked(*header->page,
+                          object_offset - sizeof(ObjectHeader),
+                          object_span_bytes(header->size));
       header->remembered = false;
       if (!header->young) ++reclaimed_old;
       statistics.collected_bytes = saturated_add(
@@ -1254,6 +1289,45 @@ bool sweep_chunk_locked(size_t budget) {
   return sweep_list == nullptr;
 }
 
+// Record space an object used to occupy so a later allocation can reuse it.
+// Callers hold gc_mutex. A page whose span list is full keeps the space
+// unusable, which is exactly the behaviour of the bump allocator.
+void release_span_locked(GcPage& page, size_t offset, size_t span) {
+  if (span == 0 || page.free_span_count >= GcPage::kMaxFreeSpans) return;
+  page.free_spans[page.free_span_count++] = GcPage::FreeSpan{offset, span};
+  page.free_span_bytes += span;
+}
+
+// First-fit reuse of reclaimed space. The scan visits pages in allocation order
+// and only pages that currently hold a free run, so a heap with nothing to reuse
+// costs one branch per page. Callers hold gc_mutex.
+GcPage* take_free_span_locked(size_t span, size_t& offset) {
+  if (span == 0) return nullptr;
+  for (auto& entry : gc_pages) {
+    GcPage* page = entry.get();
+    if (!page || page->retired || page->free_span_count == 0 ||
+        page->free_span_bytes < span)
+      continue;
+    for (size_t index = 0; index < page->free_span_count; ++index) {
+      GcPage::FreeSpan& candidate = page->free_spans[index];
+      if (candidate.span < span) continue;
+      offset = candidate.offset;
+      page->free_span_bytes -= span;
+      if (candidate.span > span) {
+        // The remainder stays a run in the same page. `span` is a multiple of
+        // the payload alignment, so the new start keeps that alignment.
+        candidate.offset += span;
+        candidate.span -= span;
+      } else {
+        page->free_spans[index] = page->free_spans[--page->free_span_count];
+      }
+      recycled_span_reuse_count = saturated_add(recycled_span_reuse_count, 1);
+      return page;
+    }
+  }
+  return nullptr;
+}
+
 // Take a page of at least `capacity` bytes from the recycle pool, or create a
 // fresh one. The caller inherits storage ownership and must either publish the
 // page into gc_pages or release the storage explicitly.
@@ -1266,6 +1340,8 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
     page->used = 0;
     page->live_objects = 0;
     page->retired = false;
+    page->free_span_count = 0;
+    page->free_span_bytes = 0;
     if (page->object_starts && page->object_start_words != 0) {
       std::memset(page->object_starts.get(), 0,
                   page->object_start_words * sizeof(uint64_t));
@@ -1307,6 +1383,8 @@ void recycle_page(std::unique_ptr<GcPage> page) {
   page->used = 0;
   page->live_objects = 0;
   page->retired = false;
+  page->free_span_count = 0;
+  page->free_span_bytes = 0;
   GcPage* raw = page.get();
   try {
     recycled_pages.push_back(std::move(page));
@@ -1553,11 +1631,18 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   if (raw_span > SIZE_MAX - (alignment - 1)) return nullptr;
   const size_t span = (raw_span + alignment - 1) & ~(alignment - 1);
   GcPage* page = nullptr;
+  size_t header_offset = 0;
+  bool reused_span = false;
   if (thread_allocation_generation != gc_page_generation) {
     thread_allocation_page = nullptr;
     thread_allocation_generation = gc_page_generation;
   }
-  if (thread_allocation_page && !thread_allocation_page->retired &&
+  // Reclaimed space in an existing page comes first: reusing it keeps the
+  // working set inside pages that are already resident.
+  page = take_free_span_locked(span, header_offset);
+  if (page) {
+    reused_span = true;
+  } else if (thread_allocation_page && !thread_allocation_page->retired &&
       thread_allocation_page->used <= thread_allocation_page->capacity &&
       span <= thread_allocation_page->capacity - thread_allocation_page->used) {
     page = thread_allocation_page;
@@ -1591,12 +1676,19 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   }
   thread_allocation_page = page;
   thread_allocation_generation = gc_page_generation;
-  void* header_storage = page->storage + page->used;
-  page->used += span;
+  if (!reused_span) {
+    header_offset = page->used;
+    page->used += span;
+  }
+  void* header_storage = page->storage + header_offset;
   auto* header = new (header_storage) ObjectHeader();
   auto rollback_reservation = [&]() {
     destroy_object_storage(header);
-    page->used -= span;
+    if (reused_span) {
+      release_span_locked(*page, header_offset, span);
+    } else {
+      page->used -= span;
+    }
   };
   header->page = page;
   void* object = static_cast<unsigned char*>(header_storage) + sizeof(ObjectHeader);
@@ -2348,6 +2440,11 @@ size_t nrq_gc_recycled_page_count(void) {
 uint64_t nrq_gc_page_reuse_count(void) {
   std::lock_guard<std::mutex> lock(gc_mutex);
   return recycled_page_reuse_count;
+}
+
+uint64_t nrq_gc_span_reuse_count(void) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  return recycled_span_reuse_count;
 }
 
 size_t nrq_gc_object_index_entries(void) {
