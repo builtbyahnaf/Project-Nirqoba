@@ -89,6 +89,19 @@ TEST(GcTest, SharedCountersDoNotShareACacheLine) {
   ASSERT_TRUE(second_address - first_address >= 64);
 }
 
+TEST(GcTest, ObjectHeaderStaysWithinItsMetadataBudget) {
+  // Small managed objects pay this overhead on every allocation. The header
+  // shares `next`/`tlab_next` and derives the payload address, so it must stay
+  // at 96 bytes; the payload must remain max_align_t aligned.
+  ASSERT_EQ(nrq_gc_object_header_bytes(), size_t{96});
+  ASSERT_EQ(nrq_gc_object_header_bytes() % alignof(std::max_align_t), size_t{0});
+
+  void* object = nrq_gc_allocate(8, nullptr);
+  ASSERT_NE(object, nullptr);
+  ASSERT_EQ(reinterpret_cast<uintptr_t>(object) % alignof(std::max_align_t),
+            uintptr_t{0});
+}
+
 TEST(GcTest, PreservesReachableCyclesAndSweepsAfterRootRemoval) {
   nrq_gc_enable();
   nrq_gc_set_threshold(1024 * 1024);

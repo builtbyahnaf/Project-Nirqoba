@@ -96,6 +96,9 @@ void nrq_gc_mutator_leave(void);
 void nrq_gc_safepoint(void);
 void nrq_gc_set_threshold(size_t bytes);
 struct nrq_gc_stats nrq_gc_get_stats(void);
+// Reports the per-object metadata bytes the collector charges for every managed
+// allocation. Exposed so the layout can be audited by tests and tooling.
+size_t nrq_gc_object_header_bytes(void);
 uint64_t nrq_gc_get_allocated_bytes(void);
 uint64_t nrq_gc_get_collected_bytes(void);
 uint64_t nrq_gc_get_collection_count(void);
