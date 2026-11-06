@@ -1692,11 +1692,26 @@ void adapt_collection_policy_locked() {
 
 ObjectHeader* find_pending_header(MutatorState& mutator, void* object);
 
+// An entry is active only while it has both an object and a nonzero delta. A
+// handoff that is cancelled before the next drain leaves nothing to fold, so the
+// slot has to stop matching: a zero-delta entry that still matched would absorb
+// later pins and keep its slot forever, which is how the buffer used to fill with
+// entries that describe nothing.
 TransferPinDelta* find_transfer_delta(MutatorState& mutator, void* object) {
-  for (size_t index = 0; index < mutator.transfer_pin_count; ++index)
-    if (mutator.transfer_pins[index].object == object)
+  if (!object) return nullptr;
+  for (size_t index = 0; index < mutator.transfer_pin_count; ++index) {
+    const TransferPinDelta& entry = mutator.transfer_pins[index];
+    if (entry.object == object && entry.delta != 0)
       return &mutator.transfer_pins[index];
+  }
   return nullptr;
+}
+
+// Releases a delta entry that has cancelled out. Keeping the object pointer would
+// leave a slot that looks occupied to every later scan.
+void clear_transfer_delta(TransferPinDelta& entry) {
+  entry.object = nullptr;
+  entry.delta = 0;
 }
 
 // Fold a mutator's buffered transfer-pin deltas into the global pin table. Called
@@ -3065,7 +3080,9 @@ void nrq_gc_unpin(void* object) {
     MutatorState& mutator = thread_mutator;
     TransferPinDelta* pending = find_transfer_delta(mutator, object);
     if (pending && pending->delta > 0) {
-      --pending->delta;
+      // A buffered pin cancelled before the drain has no effect on the pin table,
+      // so the entry stops being active as soon as its delta reaches zero.
+      if (--pending->delta == 0) clear_transfer_delta(*pending);
       end_fast_barrier();
       return;
     }
@@ -3096,7 +3113,9 @@ void* nrq_gc_pin_transfer(void* object) {
     MutatorState& mutator = thread_mutator;
     TransferPinDelta* pending = find_transfer_delta(mutator, object);
     if (pending) {
-      ++pending->delta;
+      // A pin cancels a buffered release, which is the same net effect a table pin
+      // followed by the queued release would have had.
+      if (++pending->delta == 0) clear_transfer_delta(*pending);
       end_fast_barrier();
       return object;
     }

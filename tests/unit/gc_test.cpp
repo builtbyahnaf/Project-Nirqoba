@@ -1487,3 +1487,34 @@ TEST(GcTest, DuplicateRootRegistrationsInConcurrentCollectionStayConsistent) {
   nrq_gc_collect();
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
 }
+
+TEST(GcTest, TransferPinDeltasCancelWithoutLeavingPins) {
+  nrq_gc_enable();
+  nrq_gc_collect();
+  const uint64_t baseline_pins = nrq_gc_pin_count();
+  ASSERT_EQ(baseline_pins, uint64_t{0});
+
+  // A handoff that is released before the next cycle nets to nothing: the pin
+  // table never learns about it, and the object is reclaimable once the buffered
+  // pair cancels out.
+  auto* node = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(node, nullptr);
+  ASSERT_TRUE(nrq_gc_pin_transfer(node) == node);
+  nrq_gc_unpin(node);
+  ASSERT_EQ(nrq_gc_pin_count(), baseline_pins);
+
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_pin_count(), baseline_pins);
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+
+  // The cancelled entry must not keep absorbing later handoffs: a fresh pin of the
+  // same object is a new delta and protects it again.
+  auto* second = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(second, nullptr);
+  ASSERT_TRUE(nrq_gc_pin_transfer(second) == second);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{1});
+  nrq_gc_unpin(second);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
