@@ -37,3 +37,43 @@ collector discovers them through the thread's shadow stack.
   region instead of one per root. The runtime validates the whole table before it
   publishes any slot, keeps the same per-slot duplicate counts, and marks a root
   against an in-flight snapshot exactly as the per-slot entry point does.
+
+### 3.1 Invariants that keep a live object from being swept
+
+Three properties are load-bearing, and each has an artifact that fails if it is
+broken:
+
+1. **One description of a root set.** The descriptor words and the roots they
+   describe come from a single layout walk, so the table an activation publishes
+   cannot disagree with the slots it registers. Every slot declared at any point
+   in the activation belongs to that one table, including a slot declared after a
+   collection already ran
+   (`tests/integration/positive/gc_root_completeness`).
+2. **A table states its own length.** Word 0 is the slot count and word 1 is the
+   word count, so a truncated descriptor is rejected before the walk can read past
+   it, and the marking path marks from the same validated table rather than from
+   offsets it recomputed. Publication is all-or-nothing
+   (`tests/unit/gc_test.cpp`, the frame registration cases).
+3. **Registration is never elided, only described.** A type the lowering reports as
+   managed publishes an offset; if its layout walk ever returned nothing, the slot
+   is registered at offset 0 rather than skipped. A program with no managed
+   storage elides the protocol entirely — no descriptor, no mutator entry, no poll
+   (`tests/integration/positive/gc_root_elision_owned`), and every optimization
+   level keeps registration (`tests/integration/positive/gc_root_at_O0`).
+
+### 3.2 The safepoint bound
+
+A managed loop polls on its back edge through a countdown in an entry-block slot,
+reloading the interval on the polled path only. The comparison is *at or below
+zero*, not equality: an equality test only fires on the value the emission
+intended, so a counter that reached zero without taking the polled path, or that
+wrapped past it, would stop the loop observing collection requests permanently
+while the code still looked correct. The bound is that a request is observed
+within one interval of crossings, and it holds for every counter value
+(`tests/integration/positive/gc_safepoint_bound` asserts the polled back edge and
+the comparison in the optimized module).
+
+The same poll is why a managed loop is not vectorized: a call the collector can run
+through cannot be assumed not to touch the heap, so vectorizing the body would
+either drop the poll or let the vectorizer assume a stable heap
+(`tests/integration/positive/opt_vectorize_managed_blocked`).
