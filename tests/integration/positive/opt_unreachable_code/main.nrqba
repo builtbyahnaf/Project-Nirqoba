@@ -1,0 +1,20 @@
+int function dead_branch_helper(int value) {
+    print(value + 999);
+    return value;
+}
+
+int function select(int value) {
+    if (value < 0) {
+        print(1234);
+    }
+    return value;
+}
+
+int function main() {
+    var value = select(3);
+    if (value > 100) {
+        value = dead_branch_helper(value);
+    }
+    print(value);
+    return 0;
+}
