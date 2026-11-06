@@ -1,0 +1,25 @@
+// The poll is throttled by a countdown, so the loop must prove the bound holds
+// for every counter value and reload the interval on the polled path only.
+managed<int> function make_value(int index) {
+    var value = array.allocate<int>(1);
+    value[0] = index;
+    return value;
+}
+
+int function count_with_pressure(string[] args) {
+    var total = 0;
+    var index = 0;
+    var limit = args.length + 2000;
+    while (index < limit) {
+        var value = make_value(index);
+        total = total + value[0];
+        index += 1;
+    }
+    gc.collect();
+    return total;
+}
+
+int function main(string[] args) {
+    print(count_with_pressure(args));
+    return 0;
+}

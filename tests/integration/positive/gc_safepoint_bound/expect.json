@@ -1,0 +1,8 @@
+{
+  "mode": "build_and_run",
+  "expect_stdout": "1999000\n",
+  "expect_optimized_ir_counts": {
+    "call void @nrq_gc_safepoint()": 1,
+    "icmp slt i64": 1
+  }
+}
