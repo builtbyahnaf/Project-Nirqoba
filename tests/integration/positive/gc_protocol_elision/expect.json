@@ -1,12 +1,16 @@
 {
   "mode": "build_and_run",
   "expect_stdout_contains": ["6"],
-  "expect_ir_counts": {
-    "call void @nrq_gc_mutator_enter()": 1,
-    "call void @nrq_gc_mutator_leave()": 1
-  },
   "expect_ir_contains": [
     "define internal i64 @inner(",
     "define internal i64 @middle("
+  ],
+  "expect_ir_counts": {
+    "call void @nrq_gc_mutator_enter()": 1,
+    "call void @nrq_gc_mutator_leave()": 1,
+    "@nrq_gc_layout_0 = private constant": 1
+  },
+  "expect_ir_not_contains": [
+    "alloca [1 x i64]"
   ]
 }
