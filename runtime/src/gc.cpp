@@ -33,16 +33,172 @@ using namespace std;
 
 namespace {
 
+constexpr size_t kGcPageShift = 16;
+constexpr size_t kGcPageBytes = size_t{1} << kGcPageShift;
+constexpr size_t kObjectStartAlignment = alignof(std::max_align_t);
+
 struct GcPage {
   unsigned char* storage = nullptr;
   size_t capacity = 0;
   size_t used = 0;
   size_t live_objects = 0;
+  // Page-local object-start metadata. One bit per max_align_t-sized slot lets
+  // reference resolution validate an address and derive its header without a
+  // global hash probe. Pages larger than kGcPageBytes are not indexed; their
+  // references keep using ObjectIndex.
+  std::unique_ptr<uint64_t[]> object_starts;
+  size_t object_start_words = 0;
   // Pages emptied by a concurrent sweep are retained until the next
   // stop-the-world cycle boundary, when no mutator can still be inside an
   // allocator or holding a TLAB cursor into the page.
   bool retired = false;
 };
+
+// Maps page-aligned storage to its page. Small pages are aligned to
+// kGcPageBytes, so every address in a page has the same chunk key and the
+// table holds one entry per page. The table is only mutated under gc_mutex.
+class PageDirectory {
+ public:
+  bool insert(GcPage* page) {
+    if (!page || !page->storage || !page->object_starts) return false;
+    if (entries_.empty()) {
+      if (!rehash(64)) return false;
+    } else if (size_ + tombstones_ + 1 >=
+               entries_.size() - entries_.size() / 3) {
+      size_t next = entries_.size();
+      if (size_ >= entries_.size() / 2) {
+        if (entries_.size() > SIZE_MAX / 2) return false;
+        next = entries_.size() * 2;
+      }
+      if (!rehash(next)) return false;
+    }
+    const uintptr_t key = key_for(page->storage);
+    size_t index = hash(key) & (entries_.size() - 1);
+    size_t tombstone = entries_.size();
+    for (size_t probes = 0; probes < entries_.size(); ++probes) {
+      Entry& entry = entries_[index];
+      if (entry.key == key) return entry.page == page;
+      if (entry.key == kTombstone && tombstone == entries_.size())
+        tombstone = index;
+      if (entry.key == kEmpty) {
+        if (tombstone != entries_.size()) {
+          index = tombstone;
+          --tombstones_;
+        }
+        entries_[index] = Entry{key, page};
+        ++size_;
+        return true;
+      }
+      index = (index + 1) & (entries_.size() - 1);
+    }
+    if (tombstone != entries_.size()) {
+      entries_[tombstone] = Entry{key, page};
+      --tombstones_;
+      ++size_;
+      return true;
+    }
+    return false;
+  }
+
+  void erase(GcPage* page) {
+    if (!page || !page->storage || entries_.empty()) return;
+    const uintptr_t key = key_for(page->storage);
+    const size_t mask = entries_.size() - 1;
+    size_t index = hash(key) & mask;
+    for (size_t probes = 0; probes < entries_.size(); ++probes) {
+      Entry& entry = entries_[index];
+      if (entry.key == kEmpty) return;
+      if (entry.key == key) {
+        if (entry.page != page) return;
+        entry = Entry{kTombstone, nullptr};
+        --size_;
+        ++tombstones_;
+        return;
+      }
+      index = (index + 1) & mask;
+    }
+  }
+
+  GcPage* find(void* object) const {
+    if (!object || entries_.empty()) return nullptr;
+    const uintptr_t key = key_for(object);
+    const size_t mask = entries_.size() - 1;
+    size_t index = hash(key) & mask;
+    for (size_t probes = 0; probes < entries_.size(); ++probes) {
+      const Entry& entry = entries_[index];
+      if (entry.key == kEmpty) return nullptr;
+      if (entry.key == key) return entry.page;
+      index = (index + 1) & mask;
+    }
+    return nullptr;
+  }
+
+ private:
+  static constexpr uintptr_t kEmpty = UINTPTR_MAX;
+  static constexpr uintptr_t kTombstone = UINTPTR_MAX - 1;
+  struct Entry {
+    uintptr_t key = kEmpty;
+    GcPage* page = nullptr;
+  };
+
+  static uintptr_t key_for(const void* address) {
+    return reinterpret_cast<uintptr_t>(address) >> kGcPageShift;
+  }
+
+  static size_t hash(uintptr_t key) {
+    uint64_t value = static_cast<uint64_t>(key);
+    value ^= value >> 30;
+    value *= UINT64_C(0xbf58476d1ce4e5b9);
+    value ^= value >> 27;
+    value *= UINT64_C(0x94d049bb133111eb);
+    value ^= value >> 31;
+    return static_cast<size_t>(value);
+  }
+
+  bool rehash(size_t capacity) {
+    try {
+      std::vector<Entry> replacement(capacity);
+      for (const Entry& entry : entries_) {
+        if (entry.key == kEmpty || entry.key == kTombstone) continue;
+        const size_t mask = capacity - 1;
+        size_t index = hash(entry.key) & mask;
+        while (replacement[index].key != kEmpty)
+          index = (index + 1) & mask;
+        replacement[index] = entry;
+      }
+      entries_.swap(replacement);
+      tombstones_ = 0;
+      return true;
+    } catch (...) {
+      return false;
+    }
+  }
+
+  std::vector<Entry> entries_;
+  size_t size_ = 0;
+  size_t tombstones_ = 0;
+};
+
+bool test_object_start(const GcPage& page, size_t offset) {
+  if (!page.object_starts || offset % kObjectStartAlignment != 0) return false;
+  const size_t index = offset / kObjectStartAlignment;
+  if (index / 64 >= page.object_start_words) return false;
+  return (page.object_starts[index / 64] >> (index % 64)) & 1;
+}
+
+void mark_object_start(GcPage& page, size_t offset) {
+  if (!page.object_starts || offset % kObjectStartAlignment != 0) return;
+  const size_t index = offset / kObjectStartAlignment;
+  if (index / 64 >= page.object_start_words) return;
+  page.object_starts[index / 64] |= uint64_t{1} << (index % 64);
+}
+
+void clear_object_start(GcPage& page, size_t offset) {
+  if (!page.object_starts || offset % kObjectStartAlignment != 0) return;
+  const size_t index = offset / kObjectStartAlignment;
+  if (index / 64 >= page.object_start_words) return;
+  page.object_starts[index / 64] &= ~(uint64_t{1} << (index % 64));
+}
 
 // Most managed records contain only one or two GC references. Store those
 // offsets in the object header itself so traced objects do not need a separate
@@ -281,7 +437,31 @@ thread_local bool thread_is_collector = false;
 thread_local MutatorState thread_mutator;
 ObjectHeader* objects = nullptr;
 ObjectIndex object_index;
-constexpr size_t kGcPageBytes = 64 * 1024;
+PageDirectory page_directory;
+
+// Resolve a published object through page-local start metadata first. A hit
+// validates the exact payload start, so interior and stale pointers still miss.
+// Any page that is not indexed (large-object pages or an allocation failure)
+// falls back to the exact ObjectIndex. Callers hold gc_mutex.
+ObjectHeader* find_object_locked(void* object) {
+  if (!object) return nullptr;
+  GcPage* page = page_directory.find(object);
+  if (page && page->object_starts) {
+    const auto* address = static_cast<const unsigned char*>(object);
+    if (address >= page->storage) {
+      const size_t offset = static_cast<size_t>(address - page->storage);
+      if (offset >= sizeof(ObjectHeader) && offset < page->capacity &&
+          test_object_start(*page, offset)) {
+        auto* header =
+            reinterpret_cast<ObjectHeader*>(page->storage + offset) - 1;
+        if (header->page == page && header->payload() == object)
+          return header;
+      }
+    }
+  }
+  return object_index.find(static_cast<void*>(object));
+}
+
 constexpr size_t kGcTlabBytes = 4 * 1024;
 std::vector<std::unique_ptr<GcPage>> gc_pages;
 // Empty pages keep their backing storage across cycles. Reusing them avoids an
@@ -460,6 +640,12 @@ void publish_tlab_locked(MutatorState& mutator) {
     ObjectHeader* next = header->tlab_next;
     if (!object_index.insert(header->payload(), header))
       nrq_runtime_fatal("GC failed to publish a thread-local allocation");
+    if (header->page && header->page->object_starts) {
+      const size_t offset = static_cast<size_t>(
+          static_cast<unsigned char*>(header->payload()) -
+          header->page->storage);
+      mark_object_start(*header->page, offset);
+    }
     header->tlab_next = nullptr;
     header->next = objects;
     objects = header;
@@ -570,7 +756,7 @@ void enqueue_header_locked(ObjectHeader* header, MarkContext& context) {
 void enqueue_reference(void* object, void* opaque_context) {
   if (!object) return;
   auto* context = static_cast<MarkContext*>(opaque_context);
-  ObjectHeader* found = object_index.find(object);
+  ObjectHeader* found = find_object_locked(object);
   // Roots may refer to static/native objects. Only collector-owned objects
   // enter the intrusive mark stack, so marking never allocates auxiliary heap.
   enqueue_header_locked(found, *context);
@@ -671,7 +857,7 @@ void enqueue_roots_locked(MarkContext& context) {
 void remember_reference(void* object, void* opaque_context) {
   (void)opaque_context;
   if (!object) return;
-  ObjectHeader* found = object_index.find(object);
+  ObjectHeader* found = find_object_locked(object);
   if (!found || !found->young) return;
   try {
     remembered_young.insert(found);
@@ -685,7 +871,7 @@ void remember_young_locked(void* object) {
       !generational_barrier_active.load(std::memory_order_acquire) ||
       !object)
     return;
-  ObjectHeader* found = object_index.find(object);
+  ObjectHeader* found = find_object_locked(object);
   if (found && found->young) {
     try {
       remembered_young.insert(found);
@@ -702,7 +888,7 @@ void remember_children_locked(ObjectHeader* header) {
 void defer_remembered_locked(void* object) {
   if (!object || !generational_barrier_active.load(std::memory_order_acquire))
     return;
-  ObjectHeader* found = object_index.find(object);
+  ObjectHeader* found = find_object_locked(object);
   if (found && found->young) {
     try {
       remembered_young.insert(found);
@@ -724,7 +910,7 @@ void drain_remembered_locked(MutatorState& mutator, bool defer_unresolved) {
   for (size_t index = 0; index < mutator.remembered_count; ++index) {
     void* object = mutator.remembered[index];
     if (!object) continue;
-    ObjectHeader* found = object_index.find(object);
+    ObjectHeader* found = find_object_locked(object);
     if (found && found->young) {
       try {
         remembered_young.insert(found);
@@ -773,7 +959,7 @@ ThreadGcStateCleanup::~ThreadGcStateCleanup() {
 
 void resolve_unresolved_remembered_locked() {
   for (void* object : unresolved_remembered) {
-    ObjectHeader* found = object_index.find(object);
+    ObjectHeader* found = find_object_locked(object);
     if (!found || !found->young) continue;
     try {
       remembered_young.insert(found);
@@ -847,6 +1033,12 @@ bool sweep_chunk_locked(size_t budget) {
 
     const bool collectable = !active_collection_is_minor || header->young;
     if (!header->marked && collectable) {
+      if (header->page && header->page->object_starts) {
+        const size_t offset = static_cast<size_t>(
+            static_cast<unsigned char*>(header->payload()) -
+            header->page->storage);
+        clear_object_start(*header->page, offset);
+      }
       object_index.erase(header->payload());
       remembered_young.erase(header);
       if (!header->young) {
@@ -911,18 +1103,29 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
     page->used = 0;
     page->live_objects = 0;
     page->retired = false;
+    if (page->object_starts && page->object_start_words != 0) {
+      std::memset(page->object_starts.get(), 0,
+                  page->object_start_words * sizeof(uint64_t));
+    }
     recycled_page_reuse_count = saturated_add(recycled_page_reuse_count, 1);
     return page;
   }
-  void* storage = ::operator new(capacity, std::nothrow);
+  void* storage =
+      ::operator new(capacity, std::align_val_t{kGcPageBytes}, std::nothrow);
   if (!storage) return nullptr;
   try {
     auto page = std::make_unique<GcPage>();
     page->storage = static_cast<unsigned char*>(storage);
     page->capacity = capacity;
+    if (capacity <= kGcPageBytes) {
+      const size_t slots = capacity / kObjectStartAlignment;
+      const size_t words = (slots + 63) / 64;
+      page->object_starts.reset(new (std::nothrow) uint64_t[words]());
+      if (page->object_starts) page->object_start_words = words;
+    }
     return page;
   } catch (...) {
-    ::operator delete(storage);
+    ::operator delete(storage, std::align_val_t{kGcPageBytes});
     return nullptr;
   }
 }
@@ -935,7 +1138,7 @@ void recycle_page(std::unique_ptr<GcPage> page) {
   if (recycled_pages.size() >= kMaxRecycledPages ||
       page->capacity < kGcPageBytes ||
       page->capacity > kMaxRecycledPageBytes) {
-    ::operator delete(page->storage);
+    ::operator delete(page->storage, std::align_val_t{kGcPageBytes});
     return;
   }
   page->used = 0;
@@ -945,7 +1148,7 @@ void recycle_page(std::unique_ptr<GcPage> page) {
   try {
     recycled_pages.push_back(std::move(page));
   } catch (...) {
-    ::operator delete(raw->storage);
+    ::operator delete(raw->storage, std::align_val_t{kGcPageBytes});
   }
 }
 
@@ -965,6 +1168,7 @@ void prepare_cycle_locked(bool young_only) {
   ++gc_page_generation;
   for (auto page = gc_pages.begin(); page != gc_pages.end();) {
     if ((*page)->live_objects == 0) {
+      page_directory.erase(page->get());
       auto empty_page = std::move(*page);
       page = gc_pages.erase(page);
       recycle_page(std::move(empty_page));
@@ -1158,9 +1362,12 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     try {
       gc_pages.push_back(std::move(new_page));
     } catch (...) {
-      if (new_page) ::operator delete(new_page->storage);
+      if (new_page)
+        ::operator delete(new_page->storage,
+                          std::align_val_t{kGcPageBytes});
       return nullptr;
     }
+    page_directory.insert(page);
   }
   thread_allocation_page = page;
   thread_allocation_generation = gc_page_generation;
@@ -1203,6 +1410,11 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     if (!object_index.insert(object, header)) {
       rollback_reservation();
       return nullptr;
+    }
+    if (page->object_starts) {
+      const size_t offset = static_cast<size_t>(
+          static_cast<unsigned char*>(object) - page->storage);
+      mark_object_start(*page, offset);
     }
   } catch (...) {
     rollback_reservation();
@@ -1255,9 +1467,12 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     try {
       gc_pages.push_back(std::move(new_page));
     } catch (...) {
-      if (new_page) ::operator delete(new_page->storage);
+      if (new_page)
+        ::operator delete(new_page->storage,
+                          std::align_val_t{kGcPageBytes});
       return false;
     }
+    page_directory.insert(page);
     available = page->capacity;
   }
   const size_t reserve = std::min(kGcTlabBytes, available);
@@ -1877,6 +2092,11 @@ uint64_t nrq_gc_page_reuse_count(void) {
   return recycled_page_reuse_count;
 }
 
+int32_t nrq_gc_pointer_is_managed(void* object) {
+  std::lock_guard<std::mutex> lock(gc_mutex);
+  return find_object_locked(object) ? 1 : 0;
+}
+
 nrq_gc_stats nrq_gc_get_stats(void) {
   // The registered-mutator vector is mutated under mutator_mutex. Take it
   // before gc_mutex to match the enter/leave lock order; taking only gc_mutex
@@ -1921,7 +2141,7 @@ void* nrq_gc_pin(void* object) {
   if (!object) return nullptr;
   std::lock_guard<std::mutex> lock(gc_mutex);
   if (thread_mutator.depth != 0) publish_tlab_locked(thread_mutator);
-  if (!object_index.find(object)) return nullptr;
+  if (!find_object_locked(object)) return nullptr;
   if (collection_phase.load(std::memory_order_relaxed) !=
       CollectionPhase::Idle)
     mark_value_locked(object);
@@ -1969,7 +2189,7 @@ void* nrq_gc_pin_transfer(void* object) {
   // object is already protected: cycle preparation publishes every registered
   // mutator's TLAB before enumerating pinned roots, so a pending pin becomes
   // visible for exactly the collection that needs it.
-  if (!object_index.find(object) &&
+  if (!find_object_locked(object) &&
       !find_pending_header(thread_mutator, object))
     return nullptr;
   if (collection_phase.load(std::memory_order_relaxed) !=
@@ -2002,7 +2222,7 @@ int64_t nrq_gc_get_ref_count(void* object) {
   // batch or scanning the heap, so a disabled query stays a single lock.
   if (!reference_diagnostics_enabled) return -1;
   if (thread_mutator.depth != 0) publish_tlab_locked(thread_mutator);
-  if (!object || !object_index.find(object)) return 0;
+  if (!object || !find_object_locked(object)) return 0;
   try {
     ReferenceCountTarget target{object, 0};
     for (ObjectHeader* header = objects; header; header = header->next) {
