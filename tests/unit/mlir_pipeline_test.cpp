@@ -549,7 +549,8 @@ int function main(string[] args) {
   ASSERT_TRUE(mlir::succeeded(mlir::verify(*module)));
 
   unsigned safepoint_calls = 0;
-  unsigned masked_counters = 0;
+  unsigned mask_operations = 0;
+  unsigned countdown_updates = 0;
   unsigned guarded_poll_blocks = 0;
   module->walk([&](mlir::func::FuncOp function) {
     function.walk([&](mlir::LLVM::CallOp call) {
@@ -570,15 +571,24 @@ int function main(string[] args) {
       }
       if (predecessors == 1 && guarded_by_condition) ++guarded_poll_blocks;
     });
+    // The throttle is a countdown: one subtraction feeds the comparison that
+    // guards the poll, and no mask is needed to wrap it.
+    function.walk([&](mlir::LLVM::SubOp sub_op) {
+      auto decrement = sub_op.getRhs().getDefiningOp<mlir::LLVM::ConstantOp>();
+      if (decrement &&
+          mlir::cast<mlir::IntegerAttr>(decrement.getValue()).getInt() == 1)
+        ++countdown_updates;
+    });
     function.walk([&](mlir::LLVM::AndOp and_op) {
       auto mask = and_op.getRhs().getDefiningOp<mlir::LLVM::ConstantOp>();
       if (mask && mlir::cast<mlir::IntegerAttr>(mask.getValue()).getInt() == 63)
-        ++masked_counters;
+        ++mask_operations;
     });
   });
 
-  // One poll site, guarded by one counter update.
+  // One poll site, guarded by one countdown update, and no wrap mask remains.
   ASSERT_EQ(safepoint_calls, 1u);
-  ASSERT_EQ(masked_counters, 1u);
+  ASSERT_EQ(countdown_updates, 1u);
+  ASSERT_EQ(mask_operations, 0u);
   ASSERT_EQ(guarded_poll_blocks, 1u);
 }
