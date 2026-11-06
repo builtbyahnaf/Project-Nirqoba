@@ -1,0 +1,9 @@
+{
+  "mode": "build_and_run",
+  "args": ["-O0"],
+  "expect_stdout_contains": ["35"],
+  "expect_ir_counts": {
+    "call void @nrq_gc_root_register_frame(ptr": 1,
+    "call void @nrq_gc_mutator_enter()": 1
+  }
+}
