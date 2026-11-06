@@ -1155,7 +1155,7 @@ TEST(GcTest, FrameRootRegistrationPublishesEverySlot) {
   // descriptor[0] = slot count, descriptor[1] = total word count, then
   // (object_size, reference_count, offsets...) per slot: one pointer-rooted value
   // each.
-  const size_t descriptor[] = {2, 7, sizeof(void*), 1, 0, sizeof(void*), 1, 0};
+  const size_t descriptor[] = {2, 8, sizeof(void*), 1, 0, sizeof(void*), 1, 0};
   const uint64_t marker = nrq_gc_root_frame_begin();
   nrq_gc_root_register_frame(slots, 2, descriptor);
   nrq_gc_root_store(static_cast<void**>(slots[0]), first);
