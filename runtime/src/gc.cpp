@@ -543,8 +543,20 @@ struct MutatorState {
 void drain_transfer_pins_locked(MutatorState& mutator);
 
 std::mutex mutator_mutex;
+// Mutators wait here for a collection request to clear.
 std::condition_variable mutator_condition;
+// The collector waits here for mutators to park. Keeping it separate from
+// mutator_condition means a parking mutator wakes only the collector instead of
+// every thread that is already parked or waiting to enter the registry.
+std::condition_variable collector_condition;
 std::vector<MutatorState*> mutators;
+// Number of registered mutators, maintained with mutator_mutex. The collector
+// compares it against the parked count instead of walking the registry each time
+// the wait predicate is evaluated.
+size_t registered_mutator_count = 0;
+// Number of mutators currently parked. Written by the mutator as it parks and as
+// it resumes, under mutator_mutex and published with release ordering.
+std::atomic<size_t> parked_mutator_count{0};
 // Read by every safepoint poll without a lock. Writers hold mutator_mutex and
 // publish with release ordering; waiters re-check while holding that mutex.
 std::atomic<bool> collection_requested{false};
@@ -992,25 +1004,38 @@ void wait_until_not_requested(std::unique_lock<std::mutex>& lock) {
   });
 }
 
+// Park the calling mutator and wait for the request to clear. The caller holds
+// mutator_mutex through `lock`, and the count it publishes is what the collector's
+// wait predicate observes; parking mutators do not wake each other.
+void park_mutator(std::unique_lock<std::mutex>& lock) {
+  thread_mutator.parked = true;
+  parked_mutator_count.fetch_add(1, std::memory_order_release);
+  collector_condition.notify_one();
+  wait_until_not_requested(lock);
+  parked_mutator_count.fetch_sub(1, std::memory_order_release);
+  thread_mutator.parked = false;
+}
+
+bool all_mutators_parked() {
+  const size_t self = thread_mutator.depth != 0 ? 1 : 0;
+  const size_t required =
+      registered_mutator_count >= self ? registered_mutator_count - self : 0;
+  return parked_mutator_count.load(std::memory_order_acquire) >= required;
+}
+
 void stop_mutators() {
   std::unique_lock<std::mutex> lock(mutator_mutex);
   while (collection_is_requested()) {
     if (thread_mutator.depth != 0) {
-      thread_mutator.parked = true;
-      mutator_condition.notify_all();
-      wait_until_not_requested(lock);
-      thread_mutator.parked = false;
+      park_mutator(lock);
     } else {
       wait_until_not_requested(lock);
     }
   }
+  // Mutators observe the request at their next safepoint poll, so raising it only
+  // has to wake this collector once each mutator reports in.
   collection_requested.store(true, std::memory_order_release);
-  mutator_condition.notify_all();
-  mutator_condition.wait(lock, [] {
-    for (const MutatorState* mutator : mutators)
-      if (mutator != &thread_mutator && !mutator->parked) return false;
-    return true;
-  });
+  collector_condition.wait(lock, [] { return all_mutators_parked(); });
 }
 
 void resume_mutators() {
@@ -1315,7 +1340,11 @@ ThreadGcStateCleanup::~ThreadGcStateCleanup() {
       drain_transfer_pins_locked(thread_mutator);
     }
     auto found = std::find(mutators.begin(), mutators.end(), &thread_mutator);
-    if (found != mutators.end()) mutators.erase(found);
+    if (found != mutators.end()) {
+      mutators.erase(found);
+      --registered_mutator_count;
+      collector_condition.notify_all();
+    }
     thread_mutator.depth = 0;
     thread_mutator.parked = false;
     mutator_condition.notify_all();
@@ -1843,13 +1872,15 @@ std::unique_lock<std::mutex> acquire_collection_cycle() {
     return cycle_lock;
   }
   {
-    std::lock_guard<std::mutex> lock(mutator_mutex);
+    std::unique_lock<std::mutex> lock(mutator_mutex);
     thread_mutator.parked = true;
-    mutator_condition.notify_all();
+    parked_mutator_count.fetch_add(1, std::memory_order_release);
+    collector_condition.notify_one();
   }
   cycle_lock.lock();
   {
     std::lock_guard<std::mutex> lock(mutator_mutex);
+    parked_mutator_count.fetch_sub(1, std::memory_order_release);
     thread_mutator.parked = false;
   }
   return cycle_lock;
@@ -2709,6 +2740,7 @@ void nrq_gc_mutator_enter(void) {
   while (collection_is_requested()) wait_until_not_requested(lock);
   try {
     mutators.push_back(&thread_mutator);
+    ++registered_mutator_count;
   } catch (...) {
     thread_mutator.depth = 0;
     nrq_runtime_fatal("GC mutator registration failed");
@@ -2734,6 +2766,10 @@ void nrq_gc_mutator_leave(void) {
   if (found == mutators.end())
     nrq_runtime_fatal("GC mutator registry lost an active thread");
   mutators.erase(found);
+  --registered_mutator_count;
+  // The collector's park predicate compares against the registry size, so a
+  // shrinking registry has to wake it.
+  collector_condition.notify_all();
   mutator_condition.notify_all();
 }
 
@@ -2745,10 +2781,7 @@ void nrq_gc_safepoint(void) {
 
   std::unique_lock<std::mutex> lock(mutator_mutex);
   if (!collection_is_requested()) return;
-  thread_mutator.parked = true;
-  mutator_condition.notify_all();
-  wait_until_not_requested(lock);
-  thread_mutator.parked = false;
+  park_mutator(lock);
 }
 
 void nrq_gc_set_threshold(size_t bytes) {
