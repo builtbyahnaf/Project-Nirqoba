@@ -345,6 +345,41 @@ def run_case(case_dir, compiler_exe, temp_dir):
                     f"{expected}.\nGot:\n{ir_out}"
                 )
 
+    # The checks above describe what lowering emitted. LLVM's own passes then
+    # inline, promote, unroll and vectorize that IR, so a fixture that claims one
+    # of those transforms has to assert on the optimized module instead. The
+    # second build stops after the LLVM pipeline (--emit=llvm), which is the
+    # module handed to the target machine.
+    asserts_optimized = (spec.get("expect_optimized_ir_counts") or
+                         spec.get("expect_optimized_ir_contains") is not None or
+                         spec.get("expect_optimized_ir_not_contains") is not None)
+    if asserts_optimized and mode in ("build", "build_and_run", "assembly_check", "target_assembly"):
+        opt_code, opt_out, opt_err = run_command(
+            [str(compiler_exe), "build", str(source_file),
+             "--out-dir", str(temp_dir), "--emit=llvm"] + extra_args
+        )
+        if opt_code != 0:
+            return False, (
+                f"Optimized IR emission failed with exit {opt_code}.\nStderr: {opt_err}\nStdout: {opt_out}"
+            )
+        for needle in spec.get("expect_optimized_ir_contains", []):
+            if needle not in opt_out:
+                return False, (
+                    f"Optimized IR does not contain '{needle}'.\nGot:\n{opt_out}"
+                )
+        for needle in spec.get("expect_optimized_ir_not_contains", []):
+            if needle in opt_out:
+                return False, (
+                    f"Optimized IR unexpectedly contains '{needle}'.\nGot:\n{opt_out}"
+                )
+        for needle, expected in spec.get("expect_optimized_ir_counts", {}).items():
+            actual = opt_out.count(needle)
+            if actual != expected:
+                return False, (
+                    f"Optimized IR contains '{needle}' {actual} time(s), expected "
+                    f"{expected}.\nGot:\n{opt_out}"
+                )
+
     # Special check for COFF object header if requested
     if spec.get("check_coff_header", False):
         stem = source_file.stem
