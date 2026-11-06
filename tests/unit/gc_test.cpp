@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <cstring>
 #include <thread>
@@ -438,6 +439,36 @@ TEST(GcTest, ReferenceDiagnosticsCountPinnedRoots) {
   ASSERT_EQ(nrq_gc_get_ref_count(object), int64_t{0});
   nrq_gc_ref_count_stop();
   nrq_gc_collect();
+}
+
+TEST(GcTest, ReferenceDiagnosticsCountOnlyTheRequestedObject) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  nrq_gc_ref_count_start();
+
+  auto* target = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(target, nullptr);
+  constexpr size_t kHolders = 32;
+  std::array<Node*, kHolders> holders{};
+  for (size_t index = 0; index < holders.size(); ++index) {
+    holders[index] =
+        static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+    ASSERT_NE(holders[index], nullptr);
+    nrq_gc_root_register(reinterpret_cast<void**>(&holders[index]));
+    nrq_gc_root_store(reinterpret_cast<void**>(&holders[index]->next), target);
+  }
+  // Unrelated objects must not perturb the count for the requested object.
+  for (int index = 0; index < 64; ++index)
+    ASSERT_NE(nrq_gc_allocate(32, nullptr), nullptr);
+
+  ASSERT_EQ(nrq_gc_get_ref_count(target), static_cast<int64_t>(kHolders));
+
+  for (size_t index = 0; index < holders.size(); ++index)
+    nrq_gc_root_unregister(reinterpret_cast<void**>(&holders[index]));
+  for (Node*& holder : holders) holder = nullptr;
+  nrq_gc_ref_count_stop();
+  nrq_gc_collect();
+  nrq_gc_enable();
 }
 
 TEST(GcTest, ConcurrentAllocationIsSerializedAndReclaimed) {
