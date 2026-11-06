@@ -1714,6 +1714,31 @@ void clear_transfer_delta(TransferPinDelta& entry) {
   entry.delta = 0;
 }
 
+// Returns an empty slot, reusing a retired entry before extending the logical
+// high-water count. Without reuse a workload that returns and immediately releases
+// distinct objects would fill all 32 entries with retired slots and push every
+// later handoff onto the global pin table for the rest of the process.
+TransferPinDelta* acquire_transfer_delta_slot(MutatorState& mutator) {
+  for (size_t index = 0; index < mutator.transfer_pin_count; ++index) {
+    TransferPinDelta& entry = mutator.transfer_pins[index];
+    if (!entry.object) {
+      entry.delta = 0;
+      return &entry;
+    }
+  }
+  if (mutator.transfer_pin_count >= kTransferPinBufferCapacity) return nullptr;
+  TransferPinDelta& entry = mutator.transfer_pins[mutator.transfer_pin_count];
+  ++mutator.transfer_pin_count;
+  entry.object = nullptr;
+  entry.delta = 0;
+  return &entry;
+}
+
+// Handoffs that found no reusable slot. Zero here means the buffered fast path
+// carried every handoff; a rising count means the buffer is genuinely full of live
+// deltas, which is the only case that should reach the global pin table.
+std::atomic<uint64_t> transfer_pin_fallbacks{0};
+
 // Fold a mutator's buffered transfer-pin deltas into the global pin table. Called
 // with gc_mutex held, either by the collector after parking the mutator or by the
 // mutator itself, so the buffer cannot be written while it is being read.
@@ -3062,6 +3087,10 @@ uint64_t nrq_gc_pin_count(void) {
   return static_cast<uint64_t>(pinned_objects.size());
 }
 
+uint64_t nrq_gc_transfer_pin_fallbacks(void) {
+  return transfer_pin_fallbacks.load(std::memory_order_relaxed);
+}
+
 uint64_t nrq_gc_pin_violations(void) {
   std::lock_guard<std::mutex> lock(gc_mutex);
   return pin_violations;
@@ -3086,12 +3115,14 @@ void nrq_gc_unpin(void* object) {
       end_fast_barrier();
       return;
     }
-    if (!pending && mutator.transfer_pin_count < kTransferPinBufferCapacity) {
-      mutator.transfer_pins[mutator.transfer_pin_count].object = object;
-      mutator.transfer_pins[mutator.transfer_pin_count].delta = -1;
-      ++mutator.transfer_pin_count;
-      end_fast_barrier();
-      return;
+    if (!pending) {
+      if (TransferPinDelta* slot = acquire_transfer_delta_slot(mutator)) {
+        slot->object = object;
+        slot->delta = -1;
+        end_fast_barrier();
+        return;
+      }
+      transfer_pin_fallbacks.fetch_add(1, std::memory_order_relaxed);
     }
     end_fast_barrier();
   }
@@ -3119,15 +3150,16 @@ void* nrq_gc_pin_transfer(void* object) {
       end_fast_barrier();
       return object;
     }
-    if (mutator.transfer_pin_count < kTransferPinBufferCapacity) {
-      mutator.transfer_pins[mutator.transfer_pin_count].object = object;
-      mutator.transfer_pins[mutator.transfer_pin_count].delta = 1;
-      ++mutator.transfer_pin_count;
+    if (TransferPinDelta* slot = acquire_transfer_delta_slot(mutator)) {
+      slot->object = object;
+      slot->delta = 1;
       end_fast_barrier();
       return object;
     }
-    // The buffer is full. Leave the barrier region before taking the collector
-    // mutex, because a collector holding it waits for barrier regions to drain.
+    transfer_pin_fallbacks.fetch_add(1, std::memory_order_relaxed);
+    // Every slot holds a live delta. Leave the barrier region before taking the
+    // collector mutex, because a collector holding it waits for barrier regions to
+    // drain.
     end_fast_barrier();
   }
   std::lock_guard<std::mutex> lock(gc_mutex);
