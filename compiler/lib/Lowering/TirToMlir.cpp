@@ -1874,21 +1874,12 @@ class FunctionTranslator {
     collect_managed_reference_offsets(element_type, 0, offsets);
     if (offsets.empty()) return;
     const mlir::Type i64 = builder_.getI64Type();
-    auto offsets_type = mlir::LLVM::LLVMArrayType::get(
-        i64, static_cast<unsigned>(offsets.size()));
-    mlir::Value offsets_slot = alloca_at_entry(offsets_type, loc);
-    mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
-        loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
-    for (std::size_t index = 0; index < offsets.size(); ++index) {
-      mlir::Value index_value = builder_.create<mlir::LLVM::ConstantOp>(
-          loc, i64, builder_.getI64IntegerAttr(static_cast<int64_t>(index))).getResult();
-      mlir::Value field_slot = builder_.create<mlir::LLVM::GEPOp>(
-          loc, llvm_ptr_type(ctx_), offsets_type, offsets_slot,
-          mlir::ValueRange{zero, index_value}).getResult();
-      mlir::Value offset = builder_.create<mlir::LLVM::ConstantOp>(
-          loc, i64, builder_.getI64IntegerAttr(static_cast<int64_t>(offsets[index]))).getResult();
-      builder_.create<mlir::LLVM::StoreOp>(loc, offset, field_slot);
-    }
+    // The element layout is a property of the element type, so the array path
+    // shares the same read-only descriptor the scalar path uses. Building it in
+    // a stack slot cost an alloca and one store per offset on every
+    // registration of every managed array.
+    mlir::Value offsets_slot = reference_layout_descriptor(offsets, loc);
+    if (!offsets_slot) return;
     auto register_fn = ensure_runtime_fn(
         module_, builder_, "nrq_gc_root_register_array",
         mlir::LLVM::LLVMVoidType::get(ctx_),
@@ -2536,21 +2527,11 @@ class FunctionTranslator {
             collect_managed_reference_offsets(
                 op.result.type.element_type(), 0, reference_offsets);
             if (!reference_offsets.empty()) {
-              auto offsets_type = mlir::LLVM::LLVMArrayType::get(
-                  i64, static_cast<unsigned>(reference_offsets.size()));
-              mlir::Value offsets_slot = alloca_at_entry(offsets_type, loc);
-              for (std::size_t index = 0; index < reference_offsets.size(); ++index) {
-                mlir::Value index_value = builder_.create<mlir::LLVM::ConstantOp>(
-                    loc, i64, builder_.getI64IntegerAttr(
-                                  static_cast<int64_t>(index))).getResult();
-                mlir::Value slot = builder_.create<mlir::LLVM::GEPOp>(
-                    loc, llvm_ptr_type(ctx_), offsets_type, offsets_slot,
-                    mlir::ValueRange{zero_index, index_value}).getResult();
-                mlir::Value offset = builder_.create<mlir::LLVM::ConstantOp>(
-                    loc, i64, builder_.getI64IntegerAttr(
-                                  static_cast<int64_t>(reference_offsets[index]))).getResult();
-                builder_.create<mlir::LLVM::StoreOp>(loc, offset, slot);
-              }
+              // The element layout is a constant: the shared read-only descriptor
+              // describes it once per module instead of once per activation.
+              mlir::Value offsets_slot =
+                  reference_layout_descriptor(reference_offsets, loc);
+              if (!offsets_slot) return false;
               auto clear_references = ensure_runtime_fn(
                   module_, builder_, "nrq_gc_root_clear_array_references",
                   mlir::LLVM::LLVMVoidType::get(ctx_),
@@ -2635,23 +2616,9 @@ class FunctionTranslator {
                 module_, builder_, "nrq_gc_root_clear_array_references",
                 mlir::LLVM::LLVMVoidType::get(ctx_),
                 {llvm_ptr_type(ctx_), i64, i64, llvm_ptr_type(ctx_), i64});
-            auto offsets_type = mlir::LLVM::LLVMArrayType::get(
-                i64, static_cast<unsigned>(root_offsets.size()));
-            mlir::Value offsets_slot = alloca_at_entry(offsets_type, loc);
-            mlir::Value zero_index = builder_.create<mlir::LLVM::ConstantOp>(
-                loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
-            for (std::size_t index = 0; index < root_offsets.size(); ++index) {
-              mlir::Value index_value = builder_.create<mlir::LLVM::ConstantOp>(
-                  loc, i64,
-                  builder_.getI64IntegerAttr(static_cast<int64_t>(index))).getResult();
-              mlir::Value slot = builder_.create<mlir::LLVM::GEPOp>(
-                  loc, llvm_ptr_type(ctx_), offsets_type, offsets_slot,
-                  mlir::ValueRange{zero_index, index_value}).getResult();
-              mlir::Value offset = builder_.create<mlir::LLVM::ConstantOp>(
-                  loc, i64,
-                  builder_.getI64IntegerAttr(static_cast<int64_t>(root_offsets[index]))).getResult();
-              builder_.create<mlir::LLVM::StoreOp>(loc, offset, slot);
-            }
+            mlir::Value offsets_slot =
+                reference_layout_descriptor(root_offsets, loc);
+            if (!offsets_slot) return false;
             mlir::Value root_count = builder_.create<mlir::LLVM::ConstantOp>(
                 loc, i64,
                 builder_.getI64IntegerAttr(static_cast<int64_t>(root_offsets.size()))).getResult();
@@ -2810,30 +2777,13 @@ class FunctionTranslator {
           mlir::Value offsets_pointer = builder_.create<mlir::LLVM::ZeroOp>(
               loc, llvm_ptr_type(ctx_)).getResult();
           if (!reference_offsets.empty()) {
-            auto offsets_type = mlir::LLVM::LLVMArrayType::get(
-                builder_.getI64Type(), static_cast<unsigned>(reference_offsets.size()));
-            // The offsets describe the element type, not this call, so one slot
-            // per allocation site is enough; allocating it at entry stops an
-            // allocating loop from extending the frame every iteration.
-            offsets_pointer = alloca_at_entry(offsets_type, loc);
+            // The offsets describe the element type, not this call, so one
+            // read-only descriptor per module serves every allocation site.
+            offsets_pointer = reference_layout_descriptor(reference_offsets, loc);
             if (!offsets_pointer) {
               diag_.error("NRQ4006", op.location,
-                          "internal: no entry block for the reference offsets slot");
+                          "internal: no reference layout descriptor available");
               return false;
-            }
-            mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
-                loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
-            for (std::size_t index = 0; index < reference_offsets.size(); ++index) {
-              mlir::Value index_value = builder_.create<mlir::LLVM::ConstantOp>(
-                  loc, builder_.getI64Type(),
-                  builder_.getI64IntegerAttr(static_cast<int64_t>(index))).getResult();
-              mlir::Value slot = builder_.create<mlir::LLVM::GEPOp>(
-                  loc, llvm_ptr_type(ctx_), offsets_type, offsets_pointer,
-                  mlir::ValueRange{zero, index_value}).getResult();
-              mlir::Value offset_value = builder_.create<mlir::LLVM::ConstantOp>(
-                  loc, builder_.getI64Type(),
-                  builder_.getI64IntegerAttr(static_cast<int64_t>(reference_offsets[index]))).getResult();
-              builder_.create<mlir::LLVM::StoreOp>(loc, offset_value, slot);
             }
           }
           mlir::Value root_slot = alloca_at_entry(
