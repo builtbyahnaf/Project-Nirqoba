@@ -1082,6 +1082,36 @@ TEST(GcTest, PageLocalDiscoveryResolvesOnlyPublishedObjectStarts) {
   nrq_gc_enable();
 }
 
+TEST(GcTest, ObjectIndexOnlyTracksPagesWithoutStartMetadata) {
+  // Every allocation used to pay a hash insert and every reclamation a hash
+  // erase. Small objects are found through their page's start bitmap, so the
+  // exact index must stay at zero for them and only grow for large objects.
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const size_t baseline = nrq_gc_object_index_entries();
+
+  std::vector<void*> small;
+  small.reserve(256);
+  for (int index = 0; index < 256; ++index) {
+    void* object = nrq_gc_allocate(32, nullptr);
+    ASSERT_NE(object, nullptr);
+    ASSERT_EQ(nrq_gc_pointer_is_managed(object), int32_t{1});
+    small.push_back(object);
+  }
+  ASSERT_EQ(nrq_gc_object_index_entries(), baseline);
+
+  void* large = nrq_gc_allocate(128 * 1024, nullptr);
+  ASSERT_NE(large, nullptr);
+  ASSERT_EQ(nrq_gc_object_index_entries(), baseline + 1);
+  ASSERT_EQ(nrq_gc_pointer_is_managed(large), int32_t{1});
+
+  small.clear();
+  nrq_gc_collect();
+  // Reclaiming the large object drops its index entry again.
+  ASSERT_EQ(nrq_gc_object_index_entries(), baseline);
+  nrq_gc_enable();
+}
+
 TEST(GcTest, WideReferenceBatchesPreserveEveryChild) {
   nrq_gc_disable();
   nrq_gc_collect();
