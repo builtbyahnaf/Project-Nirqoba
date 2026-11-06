@@ -736,23 +736,38 @@ class ElideNestedMutatorRegionsPass
       return function->second.getLinkage() != mlir::LLVM::Linkage::Internal;
     };
 
+    // Greatest fixpoint: start from every region-opening function that can be
+    // reached only through calls, then drop the ones that still have a caller which
+    // is neither an establisher nor covered. Starting from the optimistic side is
+    // what handles recursion: a recursive function always has itself as a caller,
+    // and that caller is exactly the function whose nested region is being removed,
+    // so the edge cannot be used to prove it needs one. Removing entries to a fixed
+    // point keeps the answer sound, because a function only survives while every way
+    // into it is already inside a region.
     llvm::StringSet<> inside_region;
+    for (auto& entry : defined) {
+      llvm::StringRef name = entry.first();
+      if (!opens_region.count(name) || establishes_region(name)) continue;
+      auto found = callers.find(name);
+      if (found == callers.end() || found->second.empty()) continue;
+      inside_region.insert(name);
+    }
     for (bool changed = true; changed;) {
       changed = false;
-      for (auto& entry : defined) {
-        llvm::StringRef name = entry.first();
-        if (!opens_region.count(name)) continue;
-        if (inside_region.count(name) || establishes_region(name)) continue;
+      llvm::SmallVector<llvm::StringRef, 8> escapees;
+      for (auto& candidate : inside_region) {
+        llvm::StringRef name = candidate.getKey();
         auto found = callers.find(name);
-        if (found == callers.end() || found->second.empty()) continue;
-        bool covered = true;
+        if (found == callers.end()) continue;
         for (llvm::StringRef caller : found->second) {
-          if (establishes_region(caller) || inside_region.count(caller)) continue;
-          covered = false;
+          if (establishes_region(caller)) continue;
+          if (inside_region.count(caller)) continue;
+          escapees.push_back(name);
           break;
         }
-        if (!covered) continue;
-        inside_region.insert(name);
+      }
+      for (llvm::StringRef name : escapees) {
+        inside_region.erase(name);
         changed = true;
       }
     }

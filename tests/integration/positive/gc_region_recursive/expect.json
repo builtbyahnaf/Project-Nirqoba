@@ -1,0 +1,8 @@
+{
+  "mode": "build_and_run",
+  "expect_stdout": "6\n",
+  "expect_ir_counts": {
+    "call void @nrq_gc_mutator_enter()": 1,
+    "call void @nrq_gc_mutator_leave()": 1
+  }
+}
