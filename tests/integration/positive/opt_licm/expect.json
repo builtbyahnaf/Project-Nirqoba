@@ -1,0 +1,6 @@
+{
+  "mode": "build_and_run",
+  "args": ["--remarks=all"],
+  "expect_stdout_contains": ["3375"],
+  "expect_stderr_contains": "hoisting mul"
+}
