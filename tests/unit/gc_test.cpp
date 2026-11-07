@@ -1314,8 +1314,11 @@ TEST(GcTest, MergedFreeRunsServeThreadLocalReserves) {
   roots.clear();
 
   // The new objects fit inside the coalesced runs, so the pages that served them
-  // are the pages that already existed.
-  ASSERT_TRUE(nrq_gc_span_reuse_count() - baseline_reuse >= 40);
+  // are the pages that already existed. A reservation now takes the whole run a
+  // page offers, so the number of reuse events tracks the number of runs consumed
+  // (a few) rather than the number of 4 KB slices it used to be carved into; the
+  // page count is what proves the space came from reclaim rather than growth.
+  ASSERT_TRUE(nrq_gc_span_reuse_count() > baseline_reuse);
   ASSERT_EQ(nrq_gc_page_count(), pages_after_reclaim);
 
   nrq_gc_collect();

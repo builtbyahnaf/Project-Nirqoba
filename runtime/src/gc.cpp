@@ -651,7 +651,6 @@ ObjectHeader* find_object_locked(void* object) {
 }
 
 constexpr size_t kGcTlabBytes = kGcPageBytes;
-constexpr size_t kGcTlabFreeSpanBytes = 4 * 1024;
 std::vector<std::unique_ptr<GcPage>> gc_pages;
 // Empty pages keep their backing storage across cycles. Reusing them avoids an
 // operator new / operator delete pair for every page a churn-heavy workload
@@ -1636,6 +1635,51 @@ GcPage* take_free_span_locked(size_t span, size_t& offset) {
   return nullptr;
 }
 
+// First-fit reuse for a thread-local reservation. `take_free_span_locked` takes
+// exactly the span it is asked for, which is right for one object and wrong for a
+// TLAB: a sweep merges a dead page into one large run, and carving it into 4 KB
+// pieces re-fragmented the page, forced a reservation every few dozen objects,
+// and left later reservations to open fresh pages - which grew the heap cycle
+// after cycle and made sweeping cost more each round. This takes the whole run
+// when it is no larger than `desired`, so one refill consumes one page's run
+// instead of sixteen, and it still accepts a shorter run as long as it can serve
+// one object. `granted` reports the length actually taken.
+// Callers hold gc_mutex.
+GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t& offset,
+                             size_t& granted) {
+  if (desired == 0 || minimum == 0 || minimum > desired ||
+      total_free_spans == 0)
+    return nullptr;
+  for (auto& entry : gc_pages) {
+    GcPage* page = entry.get();
+    if (!page || page->retired || page->free_span_count == 0 ||
+        page->free_span_bytes < minimum)
+      continue;
+    for (size_t index = 0; index < page->free_span_count; ++index) {
+      GcPage::FreeSpan& candidate = page->free_spans[index];
+      if (candidate.span < minimum) continue;
+      const size_t span = std::min(candidate.span, desired);
+      offset = candidate.offset;
+      page->free_span_bytes -= span;
+      if (candidate.span > span) {
+        // `span` is a multiple of the payload alignment, so the remainder keeps
+        // both its alignment and its position in the ordered run list.
+        candidate.offset += span;
+        candidate.span -= span;
+      } else {
+        for (size_t move = index; move + 1 < page->free_span_count; ++move)
+          page->free_spans[move] = page->free_spans[move + 1];
+        --page->free_span_count;
+        --total_free_spans;
+      }
+      recycled_span_reuse_count = saturated_add(recycled_span_reuse_count, 1);
+      granted = span;
+      return page;
+    }
+  }
+  return nullptr;
+}
+
 // Take a page of at least `capacity` bytes from the recycle pool, or create a
 // fresh one. The caller inherits storage ownership and must either publish the
 // page into gc_pages or release the storage explicitly.
@@ -2161,13 +2205,17 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
   }
   // A merged run of reclaimed space can host a whole thread-local reservation.
   // Taking it here is what turns a fragmented page back into a usable bump
-  // region instead of leaving it permanently half empty.
+  // region instead of leaving it permanently half empty - and taking all of it,
+  // rather than a fixed small slice, is what keeps a recycled heap from being
+  // carved into pieces that later reservations cannot use.
   {
     size_t run_offset = 0;
-    if (GcPage* reused = take_free_span_locked(kGcTlabFreeSpanBytes, run_offset)) {
+    size_t run_span = 0;
+    if (GcPage* reused =
+            take_free_run_locked(kGcTlabBytes, minimum_span, run_offset, run_span)) {
       mutator.tlab_page = reused;
       mutator.tlab_cursor = reused->storage + run_offset;
-      mutator.tlab_end = mutator.tlab_cursor + kGcTlabFreeSpanBytes;
+      mutator.tlab_end = mutator.tlab_cursor + run_span;
       mutator.tlab_generation = gc_page_generation;
       thread_allocation_page = reused;
       thread_allocation_generation = gc_page_generation;
