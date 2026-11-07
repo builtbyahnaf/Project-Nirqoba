@@ -6,11 +6,35 @@
 
 ---
 
-## Version 0.251-beta (dev)
+## Version 0.257-beta (dev)
+
+### Summary of Changes (since `0.251-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.251-beta release.*
+
+---
+
+## Version 0.251-beta
 
 ### Summary of Changes (since `0.246-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.246-beta release.*
+#### 1. Two Configurations That Cannot Be Mixed
+- **Runtime names corrected:** the libraries are `nirqoba_runtime` and `nirqoba_runtime_debug` (they were misspelled `nrqoba_*`), including the library file the driver links and the diagnostic it prints when the pair does not match the chosen configuration.
+- **Link-time ABI identity:** each configuration's lowering calls its own ABI symbol from the entry point (`nrq_runtime_abi_v1_production` / `nrq_runtime_abi_v1_development`), and both libraries define the same configuration marker. An object built for one configuration cannot be linked against the other, and linking both libraries at once is a duplicate-symbol error instead of a coin toss.
+- **One value per configuration:** `--debug-enabled` is read once into a `RuntimeConfiguration` that derives the emitted instrumentation, the ABI symbol, the library file name and the diagnostic's target. The runtime side derives the same facts from one macro, published `PUBLIC` on each target so it travels with the library.
+- **Agreement is tested:** a unit test compares the compiler's derived names against the runtime's in a binary that links both, so a rename on either side fails there instead of in a user's link.
+
+#### 2. What Belongs in Which Configuration
+- **`07-diagnostics-classification.md`:** every mechanism is classified as essential correctness, accuracy-critical or pure telemetry, with the rule that decides the class and the proof obligation for removing a check.
+- **Invariant audit:** all 92 fatal checks were audited - none sits behind a configuration guard, none is decidable at compile time, and both libraries are built from one source list. `scripts/check_runtime_check_parity.py` now runs after every build and fails if either property is ever broken.
+- **Reference diagnostics:** the five `diagnostics_reading_roots()` call sites are audited and recorded as accuracy-critical, because `memory.get_ref_count` publishes their result; the root snapshot is a user of that handshake, not its owner.
+
+#### 3. Statistics and Equivalence
+- **Exactness under concurrency:** `gc.get_statistics()` stays exact for unpublished TLAB batches, now verified from a second thread. The cheaper accounting schemes considered are documented with the reason each was rejected.
+- **Configuration equivalence:** `scripts/compare_configuration_equivalence.py` builds every integration program for both runtimes and requires identical exit status, stdout and stderr; 119 programs agree. Its first run found a lowering defect where string-literal globals restarted their names per function, which failed every development build of a module with two literal-using functions.
+
+#### 4. Scope Correction
+- The socket runtime was implemented ahead of its planned phase and is unlinked: it leaves the runtime source list and the link line, and its unit test is excluded. The source stays in the tree for the phase that owns it.
 
 ---
 
