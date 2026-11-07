@@ -2176,6 +2176,64 @@ class FunctionTranslator {
         .getResult();
   }
 
+  // -- Development-only allocation-site instrumentation ---------------------
+  //
+  // A site id is a stable hash of the source position, so the id for unchanged
+  // code is the same in every build and in every translation unit; the runtime
+  // is the only side that keeps a table. Nothing here runs unless the program
+  // was compiled with --debug-enabled, and the flag also selects the runtime
+  // that provides these entry points.
+  static uint64_t gc_site_id(const SourceLocation& location) {
+    uint64_t hash = UINT64_C(0xcbf29ce484222325);  // FNV-1a offset basis
+    for (unsigned char byte : location.file) {
+      hash ^= byte;
+      hash *= UINT64_C(0x100000001b3);
+    }
+    hash ^= static_cast<uint64_t>(location.line);
+    hash *= UINT64_C(0x100000001b3);
+    hash ^= static_cast<uint64_t>(location.column);
+    hash *= UINT64_C(0x100000001b3);
+    // Zero is the runtime's "no site" value.
+    return hash == 0 ? 1 : hash;
+  }
+
+  void emit_gc_site_declaration(uint64_t site, const SourceLocation& location,
+                                mlir::Location loc) {
+    auto fn = ensure_runtime_fn(module_, builder_, "nrq_gc_debug_declare_site",
+                                mlir::LLVM::LLVMVoidType::get(ctx_),
+                                {builder_.getI64Type(), llvm_ptr_type(ctx_),
+                                 builder_.getI64Type(), builder_.getI32Type()});
+    auto constant_i64 = [&](uint64_t value) {
+      return builder_
+          .create<mlir::LLVM::ConstantOp>(
+              loc, builder_.getI64Type(),
+              builder_.getI64IntegerAttr(static_cast<int64_t>(value)))
+          .getResult();
+    };
+    mlir::Value id = constant_i64(site);
+    mlir::Value file = materialize_string(location.file, loc);
+    mlir::Value length = constant_i64(location.file.size());
+    mlir::Value line = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI32Type(),
+        builder_.getI32IntegerAttr(static_cast<int32_t>(location.line))).getResult();
+    builder_.create<mlir::LLVM::CallOp>(loc, fn,
+                                       mlir::ValueRange{id, file, length, line});
+  }
+
+  // Records which source site produced `object`. The runtime keeps the record
+  // next to the object's address, so a trace can attribute every tagged
+  // allocation without the object carrying a tag of its own.
+  void emit_gc_allocation_tag(mlir::Value object, uint64_t site,
+                              mlir::Location loc) {
+    auto fn = ensure_runtime_fn(module_, builder_, "nrq_gc_debug_tag_allocation",
+                                mlir::LLVM::LLVMVoidType::get(ctx_),
+                                {llvm_ptr_type(ctx_), builder_.getI64Type()});
+    mlir::Value id = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI64Type(),
+        builder_.getI64IntegerAttr(static_cast<int64_t>(site))).getResult();
+    builder_.create<mlir::LLVM::CallOp>(loc, fn, mlir::ValueRange{object, id});
+  }
+
   mlir::Block* get_or_create_block(int label_id) {
     auto it = label_blocks_.find(label_id);
     if (it != label_blocks_.end()) return it->second;
@@ -2940,6 +2998,11 @@ class FunctionTranslator {
               loc, fn, mlir::ValueRange{root_slot, count, size, offsets_pointer,
                                         ref_count}).getResult();
           set(op.result, result);
+          if (debug_enabled_ && op.location.is_valid()) {
+            const uint64_t site = gc_site_id(op.location);
+            emit_gc_site_declaration(site, op.location, loc);
+            emit_gc_allocation_tag(result, site, loc);
+          }
           return true;
         }
         if (op.callee == "memory.allocate" && op.result.is_valid() &&

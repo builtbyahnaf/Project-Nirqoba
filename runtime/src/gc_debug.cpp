@@ -32,8 +32,6 @@ int32_t nrq_runtime_debug_enabled(void) { return NRQ_DEBUG_ENABLED ? 1 : 0; }
 #include <atomic>
 #include <cstring>
 #include <mutex>
-#include <string>
-#include <vector>
 
 #include "gc_debug_internal.h"
 
@@ -153,24 +151,29 @@ ThreadRings& thread_rings() {
   return attachment.rings;
 }
 
-// Declared allocation sites. The compiler declares each site once per function,
-// so this table is small: its size follows the number of distinct allocation
-// expressions the program executed, not the number of allocations.
-struct SiteRecord {
-  uint64_t id = 0;
+// Declared allocation sites. The compiler emits a declaration at each allocation
+// site it lowers, so it runs once per execution of that expression: the table
+// has to accept an insert with no lock and no allocation. It is a fixed, open-
+// addressed table of insert-only records; a program with more distinct sites
+// than it holds loses the surplus mappings, which costs a line number in a
+// trace, not correctness.
+constexpr size_t kSiteTableCapacity = 1024;
+constexpr size_t kMaxSitePathBytes = 176;
+
+struct SiteSlot {
+  // 0 when free, 1 while a writer is filling the slot, 2 when readable.
+  std::atomic<uint32_t> state{0};
+  std::atomic<uint64_t> id{0};
   uint32_t line = 0;
-  std::string file;
+  char file[kMaxSitePathBytes] = {};
 };
 
-struct SiteTable {
-  std::mutex mutex;
-  std::vector<SiteRecord> sites;
-};
-
-SiteTable& site_table() {
-  static SiteTable* instance = new SiteTable();
-  return *instance;
+SiteSlot* site_slots() {
+  static SiteSlot* slots = new SiteSlot[kSiteTableCapacity]();
+  return slots;
 }
+
+constexpr size_t kSiteTableMask = kSiteTableCapacity - 1;
 
 }  // namespace
 
@@ -252,35 +255,51 @@ uint64_t nrq_gc_debug_dropped_tags(void) {
 void nrq_gc_debug_declare_site(uint64_t site, const char* file,
                               size_t file_length, uint32_t line) {
   if (site == 0) return;
-  SiteTable& table = site_table();
-  std::lock_guard<std::mutex> lock(table.mutex);
-  for (const SiteRecord& record : table.sites)
-    if (record.id == site) return;
-  SiteRecord record;
-  record.id = site;
-  record.line = line;
-  if (file && file_length != 0) record.file.assign(file, file_length);
-  try {
-    table.sites.push_back(std::move(record));
-  } catch (...) {
-    // A site that cannot be remembered is a gap in the mapping from tags to
-    // source lines; it is not a reason to fail the program that is running.
+  SiteSlot* slots = site_slots();
+  size_t index = static_cast<size_t>(site) & kSiteTableMask;
+  for (size_t probes = 0; probes < kSiteTableCapacity; ++probes,
+              index = (index + 1) & kSiteTableMask) {
+    SiteSlot& slot = slots[index];
+    const uint64_t current = slot.id.load(std::memory_order_relaxed);
+    if (current == site &&
+        slot.state.load(std::memory_order_acquire) == 2)
+      return;  // Already declared; entering the site again costs one load.
+    if (current != 0) continue;  // Another site owns this slot.
+    uint32_t expected = 0;
+    if (!slot.state.compare_exchange_strong(expected, 1,
+                                            std::memory_order_acq_rel)) {
+      // Another thread is publishing a site here. Leave its slot alone and keep
+      // probing; the next free slot answers these declarations.
+      continue;
+    }
+    const size_t length = file && file_length < kMaxSitePathBytes - 1
+                              ? file_length
+                              : (file ? kMaxSitePathBytes - 1 : 0);
+    if (length != 0) std::memcpy(slot.file, file, length);
+    slot.file[length] = '\0';
+    slot.line = line;
+    slot.id.store(site, std::memory_order_relaxed);
+    slot.state.store(2, std::memory_order_release);
+    return;
   }
 }
 
 int32_t nrq_gc_debug_describe_site(uint64_t site, char* file, size_t capacity,
                                    uint32_t* line) {
-  SiteTable& table = site_table();
-  std::lock_guard<std::mutex> lock(table.mutex);
-  for (const SiteRecord& record : table.sites) {
-    if (record.id != site) continue;
-    if (line) *line = record.line;
+  if (site == 0) return 0;
+  SiteSlot* slots = site_slots();
+  // The table is small and lookups belong to the consumer, which asks about a
+  // handful of sites after draining a trace.
+  for (size_t index = 0; index < kSiteTableCapacity; ++index) {
+    const SiteSlot& slot = slots[index];
+    if (slot.state.load(std::memory_order_acquire) != 2) continue;
+    if (slot.id.load(std::memory_order_relaxed) != site) continue;
+    if (line) *line = slot.line;
     if (file && capacity != 0) {
-      const size_t length = record.file.size() < capacity - 1
-                                ? record.file.size()
-                                : capacity - 1;
-      std::memcpy(file, record.file.data(), length);
-      file[length] = '\0';
+      const size_t length = std::strlen(slot.file);
+      const size_t keep = length < capacity - 1 ? length : capacity - 1;
+      std::memcpy(file, slot.file, keep);
+      file[keep] = '\0';
     }
     return 1;
   }
