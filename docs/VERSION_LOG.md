@@ -6,11 +6,25 @@
 
 ---
 
-## Version 0.231-beta (dev)
+## Version 0.235-beta (dev)
+
+### Summary of Changes (since `0.231-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.231-beta release.*
+
+---
+
+## Version 0.231-beta
 
 ### Summary of Changes (since `0.228-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.228-beta release.*
+#### 1. Allocator Major Optimizations
+- **Major Optimizations:** Significant performance improvements to the allocator subsystem, reducing allocation overhead and improving throughput.
+- **Stress Test 2 Rerun:** Benchmark stress test 2 rerun to validate allocator improvements.
+
+#### 2. SlotIndex and Stress Test Fixes
+- **SlotIndex Feature Fix:** Modified the SlotIndex implementation to correctly track and index stack slots during root analysis.
+- **Stress Test 2 Script:** Edited the stress test 2 script for improved benchmarking stability.
 
 ---
 

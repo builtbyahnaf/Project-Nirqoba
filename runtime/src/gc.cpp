@@ -701,6 +701,31 @@ struct ShadowStack {
 };
 std::vector<ShadowStack*> shadow_stacks;
 thread_local ShadowStack* thread_shadow_stack = nullptr;
+
+// Cache of frame root descriptors validated by this thread. Compiler-generated
+// descriptors are immutable static tables, so validating them once per descriptor
+// address avoids re-walking and re-validating the descriptor on every frame entry.
+struct ValidatedDescriptorCache {
+  static constexpr size_t kCapacity = 16;
+  const size_t* entries[kCapacity]{};
+  size_t count = 0;
+
+  bool contains(const size_t* desc) const noexcept {
+    for (size_t i = 0; i < count; ++i) {
+      if (entries[i] == desc) return true;
+    }
+    return false;
+  }
+
+  void insert(const size_t* desc) noexcept {
+    if (count < kCapacity) {
+      entries[count++] = desc;
+    } else {
+      entries[0] = desc;
+    }
+  }
+};
+thread_local ValidatedDescriptorCache thread_validated_descriptors;
 // Cleans up thread-local GC state when a thread terminates without unwinding
 // its mutator/root frames. Without this the collector could later enumerate a
 // shadow stack whose owning thread is gone and whose slots are dangling, and a
@@ -2257,11 +2282,10 @@ bool is_pointer_root(const RootInfo& root) {
 
 void add_slot_state(ShadowStack& stack, void* slot, const RootInfo& info,
                     bool pointer_root) {
-  SlotState* found = stack.slot_states.find(slot);
-  if (!found) {
-    SlotState* state = stack.slot_states.insert(slot);
-    if (!state)
-      nrq_runtime_fatal("GC root slot index failed to grow");
+  SlotState* state = stack.slot_states.insert(slot);
+  if (!state)
+    nrq_runtime_fatal("GC root slot index failed to grow");
+  if (state->count == 0) {
     state->count = 1;
     state->object_size = info.object_size;
     state->layout.assign(info.reference_offsets.begin(),
@@ -2269,13 +2293,13 @@ void add_slot_state(ShadowStack& stack, void* slot, const RootInfo& info,
     state->pointer_root = pointer_root;
     return;
   }
-  if (found->object_size != info.object_size ||
-      !found->layout.matches(info.reference_offsets.begin(),
+  if (state->object_size != info.object_size ||
+      !state->layout.matches(info.reference_offsets.begin(),
                              info.reference_offsets.size()) ||
-      found->pointer_root != pointer_root)
+      state->pointer_root != pointer_root)
     nrq_runtime_fatal(
         "GC root slot was registered with an incompatible layout");
-  ++found->count;
+  ++state->count;
 }
 
 void remove_slot_state(ShadowStack& stack, void* slot, uint32_t count = 1) {
@@ -2494,36 +2518,43 @@ void nrq_gc_root_register_frame(void* const* slots, size_t slot_count,
   if (descriptor[0] != slot_count)
     nrq_runtime_fatal(
         "GC frame root registration descriptor does not match its slot count");
-  // The table states its own length, so a truncated descriptor is rejected
-  // before the walk can read past it. A table with no room for its own header or
-  // for the roots it claims is malformed in the same way.
-  const size_t word_count = descriptor[1];
-  if (word_count < 2 || word_count < 2 + 2 * slot_count)
-    nrq_runtime_fatal(
-        "GC frame root registration descriptor is shorter than its roots");
 
-  // Validate the entire table before publishing any root: a malformed
-  // descriptor must fail with the frame untouched, not halfway registered.
-  size_t cursor = 2;
   for (size_t index = 0; index < slot_count; ++index) {
     if (!slots[index])
       nrq_runtime_fatal("GC frame root registration contains a null slot");
-    const size_t object_size = descriptor[cursor++];
-    const size_t reference_count = descriptor[cursor++];
-    if (object_size == 0 || reference_count == 0)
-      nrq_runtime_fatal("GC frame root registration contains an empty root");
-    for (size_t reference = 0; reference < reference_count; ++reference) {
-      const size_t offset = descriptor[cursor + reference];
-      if (offset > object_size || sizeof(void*) > object_size - offset)
-        nrq_runtime_fatal(
-            "GC frame root registration contains an out-of-range pointer offset");
-    }
-    cursor += reference_count;
   }
-  // The words the roots described have to account for the whole table.
-  if (cursor != word_count)
-    nrq_runtime_fatal(
-        "GC frame root registration descriptor length does not match its roots");
+
+  if (!thread_validated_descriptors.contains(descriptor)) {
+    // The table states its own length, so a truncated descriptor is rejected
+    // before the walk can read past it. A table with no room for its own header or
+    // for the roots it claims is malformed in the same way.
+    const size_t word_count = descriptor[1];
+    if (word_count < 2 || word_count < 2 + 2 * slot_count)
+      nrq_runtime_fatal(
+          "GC frame root registration descriptor is shorter than its roots");
+
+    // Validate the entire table before publishing any root: a malformed
+    // descriptor must fail with the frame untouched, not halfway registered.
+    size_t cursor = 2;
+    for (size_t index = 0; index < slot_count; ++index) {
+      const size_t object_size = descriptor[cursor++];
+      const size_t reference_count = descriptor[cursor++];
+      if (object_size == 0 || reference_count == 0)
+        nrq_runtime_fatal("GC frame root registration contains an empty root");
+      for (size_t reference = 0; reference < reference_count; ++reference) {
+        const size_t offset = descriptor[cursor + reference];
+        if (offset > object_size || sizeof(void*) > object_size - offset)
+          nrq_runtime_fatal(
+              "GC frame root registration contains an out-of-range pointer offset");
+      }
+      cursor += reference_count;
+    }
+    // The words the roots described have to account for the whole table.
+    if (cursor != word_count)
+      nrq_runtime_fatal(
+          "GC frame root registration descriptor length does not match its roots");
+    thread_validated_descriptors.insert(descriptor);
+  }
 
   ShadowStack& stack = ensure_shadow_stack();
   // One reservation for the frame keeps a wide activation from growing the
@@ -2795,7 +2826,9 @@ void nrq_gc_disable(void) {
   automatic_collection_enabled.store(false, std::memory_order_relaxed);
 }
 
-void nrq_gc_collect(void) { run_collection(/*young_only=*/false); }
+void nrq_gc_collect(void) {
+  run_collection(/*young_only=*/false);
+}
 
 void nrq_gc_collect_minor(void) {
   // With generations disabled every object is old, so a young-only cycle could
