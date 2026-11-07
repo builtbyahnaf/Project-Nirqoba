@@ -22,6 +22,33 @@ namespace nirq {
 //   - `tir_module` has passed verify_tir_module() with no errors.
 //   - The nrq dialect and func dialect are registered in `context`.
 //
+// Work done by the GC root-liveness analysis, counted so its cost can be checked
+// without timing anything. The analysis is the one place where the lowering walks
+// the whole function per root candidate, so these numbers are what a complexity
+// change has to move.
+struct GcRootAnalysisStats {
+  // Functions the analysis ran on.
+  std::size_t functions = 0;
+  // Operations visited, summed over those functions.
+  std::size_t operations = 0;
+  // Stack addresses attributed to a managed slot, including derived ones.
+  std::size_t slot_addresses = 0;
+  // Get-element-pointer operations resolved to a slot.
+  std::size_t address_derivations = 0;
+  // Loads recorded against the slot they read.
+  std::size_t loads = 0;
+  // Slot candidates looked up in liveness at a collection point.
+  std::size_t liveness_probes = 0;
+  // Operations visited while scanning a function once per slot.
+  std::size_t per_slot_scans = 0;
+  // Get-element-pointer operations revisited by the address fixpoint.
+  std::size_t address_scans = 0;
+};
+
+// Totals since the last reset, for the compilation that is running now.
+GcRootAnalysisStats gc_root_analysis_stats();
+void reset_gc_root_analysis_stats();
+
 // `fast_math` opts floating-point arithmetic into reassociation and FMA
 // contraction; the default leaves IEEE semantics strict.
 mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(

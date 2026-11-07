@@ -1,4 +1,5 @@
 #include "nirqoba/Driver/CompilationPipeline.h"
+#include "nirqoba/Lowering/TirToMlir.h"
 
 #include <fstream>
 #include <iostream>
@@ -251,6 +252,16 @@ int run_pipeline(const PipelineOptions& options,
                             options.fast_math);
   if (!mlir_module || diagnostics.has_errors()) {
     return fail_with(diagnostics, sources);
+  }
+
+  if (options.verbose) {
+    const GcRootAnalysisStats stats = gc_root_analysis_stats();
+    cerr << "gc roots: " << stats.functions << " function(s), "
+         << stats.slot_addresses << " slot address(es), "
+         << stats.loads << " load(s), "
+         << stats.liveness_probes << " liveness probe(s), "
+         << stats.per_slot_scans << " per-slot scan(s), "
+         << stats.address_scans << " address scan(s)" << "\n";
   }
 
   if (options.emit == EmitKind::Mlir) {
