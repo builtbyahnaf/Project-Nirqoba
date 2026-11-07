@@ -214,7 +214,7 @@ int function main() {
 
 mlir::OwningOpRef<mlir::ModuleOp> lower_source_to_mlir(
     const std::string& source, mlir::MLIRContext& context,
-    nirq::DiagnosticEngine& diagnostics) {
+    nirq::DiagnosticEngine& diagnostics, bool debug_enabled = false) {
   nirq::SourceFile file("lowering_probe.nrqba", source);
   nirq::Lexer lexer(file, diagnostics);
   nirq::Parser parser(lexer.tokenize(), diagnostics);
@@ -226,7 +226,19 @@ mlir::OwningOpRef<mlir::ModuleOp> lower_source_to_mlir(
   auto tir_module = builder.lower(*program);
   if (!tir_module) return nullptr;
   if (!nirq::verify_tir_module(*tir_module, diagnostics)) return nullptr;
-  return nirq::translate_tir_to_mlir(*tir_module, context, diagnostics);
+  return nirq::translate_tir_to_mlir(*tir_module, context, diagnostics,
+                                     /*fast_math=*/false, debug_enabled);
+}
+
+// Reports whether the module calls `symbol` from anywhere. The ABI reference the
+// lowering emits lives in the program's entry point, so a symbol simply being
+// declared is not enough: the call has to be there for the linker to require it.
+bool module_calls_symbol(mlir::ModuleOp module, llvm::StringRef symbol) {
+  bool found = false;
+  module.walk([&](mlir::LLVM::CallOp call) {
+    if (call.getCallee() && *call.getCallee() == symbol) found = true;
+  });
+  return found;
 }
 
 }  // namespace
@@ -591,4 +603,48 @@ int function main(string[] args) {
   ASSERT_EQ(countdown_updates, 1u);
   ASSERT_EQ(mask_operations, 0u);
   ASSERT_EQ(guarded_poll_blocks, 1u);
+}
+constexpr const char* kConfigurationProbe = R"nrqba(
+int function main() {
+    print(1);
+    return 0;
+}
+)nrqba";
+
+TEST(MlirPipelineTest, EntryPointNamesTheRuntimeConfiguration) {
+  // The compiler and the runtime library have to agree on the configuration, and
+  // the linker is the only place that can prove it. The entry point names the
+  // configuration-specific ABI symbol, so a mismatched library is an unresolved
+  // external rather than a program that observes the heap differently from the
+  // way it was compiled to.
+  struct ConfigurationFixture {
+    mlir::DialectRegistry registry;
+    unique_ptr<mlir::MLIRContext> context;
+    nirq::DiagnosticEngine diagnostics;
+    mlir::OwningOpRef<mlir::ModuleOp> module;
+
+    explicit ConfigurationFixture(bool debug_enabled) {
+      nirq::register_all_dialects(registry);
+      context = make_unique<mlir::MLIRContext>(registry);
+      context->loadAllAvailableDialects();
+      module = lower_source_to_mlir(kConfigurationProbe, *context, diagnostics,
+                                    debug_enabled);
+    }
+  };
+
+  ConfigurationFixture production(/*debug_enabled=*/false);
+  ASSERT_TRUE(static_cast<bool>(production.module));
+  ASSERT_TRUE(production.diagnostics.error_count() == 0);
+  ASSERT_TRUE(module_calls_symbol(*production.module,
+                                  "nrq_runtime_abi_v1_production"));
+  ASSERT_FALSE(module_calls_symbol(*production.module,
+                                   "nrq_runtime_abi_v1_development"));
+
+  ConfigurationFixture development(/*debug_enabled=*/true);
+  ASSERT_TRUE(static_cast<bool>(development.module));
+  ASSERT_TRUE(development.diagnostics.error_count() == 0);
+  ASSERT_TRUE(module_calls_symbol(*development.module,
+                                  "nrq_runtime_abi_v1_development"));
+  ASSERT_FALSE(module_calls_symbol(*development.module,
+                                   "nrq_runtime_abi_v1_production"));
 }

@@ -225,6 +225,17 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
     policy.return_noalias = true;
     return policy;
   }
+  // The configuration marker the entry wrapper calls. It does nothing, but it
+  // must survive optimization: as a side-effecting call it is what makes the
+  // linker require the library built from the matching configuration.
+  if (symbol == "nrq_runtime_abi_v1_production" ||
+      symbol == "nrq_runtime_abi_v1_development") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    policy.willreturn = true;
+    policy.memory = MemoryEffectKind::OtherReadWrite;
+    return policy;
+  }
   // Development-only instrumentation. Both write the runtime's trace rings and
   // nothing else, so neither allocates, collects or blocks a mutator: they can
   // be called between an allocation and the statement that consumes it. The

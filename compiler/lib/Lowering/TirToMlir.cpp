@@ -1433,10 +1433,12 @@ class FunctionTranslator {
                      DiagnosticEngine& diag,
                      bool fast_math,
                      bool debug_enabled,
+                     bool emit_abi_reference,
                      bool needs_mutator_region)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
         builder_(builder), ctx_(ctx), diag_(diag), fast_math_(fast_math),
         debug_enabled_(debug_enabled),
+        emit_abi_reference_(emit_abi_reference),
         stack_allocations_(
             analyze_stack_allocations(tir_fn, borrowed_summary)),
         gc_roots_(analyze_gc_root_plan(tir_fn, collections)),
@@ -1453,6 +1455,21 @@ class FunctionTranslator {
 
     for (std::size_t i = 0; i < tir_fn.parameters().size(); ++i) {
       set(tir_fn.parameters()[i].value, entry_block_->getArgument(i));
+    }
+
+    // The entry point names the runtime configuration this object was compiled
+    // for. Each runtime library defines exactly one of the two symbols, so
+    // linking against the other one leaves this call unresolved instead of
+    // producing a program that observes the heap differently from the way it was
+    // compiled to. The call is never reached from user code and does nothing.
+    if (emit_abi_reference_) {
+      auto abi_check = ensure_runtime_fn(
+          module_, builder_,
+          debug_enabled_ ? "nrq_runtime_abi_v1_development"
+                         : "nrq_runtime_abi_v1_production",
+          mlir::LLVM::LLVMVoidType::get(ctx_), {});
+      builder_.create<mlir::LLVM::CallOp>(mlir::UnknownLoc::get(ctx_), abi_check,
+                                         mlir::ValueRange{});
     }
 
     if (uses_gc_mutator_) {
@@ -4045,6 +4062,8 @@ class FunctionTranslator {
   // provides. Off in every production build, which therefore has no hooks to
   // strip and no calls to them.
   bool debug_enabled_ = false;
+  // True for the one function that is the program's C entry point.
+  bool emit_abi_reference_ = false;
   std::unordered_map<int, StackAllocationLayout> stack_allocations_;
   std::unordered_map<int, uint64_t> pointer_alignment_;
   GcRootPlan gc_roots_;
@@ -4079,7 +4098,7 @@ class FunctionTranslator {
 static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
                                const tir::Function& user_main,
                                llvm::StringRef user_symbol,
-                               bool callee_needs_region,
+                               bool callee_needs_region, bool debug_enabled,
                                DiagnosticEngine& diagnostics) {
   mlir::MLIRContext* ctx = module.getContext();
   mlir::Location loc = mlir::UnknownLoc::get(ctx);
@@ -4101,6 +4120,18 @@ static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
       loc, "main", mlir::FunctionType::get(ctx, {i32, ptr}, {i32}));
   mlir::Block* entry = wrapper.addEntryBlock();
   builder.setInsertionPointToStart(entry);
+
+  // This object may only be linked against the runtime library built from the
+  // same configuration. Each library defines exactly one of these two symbols
+  // and the compiler names the one its own configuration requires, so the wrong
+  // library is an unresolved external instead of a program that observes the
+  // heap differently from the way it was compiled to.
+  auto abi_check = ensure_runtime_fn(
+      module, builder,
+      debug_enabled ? "nrq_runtime_abi_v1_development"
+                    : "nrq_runtime_abi_v1_production",
+      mlir::LLVM::LLVMVoidType::get(ctx), {});
+  builder.create<mlir::LLVM::CallOp>(loc, abi_check, mlir::ValueRange{});
 
   auto args_build = ensure_runtime_fn(module, builder, "nrq_args_build", ptr, {i32, ptr});
   mlir::Value array = builder.create<mlir::LLVM::CallOp>(
@@ -4284,7 +4315,7 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     FunctionTranslator translator(
         *module, *tir_fn, borrowed_summary, collections, func_op, builder,
         &context, diagnostics, fast_math, debug_enabled,
-        mutator_regions.count(tir_fn->name()) != 0);
+        symbol == "main", mutator_regions.count(tir_fn->name()) != 0);
     if (!translator.translate()) return nullptr;
 
     builder.setInsertionPointAfter(func_op);
@@ -4292,7 +4323,7 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     if (is_entry_with_args &&
         !emit_entry_wrapper(*module, builder, *tir_fn, symbol,
                             mutator_regions.count(tir_fn->name()) != 0,
-                            diagnostics)) {
+                            debug_enabled, diagnostics)) {
       return nullptr;
     }
   }

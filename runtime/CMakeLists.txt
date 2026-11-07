@@ -29,6 +29,7 @@ set(NIRQOBA_RUNTIME_SOURCES
   src/fatal_windows.cpp
   src/runtime_version.cpp
   src/runtime_config.h
+  src/runtime_abi.cpp
   src/math.cpp
   src/file_windows.cpp
   src/sync_windows.cpp

@@ -232,3 +232,29 @@ allocation appends to its thread's ring without taking the collector lock, so
 the recording path cannot serialise mutators and cannot change the order in
 which they acquire the heap. Ring capacity, drop counters and the single
 consumer rule are documented in `runtime/include/nirqoba/runtime/gc_debug.h`.
+
+### 4.3 The configuration agreement is a link-time check
+
+A development object calls entry points the production library does not define,
+while almost every other symbol the two libraries export has the same name. A
+mismatched link would therefore either fail late or, worse, succeed and produce a
+program that observes the heap differently from the way it was compiled to. Both
+outcomes are link-time facts, so both are enforced there:
+
+- **One identifier per configuration.** `nrq_runtime_abi_v1_production` is
+  defined only by the production library and `nrq_runtime_abi_v1_development`
+  only by the development library. The compiler emits a call to the one matching
+  its own configuration into the program's entry point, so every object
+  references exactly one of them, including a program that never touches managed
+  memory. Linking against the other library leaves the symbol unresolved
+  (`tests/unit/mlir_pipeline_test.cpp` pins which symbol the lowering emits).
+- **One marker both libraries define.** `nrq_runtime_abi_configuration_marker`
+  has external linkage in each library and is never read. Pulling an object from
+  each configuration into one link is then a duplicate definition instead of a
+  silent first-definition-wins, which is the only failure mode that would let
+  half a program run against a runtime that disagrees with the other half.
+
+The failure modes are deterministic and their messages are actionable: a
+development object linked against the production library reports
+`undefined symbol: nrq_runtime_abi_v1_development`, and a link that names both
+libraries reports `duplicate symbol: nrq_runtime_abi_configuration_marker`.
