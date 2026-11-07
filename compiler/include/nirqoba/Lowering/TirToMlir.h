@@ -49,10 +49,16 @@ void reset_gc_root_analysis_stats();
 
 // `fast_math` opts floating-point arithmetic into reassociation and FMA
 // contraction; the default leaves IEEE semantics strict.
+//
+// `debug_enabled` selects the development configuration: the translator emits
+// observable hooks (allocation-site tags) that only the debug runtime provides,
+// and the driver links that runtime instead of the production one. The default
+// emits no hook at all, so a production build has nothing to strip.
 mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     const tir::Module& tir_module,
     mlir::MLIRContext& context,
     DiagnosticEngine& diagnostics,
-    bool fast_math = false);
+    bool fast_math = false,
+    bool debug_enabled = false);
 
 }  // namespace nirq

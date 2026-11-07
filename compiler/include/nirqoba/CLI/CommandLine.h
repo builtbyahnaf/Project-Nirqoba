@@ -55,6 +55,11 @@ struct CommandLineOptions {
   // `--fast-math` allows reassociation and FMA contraction of floating-point
   // arithmetic so reductions can vectorize; the default keeps strict semantics.
   bool fast_math = false;
+  // `--debug-enabled` selects the development configuration: the compiler links
+  // the debug runtime library and emits the instrumentation its extra entry
+  // points consume (allocation-site tags, event emission). The default is the
+  // production path, which contains none of it.
+  bool debug_enabled = false;
   std::vector<std::string> trailing_args;  // For `nirqoba run ... -- args`
 };
 

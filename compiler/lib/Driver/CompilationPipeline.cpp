@@ -63,18 +63,26 @@ string get_executable_dir() {
   return ".";
 }
 
-string locate_runtime_lib() {
+// The runtime is built in two configurations from one source list; the compiler
+// chooses between them at link time. Nothing is decided at run time, so the
+// production binary contains no branch, counter or symbol for the development
+// instrumentation.
+string runtime_lib_file_name(bool debug_enabled) {
+  return debug_enabled ? "nrqoba_runtime_debug.lib" : "nrqoba_runtime.lib";
+}
+
+string locate_runtime_lib(const string& file_name) {
   const string exe_dir = get_executable_dir();
   const vector<string> candidates = {
-    exe_dir + "\\nrqoba_runtime.lib",
-    exe_dir + "\\..\\lib\\nrqoba_runtime.lib",
-    exe_dir + "\\..\\runtime\\nrqoba_runtime.lib",
-    exe_dir + "\\..\\..\\build\\msvc-dev\\lib\\nrqoba_runtime.lib",
-    exe_dir + "\\..\\..\\build\\msvc-release\\lib\\nrqoba_runtime.lib",
-    "lib\\nrqoba_runtime.lib",
-    "build\\msvc-dev\\lib\\nrqoba_runtime.lib",
-    "build\\msvc-release\\lib\\nrqoba_runtime.lib",
-    "nrqoba_runtime.lib",
+    exe_dir + "\\" + file_name,
+    exe_dir + "\\..\\lib\\" + file_name,
+    exe_dir + "\\..\\runtime\\" + file_name,
+    exe_dir + "\\..\\..\\build\\msvc-dev\\lib\\" + file_name,
+    exe_dir + "\\..\\..\\build\\msvc-release\\lib\\" + file_name,
+    "lib\\" + file_name,
+    "build\\msvc-dev\\lib\\" + file_name,
+    "build\\msvc-release\\lib\\" + file_name,
+    file_name,
   };
 
   for (const auto& path : candidates) {
@@ -249,7 +257,7 @@ int run_pipeline(const PipelineOptions& options,
 
   mlir::OwningOpRef<mlir::ModuleOp> mlir_module =
       translate_tir_to_mlir(*tir_module, mlir_context, diagnostics,
-                            options.fast_math);
+                            options.fast_math, options.debug_enabled);
   if (!mlir_module || diagnostics.has_errors()) {
     return fail_with(diagnostics, sources);
   }
@@ -384,10 +392,15 @@ int run_pipeline(const PipelineOptions& options,
     return 4;  // Exit code 4: environment/toolchain error
   }
 
-  string runtime_lib = locate_runtime_lib();
+  const string runtime_lib_name = runtime_lib_file_name(options.debug_enabled);
+  string runtime_lib = locate_runtime_lib(runtime_lib_name);
   if (runtime_lib.empty()) {
-    diagnostics.error(diag::kLinkFailed, SourceLocation{},
-                      "cannot find nrqoba_runtime.lib; please build the runtime target first");
+    diagnostics.error(
+        diag::kLinkFailed, SourceLocation{},
+        "cannot find " + runtime_lib_name +
+            (options.debug_enabled
+                 ? "; build the nrqoba_runtime_debug target first"
+                 : "; please build the runtime target first"));
     return fail_with(diagnostics, sources);
   }
 
