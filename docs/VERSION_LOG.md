@@ -6,11 +6,29 @@
 
 ---
 
-## Version 0.257-beta (dev)
+## Version 0.260-beta (dev)
+
+### Summary of Changes (since `0.257-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.257-beta release.*
+
+---
+
+## Version 0.257-beta
 
 ### Summary of Changes (since `0.251-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.251-beta release.*
+#### 1. Builder Path, Step One
+- **Static frame root tables:** the compiler emits the root-slot table for a `nrq_gc_roots_*` frame itself, so lowering calls `nrq_gc_root_register_frame_static` with a table it built at compile time instead of publishing slots one at a time through the dynamic entry point.
+- **Validation without a release cost:** the static entry point trusts the compiler's table in the production configuration; the development configuration validates it and memoises the result, so a malformed table is still caught where diagnostics are expected to cost something.
+- **Parity is tested:** a unit test drives both entry points over the same frame shape and requires identical published slots, and the seven integration cases that inspect the emitted call were updated to the static symbol.
+
+#### 2. Profile-Guided Optimization
+- **A missing profile runtime is no longer a test failure:** the pinned LLVM/MLIR SDK ships compiler-rt separately, so a toolchain without `clang_rt.profile-x86_64.lib` cannot link `--pgo-generate` at all. The two round-trip cases now report `SKIP` with the missing prerequisite, and the runner counts skips apart from failures.
+- **Honest diagnostic:** `NRQ5003` no longer tells the user to re-run `scripts/bootstrap.ps1`, which cannot supply compiler-rt; it names the layout the runtime must be installed into. `scripts/bootstrap.ps1` reports whether that layout is present.
+
+#### 3. Documentation
+- **`reports/performance/bo-02-builder-status.md`:** what the builder path costs today, which items remain, and the precondition each one needs.
 
 ---
 
@@ -42,18 +60,19 @@
 
 ### Summary of Changes (since `0.235-beta`):
 
-#### 1. Two Runtime Configurations
-- **`--debug-enabled`:** the compiler now accepts a flag that selects a development configuration end to end. `build`, `run` and `check` all understand it, and the help text says what it does.
-- **Two libraries from one source list:** `nrqoba_runtime` remains the default production library; `nrqoba_runtime_debug` is built from the same sources with the development configuration defined. The choice is made at link time, so a production binary carries no branch, counter or symbol for instrumentation it does not use.
+#### 1. New Debug-Oriented Runtime Configuration
+- **Introducing a new debug-oriented configuration:** The compiler now accepts a `--debug-enabled` flag that selects a development configuration end-to-end. This flag is the only way to enable the debug configuration; it is not enabled by default and must be explicitly requested.
+- **`build`, `run` and `check` all understand `--debug-enabled`:** The help text explains what the flag does, and the configuration propagates through the entire toolchain.
+- **Two libraries from one source list:** `nirqoba_runtime` (renamed from misspelled `nrqoba_runtime`) remains the default production library; `nirqoba_runtime_debug` (renamed from misspelled `nrqoba_runtime_debug`) is built from the same sources with the development configuration defined. The choice is made at link time, so a production binary carries no branch, counter, or symbol for instrumentation it does not use.
 
 #### 2. Production Path
-- **Probe telemetry removed:** slot-index probe length and rehash/growth/compaction counts are read only by tests and by development tooling, so the production build no longer records them. The probe chain itself is unchanged.
+- **Probe telemetry removed:** Slot-index probe length and rehash/growth/compaction counts are read only by tests and by development tooling, so the production build no longer records them. The probe chain itself is unchanged.
 
 #### 3. Development Path
-- **Event stream:** the development runtime records allocation, cycle begin/end, promotion, sweep chunk and root frame events, each with a globally ordered sequence number and a monotonic timestamp, into per-thread rings that never block an allocator.
-- **Allocation-site tags:** the compiler declares each lowered managed allocation's source position and tags the object it produced. Site ids are a stable hash of file, line and column, so a trace maps back to source without the compiler keeping a table.
-- **Root snapshot:** the development runtime reports every registered root slot, its layout and the object it currently holds, reusing the reference-diagnostic handshake so it never reads a stack that is being published lock-free.
-- **Recording is opt-in:** nothing is recorded until a consumer sets an event mask, so an ordinary development build pays one relaxed load per candidate event.
+- **Event stream:** The development runtime records allocation, cycle begin/end, promotion, sweep chunk, and root frame events, each with a globally ordered sequence number and a monotonic timestamp, into per-thread rings that never block an allocator.
+- **Allocation-site tags:** The compiler declares each lowered managed allocation's source position and tags the object it produced. Site IDs are a stable hash of file, line, and column, so a trace maps back to source without the compiler keeping a table.
+- **Root snapshot:** The development runtime reports every registered root slot, its layout, and the object it currently holds, reusing the reference-diagnostic handshake so it never reads a stack that is being published lock-free.
+- **Recording is opt-in:** Nothing is recorded until a consumer sets an event mask, so an ordinary development build pays one relaxed load per candidate event.
 
 #### 4. Documentation
 - `docs/architecture/06-runtime.md` states the rule that decides which configuration a mechanism belongs to, what the development library adds, and what a trace costs.
