@@ -181,8 +181,8 @@ either drop the poll or let the vectorizer assume a stable heap
 (`tests/integration/positive/opt_vectorize_managed_blocked`).
 ## 4. Production and development configurations
 
-The runtime is built twice from one set of sources. `nrqoba_runtime` is the
-production library and the default every build links. `nrqoba_runtime_debug` is
+The runtime is built twice from one set of sources. `nirqoba_runtime` is the
+production library and the default every build links. `nirqoba_runtime_debug` is
 the development library, selected by `--debug-enabled` on `build`, `run` and
 `check`. The choice is made at link time: there is no runtime switch, no
 environment variable and no hot-path branch, so a production binary contains no

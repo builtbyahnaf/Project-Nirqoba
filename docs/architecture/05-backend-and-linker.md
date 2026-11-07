@@ -14,5 +14,5 @@
 - Locates `lld-link.exe` (with fallback to MSVC `link.exe`).
 - Discovers the MSVC toolset libraries directory (`VC\Tools\MSVC\<version>\lib\x64`).
 - Discovers the Windows 10/11 SDK library directories (`ucrt\x64` and `um\x64`).
-- Links against `nrqoba_runtime.lib` and CRT runtime libraries (`msvcrt.lib`, `ucrt.lib`, `vcruntime.lib`, `kernel32.lib`).
+- Links against `nirqoba_runtime.lib` and CRT runtime libraries (`msvcrt.lib`, `ucrt.lib`, `vcruntime.lib`, `kernel32.lib`).
 - Invokes the linker through `ProcessRunner` using Windows `CreateProcessW` with standard MSVC argument quoting rules for paths containing spaces.

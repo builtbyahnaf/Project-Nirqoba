@@ -1,6 +1,6 @@
 // Unit tests for the development runtime's observation layer.
 //
-// The test binary links nrqoba_runtime_debug (see tests/CMakeLists.txt), so these
+// The test binary links nirqoba_runtime_debug (see tests/CMakeLists.txt), so these
 // exercise the exact code a --debug-enabled build runs. The production runtime
 // is covered end to end by tests/run_tests.py, which never passes the flag.
 

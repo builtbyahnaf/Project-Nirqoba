@@ -29,7 +29,7 @@ ObjectEmitter (TargetMachine: x86_64-pc-windows-msvc)
       |
 Native COFF Object (.obj)
       |
-Linker (lld-link / link.exe) + nrqoba_runtime.lib
+Linker (lld-link / link.exe) + nirqoba_runtime.lib
       |
 Native Executable (.exe)
 ```

@@ -1,8 +1,8 @@
 // gc_debug.h — observation surface of the development runtime.
 //
 // The runtime is built twice from one set of sources. The production library
-// (nrqoba_runtime) records nothing; the development library
-// (nrqoba_runtime_debug, linked when the compiler runs with --debug-enabled)
+// (nirqoba_runtime) records nothing; the development library
+// (nirqoba_runtime_debug, linked when the compiler runs with --debug-enabled)
 // carries the event stream, the allocation-site tags and the root snapshot
 // below.
 //
