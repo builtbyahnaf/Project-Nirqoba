@@ -1225,29 +1225,31 @@ static GcRootPlan analyze_gc_root_plan(const tir::Function& function,
     return false;
   };
 
-  // Stack slots whose type contains managed references, plus every address
-  // derived from them, so field and element stores can be attributed.
-  std::unordered_map<int, std::unordered_set<int>> slot_addresses;
+  // Stack slots whose type contains managed references, plus every address derived
+  // from them, so field and element stores can be attributed. TIR values are SSA and
+  // a derivation can only name a value defined before it, so one pass in program
+  // order attributes every address: no fixpoint, and no rescanning the function once
+  // per slot to find the derivations.
+  std::unordered_map<int, int> slot_of_address;
   for (const tir::Op& op : operations) {
-    if (op.kind != tir::OpKind::Alloca || !op.result.is_valid() ||
-        !collect_has_managed_reference(op.result.type))
+    if (!op.result.is_valid()) continue;
+    if (op.kind == tir::OpKind::Alloca && collect_has_managed_reference(op.result.type)) {
+      slot_of_address.emplace(op.result.id, op.result.id);
       continue;
-    slot_addresses[op.result.id].insert(op.result.id);
-  }
-  bool changed = true;
-  while (changed) {
-    changed = false;
-    for (const tir::Op& op : operations) {
-      if (op.kind != tir::OpKind::GetElementPtr || !op.result.is_valid())
-        continue;
-      ++stats.address_scans;
-      for (auto& entry : slot_addresses) {
-        if (entry.second.count(op.lhs.id) == 0) continue;
-        if (entry.second.insert(op.result.id).second) changed = true;
-        break;
-      }
     }
+    if (op.kind != tir::OpKind::GetElementPtr) continue;
+    ++stats.address_scans;
+    const auto source = slot_of_address.find(op.lhs.id);
+    if (source == slot_of_address.end()) continue;
+    slot_of_address.emplace(op.result.id, source->second);
+    ++stats.address_derivations;
   }
+
+  // Slot -> every address that names part of it, kept in program order so the
+  // candidates below are visited predictably.
+  std::unordered_map<int, std::unordered_set<int>> slot_addresses;
+  for (const auto& entry : slot_of_address)
+    slot_addresses[entry.second].insert(entry.first);
 
   for (const auto& entry : slot_addresses) stats.slot_addresses += entry.second.size();
 
