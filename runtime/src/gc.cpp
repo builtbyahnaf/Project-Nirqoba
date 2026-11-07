@@ -2743,6 +2743,20 @@ void nrq_gc_root_store(void** slot, void* value) {
   // handshake. A snapshot-at-the-beginning marker would only re-mark a value the
   // slot never stopped holding.
   if (*slot == value) return;
+  // With no cycle in progress the store cannot be observed by any collector: a
+  // cycle only snapshots this thread's roots after the thread reaches a
+  // safepoint and parks, and parking happens after the store. Nothing needs
+  // marking and nothing can be swept, so the handshake buys nothing here; the
+  // old-to-young buffer, when the barrier is raised, is append-only and is
+  // drained under the heap lock at the next cycle. This is the common case for
+  // a mutator that collects only at its own safepoints.
+  if (thread_mutator.depth != 0 &&
+      collection_phase.load(std::memory_order_acquire) ==
+          CollectionPhase::Idle) {
+    *slot = value;
+    buffer_remembered(value);
+    return;
+  }
   // Language-generated stores execute inside a registered mutator. The fast
   // path is just a pointer store plus a reader-count handshake; the collector
   // waits for in-flight readers before snapshotting roots.
