@@ -45,8 +45,14 @@ target_include_directories(nirqoba_unit_tests
 target_link_libraries(nirqoba_unit_tests
   PRIVATE
     nirqoba_compiler_lib
-    nrqoba_runtime
+    # The unit tests audit observation as well as behaviour, so they link the
+    # development runtime and compile its configuration into the test binary.
+    # The production runtime is exercised end to end by tests/run_tests.py, which
+    # builds programs without --debug-enabled.
+    nrqoba_runtime_debug
 )
+
+target_compile_definitions(nirqoba_unit_tests PRIVATE NRQ_RUNTIME_DEBUG_ENABLED=1)
 
 # Register with ctest so `ctest --preset windows-msvc-dev` finds it.
 add_test(
