@@ -994,16 +994,32 @@ void resume_mutators() {
 // private one.
 bool begin_fast_barrier() {
   if (thread_mutator.depth == 0) return false;
-  thread_mutator.barrier_depth.fetch_add(1, std::memory_order_acq_rel);
+  // The counter lives on this thread's own cache line: only its owner writes it
+  // and only the collector reads it, so no other thread can race the update.
+  // A relaxed store plus an acquire-release fence is therefore equivalent to the
+  // read-modify-write it replaces - the increment is ordered before everything
+  // the region does, and the region's work is ordered before the decrement -
+  // without a locked instruction. On x64 the fence is a compiler barrier only,
+  // so entering a region costs a plain store instead of `lock xadd`.
+  const uint32_t previous =
+      thread_mutator.barrier_depth.load(std::memory_order_relaxed);
+  thread_mutator.barrier_depth.store(previous + 1, std::memory_order_relaxed);
+  std::atomic_thread_fence(std::memory_order_acq_rel);
   if (collection_phase.load(std::memory_order_acquire) ==
       CollectionPhase::Idle)
     return true;
-  thread_mutator.barrier_depth.fetch_sub(1, std::memory_order_release);
+  std::atomic_thread_fence(std::memory_order_acq_rel);
+  thread_mutator.barrier_depth.store(previous, std::memory_order_relaxed);
   return false;
 }
 
 void end_fast_barrier() {
-  thread_mutator.barrier_depth.fetch_sub(1, std::memory_order_release);
+  const uint32_t previous =
+      thread_mutator.barrier_depth.load(std::memory_order_relaxed);
+  // Release the region's stores before the decrement becomes visible, so a
+  // collector that observes a zero count has also observed the work.
+  std::atomic_thread_fence(std::memory_order_acq_rel);
+  thread_mutator.barrier_depth.store(previous - 1, std::memory_order_relaxed);
 }
 
 // Wait until every other registered mutator has left its barrier regions. The
