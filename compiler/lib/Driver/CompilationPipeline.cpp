@@ -260,7 +260,6 @@ int run_pipeline(const PipelineOptions& options,
          << stats.slot_addresses << " slot address(es), "
          << stats.loads << " load(s), "
          << stats.liveness_probes << " liveness probe(s), "
-         << stats.per_slot_scans << " per-slot scan(s), "
          << stats.address_scans << " address scan(s)" << "\n";
   }
 
