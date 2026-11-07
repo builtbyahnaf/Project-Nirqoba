@@ -78,6 +78,49 @@ on `gc.get_statistics()` produces a different result if the value is wrong, so
 | `reference_diagnostics_enabled` / `diagnostics_reading_roots()` | internal | Required by the row above: it is the handshake that makes the counts safe to read, not a report about them |
 | `nrq_memory_profiler_*` | `memory.profiler.*` | A language feature. It is gated by its own explicit start/stop flag, which is an early return on the allocation path, so it costs nothing while unused |
 
+### 3.1 Why exactness costs two stores, and what would be cheaper but wrong
+
+`gc.get_statistics()` is exact for the calling thread's own unpublished
+allocations as well (`GcTest.UnpublishedTlabAllocationsRemainVisibleInStats`),
+and for a query made by any other thread
+(`GcTest.StatisticsStayExactWhileAnotherThreadAllocates`). The accounting that
+provides this sits on the allocation fast path, in `account_tlab_allocation`:
+
+- two relaxed loads and two relaxed stores, on the allocating mutator's own
+  `pending_bytes` and `pending_count`, which live on that mutator's cache line;
+- an owner-only add to `unflushed_bytes`, which no other thread reads;
+- one relaxed load of the shared `collection_threshold`, needed only to size the
+  batch that decides when the pending pair is flushed under the heap lock.
+
+Four cheaper schemes were considered and rejected before keeping this one:
+
+1. **One global counter under the heap lock.** Every allocation would take
+   `gc_mutex`; the mutator split exists precisely to avoid that.
+2. **One global atomic counter, updated per allocation.** Same cost per
+   allocation in instructions, but every thread writes the same cache line, so
+   every allocation invalidates the line for every other allocating thread.
+3. **Owner-only counters, published when the batch closes.** Cheapest option:
+   two owner-only adds and no shared load. It fails the contract above - a query
+   from another thread would report a heap that omits the allocating thread's
+   entire batch, and a query from the owning thread would have to special-case
+   its own unpublished state everywhere.
+4. **Packing `(bytes, count)` into one 64-bit word.** Saves one load/store pair,
+   but is unsound without a bound the language does not impose: a single
+   allocation may be arbitrarily large, so no fixed split of the word holds the
+   byte total, and a fixed split that reserved room for the count would force a
+   flush - and therefore a lock acquisition - inside the accounting step exactly
+   when the byte field was about to overflow.
+
+The count cannot be derived from the byte total either, because objects are not
+fixed-size.
+
+So the current mechanism is the cheapest one that keeps the contract, and both
+stores are relaxed writes to a line the thread already owns. No timing comparison
+was run: benchmark runs require the owner's authorization, and nothing here is
+claimed on the strength of a measurement. If one is authorized, the honest
+comparison is the two rejected variants above against this code, not a variant
+against itself.
+
 ## 4. Pure observability (debug-only, development library only)
 
 These answer a developer's question about the run. No program can read them and

@@ -645,6 +645,60 @@ TEST(GcTest, UnpublishedTlabAllocationsRemainVisibleInStats) {
   nrq_gc_enable();
 }
 
+TEST(GcTest, StatisticsStayExactWhileAnotherThreadAllocates) {
+  // The exactness contract of gc.get_statistics() covers allocations that are
+  // still sitting in a mutator's unpublished TLAB batch, and it covers them for
+  // a query made by a different thread. That is what rules out the cheaper
+  // accounting schemes: anything that published only at batch boundaries would
+  // report a heap that does not include what is already allocated, and a scheme
+  // that sums owner-only fields would miss another thread's batch entirely.
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const nrq_gc_stats before = nrq_gc_get_stats();
+
+  constexpr int kAllocations = 3000;
+  constexpr size_t kBytes = 40;
+  std::atomic<bool> allocating{true};
+  std::atomic<bool> succeeded{true};
+  std::thread worker([&] {
+    nrq_gc_mutator_enter();
+    for (int index = 0; index < kAllocations; ++index) {
+      if (!nrq_gc_allocate(kBytes, nullptr)) succeeded = false;
+    }
+    // Leave the batch unpublished: the last allocations are still pending, and
+    // the queries below must already count them.
+    allocating.store(false);
+  });
+
+  // Poll while the worker allocates. Every query must include everything the
+  // worker has allocated so far, so the reported total can only grow, and it can
+  // never exceed what has actually been handed out.
+  const uint64_t total_objects = static_cast<uint64_t>(kAllocations);
+  const uint64_t total_bytes = total_objects * kBytes;
+  uint64_t last_live = 0;
+  while (allocating.load()) {
+    const nrq_gc_stats during = nrq_gc_get_stats();
+    // Nothing is collected here, so the live count only ever grows, and it can
+    // never run ahead of what the worker has handed out.
+    ASSERT_TRUE(during.live_objects >= last_live);
+    ASSERT_TRUE(during.live_objects <= before.live_objects + total_objects);
+    ASSERT_TRUE(during.allocated_bytes >= before.allocated_bytes);
+    ASSERT_TRUE(during.allocated_bytes <= before.allocated_bytes + total_bytes);
+    last_live = during.live_objects;
+  }
+  worker.join();
+  ASSERT_TRUE(succeeded.load());
+
+  const nrq_gc_stats after = nrq_gc_get_stats();
+  ASSERT_EQ(after.live_objects, before.live_objects + kAllocations);
+  ASSERT_EQ(after.allocated_bytes,
+            before.allocated_bytes +
+                static_cast<uint64_t>(kAllocations) * kBytes);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+  nrq_gc_enable();
+}
+
 TEST(GcTest, RootStoreSynchronizesConcurrentMutationAndCollection) {
   nrq_gc_disable();
   nrq_gc_collect();
