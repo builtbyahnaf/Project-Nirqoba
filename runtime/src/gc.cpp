@@ -743,27 +743,52 @@ struct ShadowStack {
 std::vector<ShadowStack*> shadow_stacks;
 thread_local ShadowStack* thread_shadow_stack = nullptr;
 
-// Cache of frame root descriptors validated by this thread. Compiler-generated
-// descriptors are immutable static tables, so validating them once per descriptor
-// address avoids re-walking and re-validating the descriptor on every frame entry.
+// Cache of frame root descriptors this thread has already validated. Keying it
+// by address alone would be enough for the compiler's immutable tables, but the
+// entry point is a public C ABI: a caller may hand over a descriptor on the
+// stack, and two activations can reuse that address with different content. A
+// hit therefore requires identical words as well, so a cached verdict can only
+// ever be reused for the descriptor it was computed from - the validation is
+// deduplicated, never skipped. Comparing the words costs two vector compares for
+// a typical frame, far less than the walk it replaces.
 struct ValidatedDescriptorCache {
   static constexpr size_t kCapacity = 16;
-  const size_t* entries[kCapacity]{};
+  static constexpr size_t kMaxWords = 16;
+  struct Entry {
+    const size_t* descriptor = nullptr;
+    size_t word_count = 0;
+    size_t words[kMaxWords]{};
+  };
+  Entry entries[kCapacity]{};
   size_t count = 0;
 
-  bool contains(const size_t* desc) const noexcept {
+  bool matches(const size_t* desc) const noexcept {
+    const size_t word_count = desc[1];
+    // A table wider than the memo is validated on every activation instead of
+    // being stored truncated.
+    if (word_count < 2 || word_count > kMaxWords) return false;
     for (size_t i = 0; i < count; ++i) {
-      if (entries[i] == desc) return true;
+      const Entry& entry = entries[i];
+      if (entry.descriptor != desc) continue;
+      return entry.word_count == word_count &&
+             std::memcmp(entry.words, desc, word_count * sizeof(size_t)) == 0;
     }
     return false;
   }
 
   void insert(const size_t* desc) noexcept {
-    if (count < kCapacity) {
-      entries[count++] = desc;
-    } else {
-      entries[0] = desc;
+    const size_t word_count = desc[1];
+    if (word_count < 2 || word_count > kMaxWords) return;
+    for (size_t i = 0; i < count; ++i) {
+      if (entries[i].descriptor != desc) continue;
+      entries[i].word_count = word_count;
+      std::memcpy(entries[i].words, desc, word_count * sizeof(size_t));
+      return;
     }
+    Entry& entry = count < kCapacity ? entries[count++] : entries[0];
+    entry.descriptor = desc;
+    entry.word_count = word_count;
+    std::memcpy(entry.words, desc, word_count * sizeof(size_t));
   }
 };
 thread_local ValidatedDescriptorCache thread_validated_descriptors;
@@ -2593,7 +2618,7 @@ void nrq_gc_root_register_frame(void* const* slots, size_t slot_count,
       nrq_runtime_fatal("GC frame root registration contains a null slot");
   }
 
-  if (!thread_validated_descriptors.contains(descriptor)) {
+  if (!thread_validated_descriptors.matches(descriptor)) {
     // The table states its own length, so a truncated descriptor is rejected
     // before the walk can read past it. A table with no room for its own header or
     // for the roots it claims is malformed in the same way.
