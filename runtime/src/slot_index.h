@@ -16,9 +16,10 @@
 //
 // This header is not part of the public runtime ABI. The unit tests include it
 // directly so they exercise the exact implementation the collector uses. The
-// Diagnostics accessors exist for those tests: they are O(1) integer counters
-// plus a single comparison per completed probe chain, with no allocation,
-// logging, or extra table traversal, so they are safe to leave compiled in.
+// Diagnostics accessors exist for those tests and for the debug configuration's
+// tooling. In a production build nothing reads them, so the probe bookkeeping
+// they need is compiled out: `record_probe` becomes empty and the compiler drops
+// the call, leaving the probe chain itself unchanged.
 
 #pragma once
 
@@ -26,6 +27,8 @@
 #include <cstdint>
 #include <utility>
 #include <vector>
+
+#include "runtime_config.h"
 
 namespace nirq::gc::detail {
 
@@ -247,24 +250,33 @@ class SlotIndex {
       const size_t previous_capacity = entries_.size();
       entries_.swap(replacement);
       tombstones_ = 0;
-      ++rehash_count_;
-      // Initial table creation is neither a growth nor a compaction: there is
-      // no previous capacity to compare against.
-      if (previous_capacity != 0) {
-        if (capacity > previous_capacity) {
-          ++growth_count_;
-        } else {
-          ++compaction_count_;
-        }
-      }
+      record_rehash(previous_capacity, capacity);
       return true;
     } catch (...) {
       return false;
     }
   }
 
+  // Probe and rehash statistics are observation only: no collector path reads
+  // them, so the production build does not record them at all.
   void record_probe(size_t probes) {
-    if (probes > max_probe_length_) max_probe_length_ = probes;
+    if constexpr (nirq::runtime_debug_enabled) {
+      if (probes > max_probe_length_) max_probe_length_ = probes;
+    }
+  }
+
+  void record_rehash(size_t previous_capacity, size_t capacity) {
+    if constexpr (nirq::runtime_debug_enabled) {
+      ++rehash_count_;
+      // Initial table creation is neither a growth nor a compaction: there is
+      // no previous capacity to compare against.
+      if (previous_capacity == 0) return;
+      if (capacity > previous_capacity) {
+        ++growth_count_;
+      } else {
+        ++compaction_count_;
+      }
+    }
   }
 
   std::vector<Entry> entries_;
