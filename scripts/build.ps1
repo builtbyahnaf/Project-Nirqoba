@@ -106,3 +106,16 @@ if ($code -ne 0) {
     exit $code
 }
 Write-Host 'build succeeded' -ForegroundColor Green
+
+# Both runtime configurations come from one source list. This check enforces
+# that no invariant check can exist in only one of them: a fatal check inside a
+# configuration guard, or a per-target source addition, fails the build here
+# rather than surviving as two runtimes that disagree about memory safety.
+$parityScript = Join-Path $RepoRoot 'scripts/check_runtime_check_parity.py'
+if (Test-Path $parityScript) {
+    & python $parityScript
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'runtime configuration parity check failed' -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
+}

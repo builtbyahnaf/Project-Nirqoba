@@ -61,6 +61,57 @@ Two clarifications about this class:
   a descriptor whose words still match, which is a property of the memo, not a
   weakened check.
 
+### 2.1 Audit of every invariant check
+
+Every `nrq_runtime_fatal` site in the runtime was audited for two things: whether
+it can be moved, and whether its condition is decidable without running.
+
+| Source | Sites | What the checks read |
+|---|---|---|
+| `runtime/src/gc.cpp` | 51 | Root descriptors, slot bookkeeping, mutator protocol, page live counts, remembered set, pin and transfer-pin counts, TLab accounting |
+| `runtime/src/allocator_windows.cpp` | 29 | Allocator ownership records, in-flight pins, bounds and ranges, LIFO discipline, shared-release ownership |
+| `runtime/src/sync_windows.cpp` | 7 | Lock ownership and recursive acquisition state |
+| `runtime/src/mapping_windows.cpp` | 4 | Reservation and commit bookkeeping |
+| `runtime/src/fatal_windows.cpp` | 1 | The failure path itself |
+| **Total** | **92** | |
+
+Findings:
+
+- **No check sits inside a configuration guard.** `gc.cpp` has exactly one
+  `#if NRQ_DEBUG_ENABLED` region, the root-snapshot entry point, and it contains
+  no fatal. The remaining guarded files (`gc_debug.cpp`, `slot_index.h`) hold
+  telemetry only.
+- **Both libraries are compiled from one list.** `NIRQOBA_RUNTIME_SOURCES` feeds
+  `nirqoba_add_runtime_target` twice, so a check cannot exist in one build and
+  not the other by construction. `scripts/check_runtime_check_parity.py` enforces
+  both properties on every build: a fatal inside a configuration guard, or a
+  per-target source addition, fails the build.
+- **No check is compile-time decidable.** Each reads caller-supplied state (a
+  descriptor, a slot, a pin delta), heap state computed during the run (a live
+  count, an ownership record), or both. The invariants that *are* decidable are
+  already compile-time assertions rather than runtime checks:
+  `sizeof(ObjectHeader) == 96`, `alignof(ObjectHeader) ==
+  alignof(std::max_align_t)`, `sizeof(size_t) == sizeof(uintptr_t)`, and the
+  published `NrqMemoryProfile` size.
+- **Nothing was removed.** Two checks were examined as removal candidates and
+  kept, and the reasons are the reason the class exists:
+
+  1. `pending_count == SIZE_MAX` in `account_tlab_allocation` cannot be reached:
+     every allocation adds at least one byte to `unflushed_bytes`, and the batch
+     flushes at `kAccountingBatchBytes`, so the count between resets is bounded
+     by that constant. The argument holds only because of the flush rule, not
+     because of anything the check itself reads, so removing it would trade a
+     compare for a dependency on a rule that a future change to batching could
+     quietly break.
+  2. The descriptor checks on a remembered path are skipped only when the
+     descriptor's words are identical to the ones already validated. Removing the
+     check would mean trusting the memo unconditionally, which is a weaker
+     property than validating the descriptor.
+
+  A check that protects memory safety or heap integrity is not removed on the
+  strength of an argument about the code around it. The bar is compile-time
+  decidability, and none of the 92 meets it.
+
 ## 3. Accuracy-critical functionality (always enabled, both configurations)
 
 These are numbers a program can read. They are behaviour: a program that branches
