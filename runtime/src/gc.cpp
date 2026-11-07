@@ -491,7 +491,37 @@ void destroy_object_storage(ObjectHeader* header) {
   header->~ObjectHeader();
 }
 
-std::mutex gc_mutex;
+// The heap lock, instrumented with the one invariant the handshake depends on: no
+// thread may hold it while waiting for a fast-barrier region to drain, because a
+// region can itself need the lock to reserve a TLAB. That would be a deadlock, so
+// wait_for_fast_barriers() checks the flag instead of trusting every caller.
+thread_local bool heap_lock_held_by_this_thread = false;
+
+class CheckedHeapMutex {
+ public:
+  void lock() {
+    mutex_.lock();
+    heap_lock_held_by_this_thread = true;
+  }
+  void unlock() {
+    heap_lock_held_by_this_thread = false;
+    mutex_.unlock();
+  }
+ private:
+  std::mutex mutex_;
+};
+
+class HeapLockGuard {
+ public:
+  explicit HeapLockGuard(CheckedHeapMutex& mutex) : mutex_(mutex) { mutex_.lock(); }
+  HeapLockGuard(const HeapLockGuard&) = delete;
+  HeapLockGuard& operator=(const HeapLockGuard&) = delete;
+  ~HeapLockGuard() { mutex_.unlock(); }
+ private:
+  CheckedHeapMutex& mutex_;
+};
+
+CheckedHeapMutex gc_mutex;
 // Serializes complete collection cycles while leaving marking slices and the
 // sweep open to concurrent mutator execution.
 std::mutex collection_cycle_mutex;
@@ -1077,6 +1107,9 @@ void end_fast_barrier() {
 // about to perform either: one thread runs its stores and its enumeration in
 // sequence, and the region ends before the next store.
 void wait_for_fast_barriers() {
+  if (heap_lock_held_by_this_thread)
+    nrq_runtime_fatal(
+        "GC lock order violated: heap lock held while waiting for barrier regions");
   for (;;) {
     bool busy = false;
     {
@@ -1341,7 +1374,7 @@ ThreadGcStateCleanup::~ThreadGcStateCleanup() {
   std::lock_guard<std::mutex> mutator_lock(mutator_mutex);
   if (thread_mutator.depth != 0) {
     {
-      std::lock_guard<std::mutex> heap_lock(gc_mutex);
+      HeapLockGuard heap_lock(gc_mutex);
       publish_tlab_locked(thread_mutator);
       drain_remembered_locked(thread_mutator, /*defer_unresolved=*/true);
       drain_transfer_pins_locked(thread_mutator);
@@ -1359,7 +1392,7 @@ ThreadGcStateCleanup::~ThreadGcStateCleanup() {
   if (stack) {
     // Remove the stack under gc_mutex: enqueue_roots_locked enumerates the
     // registry under the same lock, so the collector can no longer reach it.
-    std::lock_guard<std::mutex> heap_lock(gc_mutex);
+    HeapLockGuard heap_lock(gc_mutex);
     auto found = std::find(shadow_stacks.begin(), shadow_stacks.end(), stack);
     if (found != shadow_stacks.end()) shadow_stacks.erase(found);
     thread_shadow_stack = nullptr;
@@ -1387,7 +1420,7 @@ void append_remembered(void* object) {
     mutator.remembered[mutator.remembered_count++] = object;
     return;
   }
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   publish_tlab_locked(mutator);
   drain_remembered_locked(mutator, /*defer_unresolved=*/true);
   defer_remembered_locked(object);
@@ -1861,7 +1894,7 @@ void begin_cycle(bool young_only) {
   // snapshot; the per-mutator barrier depth is the handshake that makes that
   // visible.
   {
-    std::lock_guard<std::mutex> lock(gc_mutex);
+    HeapLockGuard lock(gc_mutex);
     // A concurrent promotion can turn a reachable object old while mutators
     // run, so enable remembered-set recording for the whole cycle. The flag is
     // lowered again if the cycle finishes with no old objects.
@@ -1872,7 +1905,7 @@ void begin_cycle(bool young_only) {
   stop_mutators();
   wait_for_fast_barriers();
   {
-    std::lock_guard<std::mutex> lock(gc_mutex);
+    HeapLockGuard lock(gc_mutex);
     prepare_cycle_locked(young_only);
   }
   resume_mutators();
@@ -1948,7 +1981,7 @@ void run_collection(bool young_only) {
     bool finished = false;
     bool made_progress = false;
     {
-      std::lock_guard<std::mutex> lock(gc_mutex);
+      HeapLockGuard lock(gc_mutex);
       if (!sweeping) {
         const bool marked = mark_slice_locked(kMarkBudget);
         made_progress = true;
@@ -2206,7 +2239,7 @@ void account_tlab_allocation(MutatorState& mutator, size_t bytes) {
       allocation_accounting.collection_threshold.load(std::memory_order_relaxed);
   const size_t batch = std::min(kAccountingBatchBytes, threshold == 0 ? 1 : threshold);
   if (mutator.unflushed_bytes < batch) return;
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   flush_mutator_accounting_locked(mutator);
 }
 
@@ -2234,7 +2267,7 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
       thread_mutator.tlab_cursor > thread_mutator.tlab_end ||
       span > static_cast<size_t>(thread_mutator.tlab_end -
                                  thread_mutator.tlab_cursor)) {
-    std::lock_guard<std::mutex> lock(gc_mutex);
+    HeapLockGuard lock(gc_mutex);
     if (!reserve_tlab_locked(thread_mutator, span)) return nullptr;
   }
 
@@ -2281,7 +2314,7 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   // to the root barrier. Publish it immediately so a barrier can identify it.
   if (collection_phase.load(std::memory_order_acquire) !=
       CollectionPhase::Idle) {
-    std::lock_guard<std::mutex> lock(gc_mutex);
+    HeapLockGuard lock(gc_mutex);
     publish_tlab_locked(thread_mutator);
   }
   return object;
@@ -2307,7 +2340,7 @@ ShadowStack& ensure_shadow_stack() {
   auto* stack = new (std::nothrow) ShadowStack();
   if (!stack) nrq_runtime_fatal("GC shadow-stack allocation failed");
   {
-    std::lock_guard<std::mutex> lock(gc_mutex);
+    HeapLockGuard lock(gc_mutex);
     try {
       shadow_stacks.push_back(stack);
     } catch (...) {
@@ -2414,7 +2447,7 @@ void* nrq_gc_allocate(size_t bytes, nrq_gc_trace_fn trace) {
   bool handled = false;
   void* object = allocate_tlab(bytes, bytes, trace, nullptr, 0, handled);
   if (handled) return object;
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   return allocate_locked(bytes, bytes, trace, nullptr, 0);
 }
 
@@ -2427,7 +2460,7 @@ void* nrq_gc_allocate_array(size_t count, size_t element_size,
   void* object = allocate_tlab(count * element_size, element_size, trace,
                                nullptr, 0, handled);
   if (handled) return object;
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   return allocate_locked(count * element_size, element_size, trace, nullptr, 0);
 }
 
@@ -2441,7 +2474,7 @@ void* nrq_gc_allocate_array_typed(size_t count, size_t element_size,
   void* object = allocate_tlab(count * element_size, element_size, nullptr,
                                reference_offsets, reference_count, handled);
   if (handled) return object;
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   return allocate_locked(count * element_size, element_size, nullptr,
                          reference_offsets, reference_count);
 }
@@ -2476,7 +2509,7 @@ void* nrq_gc_allocate_array_typed_rooted(
     }
   }
 
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   if (thread_shadow_stack &&
       !shadow_has_pointer_root(*thread_shadow_stack, root_slot))
     nrq_runtime_fatal(
@@ -2537,7 +2570,7 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
     return;
   }
 
-  std::lock_guard<std::mutex> heap_lock(gc_mutex);
+  HeapLockGuard heap_lock(gc_mutex);
   {
     std::lock_guard<std::mutex> stack_lock(stack.mutex);
     // Re-read under gc_mutex. If the collector snapshotted before this push,
@@ -2643,7 +2676,7 @@ void nrq_gc_root_register_frame(void* const* slots, size_t slot_count,
     return;
   }
 
-  std::lock_guard<std::mutex> heap_lock(gc_mutex);
+  HeapLockGuard heap_lock(gc_mutex);
   {
     std::lock_guard<std::mutex> stack_lock(stack.mutex);
     const CollectionPhase phase =
@@ -2679,7 +2712,7 @@ void nrq_gc_root_register_array(void* data, size_t count, size_t element_size,
     if (offset > element_size || sizeof(void*) > element_size - offset)
       nrq_runtime_fatal("GC array-root registration contains an invalid pointer offset");
   }
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   auto found = roots.find(data);
   if (found != roots.end()) {
     nrq_runtime_fatal("GC array-root storage address is already registered");
@@ -2710,7 +2743,7 @@ void nrq_gc_root_clear_array_references(void* data, size_t count,
     if (offset > element_size || sizeof(void*) > element_size - offset)
       nrq_runtime_fatal("GC array-root initialization contains an invalid pointer offset");
   }
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   if (roots.find(data) != roots.end())
     nrq_runtime_fatal("GC array-root initialization requires unregistered storage");
   auto* bytes = static_cast<unsigned char*>(data);
@@ -2736,7 +2769,7 @@ void nrq_gc_root_unregister(void** slot) {
   }
   // Array/external roots live in the global table and may be released by their
   // owner from any thread.
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   auto found = roots.find(slot);
   // Compiler cleanup is emitted for owned arrays even when their element type
   // contains no managed references and no root region was registered. Preserve
@@ -2765,7 +2798,7 @@ void nrq_gc_root_store(void** slot, void* value) {
     end_fast_barrier();
     return;
   }
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   store_root_value_locked(slot, value);
 }
 
@@ -2789,7 +2822,7 @@ void nrq_gc_root_copy(void* destination, const void* source, size_t bytes) {
     end_fast_barrier();
     return;
   }
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   const CollectionPhase phase =
       collection_phase.load(std::memory_order_relaxed);
   if (phase == CollectionPhase::Marking)
@@ -2890,12 +2923,12 @@ int32_t nrq_gc_is_generational(void) {
 }
 
 uint64_t nrq_gc_get_minor_collection_count(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   return minor_collections;
 }
 
 uint64_t nrq_gc_get_major_collection_count(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   return major_collections;
 }
 
@@ -2923,7 +2956,7 @@ void nrq_gc_mutator_leave(void) {
 
   std::lock_guard<std::mutex> lock(mutator_mutex);
   {
-    std::lock_guard<std::mutex> heap_lock(gc_mutex);
+    HeapLockGuard heap_lock(gc_mutex);
     publish_tlab_locked(thread_mutator);
     drain_remembered_locked(thread_mutator, /*defer_unresolved=*/true);
     // A thread that leaves the registry is never visited by cycle preparation
@@ -2956,7 +2989,7 @@ void nrq_gc_safepoint(void) {
 void nrq_gc_set_threshold(size_t bytes) {
   // An explicit threshold is a policy decision by the program, so automatic
   // adaptation stops here until it is turned back on.
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   collection_policy.adaptive = false;
   collection_policy.adaptations = 0;
   allocation_accounting.collection_threshold.store(bytes == 0 ? 1 : bytes,
@@ -2964,13 +2997,13 @@ void nrq_gc_set_threshold(size_t bytes) {
 }
 
 size_t nrq_gc_get_threshold(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   return allocation_accounting.collection_threshold.load(
       std::memory_order_relaxed);
 }
 
 void nrq_gc_set_adaptive(int32_t enabled) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   collection_policy.adaptive = enabled != 0;
   // Re-enabling starts from the current live set instead of waiting for the next
   // cycle to correct a threshold the program may have pinned long ago.
@@ -2978,49 +3011,49 @@ void nrq_gc_set_adaptive(int32_t enabled) {
 }
 
 int32_t nrq_gc_policy_is_adaptive(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   return collection_policy.adaptive ? 1 : 0;
 }
 
 uint64_t nrq_gc_policy_adaptation_count(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   return collection_policy.adaptations;
 }
 
 uint64_t nrq_gc_last_reclaimed_bytes(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   return collection_policy.last_reclaimed_bytes;
 }
 
 size_t nrq_gc_object_header_bytes(void) { return sizeof(ObjectHeader); }
 
 size_t nrq_gc_page_count(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   return gc_pages.size();
 }
 
 size_t nrq_gc_recycled_page_count(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   return recycled_pages.size();
 }
 
 uint64_t nrq_gc_page_reuse_count(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   return recycled_page_reuse_count;
 }
 
 uint64_t nrq_gc_span_reuse_count(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   return recycled_span_reuse_count;
 }
 
 size_t nrq_gc_object_index_entries(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   return object_index.size();
 }
 
 int32_t nrq_gc_pointer_is_managed(void* object) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   return find_object_locked(object) ? 1 : 0;
 }
 
@@ -3029,7 +3062,7 @@ nrq_gc_stats nrq_gc_get_stats(void) {
   // before gc_mutex to match the enter/leave lock order; taking only gc_mutex
   // would race a concurrent registration.
   std::lock_guard<std::mutex> registry_lock(mutator_mutex);
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   nrq_gc_stats result = statistics;
   // Unpublished TLAB objects are not in `statistics` yet, but they are live.
   // Sum the per-mutator batches instead of maintaining a global pending pair
@@ -3066,7 +3099,7 @@ uint64_t nrq_gc_get_live_objects(void) {
 
 void* nrq_gc_pin(void* object) {
   if (!object) return nullptr;
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   if (thread_mutator.depth != 0) publish_tlab_locked(thread_mutator);
   if (!find_object_locked(object)) return nullptr;
   if (collection_phase.load(std::memory_order_relaxed) !=
@@ -3086,7 +3119,7 @@ void* nrq_gc_pin(void* object) {
 }
 
 uint64_t nrq_gc_pin_count(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   // Fold in this thread's buffered deltas so a query made right after a managed
   // return reflects it. Other threads' buffers stay private until the next cycle;
   // they are only ever folded while their owner is parked or holding this lock.
@@ -3099,7 +3132,7 @@ uint64_t nrq_gc_transfer_pin_fallbacks(void) {
 }
 
 uint64_t nrq_gc_pin_violations(void) {
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   return pin_violations;
 }
 
@@ -3139,7 +3172,7 @@ void nrq_gc_unpin(void* object) {
     }
     end_fast_barrier();
   }
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   if (buffer_fell_back) drain_transfer_pins_locked(thread_mutator);
   auto found = pinned_objects.find(object);
   if (found == pinned_objects.end()) return;
@@ -3178,7 +3211,7 @@ void* nrq_gc_pin_transfer(void* object) {
     buffer_fell_back = true;
     end_fast_barrier();
   }
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   if (buffer_fell_back) drain_transfer_pins_locked(thread_mutator);
   // A managed return usually refers to an object that is still in this
   // thread's unpublished TLAB. Publishing the whole pending batch here would
@@ -3222,7 +3255,7 @@ int64_t nrq_gc_get_ref_count(void* object) {
   // stack mutex themselves. The mutator registry is taken before the heap lock
   // to keep the documented lock order.
   wait_for_fast_barriers();
-  std::lock_guard<std::mutex> lock(gc_mutex);
+  HeapLockGuard lock(gc_mutex);
   if (thread_mutator.depth != 0) publish_tlab_locked(thread_mutator);
   if (!object || !find_object_locked(object)) return 0;
   try {
