@@ -66,11 +66,9 @@ string get_executable_dir() {
 // The runtime is built in two configurations from one source list; the compiler
 // chooses between them at link time. Nothing is decided at run time, so the
 // production binary contains no branch, counter or symbol for the development
-// instrumentation.
-string runtime_lib_file_name(bool debug_enabled) {
-  return debug_enabled ? "nirqoba_runtime_debug.lib" : "nirqoba_runtime.lib";
-}
-
+// instrumentation. The file name, the ABI symbol the module requires and the
+// lowering's instrumentation all come from the same RuntimeConfiguration, so a
+// build cannot pick one without the others.
 string locate_runtime_lib(const string& file_name) {
   const string exe_dir = get_executable_dir();
   const vector<string> candidates = {
@@ -257,7 +255,7 @@ int run_pipeline(const PipelineOptions& options,
 
   mlir::OwningOpRef<mlir::ModuleOp> mlir_module =
       translate_tir_to_mlir(*tir_module, mlir_context, diagnostics,
-                            options.fast_math, options.debug_enabled);
+                            options.fast_math, options.runtime_configuration);
   if (!mlir_module || diagnostics.has_errors()) {
     return fail_with(diagnostics, sources);
   }
@@ -392,15 +390,15 @@ int run_pipeline(const PipelineOptions& options,
     return 4;  // Exit code 4: environment/toolchain error
   }
 
-  const string runtime_lib_name = runtime_lib_file_name(options.debug_enabled);
+  const string runtime_lib_name =
+      runtime_library_name(options.runtime_configuration);
   string runtime_lib = locate_runtime_lib(runtime_lib_name);
   if (runtime_lib.empty()) {
     diagnostics.error(
         diag::kLinkFailed, SourceLocation{},
-        "cannot find " + runtime_lib_name +
-            (options.debug_enabled
-                 ? "; build the nirqoba_runtime_debug target first"
-                 : "; please build the runtime target first"));
+        "cannot find " + runtime_lib_name + "; build the " +
+            runtime_library_target(options.runtime_configuration) +
+            " target first");
     return fail_with(diagnostics, sources);
   }
 

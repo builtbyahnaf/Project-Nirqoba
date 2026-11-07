@@ -10,8 +10,13 @@
 #include <cstring>
 #include <vector>
 
+#include "nirqoba/Driver/RuntimeConfiguration.h"
 #include "nirqoba/runtime/gc.h"
 #include "nirqoba/runtime/gc_debug.h"
+
+// The runtime's private statement of its own configuration. The test binary
+// links the development library, so both halves below must agree on that.
+#include "runtime_config.h"
 
 namespace {
 
@@ -43,6 +48,27 @@ void drain_queued_tags() {
 
 TEST(GcDebugTest, ReportsTheDevelopmentConfiguration) {
   ASSERT_EQ(nrq_runtime_debug_enabled(), int32_t{1});
+  ASSERT_TRUE(nirq::runtime_debug_enabled);
+  ASSERT_TRUE(nirq::runtime_debug_enabled);
+}
+
+TEST(GcDebugTest, RuntimeAndCompilerAgreeOnTheConfiguration) {
+  // The compiler derives the ABI symbol, the library file name and whether
+  // instrumentation is emitted from one enum; the runtime derives the same names
+  // from one macro. If either side is renamed alone, a program built here would
+  // reference a symbol its library does not define, and the failure would only
+  // appear at link time in a user's build.
+  constexpr nirq::RuntimeConfiguration configuration =
+      nirq::runtime_configuration(nirq::runtime_debug_enabled);
+  ASSERT_TRUE(nirq::is_development(configuration));
+  ASSERT_TRUE(std::strcmp(nirq::runtime_abi_symbol(configuration),
+                          nirq::runtime_abi_symbol_name) == 0);
+  ASSERT_TRUE(std::strcmp(nirq::runtime_library_name(configuration),
+                          nirq::runtime_library_file_name) == 0);
+  // And the library actually linked reports the configuration those names
+  // describe.
+  ASSERT_EQ(nrq_runtime_debug_enabled(),
+            nirq::runtime_debug_enabled ? int32_t{1} : int32_t{0});
 }
 
 TEST(GcDebugTest, RecordsOnlyTheSelectedEventKinds) {

@@ -11,6 +11,7 @@
 
 #include "nirqoba/Backend/Optimization.h"
 #include "nirqoba/Diagnostics/DiagnosticEngine.h"
+#include "nirqoba/Driver/RuntimeConfiguration.h"
 #include "nirqoba/Frontend/SourceFile.h"
 
 namespace nirq {
@@ -52,10 +53,10 @@ struct PipelineOptions {
   bool remarks_missed_only = false;
   std::string remark_filter;
   bool fast_math = false;
-  // Selects the development runtime configuration: link nirqoba_runtime_debug
-  // instead of nirqoba_runtime, and emit the instrumentation its entry points
-  // consume. Production builds leave this false and contain none of it.
-  bool debug_enabled = false;
+  // Selects the runtime the program is built for. One value decides what the
+  // lowering emits, which ABI symbol the module requires and which library the
+  // link names, so the three cannot disagree.
+  RuntimeConfiguration runtime_configuration = RuntimeConfiguration::Production;
 };
 
 // Runs the compilation pipeline as directed by `options`. Returns 0 on

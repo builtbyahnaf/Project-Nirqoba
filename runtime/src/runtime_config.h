@@ -30,4 +30,17 @@ namespace nirq {
 // guarded code below disappears entirely from a production build.
 inline constexpr bool runtime_debug_enabled = NRQ_DEBUG_ENABLED != 0;
 
+// The ABI symbol this library defines, as a string. runtime_abi.cpp has to spell
+// the definition out, so this constant and that definition are the two places the
+// name appears in the runtime; the compiler names the same symbol from
+// RuntimeConfiguration.h, and a unit test compares the two.
+inline constexpr const char* runtime_abi_symbol_name =
+    NRQ_DEBUG_ENABLED ? "nrq_runtime_abi_v1_development"
+                      : "nrq_runtime_abi_v1_production";
+
+// The library file this configuration produces. The driver derives the same name
+// from the compiler's RuntimeConfiguration.
+inline constexpr const char* runtime_library_file_name =
+    NRQ_DEBUG_ENABLED ? "nirqoba_runtime_debug.lib" : "nirqoba_runtime.lib";
+
 }  // namespace nirq
