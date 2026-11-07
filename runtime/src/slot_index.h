@@ -101,8 +101,11 @@ class SlotIndex {
 
   // Drops `count` registrations of `slot`, tombstoning the entry only when the
   // last one goes away. One probe chain settles the removal instead of a lookup
-  // followed by a separate erase probe.
-  bool release(void* slot, uint32_t count) {
+  // followed by a separate erase probe. `fully_released`, when supplied, reports
+  // whether this call removed the key entirely, which lets the caller retire
+  // anything it derived from the slot without a second lookup.
+  bool release(void* slot, uint32_t count, bool* fully_released = nullptr) {
+    if (fully_released) *fully_released = false;
     if (!slot || entries_.empty()) return false;
     const size_t mask = entries_.size() - 1;
     size_t index = slot_hash(slot) & mask;
@@ -119,6 +122,7 @@ class SlotIndex {
           entry.slot = kTombstone();
           --size_;
           ++tombstones_;
+          if (fully_released) *fully_released = true;
         } else {
           entry.state.count -= count;
         }
