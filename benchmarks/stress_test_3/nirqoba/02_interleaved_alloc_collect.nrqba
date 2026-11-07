@@ -1,0 +1,114 @@
+// Benchmark 02 - Interleaved allocation and collection, Nirqoba track.
+//
+// PO-27 secondary regression guard: verifies that the GC's stop-the-world
+// handshake does not interact badly with rapid slot-index churn. The pattern
+// alternates between:
+//   (a) building a chain of BATCH_SIZE nodes  (many root registrations)
+//   (b) calling gc.collect()                  (stop-the-world handshake)
+//   (c) discarding all nodes                  (many root slot tombstones)
+//
+// If the slot index grows unboundedly, the alloc phase slows exponentially
+// across rounds because each round inherits a larger table from the previous
+// one. A correct implementation finishes every round in roughly the same time.
+//
+// The batch size is small enough that automatic collection does not fire
+// between explicit calls; that keeps COLLECTIONS_DELTA equal to 1 per round.
+//
+// Output keys per round:
+//   ALLOC_MS          time to build one chain of BATCH_SIZE nodes
+//   COLLECT_MS        time for one explicit gc.collect()
+//   CHECKSUM          sum of node values (correctness guard)
+//   LIVE_AFTER        objects alive after collect (must be 0: chain is dead)
+//   COLLECTIONS_DELTA gc.collections delta per round (must be 1)
+
+struct Link {
+    managed<Link> next;
+    int value;
+}
+
+managed<Link> function make_link(int v) {
+    var node = array.allocate<Link>(1);
+    node[0].value = v;
+    return node;
+}
+
+managed<Link> function build_chain(int size) {
+    var head = make_link(0);
+    var tail = head;
+    for (var i = 1; i < size; i += 1) {
+        tail[0].next = make_link(i);
+        tail = tail[0].next;
+    }
+    return head;
+}
+
+int function sum_chain(managed<Link> head, int size) {
+    var total = 0;
+    var cursor = head;
+    for (var i = 0; i < size; i += 1) {
+        total += cursor[0].value;
+        cursor = cursor[0].next;
+    }
+    return total;
+}
+
+int function main() {
+    gc.disable();
+    gc.collect();
+
+    let batch_size     = 10000;
+    let warmup_rounds  = 2;
+    let measure_rounds = 10;
+
+    for (var w = 0; w < warmup_rounds; w += 1) {
+        var chain = build_chain(batch_size);
+        gc.collect();
+    }
+
+    print("TEST");
+    print("interleaved_alloc_collect");
+    print("IMPL");
+    print("nirqoba");
+    print("OBJECTS");
+    print(batch_size);
+    print("WARMUP_ROUNDS");
+    print(warmup_rounds);
+    print("MEASURE_ROUNDS");
+    print(measure_rounds);
+
+    for (var round = 0; round < measure_rounds; round += 1) {
+        print("ROUND");
+        print(round);
+
+        let before = gc.get_statistics().collections;
+
+        let alloc_start = time.now();
+        var chain = build_chain(batch_size);
+        let alloc_end = time.now();
+
+        // Checksum while chain is still reachable.
+        var checksum = sum_chain(chain, batch_size);
+
+        // Discard head; entire chain becomes unreachable.
+        chain = array.allocate<Link>(1);  // replace root with a fresh sentinel
+
+        let collect_start = time.now();
+        gc.collect();
+        let collect_end = time.now();
+
+        let after = gc.get_statistics();
+
+        print("ALLOC_MS");
+        print(alloc_end - alloc_start);
+        print("COLLECT_MS");
+        print(collect_end - collect_start);
+        print("CHECKSUM");
+        print(checksum);
+        print("LIVE_AFTER");
+        print(after.live_objects);
+        print("COLLECTIONS_DELTA");
+        print(after.collections - before);
+    }
+
+    return 0;
+}

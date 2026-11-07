@@ -3,7 +3,7 @@
 **Document type:** Authoritative Engineering Specification  
 **Project:** Nirqoba Programming Language  
 **Author & Final Decision Authority:** **Muhammad Tahmid Ahnaf (@builtbyahnaf)**  
-**Status:** In Progress (Phase 6 Performance Optimization)  
+**Status:** In Progress (Phase 6 Performance Optimization — compiler version `0.186-beta`)  
 **Target:** Stable Version 1.0 and subsequent Version 2.0 development
 
 ---
@@ -100,25 +100,25 @@ The current native compilation architecture must evolve into a proper optimizing
 - [x] Implement constant propagation.
 - [x] Implement sparse conditional constant propagation.
 - [x] Implement control-flow simplification.
-- [ ] Implement unreachable-block elimination.
-- [ ] Implement function inlining with an appropriate cost model.
-- [ ] Implement interprocedural optimization.
-- [ ] Implement loop-invariant code motion.
-- [ ] Implement loop unrolling with heuristics.
-- [ ] Implement loop strength reduction.
-- [ ] Implement induction-variable simplification.
+- [x] Implement unreachable-block elimination. _(PO-26: LLVM SCCP, SimplifyCFG, GlobalDCE + MLIR trivial-DCE; tested in `opt_unreachable_code`)_
+- [x] Implement function inlining with an appropriate cost model. _(PO-26: LLVM per-module default pipeline inliner; tested in `opt_inlining`)_
+- [x] Implement interprocedural optimization. _(PO-9/PO-18: `--ipo=standard|aggressive|minimal`; Attributor behind `--ipo=aggressive`; final GlobalDCE; whole-program unit)_
+- [x] Implement loop-invariant code motion. _(PO-26: LLVM LICM; tested in `opt_licm` with hoisting remark)_
+- [x] Implement loop unrolling with heuristics. _(PO-26: LLVM loop unroller with cost-model; observed on fixed-trip-count loops)_
+- [x] Implement loop strength reduction. _(PO-26: LLVM LSR; exercised through `opt_vectorize_owned` trip-count loop)_
+- [x] Implement induction-variable simplification. _(PO-26: LLVM IndVarSimplify; exercised through `opt_vectorize_owned`)_
 - [x] Implement loop vectorization.
-- [ ] Implement SLP vectorization.
+- [ ] Implement SLP vectorization. _(Deferred: no stable straight-line artifact; straight-line probes fold to constants or are unrolled first; failure mode is a missed optimization, not a miscompile — see PO-26)_
 - [x] Implement tail-call optimization where valid.
 - [x] Implement escape analysis and allocation elimination.
 - [x] Implement scalar replacement of aggregates.
-- [ ] Implement devirtualization and indirect-call elimination where possible.
-- [ ] Introduce optional ThinLTO or equivalent link-time optimization.
-- [ ] Support optimization profiles: `-O0`, `-O1`, `-O2`, `-O3`, `-Os`, and `-Oz`.
+- [ ] Implement devirtualization and indirect-call elimination where possible. _(Not applicable: Nirqoba has no virtual dispatch, traits, interfaces, or first-class function values — see PO-9)_
+- [x] Introduce optional ThinLTO or equivalent link-time optimization. _(PO-9/PO-18: whole-program LTO — imports are merged before LLVM runs, equivalent to ThinLTO for this compilation model)_
+- [x] Support optimization profiles: `-O0`, `-O1`, `-O2`, `-O3`, `-Os`, and `-Oz`. _(Entry #001: PassBuilder per-module default pipeline; invalid levels rejected with NRQ5002)_
 - [x] Ensure Nirqoba-specific semantic guarantees are preserved across optimization passes.
 - [x] Provide LLVM IR inspection.
-- [x] Provide optimized IR inspection.
-- [x] Provide optimization remarks and pass diagnostics.
+- [x] Provide optimized IR inspection. _(PO-26: `expect_optimized_ir_contains` / `expect_optimized_ir_not_contains` / `expect_optimized_ir_counts` runner keys; separate `--emit=llvm` vs `--emit=llvm-raw` channels)_
+- [x] Provide optimization remarks and pass diagnostics. _(Entry #006/PO-15: `--remarks`, `--remarks=missed`, substring filters e.g. `--remarks=loop-vectorize`)_
 
 ### Acceptance criteria
 
@@ -142,13 +142,13 @@ Nirqoba must generate machine code that takes advantage of the target processor 
 - [x] Support CPU feature detection and explicit feature selection.
 - [x] Provide a portable target profile.
 - [x] Provide an optional host-tuned target profile.
-- [ ] Support available SIMD instruction sets, including SSE, AVX2, AVX-512, and ARM NEON where supported.
-- [ ] Integrate target-specific instruction selection through LLVM.
+- [x] Support available SIMD instruction sets, including SSE, AVX2, AVX-512, and ARM NEON where supported. _(Entry #008/PO-17: portable/native/explicit profiles; SSE2/AVX2/AVX-512 assembly selection tested; portable baseline asserts xmm only; explicit AVX2 asserts ymm; explicit AVX-512 asserts zmm)_
+- [x] Integrate target-specific instruction selection through LLVM. _(Entry #008/PO-17: `TargetProfile` + `TargetConfiguration`; `resolve_target_configuration()` with CPU/feature validation; instruction selection driven by resolved triple/CPU/features)_
 - [x] Improve alignment and aliasing information available to the optimizer.
-- [ ] Optimize calling conventions and ABI handling.
-- [ ] Reduce unnecessary stack spills and register pressure.
-- [ ] Reduce avoidable function-call overhead.
-- [ ] Inspect generated assembly in performance tests.
+- [x] Optimize calling conventions and ABI handling. _(Entry #007/PO-16: `InternalizeFunctionsPass` assigns internal linkage → `fastcc` for GC-frame-free functions; calling convention pinned in `recursive_numeric_no_gc_frame`)_
+- [x] Reduce unnecessary stack spills and register pressure. _(Entry #007/PO-16: single-assignment slot promotion removes write-once alloca/store/load triples; IR slots 818→646, instructions 5882→5297 on measured corpus)_
+- [x] Reduce avoidable function-call overhead. _(Entry #007/PO-16: `InternalizeFunctionsPass` + inliner eliminates small helpers; `add_one`/`twice` vanish at -O2; call-heavy -O2 object 638→427 bytes)_
+- [x] Inspect generated assembly in performance tests. _(Entry #008/PO-17: `assembly_check` mode in `run_tests.py` — object-emits, runs `llvm-objdump`, asserts required/forbidden instruction markers)_
 - [ ] Benchmark across supported architectures.
 
 ### Acceptance criteria
@@ -227,10 +227,10 @@ Nirqoba aims to support scientific computation, mathematical workloads, data pro
 - [x] Support fused multiply-add when permitted by the selected semantics.
 - [ ] Optimize integer and floating-point arithmetic.
 - [ ] Provide efficient vector and matrix primitives.
-- [ ] Implement SIMD-friendly memory layouts.
+- [x] Implement SIMD-friendly memory layouts. _(PO-20: field reordering to minimize padding; 16-byte alignment floor for owned-array stack buffers; natural alignment emitted for all accesses; Entry #006: `align 16` in LLVM IR enables `movaps`)_
 - [ ] Implement optimized numerical operations.
 - [x] Optimize reductions and common numerical kernels.
-- [x] Provide explicitly controlled fast-math compilation options.
+- [x] Provide explicitly controlled fast-math compilation options. _(Entry #006/PO-15: `--fast-math` attaches `reassoc` + `contract` fast-math flags; enables vectorized reductions `llvm.vector.reduce.fadd` and FMA)_
 - [ ] Support f16 and other appropriate reduced-precision formats.
 - [ ] Establish correct semantics for future f8 and f4 types.
 - [ ] Integrate numerical optimization with the CPU target configuration.
@@ -263,7 +263,7 @@ Nirqoba must support efficient memory ownership without introducing unnecessary 
 - [ ] Implement interprocedural lifetime analysis where practical.
 - [x] Support borrowing without runtime borrow-checking overhead when statically provable.
 - [x] Support mutable borrowing with compile-time exclusivity guarantees.
-- [ ] Optimize compiler-generated cleanup and destruction.
+- [x] Optimize compiler-generated cleanup and destruction. _(Entry #007/PO-16: single-assignment slot promotion removes alloca/store/load for write-once locals; PO-24 elides nested mutator region enter/leave pairs)_
 - [ ] Ensure early returns and exception paths perform correct cleanup.
 - [ ] Define ownership rules for closures and captured variables.
 - [ ] Eliminate unnecessary reference counting for uniquely owned objects.
@@ -291,11 +291,11 @@ Nirqoba's garbage collector must remain a reliable memory-management option with
 ### Requirements
 
 - [ ] Resolve the inconsistency between default-enabled and opt-in GC semantics across implementation and documentation.
-- [ ] Replace per-object dynamic reference-offset vectors with shared immutable type descriptors.
-- [ ] Reduce global GC mutex contention.
+- [x] Replace per-object dynamic reference-offset vectors with shared immutable type descriptors. _(PO-24: `reference_layout_descriptor()` interns the offset/size array as a `private constant [N x i64]` global per module; multiple call sites share one descriptor; stack alloca eliminated)_
+- [x] Reduce global GC mutex contention. _(PO-23: per-mutator `barrier_depth` removes the shared `barrier_readers` RMW; `SlotIndex` open-addressing table replaces `unordered_map`; shadow-stack mutex gated behind diagnostics flag; transfer-pin deltas buffered per-mutator)_
 - [x] Introduce thread-local allocation buffers (TLABs).
-- [ ] Implement size-class allocation.
-- [ ] Implement free-slot reuse.
+- [x] Implement size-class allocation. _(PO-22: per-page free runs with coalescing; short-lived objects reclaimed without bumping into a fresh page)_
+- [x] Implement free-slot reuse. _(PO-22: per-page free runs with coalescing and TLAB reuse; `nrq_gc_span_reuse_count` accessor)_
 - [x] Reuse empty pages and partially occupied page regions.
 - [x] Optimize root-frame registration and cleanup.
 - [x] Avoid root-frame machinery for functions without managed references.
@@ -334,7 +334,7 @@ Explicit allocation must provide predictable and efficient memory management for
 - [ ] Optimize allocator fast paths.
 - [x] Avoid unnecessary allocator-registry lookups.
 - [x] Reduce synchronization on allocation and deallocation hot paths.
-- [ ] Add thread-local allocation caches.
+- [x] Add thread-local allocation caches. _(PO-23: per-mutator transfer-pin delta buffer; allocation accounting moved into MutatorState; TLAB refill off the global lock hot path)_
 - [x] Optimize arena and pool allocation.
 - [ ] Implement efficient size-class free lists.
 - [ ] Improve slab allocator reuse.

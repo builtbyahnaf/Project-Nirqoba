@@ -1,0 +1,94 @@
+// Benchmark 01 - SlotIndex tombstone-churn regression guard, Nirqoba track.
+//
+// PO-27 root cause: SlotIndex::insert always doubles capacity when the load
+// factor exceeds 75%, counting tombstones in the numerator. After N
+// insert/release cycles with one live entry the table reaches capacity 2^k
+// where 2^k >= N, consuming gigabytes of memory and spending O(N) time per
+// probe. The fix rehashes to the same capacity when size_ < capacity/2
+// (tombstone-saturated), only doubling when truly full of live entries.
+//
+// This benchmark exercises EXACTLY the pattern that caused the PO-27 hang:
+//   - Allocate a small managed object in a short-lived function.
+//   - Return it; the frame ends, releasing the root slot (tombstone created).
+//   - Repeat N times.
+//
+// A correct implementation finishes all three phases in well under 1 second.
+// A regressed implementation hangs on the ALLOC phase after ~log2(N) doublings
+// cause the backing vector to reach gigabyte size.
+//
+// ALLOC_MS    time to perform ITERATIONS insert/release cycles
+// COLLECT_MS  time for one explicit GC after all slots are released
+// CHECKSUM    sum of all round values (correctness guard, must equal
+//             ITERATIONS*(ITERATIONS-1)/2 for the last measured round)
+
+struct Leaf {
+    int value;
+}
+
+managed<Leaf> function make_leaf(int v) {
+    var leaf = array.allocate<Leaf>(1);
+    leaf[0].value = v;
+    return leaf;
+}
+
+// Performs `count` alloc-then-discard cycles and returns the sum of values.
+// Each call to make_leaf opens a fresh root frame and closes it on return,
+// producing one tombstone per iteration in the slot index.
+int function churn(int count) {
+    var total = 0;
+    for (var i = 0; i < count; i += 1) {
+        var leaf = make_leaf(i);
+        total += leaf[0].value;
+    }
+    return total;
+}
+
+int function main() {
+    gc.disable();
+    gc.collect();
+
+    let iterations  = 500000;
+    let warmup_rounds  = 2;
+    let measure_rounds = 5;
+
+    // Warmup: prime the slot index and discard any JIT or OS effects.
+    for (var w = 0; w < warmup_rounds; w += 1) {
+        var ignored = churn(iterations);
+        gc.collect();
+    }
+
+    print("TEST");
+    print("slot_index_churn");
+    print("IMPL");
+    print("nirqoba");
+    print("OBJECTS");
+    print(iterations);
+    print("WARMUP_ROUNDS");
+    print(warmup_rounds);
+    print("MEASURE_ROUNDS");
+    print(measure_rounds);
+
+    for (var round = 0; round < measure_rounds; round += 1) {
+        print("ROUND");
+        print(round);
+
+        let alloc_start = time.now();
+        var checksum = churn(iterations);
+        let alloc_end = time.now();
+
+        let collect_start = time.now();
+        gc.collect();
+        let collect_end = time.now();
+
+        print("ALLOC_MS");
+        print(alloc_end - alloc_start);
+        print("COLLECT_MS");
+        print(collect_end - collect_start);
+        print("CHECKSUM");
+        print(checksum);
+        print("LIVE_AFTER");
+        print(gc.get_statistics().live_objects);
+    }
+
+    return 0;
+}

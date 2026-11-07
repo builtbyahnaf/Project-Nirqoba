@@ -35,6 +35,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,7 @@ VCVARS_BAT = Path(
 DEFAULT_REPEATS = 3
 RUN_TIMEOUT_SECONDS = 600
 COMPILE_TIMEOUT_SECONDS = 300
+NIRQOBA_MAX_PHASE_MS = 7000.0
 
 # ---------------------------------------------------------------------------
 # Suite definition
@@ -169,10 +171,46 @@ GLOBAL_KEYS = {
     "ROOT_VALUE",
 }
 
+STATUS_PASSED = "passed"
+STATUS_TIMED_OUT = "timed_out"
+STATUS_NONZERO_EXIT = "nonzero_exit"
+STATUS_VALIDATION_FAILED = "validation_failed"
+
 
 # ---------------------------------------------------------------------------
 # Command helpers
 # ---------------------------------------------------------------------------
+
+
+def kill_process_tree(proc: subprocess.Popen) -> None:
+    """Safely terminate a process and all its children across platforms."""
+    try:
+        import psutil
+
+        parent = psutil.Process(proc.pid)
+        children = parent.children(recursive=True)
+        for child in children:
+            try:
+                child.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        try:
+            parent.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    except Exception:
+        # Fallback if psutil fails or on Windows taskkill fallback
+        try:
+            if platform.system() == "Windows":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True,
+                    timeout=5,
+                )
+            else:
+                proc.kill()
+        except Exception:
+            pass
 
 
 def run_command(
@@ -181,19 +219,35 @@ def run_command(
     cwd: Path | None = None,
     timeout: int = COMPILE_TIMEOUT_SECONDS,
     shell: bool = False,
-) -> tuple[int, str]:
-    """Run a command and return (returncode, combined output)."""
-    completed = subprocess.run(
-        command,
-        cwd=str(cwd) if cwd else None,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        shell=shell,
-    )
-    return completed.returncode, (completed.stdout or "") + (completed.stderr or "")
+) -> tuple[int, str, bool]:
+    """Run a command and return (returncode, combined output, timed_out)."""
+    try:
+        proc = subprocess.Popen(
+            command,
+            cwd=str(cwd) if cwd else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=shell,
+        )
+    except Exception as exc:
+        return -1, str(exc), False
+
+    try:
+        stdout_bytes, stderr_bytes = proc.communicate(timeout=timeout)
+        output = (stdout_bytes or b"").decode("utf-8", errors="replace") + (
+            stderr_bytes or b""
+        ).decode("utf-8", errors="replace")
+        return proc.returncode, output, False
+    except subprocess.TimeoutExpired:
+        kill_process_tree(proc)
+        try:
+            stdout_bytes, stderr_bytes = proc.communicate(timeout=5)
+        except Exception:
+            stdout_bytes, stderr_bytes = b"", b""
+        output = (stdout_bytes or b"").decode("utf-8", errors="replace") + (
+            stderr_bytes or b""
+        ).decode("utf-8", errors="replace")
+        return -1, output, True
 
 
 def msvc_command(source: Path, output: Path, object_file: Path, cpp: bool) -> str:
@@ -219,35 +273,49 @@ def compile_one(test_id: str, impl: str) -> tuple[bool, str]:
         output = BIN_DIR / f"{test_id}_nirqoba.exe"
         # The Nirqoba compiler emits its intermediate .obj in the working
         # directory, so build from bin/obj rather than the suite root.
-        code, log = run_command(
+        code, log, timed_out = run_command(
             [str(NRQ_EXE), "build", str(source), "-o", str(output), "-O3"],
             cwd=OBJ_DIR,
+            timeout=COMPILE_TIMEOUT_SECONDS,
         )
+        if timed_out:
+            return False, f"Nirqoba compilation timed out after {COMPILE_TIMEOUT_SECONDS}s:\n{log}"
         return code == 0, log
 
     if impl == "c":
         output = BIN_DIR / f"{test_id}_c.exe"
         obj = OBJ_DIR / f"{test_id}_c.obj"
-        code, log = run_command(
-            msvc_command(source, output, obj, cpp=False), shell=True
+        code, log, timed_out = run_command(
+            msvc_command(source, output, obj, cpp=False),
+            shell=True,
+            timeout=COMPILE_TIMEOUT_SECONDS,
         )
+        if timed_out:
+            return False, f"C compilation timed out after {COMPILE_TIMEOUT_SECONDS}s:\n{log}"
         return code == 0, log
 
     if impl == "cpp":
         output = BIN_DIR / f"{test_id}_cpp.exe"
         obj = OBJ_DIR / f"{test_id}_cpp.obj"
-        code, log = run_command(
-            msvc_command(source, output, obj, cpp=True), shell=True
+        code, log, timed_out = run_command(
+            msvc_command(source, output, obj, cpp=True),
+            shell=True,
+            timeout=COMPILE_TIMEOUT_SECONDS,
         )
+        if timed_out:
+            return False, f"C++ compilation timed out after {COMPILE_TIMEOUT_SECONDS}s:\n{log}"
         return code == 0, log
 
     if impl == "rust":
         if not RUSTC_EXE.exists():
             return False, f"rustc not found: {RUSTC_EXE}"
         output = BIN_DIR / f"{test_id}_rust.exe"
-        code, log = run_command(
-            [str(RUSTC_EXE), "-C", "opt-level=3", str(source), "-o", str(output)]
+        code, log, timed_out = run_command(
+            [str(RUSTC_EXE), "-C", "opt-level=3", str(source), "-o", str(output)],
+            timeout=COMPILE_TIMEOUT_SECONDS,
         )
+        if timed_out:
+            return False, f"Rust compilation timed out after {COMPILE_TIMEOUT_SECONDS}s:\n{log}"
         return code == 0, log
 
     if impl == "java":
@@ -264,9 +332,12 @@ def compile_java() -> tuple[bool, str]:
         shutil.rmtree(JAVA_CLASSES_DIR)
     JAVA_CLASSES_DIR.mkdir(parents=True, exist_ok=True)
     sources = [str(TESTS[test_id]["sources"]["java"]) for test_id in TESTS]
-    code, log = run_command(
-        [str(JAVAC_EXE), "-d", str(JAVA_CLASSES_DIR), *sources]
+    code, log, timed_out = run_command(
+        [str(JAVAC_EXE), "-d", str(JAVA_CLASSES_DIR), *sources],
+        timeout=COMPILE_TIMEOUT_SECONDS,
     )
+    if timed_out:
+        return False, f"Java compilation timed out after {COMPILE_TIMEOUT_SECONDS}s:\n{log}"
     return code == 0, log
 
 
@@ -387,15 +458,25 @@ def validate_run(test_id: str, impl: str, parsed: dict[str, Any]) -> list[str]:
         for metric in definition["phase_metrics"]:
             if metric not in round_data:
                 problems.append(f"round {round_number}: missing {metric}")
-            elif as_float(round_data[metric]) <= 0.0:
-                problems.append(
-                    f"round {round_number}: {metric}={round_data[metric]} is not positive"
-                )
+            else:
+                metric_val = as_float(round_data[metric])
+                if metric_val <= 0.0:
+                    problems.append(
+                        f"round {round_number}: {metric}={round_data[metric]} is not positive"
+                    )
+                elif impl == "nirqoba" and metric_val > NIRQOBA_MAX_PHASE_MS:
+                    problems.append(
+                        f"round {round_number}: {metric}={round_data[metric]}ms exceeds {NIRQOBA_MAX_PHASE_MS:.0f}ms limit for nirqoba [FAIL]"
+                    )
 
     if test_id in {"01", "02"}:
         for metric in definition.get("global_metrics", []):
             if metric not in globals_:
                 problems.append(f"missing {metric}")
+            elif impl == "nirqoba" and as_float(globals_[metric]) > NIRQOBA_MAX_PHASE_MS:
+                problems.append(
+                    f"global {metric}={globals_[metric]}ms exceeds {NIRQOBA_MAX_PHASE_MS:.0f}ms limit for nirqoba [FAIL]"
+                )
 
     for round_data in rounds:
         round_number = round_data.get("ROUND", "?")
@@ -610,14 +691,59 @@ def compile_all(selected_tests: list[str], selected_impls: list[str]) -> bool:
     return ok
 
 
+def atomic_save_json(path: Path, data: dict[str, Any]) -> None:
+    """Atomically save JSON data using a temporary file replaced into place."""
+    path = path.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_file = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=str(path.parent),
+        delete=False,
+        suffix=".tmp",
+    )
+    temp_path = Path(temp_file.name)
+    try:
+        json.dump(data, temp_file, indent=2)
+        temp_file.write("\n")
+        temp_file.flush()
+        temp_file.close()
+        os.replace(temp_path, path)
+    except Exception:
+        temp_file.close()
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except Exception:
+                pass
+        raise
+
+
 def run_suite(
     selected_tests: list[str],
     selected_impls: list[str],
     repeats: int,
+    output_path: Path | None = None,
 ) -> dict[str, Any]:
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     results: dict[str, Any] = {}
     validation_failures: list[str] = []
+    attempts: list[dict[str, Any]] = []
+
+    checkpoint_path = (
+        output_path.with_suffix(".checkpoint.json")
+        if output_path
+        else BENCH_DIR / "benchmark_results.checkpoint.json"
+    )
+
+    metadata = environment_metadata()
+    current_payload: dict[str, Any] = {
+        "metadata": metadata,
+        "valid": True,
+        "validation_failures": validation_failures,
+        "results": results,
+        "attempts": attempts,
+    }
 
     for test_id in selected_tests:
         definition = TESTS[test_id]
@@ -629,53 +755,142 @@ def run_suite(
             print(f"  {impl:<8}", end="", flush=True)
 
             for repeat in range(repeats):
+                repeat_number = repeat + 1
                 argv = executable_for(test_id, impl)
                 if not Path(argv[0]).exists():
                     message = f"missing executable for {test_id} {impl}: {argv[0]}"
                     validation_failures.append(message)
+                    attempts.append(
+                        {
+                            "test": test_id,
+                            "test_name": definition["name"],
+                            "impl": impl,
+                            "repeat": repeat_number,
+                            "command": argv,
+                            "status": STATUS_NONZERO_EXIT,
+                            "returncode": -1,
+                            "wall_seconds": 0.0,
+                            "timeout_seconds": RUN_TIMEOUT_SECONDS,
+                            "error": message,
+                        }
+                    )
+                    current_payload["valid"] = False
+                    atomic_save_json(checkpoint_path, current_payload)
                     print("MISSING", end="")
                     break
 
                 started = time.perf_counter()
-                code, output = run_command(
+                code, output, timed_out = run_command(
                     argv, timeout=RUN_TIMEOUT_SECONDS, shell=False
                 )
                 wall_seconds = time.perf_counter() - started
 
-                raw_path = RAW_DIR / f"{test_id}_{impl}_run{repeat + 1}.txt"
+                raw_path = RAW_DIR / f"{test_id}_{impl}_run{repeat_number}.txt"
                 raw_path.write_text(
                     f"$ {' '.join(argv)}\n"
                     f"exit_code={code}\n"
+                    f"timed_out={timed_out}\n"
                     f"wall_seconds={wall_seconds:.3f}\n"
                     f"{output}\n",
                     encoding="utf-8",
                 )
 
-                if code != 0:
+                if timed_out:
+                    status = STATUS_TIMED_OUT
                     message = (
-                        f"{test_id} {impl} run {repeat + 1} exited with {code}; "
+                        f"{test_id} {impl} run {repeat_number} timed out after "
+                        f"{RUN_TIMEOUT_SECONDS}s (wall: {wall_seconds:.3f}s); see {raw_path}"
+                    )
+                    validation_failures.append(message)
+                    attempts.append(
+                        {
+                            "test": test_id,
+                            "test_name": definition["name"],
+                            "impl": impl,
+                            "repeat": repeat_number,
+                            "command": argv,
+                            "status": status,
+                            "returncode": code,
+                            "wall_seconds": round(wall_seconds, 3),
+                            "timeout_seconds": RUN_TIMEOUT_SECONDS,
+                            "partial_output": output,
+                            "raw_log": str(raw_path),
+                        }
+                    )
+                    current_payload["valid"] = False
+                    atomic_save_json(checkpoint_path, current_payload)
+                    print("TIMEOUT", end="", flush=True)
+                    continue
+
+                if code != 0:
+                    status = STATUS_NONZERO_EXIT
+                    message = (
+                        f"{test_id} {impl} run {repeat_number} exited with {code}; "
                         f"see {raw_path}"
                     )
                     validation_failures.append(message)
-                    print("EXIT", end="")
-                    break
+                    attempts.append(
+                        {
+                            "test": test_id,
+                            "test_name": definition["name"],
+                            "impl": impl,
+                            "repeat": repeat_number,
+                            "command": argv,
+                            "status": status,
+                            "returncode": code,
+                            "wall_seconds": round(wall_seconds, 3),
+                            "timeout_seconds": RUN_TIMEOUT_SECONDS,
+                            "output": output,
+                            "raw_log": str(raw_path),
+                        }
+                    )
+                    current_payload["valid"] = False
+                    atomic_save_json(checkpoint_path, current_payload)
+                    print("EXIT", end="", flush=True)
+                    continue
 
                 parsed = parse_output(output)
                 problems = validate_run(test_id, impl, parsed)
-                for problem in problems:
-                    validation_failures.append(
-                        f"{test_id} {impl} run {repeat + 1}: {problem}"
-                    )
+                if problems:
+                    status = STATUS_VALIDATION_FAILED
+                    for problem in problems:
+                        validation_failures.append(
+                            f"{test_id} {impl} run {repeat_number}: {problem}"
+                        )
+                else:
+                    status = STATUS_PASSED
 
-                runs.append(
+                attempts.append(
                     {
-                        "repeat": repeat + 1,
+                        "test": test_id,
+                        "test_name": definition["name"],
+                        "impl": impl,
+                        "repeat": repeat_number,
+                        "command": argv,
+                        "status": status,
+                        "returncode": code,
                         "wall_seconds": round(wall_seconds, 3),
-                        "parsed": parsed,
-                        "rounds": parsed["rounds"],
+                        "timeout_seconds": RUN_TIMEOUT_SECONDS,
+                        "validation_problems": problems,
+                        "raw_log": str(raw_path),
                     }
                 )
-                print(".", end="", flush=True)
+
+                if status == STATUS_PASSED:
+                    runs.append(
+                        {
+                            "repeat": repeat_number,
+                            "wall_seconds": round(wall_seconds, 3),
+                            "parsed": parsed,
+                            "rounds": parsed["rounds"],
+                        }
+                    )
+                    print(".", end="", flush=True)
+                else:
+                    current_payload["valid"] = False
+                    print("FAIL", end="", flush=True)
+
+                atomic_save_json(checkpoint_path, current_payload)
 
             print()
             if runs:
@@ -689,13 +904,10 @@ def run_suite(
                     }
                     for run in runs
                 ]
+                atomic_save_json(checkpoint_path, current_payload)
 
-    return {
-        "metadata": environment_metadata(),
-        "valid": not validation_failures,
-        "validation_failures": validation_failures,
-        "results": results,
-    }
+    current_payload["valid"] = not validation_failures
+    return current_payload
 
 
 def print_summary(payload: dict[str, Any]) -> None:
@@ -756,6 +968,11 @@ def main() -> int:
         default=RESULT_JSON,
         help=f"JSON output path (default: {RESULT_JSON}).",
     )
+    parser.add_argument(
+        "--force-overwrite",
+        action="store_true",
+        help="Overwrite the output JSON even if validation fails or runs timed out.",
+    )
     args = parser.parse_args()
 
     if args.repeats < 1:
@@ -777,7 +994,12 @@ def main() -> int:
     else:
         print("\nSkipping compilation.")
 
-    payload = run_suite(selected_tests, selected_impls, args.repeats)
+    target_output = args.output.resolve()
+    default_output = RESULT_JSON.resolve()
+
+    payload = run_suite(
+        selected_tests, selected_impls, args.repeats, output_path=target_output
+    )
     payload["configuration"] = {
         "repeats": args.repeats,
         "tests": selected_tests,
@@ -785,11 +1007,24 @@ def main() -> int:
         "run_timeout_seconds": RUN_TIMEOUT_SECONDS,
     }
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    should_write_target = True
+    if target_output == default_output and not payload["valid"] and not args.force_overwrite:
+        if target_output.exists():
+            should_write_target = False
+            diag_output = target_output.with_name(
+                f"benchmark_results_failed_{int(time.time())}.json"
+            )
+            atomic_save_json(diag_output, payload)
+            print(
+                f"\n[WARNING] Validation failed or runs were incomplete. Preserving previous "
+                f"successful artifact at {target_output}. Diagnostic run saved to: {diag_output}"
+            )
+
+    if should_write_target:
+        atomic_save_json(target_output, payload)
+        print(f"\nResults saved to: {target_output}")
 
     print_summary(payload)
-    print(f"\nResults saved to: {args.output}")
 
     return 0 if payload["valid"] else 1
 

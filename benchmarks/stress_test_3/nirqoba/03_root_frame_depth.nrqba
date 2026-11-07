@@ -1,0 +1,105 @@
+// Benchmark 03 - Root-frame depth regression guard, Nirqoba track.
+//
+// PO-27 tertiary guard: deep call stacks with many live root slots per frame
+// probe the slot index under realistic GC-managed recursion. The concern is
+// that a large frame depth multiplies root registrations, which could interact
+// with the tombstone-churn bug if the fix is applied incorrectly.
+//
+// Pattern:
+//   - Recursively build a binary tree of depth TREE_DEPTH.
+//   - Each recursive call keeps its own managed<Node> locals in scope through
+//     at least one safepoint, so the slot index must hold O(TREE_DEPTH) live
+//     entries simultaneously.
+//   - After full construction, explicitly collect and verify reclamation.
+//
+// This benchmark PASSES before the PO-27 fix only if TREE_DEPTH is small
+// (slot count stays low). With TREE_DEPTH=18 (262143 nodes) the slot index
+// must sustain up to 18 live entries at peak depth, then accumulate 2*18=36
+// tombstones per tree built. Repeating ITERATIONS times leaves
+// ITERATIONS * 36 total tombstones, which triggers the bug without the fix.
+//
+// Output keys per round:
+//   BUILD_MS          time to build one complete tree
+//   COLLECT_MS        time for one explicit gc.collect()
+//   CHECKSUM          recursive value sum (correctness guard)
+//   LIVE_AFTER        objects alive after collect (must be 0)
+
+struct TreeNode {
+    managed<TreeNode> left;
+    managed<TreeNode> right;
+    int value;
+}
+
+managed<TreeNode> function build(int depth, int value) {
+    var node = array.allocate<TreeNode>(1);
+    node[0].value = value;
+    if (depth > 0) {
+        node[0].left  = build(depth - 1, value * 2);
+        node[0].right = build(depth - 1, value * 2 + 1);
+    }
+    return node;
+}
+
+int function sum(managed<TreeNode> node, int depth) {
+    if (depth == 0) {
+        return node[0].value;
+    }
+    return node[0].value
+        + sum(node[0].left,  depth - 1)
+        + sum(node[0].right, depth - 1);
+}
+
+int function main() {
+    gc.disable();
+    gc.collect();
+
+    let tree_depth     = 18;
+    let warmup_rounds  = 2;
+    let measure_rounds = 5;
+
+    for (var w = 0; w < warmup_rounds; w += 1) {
+        var root = build(tree_depth, 1);
+        gc.collect();
+    }
+
+    print("TEST");
+    print("root_frame_depth");
+    print("IMPL");
+    print("nirqoba");
+    // Report leaf-level node count: 2^(depth+1)-1
+    print("OBJECTS");
+    print(262143);
+    print("WARMUP_ROUNDS");
+    print(warmup_rounds);
+    print("MEASURE_ROUNDS");
+    print(measure_rounds);
+
+    for (var round = 0; round < measure_rounds; round += 1) {
+        print("ROUND");
+        print(round);
+
+        let build_start = time.now();
+        var root = build(tree_depth, 1);
+        let build_end = time.now();
+
+        var checksum = sum(root, tree_depth);
+
+        // Drop the root so the entire tree is unreachable.
+        root = array.allocate<TreeNode>(1);
+
+        let collect_start = time.now();
+        gc.collect();
+        let collect_end = time.now();
+
+        print("BUILD_MS");
+        print(build_end - build_start);
+        print("COLLECT_MS");
+        print(collect_end - collect_start);
+        print("CHECKSUM");
+        print(checksum);
+        print("LIVE_AFTER");
+        print(gc.get_statistics().live_objects);
+    }
+
+    return 0;
+}
