@@ -6,11 +6,33 @@
 
 ---
 
-## Version 0.241-beta (dev)
+## Version 0.251-beta (dev)
+
+### Summary of Changes (since `0.246-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.246-beta release.*
+
+---
+
+## Version 0.246-beta
 
 ### Summary of Changes (since `0.235-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.235-beta release.*
+#### 1. Two Runtime Configurations
+- **`--debug-enabled`:** the compiler now accepts a flag that selects a development configuration end to end. `build`, `run` and `check` all understand it, and the help text says what it does.
+- **Two libraries from one source list:** `nrqoba_runtime` remains the default production library; `nrqoba_runtime_debug` is built from the same sources with the development configuration defined. The choice is made at link time, so a production binary carries no branch, counter or symbol for instrumentation it does not use.
+
+#### 2. Production Path
+- **Probe telemetry removed:** slot-index probe length and rehash/growth/compaction counts are read only by tests and by development tooling, so the production build no longer records them. The probe chain itself is unchanged.
+
+#### 3. Development Path
+- **Event stream:** the development runtime records allocation, cycle begin/end, promotion, sweep chunk and root frame events, each with a globally ordered sequence number and a monotonic timestamp, into per-thread rings that never block an allocator.
+- **Allocation-site tags:** the compiler declares each lowered managed allocation's source position and tags the object it produced. Site ids are a stable hash of file, line and column, so a trace maps back to source without the compiler keeping a table.
+- **Root snapshot:** the development runtime reports every registered root slot, its layout and the object it currently holds, reusing the reference-diagnostic handshake so it never reads a stack that is being published lock-free.
+- **Recording is opt-in:** nothing is recorded until a consumer sets an event mask, so an ordinary development build pays one relaxed load per candidate event.
+
+#### 4. Documentation
+- `docs/architecture/06-runtime.md` states the rule that decides which configuration a mechanism belongs to, what the development library adds, and what a trace costs.
 
 ---
 
