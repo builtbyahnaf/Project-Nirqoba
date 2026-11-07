@@ -1421,6 +1421,15 @@ struct PendingGcRoot {
   mlir::Value initial_value;
 };
 
+// String literals are module-scope globals, but lowering creates one translator
+// per function. A table owned by the caller and handed to every translator keeps
+// literal names unique across the module and materialises an identical literal
+// once, whichever function mentions it first.
+struct StringLiteralTable {
+  std::unordered_map<std::string, std::string> symbols;
+  int counter = 0;
+};
+
 class FunctionTranslator {
  public:
   FunctionTranslator(mlir::ModuleOp module,
@@ -1433,11 +1442,13 @@ class FunctionTranslator {
                      DiagnosticEngine& diag,
                      bool fast_math,
                      RuntimeConfiguration configuration,
+                     StringLiteralTable& string_literals,
                      bool emit_abi_reference,
                      bool needs_mutator_region)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
         builder_(builder), ctx_(ctx), diag_(diag), fast_math_(fast_math),
         configuration_(configuration),
+        string_literals_(string_literals),
         emit_abi_reference_(emit_abi_reference),
         stack_allocations_(
             analyze_stack_allocations(tir_fn, borrowed_summary)),
@@ -2169,12 +2180,12 @@ class FunctionTranslator {
   // Emits (once per distinct literal) a private global holding `text` plus a
   // terminating NUL and returns a pointer to its first byte.
   mlir::Value materialize_string(const std::string& text, mlir::Location loc) {
-    auto cached = string_literals_.find(text);
+    auto cached = string_literals_.symbols.find(text);
     std::string symbol;
-    if (cached != string_literals_.end()) {
+    if (cached != string_literals_.symbols.end()) {
       symbol = cached->second;
     } else {
-      symbol = "__nrq_strlit_" + std::to_string(string_literal_counter_++);
+      symbol = "__nrq_strlit_" + std::to_string(string_literals_.counter++);
       const std::string stored = text + '\0';
       auto array_type = mlir::LLVM::LLVMArrayType::get(
           builder_.getI8Type(), static_cast<unsigned>(stored.size()));
@@ -2185,7 +2196,7 @@ class FunctionTranslator {
       builder_.create<mlir::LLVM::GlobalOp>(loc, array_type, /*isConstant=*/true,
                                             mlir::LLVM::Linkage::Private, symbol,
                                             builder_.getStringAttr(stored));
-      string_literals_.emplace(text, symbol);
+      string_literals_.symbols.emplace(text, symbol);
     }
     return builder_.create<mlir::LLVM::AddressOfOp>(loc, llvm_ptr_type(ctx_), symbol)
         .getResult();
@@ -4080,8 +4091,7 @@ class FunctionTranslator {
   std::unordered_map<int, mlir::Value> forwarded_root_values_;
   std::vector<mlir::Value> values_;
   std::unordered_map<int, mlir::Block*> label_blocks_;
-  std::unordered_map<std::string, std::string> string_literals_;
-  int string_literal_counter_ = 0;
+  StringLiteralTable& string_literals_;
   std::size_t current_operation_index_ = 0;
   mlir::Value gc_root_frame_marker_;
   mlir::Block* bounds_fail_block_ = nullptr;
@@ -4203,6 +4213,9 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
   const CollectionSummary collections = summarize_collections(tir_module);
   const std::unordered_set<std::string> mutator_regions =
       summarize_mutator_regions(tir_module);
+  // One table for the whole module: literal globals live at module scope, so the
+  // names must not restart for every function the lowering visits.
+  StringLiteralTable string_literals;
 
   for (const auto& tir_fn : tir_module.functions()) {
     mlir::Type ret_type;
@@ -4311,7 +4324,7 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
 
     FunctionTranslator translator(
         *module, *tir_fn, borrowed_summary, collections, func_op, builder,
-        &context, diagnostics, fast_math, configuration,
+        &context, diagnostics, fast_math, configuration, string_literals,
         symbol == "main", mutator_regions.count(tir_fn->name()) != 0);
     if (!translator.translate()) return nullptr;
 
