@@ -1,0 +1,32 @@
+// RC_FIX 4.4 audit: loop backedges are collection points, recursion keeps a parent
+// activation's reference live across the child's allocations, and a value that is
+// dead before the next collection point must not keep the frame registered for its
+// sake.
+managed<int> function descend(int depth) {
+    var cell = array.allocate<int>(1);
+    cell[0] = depth;
+    if (depth <= 0) {
+        return cell;
+    }
+    var child = descend(depth - 1);
+    return child;
+}
+
+int function spin(int count) {
+    var index = 0;
+    var total = 0;
+    while (index < count) {
+        var cell = array.allocate<int>(1);
+        cell[0] = index;
+        total = total + cell[0];
+        index = index + 1;
+    }
+    return total;
+}
+
+int function main() {
+    var deepest = descend(3);
+    gc.collect();
+    print(deepest[0] + spin(4) + 1);
+    return 0;
+}

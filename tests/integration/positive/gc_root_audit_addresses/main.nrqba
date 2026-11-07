@@ -1,0 +1,27 @@
+// RC_FIX 4.4 audit: derived addresses of a managed stack slot, values loaded from
+// that slot, and an array whose element layout holds managed references. The slot
+// is written, read back, and only then collected over.
+struct Node {
+    int value;
+}
+
+struct Cell {
+    managed<Node> node;
+}
+
+int function read_back(int seed) {
+    var holder = Cell { node: array.allocate<Node>(1) };
+    holder.node[0].value = seed;
+    var alias = holder;
+    alias.node[0].value = alias.node[0].value + 1;
+    var nodes = array.allocate<Node>(2);
+    nodes[0].value = alias.node[0].value;
+    nodes[1].value = holder.node[0].value;
+    gc.collect();
+    return nodes[0].value + nodes[1].value;
+}
+
+int function main() {
+    print(read_back(20));
+    return 0;
+}
