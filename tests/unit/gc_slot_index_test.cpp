@@ -10,10 +10,11 @@
 // cycles the backing vector reached 2^ceil(log2(N)) entries even with only
 // 1–2 live entries, causing gigabyte allocations and O(N) probe loops.
 //
-// The fix (not yet applied at the time these tests were written) rehashes to
-// the same capacity when size_ < capacity/2 (tombstone-saturated), only
-// doubling when truly full of live entries — matching the policy in
-// PageDirectory (gc.cpp:95).
+// The fix (applied in PO-27A) rehashes to the same capacity when
+// size_ < capacity/2 (tombstone-saturated), and only doubles when the table is
+// truly half full of live entries -- matching the policy in PageDirectory.
+// See tests/unit/slot_index_test.cpp for white-box tests that assert the
+// capacity, compaction and probe diagnostics directly.
 //
 // Tests are written against the public GC API; they do not reach into
 // SlotIndex internals. Capacity is bounded indirectly:
@@ -96,10 +97,7 @@ TEST(GcSlotIndexTest, SingleSlotRepeatedRegisterUnregisterStaysBounder) {
     // entire test suite when the fix is absent.
     if (i % 10'000 == 0) {
       const double ms = elapsed_ms(start);
-      ASSERT_TRUE(ms < kTestTimeoutMs)
-          << "Exceeded " << kTestTimeoutMs << " ms after " << i
-          << " iterations (" << ms << " ms elapsed). "
-          << "SlotIndex capacity is likely growing unboundedly (PO-27 regression).";
+      ASSERT_TRUE(ms < kTestTimeoutMs);
     }
   }
 
@@ -108,9 +106,7 @@ TEST(GcSlotIndexTest, SingleSlotRepeatedRegisterUnregisterStaysBounder) {
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
 
   // Total time must be well under the timeout even on slow machines.
-  ASSERT_TRUE(elapsed_ms(start) < kTestTimeoutMs)
-      << "Total elapsed " << elapsed_ms(start)
-      << " ms exceeds " << kTestTimeoutMs << " ms ceiling.";
+  ASSERT_TRUE(elapsed_ms(start) < kTestTimeoutMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -141,10 +137,7 @@ TEST(GcSlotIndexTest, RootFrameChurnDoesNotGrowCapacity) {
 
     if (i % 10'000 == 0) {
       const double ms = elapsed_ms(start);
-      ASSERT_TRUE(ms < kTestTimeoutMs)
-          << "Exceeded " << kTestTimeoutMs << " ms after " << i
-          << " frames (" << ms << " ms elapsed). "
-          << "Root-frame slot index likely growing unboundedly (PO-27).";
+      ASSERT_TRUE(ms < kTestTimeoutMs);
     }
   }
 
@@ -184,9 +177,7 @@ TEST(GcSlotIndexTest, MultiSlotFrameChurnDoesNotGrowCapacity) {
 
     if (f % 5'000 == 0) {
       const double ms = elapsed_ms(start);
-      ASSERT_TRUE(ms < kTestTimeoutMs)
-          << "Exceeded " << kTestTimeoutMs << " ms after " << f
-          << " frames (" << ms << " ms). Multi-slot churn growing (PO-27).";
+      ASSERT_TRUE(ms < kTestTimeoutMs);
     }
   }
 
@@ -230,9 +221,7 @@ TEST(GcSlotIndexTest, InsertTimeIsConstantAcrossChurnEpochs) {
     if (epoch == 0) first_epoch_ms = ms;
     last_epoch_ms = ms;
 
-    ASSERT_TRUE(ms < kTestTimeoutMs)
-        << "Epoch " << epoch << " took " << ms << " ms (limit "
-        << kTestTimeoutMs << " ms). SlotIndex is growing unboundedly.";
+    ASSERT_TRUE(ms < kTestTimeoutMs);
   }
 
   // The core assertion: later batches are not dramatically slower.
@@ -240,12 +229,7 @@ TEST(GcSlotIndexTest, InsertTimeIsConstantAcrossChurnEpochs) {
   ASSERT_TRUE(last_epoch_ms >= 0.0);
   if (first_epoch_ms > 0.5) {  // skip if first epoch was sub-ms (noise floor)
     const double ratio = last_epoch_ms / first_epoch_ms;
-    ASSERT_TRUE(ratio < kGrowthRatio)
-        << "Last epoch (" << last_epoch_ms << " ms) is "
-        << ratio << "x slower than first epoch ("
-        << first_epoch_ms << " ms). "
-        << "Ratio exceeds " << kGrowthRatio
-        << "x — exponential SlotIndex growth detected (PO-27 regression).";
+    ASSERT_TRUE(ratio < kGrowthRatio);
   }
 
   nrq_gc_collect();
@@ -282,13 +266,10 @@ TEST(GcSlotIndexTest, ChurnInterleavedWithCollectionKeepsCapacityBounded) {
     nrq_gc_collect();
 
     // All objects must be reclaimed after each collect — no leaks.
-    ASSERT_EQ(nrq_gc_get_live_objects(), baseline)
-        << "Live objects non-zero after collect in round " << round;
+    ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
 
     const double ms = elapsed_ms(start);
-    ASSERT_TRUE(ms < kTestTimeoutMs)
-        << "Exceeded " << kTestTimeoutMs << " ms in round " << round
-        << " (" << ms << " ms). SlotIndex growing during interleaved churn.";
+    ASSERT_TRUE(ms < kTestTimeoutMs);
   }
 }
 
@@ -333,9 +314,8 @@ TEST(GcSlotIndexTest, ConcurrentPerThreadSlotChurnCompletesCleanly) {
 
   for (auto& w : workers) w.join();
 
-  ASSERT_FALSE(any_failure.load()) << "A worker thread failed to allocate.";
-  ASSERT_TRUE(elapsed_ms(start) < kTestTimeoutMs)
-      << "Concurrent slot churn exceeded " << kTestTimeoutMs << " ms.";
+  ASSERT_FALSE(any_failure.load());
+  ASSERT_TRUE(elapsed_ms(start) < kTestTimeoutMs);
 
   nrq_gc_collect();
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
@@ -375,9 +355,7 @@ TEST(GcSlotIndexTest, DeepNestedRootFramesDoNotExplodeCapacity) {
 
     if (round % 1000 == 0) {
       const double ms = elapsed_ms(start);
-      ASSERT_TRUE(ms < kTestTimeoutMs)
-          << "Exceeded " << kTestTimeoutMs << " ms after " << round
-          << " deep-frame rounds (" << ms << " ms). Capacity explosion.";
+      ASSERT_TRUE(ms < kTestTimeoutMs);
     }
   }
 

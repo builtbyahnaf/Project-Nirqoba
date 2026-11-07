@@ -15,6 +15,7 @@ add_executable(nirqoba_unit_tests
   unit/diagnostics_test.cpp
   unit/gc_test.cpp
   unit/gc_slot_index_test.cpp
+  unit/slot_index_test.cpp
   unit/allocator_test.cpp
   unit/file_test.cpp
   unit/mapping_test.cpp
@@ -35,6 +36,7 @@ nirqoba_set_target_warnings(nirqoba_unit_tests)
 target_include_directories(nirqoba_unit_tests
   PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/support"
+    "${CMAKE_SOURCE_DIR}/runtime/src"                # internal SlotIndex header
     "${CMAKE_SOURCE_DIR}/compiler/include"
     "${CMAKE_BINARY_DIR}/include"                    # generated Version.h
     "${CMAKE_BINARY_DIR}/compiler/include"           # TableGen .inc files

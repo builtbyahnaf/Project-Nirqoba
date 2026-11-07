@@ -22,6 +22,7 @@ add_library(nrqoba_runtime STATIC
   src/sync_windows.cpp
   src/socket_windows.cpp
   src/gc.cpp
+  src/slot_index.h
   src/system_windows.cpp
   src/args_windows.cpp
   src/allocator_windows.cpp
