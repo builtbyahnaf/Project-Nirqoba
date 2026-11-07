@@ -2166,11 +2166,22 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
 }
 
 void account_tlab_allocation(MutatorState& mutator, size_t bytes) {
-  const size_t previous = mutator.pending_bytes.fetch_add(
-      bytes, std::memory_order_relaxed);
-  if (previous > SIZE_MAX - bytes ||
-      mutator.pending_count.fetch_add(1, std::memory_order_relaxed) == SIZE_MAX)
+  // Both published counters are written only by this thread: publish_tlab_locked
+  // clears them while the owner is parked (or is itself the publisher). A load
+  // plus a store therefore has no lost update to guard against, and it keeps the
+  // value immediately visible to a statistics query - unlike batching it, which
+  // would make an in-flight allocation momentarily invisible. What it drops is
+  // the locked read-modify-write, which cost more than the rest of this function.
+  const size_t pending_bytes = mutator.pending_bytes.load(std::memory_order_relaxed);
+  if (pending_bytes > SIZE_MAX - bytes)
     nrq_runtime_fatal("GC thread-local allocation accounting overflow");
+  mutator.pending_bytes.store(pending_bytes + bytes, std::memory_order_relaxed);
+  const size_t pending_count = mutator.pending_count.load(std::memory_order_relaxed);
+  if (pending_count == SIZE_MAX)
+    nrq_runtime_fatal("GC thread-local allocation accounting overflow");
+  mutator.pending_count.store(pending_count + 1, std::memory_order_relaxed);
+  // The trigger only needs batch granularity, so the trackable total behind it
+  // stays owner-only until the batch closes.
   if (bytes > SIZE_MAX - mutator.unflushed_bytes)
     nrq_runtime_fatal("GC thread-local batch accounting overflow");
   mutator.unflushed_bytes += bytes;
