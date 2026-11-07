@@ -6,7 +6,7 @@
 
 ---
 
-## Version 0.212-beta (dev)
+## Version 0.217-beta (dev)
 
 ### Summary of Changes (since `0.206-beta`):
 
@@ -14,12 +14,46 @@
 
 ---
 
+## Version 0.212-beta
+
+### Summary of Changes (since `0.206-beta`):
+
+#### 1. Root-Liveness Analysis Cost and Audit (PO-27 §2.4)
+- **Measured first:** `--verbose` reports functions, slot addresses, loads, liveness probes and address scans, so the rewrite was judged by counters rather than timing.
+- **Address attribution:** derived stack addresses are attributed to their slot in one pass in program order instead of a fixed point that rescanned the function per slot; address scans fell from four times per doubling to linear (34, 66, 130, 258 for 8, 16, 32, 64 managed slots).
+- **Load indexing:** loads are recorded against their slot in one pass, replacing a rescan of every operation per slot (per-slot scans fell from 100,407 to 0 at 64 slots).
+- **Root decision:** rooted slots are decided by walking the live set at each collection point once, instead of probing liveness per candidate per point.
+- **Audit:** fixtures cover each case RC_FIX §4.4 lists, asserting both program output and the emitted root protocol. Collection-point classification was not weakened.
+
+---
+
 ## Version 0.206-beta
 
 ### Summary of Changes (since `0.201-beta`):
 
-*Released after the mutator-region work. See the 0.201-beta section for the changes it
-contains and the PO-27 status report for the open items.*
+#### 1. Runtime Hardening and Edge-Case Fixes (PO-27 follow-up)
+- **Transfer-Pin Delta Retirement:** A delta that cancels out clears its slot instead of leaving an entry that describes nothing but still matches later handoffs.
+- **Transfer-Pin Slot Reuse:** Empty slots are reused before the high-water count grows, so returning and releasing distinct objects no longer pushes every handoff past the thirty-second onto the collector mutex; `nrq_gc_transfer_pin_fallbacks()` reports the genuine full-buffer cases.
+- **Fallback Ordering:** A fallback settles the mutator's buffered deltas under the collector mutex before applying its own operation, so a release can no longer erase an entry a buffered pin had not reached yet and leave the object pinned for the life of the process.
+
+#### 2. Mutator Region Completeness (PO-27 §2.2)
+- **Propagation:** A function needs a region when it holds a managed value or calls one that does, resolved to a fixed point over direct calls. A driver loop that only calls an allocating helper keeps one region instead of entering and leaving per iteration; runtime entry points are not propagated, so querying or toggling collection still needs no region.
+- **Recursion:** Region elision now resolves from the optimistic direction and narrows, so a direct or mutually recursive group entered once from `main` shares the outer region instead of duplicating it on every activation.
+- **Entry Wrapper:** The wrapper the C runtime calls opens and closes the region, and the elision pass sees func-level as well as LLVM calls, so everything under `main` runs in one region.
+- **Evidence:** `tests/integration/positive/gc_region_transitive`, `gc_region_recursive` and `gc_region_mutual` assert one enter and one leave for the whole program, with the safepoint poll still present in the loops that may allocate.
+
+#### 3. Safepoint Poll Bound
+- **Comparison:** The countdown is tested at or below zero instead of for equality, so a counter that reaches zero off the polled path or wraps past it can no longer stop a loop from observing collection requests.
+- **Evidence:** `tests/integration/positive/gc_safepoint_bound` asserts one polled back edge and the comparison in the optimized module while the program allocates past the poll interval.
+
+#### 4. Root Publication Guarantees
+- **Never Dropped:** A type the lowering reports as managed always publishes an offset; a layout walk that returned nothing now registers offset 0 instead of silently skipping the root, with a debug assertion covering the disagreement.
+- **Complete Elision:** `tests/integration/positive/gc_root_elision_owned` requires no descriptor, no mutator entry and no poll for a program with no managed storage.
+- **Every Level:** `tests/integration/positive/gc_root_at_O0` requires the frame call at `-O0`.
+
+#### 5. Documented Invariants
+- **Runtime ABI:** `docs/architecture/06-runtime.md` now states the three root-completeness invariants and the poll bound, each naming the artifact that fails when it is broken.
+- **Mutator Regions:** `docs/architecture/06-runtime.md` documents how mutator regions are decided (call-graph propagation, recursion handling, entry wrapper, what is never removed).
 
 ---
 
@@ -28,9 +62,9 @@ contains and the PO-27 status report for the open items.*
 ### Summary of Changes (since `0.195-beta`):
 
 #### 1. Mutator Regions Follow the Call Graph (PO-27 §2.2)
-- **Propagation:** a function needs a region when it holds a managed value or calls one that does, resolved to a fixed point over direct calls. A driver loop that only calls an allocating helper keeps one region instead of entering and leaving per iteration; runtime entry points are not propagated, so querying or toggling collection still needs no region.
-- **Recursion:** region elision now resolves from the optimistic direction and narrows, so a direct or mutually recursive group entered once from `main` shares the outer region instead of duplicating it on every activation.
-- **Entry wrapper:** the wrapper the C runtime calls opens and closes the region, and the elision pass sees func-level as well as LLVM calls, so everything under `main` runs in one region.
+- **Propagation:** A function needs a region when it holds a managed value or calls one that does, resolved to a fixed point over direct calls. A driver loop that only calls an allocating helper keeps one region instead of entering and leaving per iteration; runtime entry points are not propagated, so querying or toggling collection still needs no region.
+- **Recursion:** Region elision now resolves from the optimistic direction and narrows, so a direct or mutually recursive group entered once from `main` shares the outer region instead of duplicating it on every activation.
+- **Entry Wrapper:** The wrapper the C runtime calls opens and closes the region, and the elision pass sees func-level as well as LLVM calls, so everything under `main` runs in one region.
 - **Evidence:** `tests/integration/positive/gc_region_transitive`, `gc_region_recursive` and `gc_region_mutual` assert one enter and one leave for the whole program, with the safepoint poll still present in the loops that may allocate.
 
 ---
@@ -40,9 +74,9 @@ contains and the PO-27 status report for the open items.*
 ### Summary of Changes (since `0.192-beta`):
 
 #### 1. Transfer-Pin Delta Lifecycle (PO-27 §2.1)
-- **Retirement:** a delta that cancels out clears its slot instead of leaving an entry that describes nothing but still matches later handoffs.
-- **Reuse:** empty slots are reused before the high-water count grows, so returning and releasing distinct objects no longer pushes every handoff past the thirty-second onto the collector mutex; `nrq_gc_transfer_pin_fallbacks()` reports the genuine full-buffer cases.
-- **Ordering:** a fallback settles the mutator's buffered deltas under the collector mutex before applying its own operation, so a release can no longer erase an entry a buffered pin had not reached yet and leave the object pinned for the life of the process.
+- **Retirement:** A delta that cancels out clears its slot instead of leaving an entry that describes nothing but still matches later handoffs.
+- **Reuse:** Empty slots are reused before the high-water count grows, so returning and releasing distinct objects no longer pushes every handoff past the thirty-second onto the collector mutex; `nrq_gc_transfer_pin_fallbacks()` reports the genuine full-buffer cases.
+- **Ordering:** A fallback settles the mutator's buffered deltas under the collector mutex before applying its own operation, so a release can no longer erase an entry a buffered pin had not reached yet and leave the object pinned for the life of the process.
 
 ---
 
@@ -51,13 +85,13 @@ contains and the PO-27 status report for the open items.*
 ### Summary of Changes (since `0.186-beta`):
 
 #### 1. Safepoint Poll Bound
-- **Comparison:** the countdown is tested at or below zero instead of for equality, so a counter that reaches zero off the polled path or wraps past it can no longer stop a loop from observing collection requests.
+- **Comparison:** The countdown is tested at or below zero instead of for equality, so a counter that reaches zero off the polled path or wraps past it can no longer stop a loop from observing collection requests.
 - **Evidence:** `tests/integration/positive/gc_safepoint_bound` asserts one polled back edge and the comparison in the optimized module while the program allocates past the poll interval.
 
 #### 2. Root Publication Edges
-- **Never dropped:** a type the lowering reports as managed always publishes an offset; a layout walk that returned nothing now registers offset 0 instead of silently skipping the root, with a debug assertion covering the disagreement.
-- **Complete elision:** `tests/integration/positive/gc_root_elision_owned` requires no descriptor, no mutator entry and no poll for a program with no managed storage.
-- **Every level:** `tests/integration/positive/gc_root_at_O0` requires the frame call at `-O0`.
+- **Never Dropped:** A type the lowering reports as managed always publishes an offset; a layout walk that returned nothing now registers offset 0 instead of silently skipping the root, with a debug assertion covering the disagreement.
+- **Complete Elision:** `tests/integration/positive/gc_root_elision_owned` requires no descriptor, no mutator entry and no poll for a program with no managed storage.
+- **Every Level:** `tests/integration/positive/gc_root_at_O0` requires the frame call at `-O0`.
 
 #### 3. Documented Invariants
 - **Runtime ABI:** `docs/architecture/06-runtime.md` now states the three root-completeness invariants and the poll bound, each naming the artifact that fails when it is broken.
@@ -69,9 +103,9 @@ contains and the PO-27 status report for the open items.*
 ### Summary of Changes (since `0.181-beta`):
 
 #### 1. Root Registration Completeness
-- **One layout walk:** the frame descriptor's words and its validity check come from a single derivation, so the table an activation publishes always matches the roots it was built from.
-- **Self-describing tables:** a descriptor now carries its own word count, and the runtime rejects a truncated table before publishing anything, including on the marking path where the roots are marked from the table itself.
-- **Late and nested slots:** `tests/integration/positive/gc_root_completeness` collects between declarations and asserts one descriptor holding a slot declared after a collection plus a nested aggregate layout.
+- **One Layout Walk:** The frame descriptor's words and its validity check come from a single derivation, so the table an activation publishes always matches the roots it was built from.
+- **Self-Describing Tables:** A descriptor now carries its own word count, and the runtime rejects a truncated table before publishing anything, including on the marking path where the roots are marked from the table itself.
+- **Late and Nested Slots:** `tests/integration/positive/gc_root_completeness` collects between declarations and asserts one descriptor holding a slot declared after a collection plus a nested aggregate layout.
 
 ---
 
@@ -81,7 +115,7 @@ contains and the PO-27 status report for the open items.*
 
 #### 1. Optimizer Evidence Matrix Recorded
 - **Report:** `reports/performance/po-26-optimizer-evidence.md` maps every requested transform to its owner, its artifact and its verdict, including the one deferred item (SLP) and the two IR properties that limit LLVM.
-- **Roadmap:** the optimization roadmap now names the owner and evidence artifact for each transform it lists, so a future cycle does not re-implement a pass the pipeline already runs.
+- **Roadmap:** The optimization roadmap now names the owner and evidence artifact for each transform it lists, so a future cycle does not re-implement a pass the pipeline already runs.
 
 ---
 
@@ -153,7 +187,7 @@ contains and the PO-27 status report for the open items.*
 
 ### Summary of Changes (since `0.153-beta`):
 
-#### 1. Runtime Synchronization and GC Protocol Optimization â€” Extended (PO-23)
+#### 1. Runtime Synchronization and GC Protocol Optimization — Extended (PO-23)
 - **Skip Redundant Root-Store Edges:** Store barriers now check whether the new referent is already reachable from the same root frame before publishing a remembered-set edge, eliminating unnecessary per-store overhead when the edge already exists.
 - **Counter-Based Mutator Parking with Dedicated Wakeup:** Replaced the flag-based parking protocol with a per-mutator counter and a dedicated wakeup primitive, so the collector parks and resumes mutators without a shared flag cache-line ping-pong.
 - **Single-Pass Frame Root-Slot Release:** Frame teardown now clears all root slots belonging to the frame in one indexed scan instead of walking the entire root table, reducing per-frame cleanup to O(frame slots).
@@ -320,7 +354,7 @@ contains and the PO-27 status report for the open items.*
 - Ensured all temporary stack allocations (aggregate barrier copies, `array.allocate` reference offsets, mapped memory access buffers, profiler records) are allocated exclusively in the function entry block via `alloca_at_entry`.
 - Resolves unbounded stack growth inside loops and exposes all stack-allocated temporaries directly to LLVM's `mem2reg` and `SROA` passes.
 
-#### 4. Review Hardening & Optimizations (PO-14 / F2â€“F6)
+#### 4. Review Hardening & Optimizations (PO-14 / F2–F6)
 - **Parameter Attribute Derivation (F2):** `nocapture` and `readonly` attributes are now derived directly from escape fixpoint analysis and store-destination scanning instead of being blindly assigned from ownership classes.
 - **Escape Analysis Store Soundness (F3):** Refused pointer-derived stores through borrowed views, ensuring publishing pointers/references into caller-accessible memory is properly treated as an escape.
 - **Linear Stack-Allocation Analysis (F4):** Re-architected candidate descriptor lookups in stack promotion analysis using indexed hash tables, reducing escape analysis time on large view sets from cubic ($O(N^3)$) to linear ($O(N)$).
@@ -332,19 +366,19 @@ contains and the PO-27 status report for the open items.*
 ## Version 0.108-beta
 
 ### Changes since 0.105-beta:
-- **`eb858e7`** â€” `feat(opt): implement escape analysis and stack promotion for pointer allocations`
-- **`2a96640`** â€” `docs(report): complete alias analysis report and integration test expectation`
-- **`6fec2d7`** â€” `feat(compiler): alias architecture upgrade`
-- **`4bbaf93`** â€” `feat(compiler): Accurate Runtime Function Attributes`
-- **`a5c7a28`** â€” `benchmark: rerun stress test 2`
-- **`1caa5e8`** â€” `perf(gc): upgraded the internal mechanisms (pt 3)`
-- **`0df9174`** â€” `perf(gc): upgraded the internal mechanisms (pt 2)`
-- **`fdd9066`** â€” `perf(gc): upgraded the internal mechanisms`
+- **`eb858e7`** — `feat(opt): implement escape analysis and stack promotion for pointer allocations`
+- **`2a96640`** — `docs(report): complete alias analysis report and integration test expectation`
+- **`6fec2d7`** — `feat(compiler): alias architecture upgrade`
+- **`4bbaf93`** — `feat(compiler): Accurate Runtime Function Attributes`
+- **`a5c7a28`** — `benchmark: rerun stress test 2`
+- **`1caa5e8`** — `perf(gc): upgraded the internal mechanisms (pt 3)`
+- **`0df9174`** — `perf(gc): upgraded the internal mechanisms (pt 2)`
+- **`fdd9066`** — `perf(gc): upgraded the internal mechanisms`
 
 ---
 
 ## Version 0.105-beta
 
 ### Changes since 0.102-beta:
-- **`ede0f26`** â€” `feat: gc improvement and new benchmark tests`
-- **`678d7c1`** â€” `perf: add constant propagation and sccp to mlir cleanup`
+- **`ede0f26`** — `feat: gc improvement and new benchmark tests`
+- **`678d7c1`** — `perf: add constant propagation and sccp to mlir cleanup`
