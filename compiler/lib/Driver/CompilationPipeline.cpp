@@ -424,9 +424,10 @@ int run_pipeline(const PipelineOptions& options,
     if (profile_runtime.empty()) {
       diagnostics.error(
           diag::kToolchainUnavailable, SourceLocation{},
-          "cannot find clang_rt.profile-x86_64.lib for --pgo-generate; "
-          "re-run scripts/bootstrap.ps1 so the packaged LLVM toolchain "
-          "contains compiler-rt (NRQ5003)");
+          "cannot find clang_rt.profile-x86_64.lib for --pgo-generate; the "
+          "pinned LLVM SDK ships no compiler-rt, so the profile runtime must "
+          "be installed under toolchain/<name>/lib/clang/<version>/lib/"
+          "windows/ (NRQ5003)");
       return fail_with(diagnostics, sources);
     }
     link_args.push_back(profile_runtime);
