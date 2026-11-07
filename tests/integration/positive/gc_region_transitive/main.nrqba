@@ -1,0 +1,22 @@
+// The loop that drives the allocation holds no managed value itself. Its callee
+// allocates, so the loop has to run inside the caller's region and keep polling
+// instead of entering and leaving the protocol once per helper call.
+managed<int> function make_one(int index) {
+    var cell = array.allocate<int>(1);
+    cell[0] = index;
+    return cell;
+}
+
+int function drive(int count) {
+    var index = 0;
+    while (index < count) {
+        var cell = make_one(index);
+        index = index + 1;
+    }
+    return index;
+}
+
+int function main(string[] args) {
+    print(drive(args.length + 64));
+    return 0;
+}
