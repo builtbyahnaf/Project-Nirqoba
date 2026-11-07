@@ -1,0 +1,32 @@
+// RC_FIX 4.4 audit: a managed parameter that stays live across a collecting call,
+// a call result used after another collection, and an aggregate holding two managed
+// references. All three have to be rooted where the collector can see them.
+struct Node {
+    int value;
+}
+
+struct Pair {
+    managed<Node> first;
+    managed<Node> second;
+}
+
+int function total_after_collection(managed<Node> node) {
+    gc.collect();
+    return node[0].value;
+}
+
+int function combine(int seed) {
+    var left = array.allocate<Node>(1);
+    var right = array.allocate<Node>(1);
+    left[0].value = seed;
+    right[0].value = seed * 2;
+    var pair = Pair { first: left, second: right };
+    var kept = total_after_collection(left);
+    gc.collect();
+    return kept + pair.first[0].value + pair.second[0].value;
+}
+
+int function main() {
+    print(combine(7));
+    return 0;
+}

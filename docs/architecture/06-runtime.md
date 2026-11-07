@@ -10,7 +10,7 @@ The Phase 1 runtime interface is defined in `runtime/include/nirqoba/runtime/`:
 | `nrq_runtime_init` | `void()` | Initialises runtime state; GC root boundary in Phase 6.5 |
 | `nrq_runtime_shutdown` | `void()` | Flushes stdout buffers; GC cleanup boundary in Phase 6.5 |
 | `nrq_runtime_fatal` | `void(const char* message)` | Writes error message to stderr and exits with code 70 |
-| `nrq_runtime_version` | `const char*()` | Returns runtime version string (`0.212-beta-phase6`) |
+| `nrq_runtime_version` | `const char*()` | Returns runtime version string (`0.206-beta-phase6`) |
 | `nrq_gc_root_register_frame` | `void(void* const* slots, size_t count, const size_t* descriptor)` | Publishes an activation's ordinary roots in one call from a read-only frame descriptor |
 
 ## 2. Direct Win32 I/O
@@ -72,6 +72,43 @@ while the code still looked correct. The bound is that a request is observed
 within one interval of crossings, and it holds for every counter value
 (`tests/integration/positive/gc_safepoint_bound` asserts the polled back edge and
 the comparison in the optimized module).
+
+### 3.4 Root-liveness audit and cost
+
+The root plan decides, per function, which stack slots and values are registered
+with the collector and which stores can skip the write barrier. It has to be
+conservative where it cannot prove otherwise, and it runs on every function, so both
+its answers and its cost are worth pinning down.
+
+Cases audited against the plan, each with a fixture that asserts runtime output and
+the emitted root protocol (`nrq_gc_root_frame_begin` / `nrq_gc_root_register_typed`):
+
+| Case | Fixture |
+| --- | --- |
+| managed parameter live across a collecting call | `gc_root_audit_values` |
+| call result used after another collection point | `gc_root_audit_values` |
+| aggregate holding two managed references | `gc_root_audit_values` |
+| derived addresses of a managed stack slot | `gc_root_audit_addresses` |
+| values loaded from a managed slot | `gc_root_audit_addresses` |
+| array whose element layout holds managed references | `gc_root_audit_addresses` |
+| loop backedges as collection points | `gc_root_audit_control_flow` |
+| a parent activation live across a recursive child | `gc_root_audit_control_flow` |
+| explicit `gc.collect()` | `gc_root_audit_values`, `gc_frame_roots` |
+| value dead before the next collection point | `gc_root_elision_owned`, `gc_region_transitive` |
+
+Indirect calls are not expressible in the language today. The plan does not depend on
+resolving a target: `call_may_collect` treats every callee it cannot prove
+collection-free as a collection point, so an unresolved call would be handled
+conservatively on that path.
+
+Cost. `--verbose` reports what the analysis did: functions, slot addresses, loads,
+liveness probes and address scans. Attribution and load indexing are single passes in
+program order (TIR is SSA), and the root decision walks the live set at each
+collection point once instead of asking liveness per candidate per point. On a
+synthetic function with N managed slots the per-slot rescanning that this replaced
+grew four times per doubling (1,847 scans at N=8, 100,407 at N=64); the analysis now
+touches each operation a fixed number of times, and the numbers reported for the same
+programs are address scans 34/66/130/258 for N=8/16/32/64.
 
 ### 3.3 Mutator regions
 
