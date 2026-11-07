@@ -1123,6 +1123,22 @@ class ValueLiveness {
   bool live_in(std::size_t op_index, int value) const {
     return test(live_in_, op_index, value);
   }
+  // Visits every value live at `op_index` in ascending id order. Root attribution
+  // walks this instead of asking `live_in` once per candidate, which is what made it
+  // quadratic in the number of roots.
+  template <typename Callback>
+  void for_each_live_in(std::size_t op_index, Callback&& callback) const {
+    if (words_ == 0) return;
+    const uint64_t* bits = &live_in_[op_index * words_];
+    for (std::size_t word = 0; word < words_; ++word) {
+      uint64_t chunk = bits[word];
+      while (chunk != 0) {
+        const unsigned bit = static_cast<unsigned>(llvm::countr_zero(chunk));
+        callback(static_cast<int>(word * 64 + bit));
+        chunk &= chunk - 1;
+      }
+    }
+  }
   bool live_out(std::size_t op_index, int value) const {
     return test(live_out_, op_index, value);
   }
@@ -1254,32 +1270,32 @@ static GcRootPlan analyze_gc_root_plan(const tir::Function& function,
   for (const auto& entry : slot_addresses) stats.slot_addresses += entry.second.size();
 
   // A value loaded out of a slot keeps the object alive only while its source slot
-  // still holds the reference, so the slot has to stay registered as long as any
-  // value loaded from it is live at a collection point. Loads are recorded against
-  // their slot in one pass; scanning the function once per slot is what made this
-  // quadratic in the size of the function.
-  std::unordered_map<int, std::unordered_set<int>> loads_of_slot;
-  stats.per_slot_scans += operations.size();
+  // still holds the reference, so a slot has to stay registered as long as any
+  // address of it, or any value loaded from it, is live at a collection point.
+  // Asking liveness once per candidate made this quadratic; instead every address
+  // and load is mapped to its slot once, and the live sets at the collection points
+  // decide which slots are needed.
+  std::unordered_map<int, int> slot_of_candidate;
+  for (const auto& entry : slot_of_address) slot_of_candidate.emplace(entry.first, entry.second);
   for (const tir::Op& op : operations) {
     if (op.kind != tir::OpKind::Load || !op.result.is_valid()) continue;
     const auto source = slot_of_address.find(op.lhs.id);
     if (source == slot_of_address.end()) continue;
-    loads_of_slot[source->second].insert(op.result.id);
+    slot_of_candidate.emplace(op.result.id, source->second);
     ++stats.loads;
   }
 
+  std::unordered_set<int> needed_slots;
+  for (std::size_t point : collection_points) {
+    liveness.for_each_live_in(point, [&](int value) {
+      ++stats.liveness_probes;
+      const auto candidate = slot_of_candidate.find(value);
+      if (candidate != slot_of_candidate.end()) needed_slots.insert(candidate->second);
+    });
+  }
+
   for (auto& entry : slot_addresses) {
-    std::unordered_set<int> candidates = entry.second;
-    const auto loads = loads_of_slot.find(entry.first);
-    if (loads != loads_of_slot.end())
-      candidates.insert(loads->second.begin(), loads->second.end());
-    bool rooted = false;
-    for (int candidate : candidates) {
-      if (!live_at_any_collection_point(candidate)) continue;
-      rooted = true;
-      break;
-    }
-    if (rooted) {
+    if (needed_slots.count(entry.first) != 0) {
       plan.rooted_slots.insert(entry.first);
     } else {
       plan.unobserved_addresses.insert(entry.second.begin(), entry.second.end());
