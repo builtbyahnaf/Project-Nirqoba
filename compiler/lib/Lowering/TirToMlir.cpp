@@ -1432,9 +1432,11 @@ class FunctionTranslator {
                      mlir::MLIRContext* ctx,
                      DiagnosticEngine& diag,
                      bool fast_math,
+                     bool debug_enabled,
                      bool needs_mutator_region)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
         builder_(builder), ctx_(ctx), diag_(diag), fast_math_(fast_math),
+        debug_enabled_(debug_enabled),
         stack_allocations_(
             analyze_stack_allocations(tir_fn, borrowed_summary)),
         gc_roots_(analyze_gc_root_plan(tir_fn, collections)),
@@ -3976,6 +3978,10 @@ class FunctionTranslator {
   mlir::MLIRContext* ctx_;
   DiagnosticEngine& diag_;
   bool fast_math_ = false;
+  // Development configuration: emit the observable hooks the debug runtime
+  // provides. Off in every production build, which therefore has no hooks to
+  // strip and no calls to them.
+  bool debug_enabled_ = false;
   std::unordered_map<int, StackAllocationLayout> stack_allocations_;
   std::unordered_map<int, uint64_t> pointer_alignment_;
   GcRootPlan gc_roots_;
@@ -4094,7 +4100,8 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     const tir::Module& tir_module,
     mlir::MLIRContext& context,
     DiagnosticEngine& diagnostics,
-    bool fast_math) {
+    bool fast_math,
+    bool debug_enabled) {
 
   mlir::OpBuilder builder(&context);
   mlir::OwningOpRef<mlir::ModuleOp> module =
@@ -4213,7 +4220,7 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
 
     FunctionTranslator translator(
         *module, *tir_fn, borrowed_summary, collections, func_op, builder,
-        &context, diagnostics, fast_math,
+        &context, diagnostics, fast_math, debug_enabled,
         mutator_regions.count(tir_fn->name()) != 0);
     if (!translator.translate()) return nullptr;
 
