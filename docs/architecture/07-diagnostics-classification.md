@@ -112,6 +112,19 @@ Findings:
   strength of an argument about the code around it. The bar is compile-time
   decidability, and none of the 92 meets it.
 
+### 2.2 A descriptor the compiler built
+
+`nrq_gc_root_register_frame` takes a table from its caller and has to prove it is
+well formed. The lowering's own tables are different: `nrq_gc_roots_*` is a
+constant private global whose words are derived from the slots the same function
+is about to publish, so the table cannot disagree with the frame. That is a
+compile-time property, which is exactly the bar the class rule asks for, so the
+lowering calls `nrq_gc_root_register_frame_static` instead: the development
+configuration still validates and memoises the table (a bug in the derivation must
+be caught where it is cheap to diagnose), and the production configuration skips
+the walk and the memo entirely. The dynamic entry point keeps validating
+everything it is handed, which is what a caller that is not the compiler must use.
+
 ## 3. Accuracy-critical functionality (always enabled, both configurations)
 
 These are numbers a program can read. They are behaviour: a program that branches

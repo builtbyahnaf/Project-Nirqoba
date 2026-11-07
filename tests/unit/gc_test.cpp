@@ -1232,6 +1232,47 @@ TEST(GcTest, FrameRootRegistrationPublishesEverySlot) {
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
 }
 
+// The compiler's descriptor tables are constants it builds itself, so its entry
+// point does not re-validate them. It must register, trace and release exactly
+// what the dynamic entry point does - same slots, same frames, same lifetime.
+TEST(GcTest, StaticDescriptorRegistrationMatchesTheDynamicPath) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+
+  auto* first = nrq_gc_allocate_array(1, sizeof(uint64_t), nullptr);
+  auto* second = nrq_gc_allocate_array(1, sizeof(uint64_t), nullptr);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+
+  void* root0 = nullptr;
+  void* root1 = nullptr;
+  void* slots[2] = {&root0, &root1};
+  // Same table the compiler emits for a two-slot frame: slot count, word count,
+  // then (object size, reference count, offsets...) per slot.
+  const size_t descriptor[] = {2, 8, sizeof(void*), 1, 0, sizeof(void*), 1, 0};
+  const uint64_t marker = nrq_gc_root_frame_begin();
+  nrq_gc_root_register_frame_static(slots, 2, descriptor);
+  nrq_gc_root_store(static_cast<void**>(slots[0]), first);
+  nrq_gc_root_store(static_cast<void**>(slots[1]), second);
+
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{2});
+
+  // The slot index the static path fills is the same one the rooted-allocation
+  // entry point resolves through.
+  ASSERT_NE(nrq_gc_allocate_array_typed_rooted(
+                static_cast<void**>(slots[0]), 1, sizeof(uint64_t), nullptr, 0),
+            nullptr);
+  nrq_gc_root_store(static_cast<void**>(slots[0]), first);
+
+  nrq_gc_root_frame_end(marker);
+  root0 = nullptr;
+  root1 = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+  nrq_gc_enable();
+}
+
 TEST(GcTest, EarlyReturnUnwindsRootFrameAndReleasesRoots) {
   nrq_gc_disable();
   nrq_gc_collect();
