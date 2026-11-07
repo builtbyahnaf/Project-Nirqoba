@@ -99,11 +99,15 @@ Where each requirement is enforced:
 - **TLAB publication and transfer-pin draining precede pinned-root enumeration.**
   `prepare_cycle_locked` publishes every parked mutator's TLAB, drains remembered
   references, folds buffered transfer pins into the table, and only then calls
-  `enqueue_roots_locked`.
+  `enqueue_roots_locked`; `GcTest.BufferedPinsAndTlabObjectsSurviveCollectionBeforeRootEnumeration`
+  keeps a buffered pin and a batch-resident allocation alive across a cycle.
 - **No mutator leaves the registry with state it still owns.** The thread's cleanup
   publishes its TLAB, drains remembered references and transfer pins under
   `gc_mutex`, and only then removes itself from the registry, so the removal cannot
-  drop work the collector would otherwise have seen.
+  drop work the collector would otherwise have seen;
+  `GcTest.ThreadExitPublishesPendingStateBeforeRegistryRemoval` exits a thread with
+  an unpublished batch and a live root slot and requires every object it held to be
+  reclaimed without leaving a phantom registration behind.
 
 ### 3.4 Root-liveness audit and cost
 
