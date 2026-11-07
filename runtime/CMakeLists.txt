@@ -34,6 +34,8 @@ set(NRQOBA_RUNTIME_SOURCES
   src/sync_windows.cpp
   src/socket_windows.cpp
   src/gc.cpp
+  src/gc_debug.cpp
+  src/gc_debug_internal.h
   src/slot_index.h
   src/system_windows.cpp
   src/args_windows.cpp

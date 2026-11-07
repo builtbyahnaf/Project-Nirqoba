@@ -14,6 +14,7 @@
 #include "nirqoba/runtime/cache_line.h"
 #include "nirqoba/runtime/fatal.h"
 
+#include "gc_debug_internal.h"
 #include "slot_index.h"
 
 #include <algorithm>
@@ -37,6 +38,11 @@ using namespace std;
 // The slot index lives in a header so the unit tests can exercise the exact
 // table implementation instead of approximating it through the public GC API.
 using nirq::gc::detail::SlotIndex;
+// Emission points below name these directly. Every helper is `if constexpr` on
+// the build configuration, so in a production build the calls and their
+// arguments disappear from this translation unit entirely.
+using nirq::gc::detail::debug_emit;
+using nirq::gc::detail::debug_tag;
 
 namespace {
 
@@ -1526,6 +1532,8 @@ bool sweep_chunk_locked(size_t budget) {
             promotion_raised_barrier = true;
             remember_children_locked(header);
             header->remembered = false;
+            debug_emit(NRQ_GC_EVENT_PROMOTE, 0, 0,
+                       static_cast<void*>(header + 1));
           }
         }
       } else {
@@ -1533,6 +1541,8 @@ bool sweep_chunk_locked(size_t budget) {
           header->young = false;
           ++promoted_young;
           promotion_raised_barrier = true;
+          debug_emit(NRQ_GC_EVENT_PROMOTE, 0, 0,
+                     static_cast<void*>(header + 1));
         }
         header->age = 0;
         header->remembered = false;
@@ -1555,6 +1565,8 @@ bool sweep_chunk_locked(size_t budget) {
   // before any mutator can publish an old-to-young edge, and mutators cannot run
   // new statements while this chunk holds the heap lock.
   if (promotion_raised_barrier) raise_store_barrier();
+  debug_emit(NRQ_GC_EVENT_SWEEP, static_cast<uint32_t>(reclaimed_old), steps,
+             nullptr);
   return sweep_list == nullptr;
 }
 
@@ -1938,6 +1950,7 @@ void plan_next_cycle_locked() {
 }
 
 void begin_cycle(bool young_only) {
+  debug_emit(NRQ_GC_EVENT_CYCLE_BEGIN, young_only ? 1u : 0u, 0, nullptr);
   // Publish the transition before parking so new fast-path stores fall back to
   // the synchronized barrier. In-flight fast stores finish before the root
   // snapshot; the per-mutator barrier depth is the handshake that makes that
@@ -1975,6 +1988,8 @@ void finish_cycle_locked(bool young_only) {
   // reports it directly instead of walking every live object each cycle.
   statistics.allocated_bytes = live_heap_bytes;
   adapt_collection_policy_locked();
+  debug_emit(NRQ_GC_EVENT_CYCLE_END, young_only ? 1u : 0u,
+             collection_policy.last_reclaimed_bytes, nullptr);
   if (!young_only) live_heap_bytes_at_last_major = live_heap_bytes;
   plan_next_cycle_locked();
   // Do not clear the remembered set here. A major collection erases promoted
@@ -2193,6 +2208,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   statistics.live_objects = saturated_add(statistics.live_objects, 1);
   live_heap_bytes = saturated_add(live_heap_bytes, bytes);
   atomic_saturating_add_size(allocation_accounting.bytes_since_collection, bytes);
+  debug_emit(NRQ_GC_EVENT_ALLOCATION, 0, bytes, object);
   return object;
 }
 
@@ -2373,6 +2389,7 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     HeapLockGuard lock(gc_mutex);
     publish_tlab_locked(thread_mutator);
   }
+  debug_emit(NRQ_GC_EVENT_ALLOCATION, 0, bytes, object);
   return object;
 }
 
@@ -2933,6 +2950,7 @@ uint64_t nrq_gc_root_frame_begin(void) {
   } catch (...) {
     nrq_runtime_fatal("GC root frame registration failed to allocate thread metadata");
   }
+  debug_emit(NRQ_GC_EVENT_ROOT_FRAME, 1, marker, nullptr);
   return marker;
 }
 
@@ -2946,6 +2964,7 @@ void nrq_gc_root_frame_end(uint64_t marker) {
     nrq_runtime_fatal("GC root frames must end in LIFO order with a valid marker");
   const size_t target_depth = stack.frames.back().root_depth;
   stack.frames.pop_back();
+  debug_emit(NRQ_GC_EVENT_ROOT_FRAME, 0, marker, nullptr);
 
   // Remove exactly the registrations owned by this frame. Complexities of this
   // path are proportional to the number of roots the frame leaves behind, not
@@ -2973,6 +2992,64 @@ void nrq_gc_root_frame_end(uint64_t marker) {
   std::lock_guard<std::mutex> lock(stack.mutex);
   remove_owned_roots();
 }
+
+#if NRQ_DEBUG_ENABLED
+size_t nrq_gc_debug_snapshot_roots(nrq_gc_debug_root* out, size_t capacity) {
+  if (!out || capacity == 0) return 0;
+  // A fast-path root push does not take the stack mutex, so reading a stack
+  // needs the same handshake the reference-count query uses: publish that a
+  // diagnostic reader is active, which makes every later push synchronize, then
+  // drain the pushes that entered the lock-free path before the flag became
+  // visible. Only then is every stack this function walks either quiescent or
+  // mutex-protected.
+  const bool previous = reference_diagnostics_enabled.exchange(
+      true, std::memory_order_acq_rel);
+  struct RestoreFlag {
+    bool previous;
+    ~RestoreFlag() {
+      reference_diagnostics_enabled.store(previous, std::memory_order_release);
+    }
+  } restore{previous};
+  wait_for_fast_barriers();
+
+  size_t written = 0;
+  auto record = [&](void* slot, const RootInfo& info) {
+    if (written == capacity) return;
+    nrq_gc_debug_root& entry = out[written++];
+    entry = nrq_gc_debug_root{};
+    entry.slot = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(slot));
+    entry.reference_count =
+        static_cast<uint32_t>(info.reference_offsets.size());
+    entry.element_size = static_cast<uint32_t>(info.element_size);
+    entry.element_count = info.repeated_count != 0
+                             ? static_cast<uint32_t>(info.repeated_count)
+                             : 1u;
+    entry.is_pointer_root = is_pointer_root(info) ? 1u : 0u;
+    if (!slot || info.reference_offsets.empty()) return;
+    // Report the object the slot currently holds at its first reference offset.
+    // For an array root that is the first element's first reference.
+    const size_t span = info.repeated_count != 0 ? info.element_size
+                                                : info.object_size;
+    const size_t offset = info.reference_offsets[0];
+    if (offset > span || sizeof(void*) > span - offset) return;
+    void* referent = nullptr;
+    std::memcpy(&referent, static_cast<const unsigned char*>(slot) + offset,
+                sizeof(referent));
+    entry.referent = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(referent));
+  };
+
+  {
+    HeapLockGuard lock(gc_mutex);
+    for (const auto& root : roots) record(root.first, root.second);
+    for (ShadowStack* stack : shadow_stacks) {
+      if (!stack) continue;
+      std::lock_guard<std::mutex> stack_lock(stack->mutex);
+      for (const ShadowRoot& root : stack->roots) record(root.slot, root.info);
+    }
+  }
+  return written;
+}
+#endif  // NRQ_DEBUG_ENABLED
 
 void nrq_gc_enable(void) {
   automatic_collection_enabled.store(true, std::memory_order_relaxed);
