@@ -52,8 +52,8 @@ struct PipelineOptions {
   bool remarks_missed_only = false;
   std::string remark_filter;
   bool fast_math = false;
-  // Selects the development runtime configuration: link nrqoba_runtime_debug
-  // instead of nrqoba_runtime, and emit the instrumentation its entry points
+  // Selects the development runtime configuration: link nirqoba_runtime_debug
+  // instead of nirqoba_runtime, and emit the instrumentation its entry points
   // consume. Production builds leave this false and contain none of it.
   bool debug_enabled = false;
 };

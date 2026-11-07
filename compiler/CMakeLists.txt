@@ -134,7 +134,7 @@ nirqoba_set_target_warnings(nirqoba)
 target_link_libraries(nirqoba
   PRIVATE
     nirqoba_compiler_lib
-    nrqoba_runtime
+    nirqoba_runtime
 )
 
 # Place the binary in build/<preset>/bin/ so scripts can find it predictably.

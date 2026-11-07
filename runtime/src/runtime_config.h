@@ -2,8 +2,8 @@
 //
 // The runtime is built twice from one set of sources:
 //
-//   nrqoba_runtime        production path, linked by default
-//   nrqoba_runtime_debug  development path, linked by --debug-enabled
+//   nirqoba_runtime        production path, linked by default
+//   nirqoba_runtime_debug  development path, linked by --debug-enabled
 //
 // The two differ only in observation. The debug configuration carries the event
 // stream, allocation-site tags and root-stack snapshots, and it keeps the

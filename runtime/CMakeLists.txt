@@ -10,8 +10,8 @@
 #
 # The same sources are built twice:
 #
-#   nrqoba_runtime        production path (default)
-#   nrqoba_runtime_debug  development path (selected by --debug-enabled)
+#   nirqoba_runtime        production path (default)
+#   nirqoba_runtime_debug  development path (selected by --debug-enabled)
 #
 # Only observation differs between them; see src/runtime_config.h for the exact
 # contract. The debug library carries the event stream, allocation-site tags,
@@ -24,7 +24,7 @@
 
 cmake_minimum_required(VERSION 3.28)
 
-set(NRQOBA_RUNTIME_SOURCES
+set(NIRQOBA_RUNTIME_SOURCES
   src/io_windows.cpp
   src/fatal_windows.cpp
   src/runtime_version.cpp
@@ -48,7 +48,7 @@ set(NRQOBA_RUNTIME_SOURCES
 # cannot land in one path without being visible in the other.
 function(nirqoba_add_runtime_target target)
   cmake_parse_arguments(ARG "DEBUG" "" "" ${ARGN})
-  add_library(${target} STATIC ${NRQOBA_RUNTIME_SOURCES})
+  add_library(${target} STATIC ${NIRQOBA_RUNTIME_SOURCES})
   set_property(TARGET ${target} PROPERTY CXX_STANDARD 20)
   set_property(TARGET ${target} PROPERTY CXX_STANDARD_REQUIRED ON)
   target_include_directories(${target}
@@ -67,5 +67,5 @@ function(nirqoba_add_runtime_target target)
   )
 endfunction()
 
-nirqoba_add_runtime_target(nrqoba_runtime)
-nirqoba_add_runtime_target(nrqoba_runtime_debug DEBUG)
+nirqoba_add_runtime_target(nirqoba_runtime)
+nirqoba_add_runtime_target(nirqoba_runtime_debug DEBUG)

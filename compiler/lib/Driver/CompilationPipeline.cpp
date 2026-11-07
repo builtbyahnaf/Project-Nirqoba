@@ -68,7 +68,7 @@ string get_executable_dir() {
 // production binary contains no branch, counter or symbol for the development
 // instrumentation.
 string runtime_lib_file_name(bool debug_enabled) {
-  return debug_enabled ? "nrqoba_runtime_debug.lib" : "nrqoba_runtime.lib";
+  return debug_enabled ? "nirqoba_runtime_debug.lib" : "nirqoba_runtime.lib";
 }
 
 string locate_runtime_lib(const string& file_name) {
@@ -399,7 +399,7 @@ int run_pipeline(const PipelineOptions& options,
         diag::kLinkFailed, SourceLocation{},
         "cannot find " + runtime_lib_name +
             (options.debug_enabled
-                 ? "; build the nrqoba_runtime_debug target first"
+                 ? "; build the nirqoba_runtime_debug target first"
                  : "; please build the runtime target first"));
     return fail_with(diagnostics, sources);
   }

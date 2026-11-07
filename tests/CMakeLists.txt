@@ -50,7 +50,7 @@ target_link_libraries(nirqoba_unit_tests
     # development runtime and compile its configuration into the test binary.
     # The production runtime is exercised end to end by tests/run_tests.py, which
     # builds programs without --debug-enabled.
-    nrqoba_runtime_debug
+    nirqoba_runtime_debug
 )
 
 target_compile_definitions(nirqoba_unit_tests PRIVATE NRQ_RUNTIME_DEBUG_ENABLED=1)
