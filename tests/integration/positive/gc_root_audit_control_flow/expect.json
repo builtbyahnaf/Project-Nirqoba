@@ -1,0 +1,9 @@
+{
+  "mode": "build_and_run",
+  "expect_stdout": "7\n",
+  "expect_ir_counts": {
+    "call i64 @nrq_gc_root_frame_begin()": 3,
+    "call void @nrq_gc_root_register_typed(": 3,
+    "call void @nrq_gc_root_frame_end(i64": 4
+  }
+}

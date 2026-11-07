@@ -1,0 +1,7 @@
+{
+  "mode": "build_and_run",
+  "expect_stdout": "28\n",
+  "expect_ir_counts": {
+    "call void @nrq_gc_root_register_frame(ptr": 1
+  }
+}
