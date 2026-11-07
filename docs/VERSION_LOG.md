@@ -6,11 +6,31 @@
 
 ---
 
-## Version 0.235-beta (dev)
+## Version 0.241-beta (dev)
+
+### Summary of Changes (since `0.235-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.235-beta release.*
+
+---
+
+## Version 0.235-beta
 
 ### Summary of Changes (since `0.231-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.231-beta release.*
+#### 1. Builder Bookkeeping (BO-01 head start)
+- **Descriptor validation memo:** a frame's root descriptor is validated once per thread and per descriptor content instead of on every activation; a hit requires identical words, so a stack descriptor that reuses a validated address is re-validated rather than trusted.
+- **Single-probe slot registration:** registering a root slot performs one index probe instead of a lookup followed by an insertion.
+
+#### 2. Allocation Path
+- **Barrier regions without locked instructions:** entering a mutator barrier region updates the thread's own counter with a plain store plus a fence instead of a locked read-modify-write.
+- **Allocation counters:** the per-mutator byte and object counters are published with a load and a store instead of two locked read-modify-writes, while staying immediately visible to a statistics query.
+- **Idle-heap field stores:** a store to a root slot skips the reader-count handshake while no cycle is running, because a cycle only snapshots roots after the mutator parks.
+- **Header construction:** each object header field is written once instead of value-initialising the header and overwriting it.
+- **Pointer-root memo:** the rooted allocation path answers its slot check from a small per-thread memo that is retired together with the registration it describes.
+
+#### 3. Collection Stability
+- **Reclaimed runs:** a thread-local reservation consumes the whole run a page offers, up to a full TLAB, instead of a fixed 4 KB slice. The slice had been re-fragmenting recycled pages, forcing a reservation every few dozen objects, and pushing later allocations onto fresh pages - which made sweeping cost more cycle after cycle.
 
 ---
 
