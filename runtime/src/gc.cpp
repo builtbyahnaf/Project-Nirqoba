@@ -2669,21 +2669,28 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
 // Word 0 is the slot count and word 1 is the table's own length.
 constexpr size_t kFrameRootHeaderWords = 2;
 
-void nrq_gc_root_register_frame(void* const* slots, size_t slot_count,
-                                const size_t* descriptor) {
+// Shared body of the two frame-registration entry points. `validate` is a
+// compile-time constant at both call sites, so the development configuration
+// keeps every check and the production configuration for a compiler-built table
+// contains none of them.
+static void register_frame_roots(void* const* slots, size_t slot_count,
+                                 const size_t* descriptor, bool validate) {
   if (slot_count == 0) return;
   if (!slots || !descriptor)
     nrq_runtime_fatal("GC frame root registration received an invalid descriptor");
-  if (descriptor[0] != slot_count)
-    nrq_runtime_fatal(
-        "GC frame root registration descriptor does not match its slot count");
 
-  for (size_t index = 0; index < slot_count; ++index) {
-    if (!slots[index])
-      nrq_runtime_fatal("GC frame root registration contains a null slot");
+  if (validate) {
+    if (descriptor[0] != slot_count)
+      nrq_runtime_fatal(
+          "GC frame root registration descriptor does not match its slot count");
+
+    for (size_t index = 0; index < slot_count; ++index) {
+      if (!slots[index])
+        nrq_runtime_fatal("GC frame root registration contains a null slot");
+    }
   }
 
-  if (!thread_validated_descriptors.matches(descriptor)) {
+  if (validate && !thread_validated_descriptors.matches(descriptor)) {
     // The table states its own length, so a truncated descriptor is rejected
     // before the walk can read past it. A table with no room for its own header or
     // for the roots it claims is malformed in the same way.
@@ -2786,6 +2793,26 @@ void nrq_gc_root_register_frame(void* const* slots, size_t slot_count,
       push_root(slots[index], cursor);
     }
   }
+}
+
+// Dynamic entry point: the descriptor is supplied by the caller, so it is
+// validated on every activation (memoised only for an identical table).
+void nrq_gc_root_register_frame(void* const* slots, size_t slot_count,
+                                const size_t* descriptor) {
+  register_frame_roots(slots, slot_count, descriptor, /*validate=*/true);
+}
+
+// Static-descriptor entry point. Only the lowering emits this, and only with a
+// table it built itself: `nrq_gc_roots_*` is a constant private global whose
+// words the compiler derives from the slots it is about to publish, so the table
+// cannot disagree with the frame. The development configuration still validates
+// it, because a bug in that derivation must be caught where it is cheap to
+// diagnose; the production configuration skips the walk entirely, which is the
+// whole point of a separate entry point.
+void nrq_gc_root_register_frame_static(void* const* slots, size_t slot_count,
+                                       const size_t* descriptor) {
+  register_frame_roots(slots, slot_count, descriptor,
+                       /*validate=*/nirq::runtime_debug_enabled);
 }
 
 void nrq_gc_root_register_array(void* data, size_t count, size_t element_size,

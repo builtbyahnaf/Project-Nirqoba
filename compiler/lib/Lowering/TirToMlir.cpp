@@ -2011,8 +2011,12 @@ class FunctionTranslator {
           mlir::ValueRange{zero, position}).getResult();
       builder_.create<mlir::LLVM::StoreOp>(loc, roots[index].slot, element);
     }
+    // The descriptor is the constant global this function just emitted, so the
+    // runtime does not have to re-validate it on every activation: the static
+    // entry point keeps the development build's validation and drops it from the
+    // production build.
     auto register_fn = ensure_runtime_fn(
-        module_, builder_, "nrq_gc_root_register_frame",
+        module_, builder_, "nrq_gc_root_register_frame_static",
         mlir::LLVM::LLVMVoidType::get(ctx_),
         {llvm_ptr_type(ctx_), builder_.getI64Type(), llvm_ptr_type(ctx_)});
     mlir::Value count = builder_.create<mlir::LLVM::ConstantOp>(

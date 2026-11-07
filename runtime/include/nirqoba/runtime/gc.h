@@ -61,6 +61,14 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
 // pushed under one barrier region instead of one per root.
 void nrq_gc_root_register_frame(void* const* slots, size_t slot_count,
                                 const size_t* descriptor);
+// Same registration for a descriptor the compiler emitted. The lowering only
+// calls this with a constant private table it built itself from the slots it is
+// publishing, so the table cannot disagree with the frame; the development
+// configuration validates it anyway, and the production configuration does not
+// walk it. A caller that is not the compiler must use the dynamic entry point
+// above, which validates every table it is given.
+void nrq_gc_root_register_frame_static(void* const* slots, size_t slot_count,
+                                       const size_t* descriptor);
 // Registers an externally owned contiguous array as a root region. Offsets are
 // relative to each element and are repeated count times with element_size as
 // the stride. The caller must unregister the data address before freeing it.
