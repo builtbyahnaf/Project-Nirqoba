@@ -283,3 +283,46 @@ place on each side of the boundary:
   compiler's enum-derived names against the runtime's macro-derived names in a
   binary that links both, so a rename on one side fails a unit test instead of a
   user's link.
+
+### 4.5 The two configurations must not collect differently
+
+A development build may be slower and may observe more. It may not synchronise
+differently, and nothing in the observation may become a correctness dependency.
+The list this is checked against:
+
+- **GC synchronization.** One heap mutex, taken in the documented order
+  (`mutator_mutex` then `gc_mutex`) and never across a barrier wait.
+- **Barriers.** SBAT/SBOT fast regions are entered and exited through the same
+  `begin_fast_barrier()`/`end_fast_barrier()` pair, and the per-mutator
+  `barrier_depth` that `wait_for_fast_barriers()` drains is incremented once per
+  region in both configurations.
+- **Root-frame discipline.** Frames are opened with a marker, closed in LIFO
+  order, and their slots removed by `root_depth`; the marker and the reserved
+  depth are computed from the same descriptor in both configurations.
+- **Parking.** Mutators are parked before roots are enumerated, in both
+  configurations, and a parked mutator's TLab is published by the same call.
+- **SBAT/SBOT and ownership.** TLab ownership, page ownership, pin ownership and
+  the handoff of both are unchanged; instrumentation never holds an object.
+- **Instrumentation is not a dependency.** Hooks are emitted after the state
+  change they describe and touch only the debug ring or the debug site table,
+  neither of which the collector, the mutator protocol or the barriered stores
+  read. The production build does not call them at all: the lowering emits
+  nothing without `--debug-enabled`, so there is no branch to skip. The single
+  mechanism both configurations share is `diagnostics_reading_roots()`, which
+  exists for reference counting rather than for observation (see
+  `07-diagnostics-classification.md` Section 3.2).
+
+The evidence is `scripts/compare_configuration_equivalence.py`: it builds every
+integration program twice, runs both, and requires identical exit status, stdout
+and stderr. A program whose own output is not reproducible is skipped, because a
+difference there could not be attributed to the configuration. On the current
+corpus: 119 programs agreed, 2 were skipped (socket cases whose plain link line
+lacks `ws2_32` in either configuration, and which the harness only type-checks),
+and none disagreed.
+
+This is evidence over a corpus, not a proof; the structural argument above is the
+reason to expect it outside the corpus. Both belong in the record, and the first
+run already paid for itself: it found a lowering defect that made every
+development build of a module with two literal-using functions fail, which is
+fixed in `TirToMlir.cpp` by giving the literal table to the module instead of to
+each function.
