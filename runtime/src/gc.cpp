@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
@@ -629,14 +630,15 @@ ObjectHeader* find_object_locked(void* object) {
   return object_index.find(static_cast<void*>(object));
 }
 
-constexpr size_t kGcTlabBytes = 4 * 1024;
+constexpr size_t kGcTlabBytes = kGcPageBytes;
+constexpr size_t kGcTlabFreeSpanBytes = 4 * 1024;
 std::vector<std::unique_ptr<GcPage>> gc_pages;
 // Empty pages keep their backing storage across cycles. Reusing them avoids an
 // operator new / operator delete pair for every page a churn-heavy workload
 // frees at each cycle boundary. The pool is bounded so idle programs do not
 // retain an unbounded amount of address space.
 std::vector<std::unique_ptr<GcPage>> recycled_pages;
-constexpr size_t kMaxRecycledPages = 64;
+constexpr size_t kMaxRecycledPages = 2048;
 // Large-object pages can be much bigger than kGcPageBytes. Retaining a pool of
 // them would make the page-count bound meaningless, so only ordinary-sized
 // pages are recycled and oversized pages return to the process heap.
@@ -645,6 +647,7 @@ uint64_t recycled_page_reuse_count = 0;
 // Counts allocations served from space freed by an earlier sweep rather than
 // from a page's untouched tail.
 uint64_t recycled_span_reuse_count = 0;
+size_t total_free_spans = 0;
 // Cache the current bump page per allocating thread. Collection increments the
 // generation so a thread that resumes after another thread reclaimed its page
 // discards the stale pointer before dereferencing it.
@@ -1470,6 +1473,7 @@ void release_span_locked(GcPage& page, size_t offset, size_t span) {
           previous.offset + previous.span == page.free_spans[index].offset) {
         previous.span += page.free_spans[index].span;
         page.free_spans[index] = page.free_spans[--page.free_span_count];
+        --total_free_spans;
       }
       return;
     }
@@ -1486,6 +1490,7 @@ void release_span_locked(GcPage& page, size_t offset, size_t span) {
     page.free_spans[move] = page.free_spans[move - 1];
   page.free_spans[index] = GcPage::FreeSpan{offset, span};
   ++page.free_span_count;
+  ++total_free_spans;
   page.free_span_bytes += span;
 }
 
@@ -1493,7 +1498,7 @@ void release_span_locked(GcPage& page, size_t offset, size_t span) {
 // and only pages that currently hold a free run, so a heap with nothing to reuse
 // costs one branch per page. Callers hold gc_mutex.
 GcPage* take_free_span_locked(size_t span, size_t& offset) {
-  if (span == 0) return nullptr;
+  if (span == 0 || total_free_spans == 0) return nullptr;
   for (auto& entry : gc_pages) {
     GcPage* page = entry.get();
     if (!page || page->retired || page->free_span_count == 0 ||
@@ -1515,6 +1520,7 @@ GcPage* take_free_span_locked(size_t span, size_t& offset) {
         for (size_t move = index; move + 1 < page->free_span_count; ++move)
           page->free_spans[move] = page->free_spans[move + 1];
         --page->free_span_count;
+        --total_free_spans;
       }
       recycled_span_reuse_count = saturated_add(recycled_span_reuse_count, 1);
       return page;
@@ -1535,8 +1541,11 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
     page->used = 0;
     page->live_objects = 0;
     page->retired = false;
-    page->free_span_count = 0;
-    page->free_span_bytes = 0;
+    if (page->free_span_count != 0) {
+      total_free_spans -= page->free_span_count;
+      page->free_span_count = 0;
+      page->free_span_bytes = 0;
+    }
     if (page->object_starts && page->object_start_words != 0) {
       std::memset(page->object_starts.get(), 0,
                   page->object_start_words * sizeof(uint64_t));
@@ -1569,6 +1578,11 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
 // no mutator can still hold a cursor into the page.
 void recycle_page(std::unique_ptr<GcPage> page) {
   if (!page) return;
+  if (page->free_span_count != 0) {
+    total_free_spans -= page->free_span_count;
+    page->free_span_count = 0;
+    page->free_span_bytes = 0;
+  }
   if (recycled_pages.size() >= kMaxRecycledPages ||
       page->capacity < kGcPageBytes ||
       page->capacity > kMaxRecycledPageBytes) {
@@ -2047,10 +2061,10 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
   // region instead of leaving it permanently half empty.
   {
     size_t run_offset = 0;
-    if (GcPage* reused = take_free_span_locked(kGcTlabBytes, run_offset)) {
+    if (GcPage* reused = take_free_span_locked(kGcTlabFreeSpanBytes, run_offset)) {
       mutator.tlab_page = reused;
       mutator.tlab_cursor = reused->storage + run_offset;
-      mutator.tlab_end = mutator.tlab_cursor + kGcTlabBytes;
+      mutator.tlab_end = mutator.tlab_cursor + kGcTlabFreeSpanBytes;
       mutator.tlab_generation = gc_page_generation;
       thread_allocation_page = reused;
       thread_allocation_generation = gc_page_generation;
