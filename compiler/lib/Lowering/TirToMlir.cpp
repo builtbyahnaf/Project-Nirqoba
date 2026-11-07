@@ -1156,6 +1156,13 @@ class ValueLiveness {
   std::unordered_map<int, std::size_t> label_positions_;
 };
 
+namespace {
+GcRootAnalysisStats& analysis_stats() {
+  static GcRootAnalysisStats stats;
+  return stats;
+}
+}  // namespace
+
 static GcRootPlan analyze_gc_root_plan(const tir::Function& function,
                                        const CollectionSummary& summary) {
   const std::vector<tir::Op>& operations = function.operations();
@@ -1185,6 +1192,10 @@ static GcRootPlan analyze_gc_root_plan(const tir::Function& function,
     return plan;
   }
 
+  GcRootAnalysisStats& stats = analysis_stats();
+  ++stats.functions;
+  stats.operations += operations.size();
+
   const ValueLiveness liveness(function);
 
   // Collection points: calls that may collect, plus loop back edges where the
@@ -1208,6 +1219,7 @@ static GcRootPlan analyze_gc_root_plan(const tir::Function& function,
   }
 
   auto live_at_any_collection_point = [&](int value) {
+    ++stats.liveness_probes;
     for (std::size_t point : collection_points)
       if (liveness.live_in(point, value)) return true;
     return false;
@@ -1228,6 +1240,7 @@ static GcRootPlan analyze_gc_root_plan(const tir::Function& function,
     for (const tir::Op& op : operations) {
       if (op.kind != tir::OpKind::GetElementPtr || !op.result.is_valid())
         continue;
+      ++stats.address_scans;
       for (auto& entry : slot_addresses) {
         if (entry.second.count(op.lhs.id) == 0) continue;
         if (entry.second.insert(op.result.id).second) changed = true;
@@ -1236,14 +1249,20 @@ static GcRootPlan analyze_gc_root_plan(const tir::Function& function,
     }
   }
 
+  for (const auto& entry : slot_addresses) stats.slot_addresses += entry.second.size();
+
   // A value loaded out of a slot keeps the object alive only while its source
   // slot still holds the reference, so the slot has to stay registered as long
   // as any value loaded from it is live at a collection point.
   for (auto& entry : slot_addresses) {
     std::unordered_set<int> candidates = entry.second;
     for (const tir::Op& op : operations) {
+      ++stats.per_slot_scans;
       if (op.kind != tir::OpKind::Load || !op.result.is_valid()) continue;
-      if (entry.second.count(op.lhs.id) != 0) candidates.insert(op.result.id);
+      if (entry.second.count(op.lhs.id) != 0) {
+        candidates.insert(op.result.id);
+        ++stats.loads;
+      }
     }
     bool rooted = false;
     for (int candidate : candidates) {
@@ -4041,7 +4060,10 @@ static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
   return true;
 }
 
-}  // namespace
+}
+
+GcRootAnalysisStats gc_root_analysis_stats() { return analysis_stats(); }
+void reset_gc_root_analysis_stats() { analysis_stats() = GcRootAnalysisStats{}; }
 
 mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     const tir::Module& tir_module,
