@@ -1064,18 +1064,25 @@ void end_fast_barrier() {
   thread_mutator.barrier_depth.fetch_sub(1, std::memory_order_release);
 }
 
-// Wait until every registered mutator has left its barrier regions. The
+// Wait until every other registered mutator has left its barrier regions. The
 // collector publishes Preparing first, so a mutator that observes the phase
 // change retreats to the serialized path and never enters a new region; the loop
 // only has to wait out the regions that were already in flight, and a mutator
 // inside one finishes it before it can reach a safepoint.
+//
+// The calling thread's own entry is skipped. It can only be non-zero when the caller
+// is itself inside a region, and waiting for it would spin until the caller's own
+// region ended - which cannot happen, because the caller is this thread and it is
+// busy waiting. Its region cannot be in flight against the enumeration the caller is
+// about to perform either: one thread runs its stores and its enumeration in
+// sequence, and the region ends before the next store.
 void wait_for_fast_barriers() {
   for (;;) {
     bool busy = false;
     {
       std::lock_guard<std::mutex> lock(mutator_mutex);
       for (const MutatorState* mutator : mutators) {
-        if (mutator &&
+        if (mutator && mutator != &thread_mutator &&
             mutator->barrier_depth.load(std::memory_order_acquire) != 0) {
           busy = true;
           break;

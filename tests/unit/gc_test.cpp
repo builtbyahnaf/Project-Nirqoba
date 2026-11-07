@@ -1568,6 +1568,51 @@ TEST(GcTest, TransferPinBufferReusesSlotsForReleasedHandoffs) {
   nrq_gc_mutator_leave();
 }
 
+TEST(GcTest, CollectorAndRootedAllocatorMakeProgressTogether) {
+  nrq_gc_enable();
+  nrq_gc_set_threshold(1024 * 1024 * 1024);
+  nrq_gc_collect();
+  const uint64_t baseline_fallbacks = nrq_gc_transfer_pin_fallbacks();
+
+  // The rooted allocation fast path runs inside a barrier region and can take the
+  // collector lock when it needs a new TLAB. The collector, meanwhile, publishes its
+  // phase under that lock and then waits for barrier regions to drain. Neither may
+  // wait for the other: if the handshake ever inverted, this pair of threads would
+  // stop making progress and the test would hang instead of returning.
+  std::atomic<bool> stop = false;
+  std::atomic<int> allocations = 0;
+  std::thread collector([&stop] {
+    nrq_gc_mutator_enter();
+    while (!stop.load()) nrq_gc_collect();
+    nrq_gc_mutator_leave();
+  });
+  std::thread allocator([&stop, &allocations] {
+    nrq_gc_mutator_enter();
+    while (!stop.load()) {
+      Node* root = nullptr;
+      nrq_gc_root_register(reinterpret_cast<void**>(&root));
+      root = static_cast<Node*>(nrq_gc_allocate_array_typed_rooted(
+          reinterpret_cast<void**>(&root), 1, sizeof(Node), nullptr, 0));
+      if (root) ++allocations;
+      nrq_gc_root_unregister(reinterpret_cast<void**>(&root));
+      if (allocations.load() >= 512) break;
+    }
+    nrq_gc_mutator_leave();
+  });
+  allocator.join();
+  stop.store(true);
+  collector.join();
+
+  ASSERT_TRUE(allocations.load() >= 512);
+  // Handoff slots are reused rather than pushed onto the collector mutex, so this
+  // workload should not have needed a single fallback.
+  ASSERT_EQ(nrq_gc_transfer_pin_fallbacks() - baseline_fallbacks, uint64_t{0});
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+  ASSERT_EQ(nrq_gc_pin_count(), uint64_t{0});
+  nrq_gc_set_threshold(1024 * 1024);
+}
+
 TEST(GcTest, TransferPinFallbackSettlesBufferedDeltasFirst) {
   nrq_gc_enable();
   nrq_gc_collect();
