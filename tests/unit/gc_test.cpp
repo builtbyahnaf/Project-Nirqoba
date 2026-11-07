@@ -1652,6 +1652,38 @@ TEST(GcTest, BufferedPinsAndTlabObjectsSurviveCollectionBeforeRootEnumeration) {
   nrq_gc_mutator_leave();
 }
 
+TEST(GcTest, ThreadExitPublishesPendingStateBeforeRegistryRemoval) {
+  nrq_gc_enable();
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+
+  // The thread exits while its allocations are still in an unpublished TLAB batch and
+  // while a root slot on its stack still points at one of them. The cleanup has to
+  // publish the batch and remove the stack before it leaves the registry: dropping
+  // either would either lose a reachable object or leave the collector believing in a
+  // mutator that no longer exists.
+  std::thread worker([] {
+    nrq_gc_mutator_enter();
+    Node* root = nullptr;
+    nrq_gc_root_register(reinterpret_cast<void**>(&root));
+    root = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+    for (int index = 0; index < 32; ++index)
+      ASSERT_NE(nrq_gc_allocate(sizeof(Node), trace_node), nullptr);
+    ASSERT_NE(root, nullptr);
+    // No mutator_leave, no unregister: the thread's own cleanup runs on exit.
+  });
+  worker.join();
+
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+  ASSERT_EQ(nrq_gc_pin_count(), uint64_t{0});
+
+  // The collector still has to park and finish the next cycle, which it cannot do if
+  // the exited thread was left registered.
+  for (int index = 0; index < 4; ++index) nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+}
+
 TEST(GcTest, TransferPinFallbackSettlesBufferedDeltasFirst) {
   nrq_gc_enable();
   nrq_gc_collect();
