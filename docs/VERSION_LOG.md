@@ -6,11 +6,22 @@
 
 ---
 
-## Version 0.223-beta (dev)
+## Version 0.228-beta (dev)
+
+### Summary of Changes (since `0.223-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.223-beta release.*
+
+---
+
+## Version 0.223-beta
 
 ### Summary of Changes (since `0.217-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.217-beta release.*
+#### 1. Collection Progress and Runtime Lock Ordering, completed (PO-27 §2.5)
+- **Root snapshot completeness:** a cycle folds in what mutators have not published, so a pin recorded in a delta buffer and an object still in an unpublished TLAB batch both survive the snapshot; a unit test requires four such objects to stay alive across a collection and to be reclaimed once released.
+- **Registry removal:** a thread that exits with an unpublished batch and a live root slot publishes the batch, drops the stack and only then leaves the registry; a unit test reclaims everything it held, leaves no pin behind, and requires the next cycle to park and finish.
+- **Evidence:** the runtime document's lock-order section now cites the test that would fail for each requirement, including the progress test that runs a collector against the rooted allocation path.
 
 ---
 
