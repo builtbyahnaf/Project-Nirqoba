@@ -39,8 +39,6 @@ struct GcRootAnalysisStats {
   std::size_t loads = 0;
   // Slot candidates looked up in liveness at a collection point.
   std::size_t liveness_probes = 0;
-  // Operations visited while scanning a function once per slot.
-  std::size_t per_slot_scans = 0;
   // Get-element-pointer operations revisited by the address fixpoint.
   std::size_t address_scans = 0;
 };
