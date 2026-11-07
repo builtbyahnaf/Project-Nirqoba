@@ -721,7 +721,9 @@ int run_driver(int argc, const char* const* argv) {
   pipe_opts.remarks_missed_only = options.remarks_missed_only;
   pipe_opts.remark_filter = options.remark_filter;
   pipe_opts.fast_math = options.fast_math;
-  pipe_opts.debug_enabled = options.debug_enabled;
+  // The flag is the only place the two configurations differ at the command
+  // line; everything downstream is derived from this one value.
+  pipe_opts.runtime_configuration = runtime_configuration(options.debug_enabled);
 
   if (options.command == CommandKind::Check) {
     pipe_opts.emit = options.emit_specified ? options.emit : EmitKind::Tir;

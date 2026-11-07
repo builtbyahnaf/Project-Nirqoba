@@ -18,6 +18,7 @@
 #include "nirqoba/Frontend/Lexer.h"
 #include "nirqoba/Frontend/Parser.h"
 #include "nirqoba/Frontend/SourceFile.h"
+#include "nirqoba/Driver/RuntimeConfiguration.h"
 #include "nirqoba/Lowering/TirToMlir.h"
 #include "nirqoba/Sema/TypeChecker.h"
 #include "nirqoba/TIR/Builder.h"
@@ -214,7 +215,9 @@ int function main() {
 
 mlir::OwningOpRef<mlir::ModuleOp> lower_source_to_mlir(
     const std::string& source, mlir::MLIRContext& context,
-    nirq::DiagnosticEngine& diagnostics, bool debug_enabled = false) {
+    nirq::DiagnosticEngine& diagnostics,
+    nirq::RuntimeConfiguration configuration =
+        nirq::RuntimeConfiguration::Production) {
   nirq::SourceFile file("lowering_probe.nrqba", source);
   nirq::Lexer lexer(file, diagnostics);
   nirq::Parser parser(lexer.tokenize(), diagnostics);
@@ -227,7 +230,7 @@ mlir::OwningOpRef<mlir::ModuleOp> lower_source_to_mlir(
   if (!tir_module) return nullptr;
   if (!nirq::verify_tir_module(*tir_module, diagnostics)) return nullptr;
   return nirq::translate_tir_to_mlir(*tir_module, context, diagnostics,
-                                     /*fast_math=*/false, debug_enabled);
+                                     /*fast_math=*/false, configuration);
 }
 
 // Reports whether the module calls `symbol` from anywhere. The ABI reference the
@@ -623,16 +626,16 @@ TEST(MlirPipelineTest, EntryPointNamesTheRuntimeConfiguration) {
     nirq::DiagnosticEngine diagnostics;
     mlir::OwningOpRef<mlir::ModuleOp> module;
 
-    explicit ConfigurationFixture(bool debug_enabled) {
+    explicit ConfigurationFixture(nirq::RuntimeConfiguration configuration) {
       nirq::register_all_dialects(registry);
       context = make_unique<mlir::MLIRContext>(registry);
       context->loadAllAvailableDialects();
       module = lower_source_to_mlir(kConfigurationProbe, *context, diagnostics,
-                                    debug_enabled);
+                                    configuration);
     }
   };
 
-  ConfigurationFixture production(/*debug_enabled=*/false);
+  ConfigurationFixture production(nirq::RuntimeConfiguration::Production);
   ASSERT_TRUE(static_cast<bool>(production.module));
   ASSERT_TRUE(production.diagnostics.error_count() == 0);
   ASSERT_TRUE(module_calls_symbol(*production.module,
@@ -640,7 +643,7 @@ TEST(MlirPipelineTest, EntryPointNamesTheRuntimeConfiguration) {
   ASSERT_FALSE(module_calls_symbol(*production.module,
                                    "nrq_runtime_abi_v1_development"));
 
-  ConfigurationFixture development(/*debug_enabled=*/true);
+  ConfigurationFixture development(nirq::RuntimeConfiguration::Development);
   ASSERT_TRUE(static_cast<bool>(development.module));
   ASSERT_TRUE(development.diagnostics.error_count() == 0);
   ASSERT_TRUE(module_calls_symbol(*development.module,

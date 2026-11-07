@@ -58,8 +58,15 @@ function(nirqoba_add_runtime_target target)
     PRIVATE
       "${CMAKE_CURRENT_SOURCE_DIR}/src"
   )
+  # PUBLIC, so the definition travels with the library: anything that links this
+  # target sees the same configuration the target's own objects were compiled
+  # with, and there is no second place to keep in step. The production target
+  # states 0 rather than relying on the macro being absent, so a consumer that
+  # includes a runtime header always gets an answer.
   if(ARG_DEBUG)
-    target_compile_definitions(${target} PRIVATE NRQ_RUNTIME_DEBUG_ENABLED=1)
+    target_compile_definitions(${target} PUBLIC NRQ_RUNTIME_DEBUG_ENABLED=1)
+  else()
+    target_compile_definitions(${target} PUBLIC NRQ_RUNTIME_DEBUG_ENABLED=0)
   endif()
   nirqoba_set_target_warnings(${target})
   target_link_libraries(${target} PUBLIC ws2_32 dxgi)

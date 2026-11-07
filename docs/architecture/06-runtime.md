@@ -199,6 +199,10 @@ development build can be slower; it must never collect differently, and a
 production build must never lose a check. A measurement that changed behaviour
 would describe a collector that is not the one being shipped.
 
+The classification of every diagnostic mechanism in the runtime, and the rule
+that decides which side of this split a new one belongs to, is in
+`07-diagnostics-classification.md`.
+
 ### 4.1 What the development library adds
 
 - **Event stream.** Allocation, cycle begin/end, promotion, sweep chunk and root
@@ -258,3 +262,24 @@ The failure modes are deterministic and their messages are actionable: a
 development object linked against the production library reports
 `undefined symbol: nrq_runtime_abi_v1_development`, and a link that names both
 libraries reports `duplicate symbol: nrq_runtime_abi_configuration_marker`.
+### 4.4 One value decides the configuration
+
+The three facts a configuration consists of - what the lowering emits, which ABI
+symbol the module requires, and which library the link names - come from one
+place on each side of the boundary:
+
+- **Compiler.** `--debug-enabled` is read once and mapped to
+  `RuntimeConfiguration`; `runtime_abi_symbol()`, `runtime_library_name()` and
+  `runtime_library_target()` are derived from that value, and
+  `translate_tir_to_mlir` receives the value rather than a boolean per fact.
+  There is no call path on which a caller can pick two of the three.
+- **Runtime.** `NRQ_RUNTIME_DEBUG_ENABLED` is set `PUBLIC` on the runtime target,
+  so the definition travels with the library: anything linking
+  `nirqoba_runtime_debug` compiles against the same macro its objects were built
+  with, and the production target states `0` instead of relying on absence. The
+  macro derives `runtime_debug_enabled`, the ABI symbol name and the library file
+  name in one header.
+- **Tests.** `GcDebugTest.RuntimeAndCompilerAgreeOnTheConfiguration` compares the
+  compiler's enum-derived names against the runtime's macro-derived names in a
+  binary that links both, so a rename on one side fails a unit test instead of a
+  user's link.

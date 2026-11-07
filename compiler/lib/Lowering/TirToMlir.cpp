@@ -1432,12 +1432,12 @@ class FunctionTranslator {
                      mlir::MLIRContext* ctx,
                      DiagnosticEngine& diag,
                      bool fast_math,
-                     bool debug_enabled,
+                     RuntimeConfiguration configuration,
                      bool emit_abi_reference,
                      bool needs_mutator_region)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
         builder_(builder), ctx_(ctx), diag_(diag), fast_math_(fast_math),
-        debug_enabled_(debug_enabled),
+        configuration_(configuration),
         emit_abi_reference_(emit_abi_reference),
         stack_allocations_(
             analyze_stack_allocations(tir_fn, borrowed_summary)),
@@ -1464,9 +1464,7 @@ class FunctionTranslator {
     // compiled to. The call is never reached from user code and does nothing.
     if (emit_abi_reference_) {
       auto abi_check = ensure_runtime_fn(
-          module_, builder_,
-          debug_enabled_ ? "nrq_runtime_abi_v1_development"
-                         : "nrq_runtime_abi_v1_production",
+          module_, builder_, runtime_abi_symbol(configuration_),
           mlir::LLVM::LLVMVoidType::get(ctx_), {});
       builder_.create<mlir::LLVM::CallOp>(mlir::UnknownLoc::get(ctx_), abi_check,
                                          mlir::ValueRange{});
@@ -3015,7 +3013,7 @@ class FunctionTranslator {
               loc, fn, mlir::ValueRange{root_slot, count, size, offsets_pointer,
                                         ref_count}).getResult();
           set(op.result, result);
-          if (debug_enabled_ && op.location.is_valid()) {
+          if (is_development(configuration_) && op.location.is_valid()) {
             const uint64_t site = gc_site_id(op.location);
             emit_gc_site_declaration(site, op.location, loc);
             emit_gc_allocation_tag(result, site, loc);
@@ -4061,7 +4059,7 @@ class FunctionTranslator {
   // Development configuration: emit the observable hooks the debug runtime
   // provides. Off in every production build, which therefore has no hooks to
   // strip and no calls to them.
-  bool debug_enabled_ = false;
+  RuntimeConfiguration configuration_ = RuntimeConfiguration::Production;
   // True for the one function that is the program's C entry point.
   bool emit_abi_reference_ = false;
   std::unordered_map<int, StackAllocationLayout> stack_allocations_;
@@ -4098,7 +4096,8 @@ class FunctionTranslator {
 static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
                                const tir::Function& user_main,
                                llvm::StringRef user_symbol,
-                               bool callee_needs_region, bool debug_enabled,
+                               bool callee_needs_region,
+                               RuntimeConfiguration configuration,
                                DiagnosticEngine& diagnostics) {
   mlir::MLIRContext* ctx = module.getContext();
   mlir::Location loc = mlir::UnknownLoc::get(ctx);
@@ -4127,9 +4126,7 @@ static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
   // library is an unresolved external instead of a program that observes the
   // heap differently from the way it was compiled to.
   auto abi_check = ensure_runtime_fn(
-      module, builder,
-      debug_enabled ? "nrq_runtime_abi_v1_development"
-                    : "nrq_runtime_abi_v1_production",
+      module, builder, runtime_abi_symbol(configuration),
       mlir::LLVM::LLVMVoidType::get(ctx), {});
   builder.create<mlir::LLVM::CallOp>(loc, abi_check, mlir::ValueRange{});
 
@@ -4195,7 +4192,7 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     mlir::MLIRContext& context,
     DiagnosticEngine& diagnostics,
     bool fast_math,
-    bool debug_enabled) {
+    RuntimeConfiguration configuration) {
 
   mlir::OpBuilder builder(&context);
   mlir::OwningOpRef<mlir::ModuleOp> module =
@@ -4314,7 +4311,7 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
 
     FunctionTranslator translator(
         *module, *tir_fn, borrowed_summary, collections, func_op, builder,
-        &context, diagnostics, fast_math, debug_enabled,
+        &context, diagnostics, fast_math, configuration,
         symbol == "main", mutator_regions.count(tir_fn->name()) != 0);
     if (!translator.translate()) return nullptr;
 
@@ -4323,7 +4320,7 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     if (is_entry_with_args &&
         !emit_entry_wrapper(*module, builder, *tir_fn, symbol,
                             mutator_regions.count(tir_fn->name()) != 0,
-                            debug_enabled, diagnostics)) {
+                            configuration, diagnostics)) {
       return nullptr;
     }
   }

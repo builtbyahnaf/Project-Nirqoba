@@ -11,6 +11,7 @@
 #include "mlir/IR/OwningOpRef.h"
 
 #include "nirqoba/Diagnostics/DiagnosticEngine.h"
+#include "nirqoba/Driver/RuntimeConfiguration.h"
 #include "nirqoba/TIR/IR.h"
 
 namespace nirq {
@@ -50,15 +51,15 @@ void reset_gc_root_analysis_stats();
 // `fast_math` opts floating-point arithmetic into reassociation and FMA
 // contraction; the default leaves IEEE semantics strict.
 //
-// `debug_enabled` selects the development configuration: the translator emits
-// observable hooks (allocation-site tags) that only the debug runtime provides,
-// and the driver links that runtime instead of the production one. The default
-// emits no hook at all, so a production build has nothing to strip.
+// `configuration` selects what the module is built for: in the development
+// configuration the translator emits the observation hooks only the development
+// runtime provides, and it names that runtime's ABI symbol from the entry point.
+// The default emits no hook at all, so a production build has nothing to strip.
 mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     const tir::Module& tir_module,
     mlir::MLIRContext& context,
     DiagnosticEngine& diagnostics,
     bool fast_math = false,
-    bool debug_enabled = false);
+    RuntimeConfiguration configuration = RuntimeConfiguration::Production);
 
 }  // namespace nirq
