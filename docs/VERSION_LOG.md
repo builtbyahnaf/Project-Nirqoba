@@ -6,11 +6,23 @@
 
 ---
 
-## Version 0.217-beta (dev)
+## Version 0.223-beta (dev)
+
+### Summary of Changes (since `0.217-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.217-beta release.*
+
+---
+
+## Version 0.217-beta
 
 ### Summary of Changes (since `0.212-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.212-beta release.*
+#### 1. Lock Order and Collection Progress (PO-27 §2.5)
+- **Barrier wait and the caller's own region:** waiting for regions to drain skipped the calling thread's own entry, which could otherwise wait on a region belonging to the thread doing the waiting.
+- **Heap lock under a barrier wait:** the heap lock records whether the calling thread holds it, and the barrier wait reports a lock-order violation instead of deadlocking; every acquisition goes through the instrumented guard.
+- **Progress regression test:** a collector runs against a mutator on the rooted allocation path, where a barrier region takes the heap lock, so an inversion stops both threads instead of passing quietly.
+- **Documented audit:** the runtime document states the lock order and where each collection-progress requirement is enforced.
 
 ---
 
