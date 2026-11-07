@@ -1723,3 +1723,140 @@ TEST(GcTest, TransferPinFallbackSettlesBufferedDeltasFirst) {
   ASSERT_EQ(nrq_gc_pin_violations() - baseline_violations, uint64_t{0});
   nrq_gc_mutator_leave();
 }
+
+TEST(GcTest, ConcurrentCollectionRequestsDoNotDeadlock) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  nrq_gc_mutator_enter();
+
+  const auto start_time = std::chrono::steady_clock::now();
+  std::atomic<bool> timed_out{false};
+
+  std::vector<std::thread> workers;
+  for (int t = 0; t < 3; ++t) {
+    workers.emplace_back([&] {
+      nrq_gc_mutator_enter();
+      for (int i = 0; i < 20; ++i) {
+        void* p = nrq_gc_allocate(64, nullptr);
+        (void)p;
+        nrq_gc_collect();
+        if (std::chrono::steady_clock::now() - start_time > std::chrono::seconds(10)) {
+          timed_out.store(true, std::memory_order_relaxed);
+          break;
+        }
+      }
+      nrq_gc_mutator_leave();
+    });
+  }
+
+  for (int i = 0; i < 20; ++i) {
+    void* p = nrq_gc_allocate(64, nullptr);
+    (void)p;
+    nrq_gc_collect();
+    if (std::chrono::steady_clock::now() - start_time > std::chrono::seconds(10)) {
+      timed_out.store(true, std::memory_order_relaxed);
+      break;
+    }
+  }
+
+  nrq_gc_mutator_leave();
+
+  for (auto& w : workers) {
+    w.join();
+  }
+
+  const auto elapsed = std::chrono::steady_clock::now() - start_time;
+  ASSERT_FALSE(timed_out.load());
+  ASSERT_TRUE(elapsed <= std::chrono::seconds(10));
+
+  nrq_gc_collect();
+}
+
+TEST(GcTest, MutatorExitDuringCollectionDoesNotDeadlock) {
+  nrq_gc_enable();
+  nrq_gc_set_threshold(1024);
+  nrq_gc_collect();
+
+  std::atomic<int> completed{0};
+  const auto start_time = std::chrono::steady_clock::now();
+
+  std::vector<std::thread> workers;
+  for (int t = 0; t < 4; ++t) {
+    workers.emplace_back([&] {
+      nrq_gc_mutator_enter();
+      const auto thread_start = std::chrono::steady_clock::now();
+      while (std::chrono::steady_clock::now() - thread_start < std::chrono::milliseconds(200)) {
+        void* p = nrq_gc_allocate(128, nullptr);
+        (void)p;
+      }
+      nrq_gc_mutator_leave();
+      completed.fetch_add(1, std::memory_order_release);
+    });
+  }
+
+  while (completed.load(std::memory_order_acquire) < 4) {
+    nrq_gc_collect();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    if (std::chrono::steady_clock::now() - start_time > std::chrono::seconds(10)) {
+      break;
+    }
+  }
+
+  for (auto& w : workers) {
+    w.join();
+  }
+
+  const auto elapsed = std::chrono::steady_clock::now() - start_time;
+  ASSERT_EQ(completed.load(), 4);
+  ASSERT_TRUE(elapsed <= std::chrono::seconds(10));
+
+  nrq_gc_disable();
+  nrq_gc_collect();
+}
+
+TEST(GcTest, RepeatedCollectionUnderSustainedAllocation) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  nrq_gc_mutator_enter();
+
+  const uint64_t initial_live = nrq_gc_get_live_objects();
+  std::atomic<bool> stop_allocating{false};
+  std::atomic<int> finished_count{0};
+  const auto start_time = std::chrono::steady_clock::now();
+
+  std::vector<std::thread> workers;
+  for (int t = 0; t < 4; ++t) {
+    workers.emplace_back([&] {
+      nrq_gc_mutator_enter();
+      while (!stop_allocating.load(std::memory_order_relaxed)) {
+        void* p = nrq_gc_allocate(64, nullptr);
+        (void)p;
+        nrq_gc_safepoint();
+        std::this_thread::yield();
+      }
+      nrq_gc_mutator_leave();
+      finished_count.fetch_add(1, std::memory_order_release);
+    });
+  }
+
+  for (int i = 0; i < 50; ++i) {
+    nrq_gc_collect();
+    if (std::chrono::steady_clock::now() - start_time > std::chrono::seconds(15)) {
+      break;
+    }
+  }
+
+  stop_allocating.store(true, std::memory_order_relaxed);
+  nrq_gc_mutator_leave();
+
+  for (auto& w : workers) {
+    w.join();
+  }
+
+  const auto elapsed = std::chrono::steady_clock::now() - start_time;
+  ASSERT_EQ(finished_count.load(), 4);
+  ASSERT_TRUE(elapsed <= std::chrono::seconds(15));
+
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), initial_live);
+}

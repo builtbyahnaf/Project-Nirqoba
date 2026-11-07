@@ -14,6 +14,7 @@ add_executable(nirqoba_unit_tests
   unit/sema_test.cpp
   unit/diagnostics_test.cpp
   unit/gc_test.cpp
+  unit/gc_slot_index_test.cpp
   unit/allocator_test.cpp
   unit/file_test.cpp
   unit/mapping_test.cpp
