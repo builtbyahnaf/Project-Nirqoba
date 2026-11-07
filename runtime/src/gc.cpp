@@ -14,6 +14,8 @@
 #include "nirqoba/runtime/cache_line.h"
 #include "nirqoba/runtime/fatal.h"
 
+#include "slot_index.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -30,6 +32,10 @@
 #include <vector>
 
 using namespace std;
+
+// The slot index lives in a header so the unit tests can exercise the exact
+// table implementation instead of approximating it through the public GC API.
+using nirq::gc::detail::SlotIndex;
 
 namespace {
 
@@ -672,130 +678,8 @@ struct SlotState {
 // Thread-local index of active root slots. It answers the three questions the
 // shadow stack needs -- how many registrations a slot currently has, whether a
 // repeated registration agrees with the first one, and whether the slot is a
-// plain pointer root -- without allocating a hash node per slot. Entries live in
-// one power-of-two table with linear probing, so a registration or a frame-end
-// removal touches a single cache line, and the table is only ever used by the
-// thread that owns the shadow stack.
-class SlotIndex {
- public:
-  SlotState* find(void* slot) {
-    if (entries_.empty() || !slot) return nullptr;
-    const size_t mask = entries_.size() - 1;
-    size_t index = hash(slot) & mask;
-    for (size_t probes = 0; probes < entries_.size(); ++probes) {
-      Entry& entry = entries_[index];
-      if (entry.slot == nullptr) return nullptr;
-      if (entry.slot == slot) return &entry.state;
-      index = (index + 1) & mask;
-    }
-    return nullptr;
-  }
-
-  // Returns the state for `slot`, default constructed when absent. The caller
-  // fills it in; the state is never reallocated afterwards.
-  SlotState* insert(void* slot) {
-    if (!slot) return nullptr;
-    if (entries_.empty() || size_ + tombstones_ + 1 >=
-            entries_.size() - entries_.size() / 4) {
-      if (!rehash(entries_.empty() ? 16 : entries_.size() * 2)) return nullptr;
-    }
-    const size_t mask = entries_.size() - 1;
-    size_t index = hash(slot) & mask;
-    size_t tombstone = entries_.size();
-    for (size_t probes = 0; probes < entries_.size(); ++probes) {
-      Entry& entry = entries_[index];
-      if (entry.slot == slot) return &entry.state;
-      if (entry.slot == kTombstone && tombstone == entries_.size())
-        tombstone = index;
-      if (entry.slot == nullptr) {
-        if (tombstone != entries_.size()) {
-          index = tombstone;
-          --tombstones_;
-        }
-        entries_[index] = Entry{};
-        entries_[index].slot = slot;
-        ++size_;
-        return &entries_[index].state;
-      }
-      index = (index + 1) & mask;
-    }
-    if (tombstone != entries_.size()) {
-      entries_[tombstone] = Entry{};
-      entries_[tombstone].slot = slot;
-      --tombstones_;
-      ++size_;
-      return &entries_[tombstone].state;
-    }
-    return nullptr;
-  }
-
-  // Drop `count` registrations of `slot`, tombstoning the entry only when the
-  // last one goes away. One probe chain settles the removal instead of a lookup
-  // followed by a separate erase probe.
-  bool release(void* slot, uint32_t count) {
-    if (!slot || entries_.empty()) return false;
-    const size_t mask = entries_.size() - 1;
-    size_t index = hash(slot) & mask;
-    for (size_t probes = 0; probes < entries_.size(); ++probes) {
-      Entry& entry = entries_[index];
-      if (entry.slot == nullptr) return false;
-      if (entry.slot == slot) {
-        if (count >= entry.state.count) {
-          entry = Entry{};
-          entry.slot = kTombstone();
-          --size_;
-          ++tombstones_;
-        } else {
-          entry.state.count -= count;
-        }
-        return true;
-      }
-      index = (index + 1) & mask;
-    }
-    return false;
-  }
-
-  size_t size() const { return size_; }
-
- private:
-  struct Entry {
-    void* slot = nullptr;
-    SlotState state;
-  };
-  static void* kTombstone() { return reinterpret_cast<void*>(uintptr_t{1}); }
-
-  static size_t hash(void* slot) {
-    uint64_t value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(slot));
-    value ^= value >> 30;
-    value *= UINT64_C(0xbf58476d1ce4e5b9);
-    value ^= value >> 27;
-    value *= UINT64_C(0x94d049bb133111eb);
-    value ^= value >> 31;
-    return static_cast<size_t>(value);
-  }
-
-  bool rehash(size_t capacity) {
-    try {
-      std::vector<Entry> replacement(capacity);
-      for (Entry& entry : entries_) {
-        if (!entry.slot || entry.slot == kTombstone()) continue;
-        const size_t mask = capacity - 1;
-        size_t index = hash(entry.slot) & mask;
-        while (replacement[index].slot != nullptr) index = (index + 1) & mask;
-        replacement[index] = std::move(entry);
-      }
-      entries_.swap(replacement);
-      tombstones_ = 0;
-      return true;
-    } catch (...) {
-      return false;
-    }
-  }
-
-  std::vector<Entry> entries_;
-  size_t size_ = 0;
-  size_t tombstones_ = 0;
-};
+// plain pointer root -- without allocating a hash node per slot. See
+// slot_index.h for the table's rehash policy and the PO-27 tombstone fix.
 
 struct ShadowStack {
   std::mutex mutex;
@@ -810,7 +694,7 @@ struct ShadowStack {
   // never read by the collector. It replaces both the old full-root scan used
   // for duplicate-layout validation and the pointer-root set that was rebuilt
   // on every frame end.
-  SlotIndex slot_states;
+  SlotIndex<SlotState> slot_states;
 };
 std::vector<ShadowStack*> shadow_stacks;
 thread_local ShadowStack* thread_shadow_stack = nullptr;

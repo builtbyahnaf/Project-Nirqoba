@@ -35,11 +35,17 @@ See `reports/regression/po-27-concurrency-analysis.md` for the full analysis.
 
 ## Unit tests (C++)
 
-`tests/unit/gc_slot_index_test.cpp` contains 7 white-box regression tests
+`tests/unit/gc_slot_index_test.cpp` contains 7 API-level regression tests
 registered in the `nirqoba_unit_tests` executable under the `GcSlotIndexTest`
 suite. They exercise the same failure modes against the public GC API and
 include a wall-clock timeout assertion so a regressed build fails quickly
 instead of hanging the test suite.
+
+`tests/unit/slot_index_test.cpp` contains 10 white-box tests under the
+`SlotIndexTest` suite. They include `runtime/src/slot_index.h` directly and
+assert capacity, live/tombstone counts, rehash/compaction/growth counts and
+maximum probe length for the exact table implementation, including
+collision-heavy and full-table termination cases.
 
 ## Usage
 
