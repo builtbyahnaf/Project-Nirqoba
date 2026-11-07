@@ -33,7 +33,9 @@ set(NIRQOBA_RUNTIME_SOURCES
   src/math.cpp
   src/file_windows.cpp
   src/sync_windows.cpp
-  src/socket_windows.cpp
+  # src/socket_windows.cpp is deliberately absent: the socket runtime belongs to
+  # a later phase and is unlinked until that phase starts. The source and its
+  # header stay in the tree; nothing in the runtime references them.
   src/gc.cpp
   src/gc_debug.cpp
   src/gc_debug_internal.h
@@ -69,7 +71,9 @@ function(nirqoba_add_runtime_target target)
     target_compile_definitions(${target} PUBLIC NRQ_RUNTIME_DEBUG_ENABLED=0)
   endif()
   nirqoba_set_target_warnings(${target})
-  target_link_libraries(${target} PUBLIC ws2_32 dxgi)
+  # ws2_32 is linked with the socket runtime, which is not built yet; keeping it
+  # here would suggest the library offers sockets when it does not.
+  target_link_libraries(${target} PUBLIC dxgi)
   set_target_properties(${target} PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
   )

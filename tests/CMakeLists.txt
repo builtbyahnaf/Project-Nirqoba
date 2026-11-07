@@ -21,7 +21,9 @@ add_executable(nirqoba_unit_tests
   unit/file_test.cpp
   unit/mapping_test.cpp
   unit/sync_test.cpp
-  unit/socket_test.cpp
+  # unit/socket_test.cpp is excluded while the socket runtime is unlinked: the
+  # test links the socket entry points, so it can only build once that runtime
+  # is part of the build again. The file stays in the tree.
   unit/tir_test.cpp
   unit/nrq_dialect_test.cpp
   unit/mlir_pipeline_test.cpp
