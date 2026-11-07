@@ -1613,6 +1613,45 @@ TEST(GcTest, CollectorAndRootedAllocatorMakeProgressTogether) {
   nrq_gc_set_threshold(1024 * 1024);
 }
 
+TEST(GcTest, BufferedPinsAndTlabObjectsSurviveCollectionBeforeRootEnumeration) {
+  nrq_gc_enable();
+  nrq_gc_collect();
+  nrq_gc_mutator_enter();
+
+  // A pin recorded in the thread's delta buffer and an object still sitting in its
+  // unpublished TLAB batch are both invisible to the collector until they are folded
+  // in. Both have to be settled before the cycle enumerates pinned roots, or the
+  // snapshot misses them and frees objects a mutator still holds.
+  std::array<void*, 3> pinned{};
+  for (void*& entry : pinned) {
+    entry = nrq_gc_allocate(sizeof(Node), trace_node);
+    ASSERT_NE(entry, nullptr);
+    ASSERT_TRUE(nrq_gc_pin_transfer(entry) == entry);
+  }
+  Node* pending = nullptr;
+  nrq_gc_root_register(reinterpret_cast<void**>(&pending));
+  pending = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(pending, nullptr);
+  nrq_gc_root_store(reinterpret_cast<void**>(&pending), pending);
+
+  nrq_gc_collect();
+
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{4});
+  ASSERT_EQ(nrq_gc_pin_count(), uint64_t{3});
+  for (void* entry : pinned) {
+    ASSERT_NE(entry, nullptr);
+    nrq_gc_unpin(entry);
+  }
+  nrq_gc_root_unregister(reinterpret_cast<void**>(&pending));
+  pending = nullptr;
+  // Nothing holds any of them now: the pins are released and the TLAB batch was
+  // published by the previous cycle.
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+  ASSERT_EQ(nrq_gc_pin_count(), uint64_t{0});
+  nrq_gc_mutator_leave();
+}
+
 TEST(GcTest, TransferPinFallbackSettlesBufferedDeltasFirst) {
   nrq_gc_enable();
   nrq_gc_collect();
