@@ -172,6 +172,54 @@ claimed on the strength of a measurement. If one is authorized, the honest
 comparison is the two rejected variants above against this code, not a variant
 against itself.
 
+### 3.2 `diagnostics_reading_roots()`: an audit of its five call sites
+
+The function answers one question: may some thread walk a shadow stack right now
+outside the collector's own enumeration? Fast-path root pushes write the stack
+without `stack.mutex`, which is safe against the collector (it parks mutators and
+takes the mutex) but not against a reader that is running concurrently with a
+mutator that is not being parked. The flag is how a reader announces itself, and
+the five call sites divide cleanly into three writers and two readers.
+
+Writers - mutator side, each taking `stack.mutex` only when a reader could be
+present:
+
+| Site | Operation | Why the mutex is conditional |
+|---|---|---|
+| `nrq_gc_root_register` fast path | push one root | A reader walking the vector could otherwise see it mid-growth. Already inside `begin_fast_barrier()`/`end_fast_barrier()`, so the collector cannot snapshot between the check and the push |
+| `nrq_gc_root_register_frame` fast path | reserve and push a whole frame | Same hazard at batch granularity; the mutex covers the reserve and every push, so no reader observes a half-installed frame |
+| `nrq_gc_root_frame_end` fast path | shrink the root vector | `resize` is not atomic; a reader could observe a truncated vector while it is being rewritten |
+
+Readers - each sets or observes the flag, drains the lock-free regions that are
+still in flight, and only then walks:
+
+| Site | Role |
+|---|---|
+| `nrq_gc_get_ref_count` | Returns `-1` immediately when no reference counting is active. Otherwise it drains in-flight fast-barrier regions (`wait_for_fast_barriers()`, skipping its own thread), takes `gc_mutex`, publishes its own TLab, then counts references over every object and every root |
+| `nrq_gc_debug_snapshot_roots` | Development configuration only. It *sets* the flag around its walk, then restores the previous value, so a snapshot neither permanently enables reference diagnostics nor interrupts one that a program started |
+
+Classification: **accuracy-critical, not telemetry.**
+
+- The value `nrq_gc_get_ref_count` returns is published to the program by
+  `memory.get_ref_count`, so the read has to be correct in the same sense
+  `gc.get_statistics()` has to be exact.
+- The flag is turned on by `nrq_gc_ref_count_start`, which exists for the
+  reference-count feature rather than for observation; the debug snapshot sets it
+  only for the duration of its own walk and restores the previous value. A
+  production program that asks for a reference count gets the same handshake a
+  development program does.
+- The debug root snapshot is a *user* of the mechanism, not its owner. It would
+  be deleted in the production configuration regardless; deleting it does not
+  remove a single call site, because the three mutator sites and
+  `nrq_gc_get_ref_count` remain. That is the correct direction of dependency:
+  instrumentation leans on correctness machinery, never the reverse.
+- It does not touch parking, SBAT/SBOT, safepoint placement, or root-frame
+  discipline. Its only effect on a collection is that mutators take
+  `stack.mutex` on a push while a reader is active - a lock the collector's own
+  enumeration takes anyway.
+- Cost when no program asks for reference counts: one acquire load of a
+  read-mostly word in each of the three mutator fast paths, on x64 a plain load.
+
 ## 4. Pure observability (debug-only, development library only)
 
 These answer a developer's question about the run. No program can read them and
