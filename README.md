@@ -238,6 +238,10 @@ nirqoba build main.nrqba -O2 --target-profile=explicit --target x86_64-unknown-l
 # Enable fast-math for floating-point loop reductions
 nirqoba build main.nrqba -O2 --fast-math -o program.exe
 
+# Build the development configuration: link the debug runtime, which records GC
+# events, allocation-site tags and root snapshots for development tooling
+nirqoba build main.nrqba -O2 --debug-enabled -o program.exe
+
 # Tune whole-program interprocedural optimization
 nirqoba build main.nrqba -O2 --ipo=standard -o program.exe    # default
 nirqoba build main.nrqba -O2 --ipo=aggressive -o program.exe  # deeper analysis

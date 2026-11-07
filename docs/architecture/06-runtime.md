@@ -179,3 +179,56 @@ The same poll is why a managed loop is not vectorized: a call the collector can 
 through cannot be assumed not to touch the heap, so vectorizing the body would
 either drop the poll or let the vectorizer assume a stable heap
 (`tests/integration/positive/opt_vectorize_managed_blocked`).
+## 4. Production and development configurations
+
+The runtime is built twice from one set of sources. `nrqoba_runtime` is the
+production library and the default every build links. `nrqoba_runtime_debug` is
+the development library, selected by `--debug-enabled` on `build`, `run` and
+`check`. The choice is made at link time: there is no runtime switch, no
+environment variable and no hot-path branch, so a production binary contains no
+counter, buffer or symbol for anything it does not use.
+
+**One rule decides what belongs to each configuration.** Anything that changes
+what a program observes as behaviour stays in production; only recording that no
+production code reads is compiled out. Collection semantics, the barrier
+handshake, root publication, promotion, reclamation policy and every fatal
+invariant check are therefore identical in both libraries, as are
+`gc.get_statistics()` and the query surface a program can call
+(`memory.get_ref_count`, `gc.page_reuse_count`, `memory.pin_count`, ...). A
+development build can be slower; it must never collect differently, and a
+production build must never lose a check. A measurement that changed behaviour
+would describe a collector that is not the one being shipped.
+
+### 4.1 What the development library adds
+
+- **Event stream.** Allocation, cycle begin/end, promotion, sweep chunk and root
+  frame open/close, each with a globally ordered sequence number and a monotonic
+  timestamp. Each thread appends to its own fixed ring; a consumer drains them
+  with `nrq_gc_debug_drain_events`. A ring that fills drops records and counts
+  them (`nrq_gc_debug_dropped_events`) instead of growing or blocking, so tracing
+  never turns a workload into a different workload.
+- **Allocation-site tags.** With the flag, each lowered managed allocation
+  declares its source position and tags the object it produced
+  (`nrq_gc_debug_declare_site`, `nrq_gc_debug_tag_allocation`). The site id is a
+  stable FNV-1a hash of file, line and column, so any development build maps a
+  trace back to the same source line without the compiler carrying a table. The
+  runtime keeps the mapping in a fixed, lock-free table, so re-entering an
+  allocation site costs one atomic load.
+- **Root snapshot.** `nrq_gc_debug_snapshot_roots` reports every registered root
+  slot, its layout and the object it currently holds. It reuses the
+  reference-diagnostic handshake: it publishes that a reader is active, drains
+  the lock-free root-publication regions, then walks the roots. It is a coherent
+  view, not a stop-the-world freeze.
+- **Slot-index probe counters.** Probe length and rehash/growth/compaction
+  counts are read only by tests and by this tooling, so the production library no
+  longer records them at all.
+
+### 4.2 Cost in the development build
+
+Nothing is recorded until a consumer sets a mask
+(`nrq_gc_debug_set_event_mask`), so an ordinary `--debug-enabled` run pays one
+relaxed load of a read-mostly word per candidate event. With a mask set, an
+allocation appends to its thread's ring without taking the collector lock, so
+the recording path cannot serialise mutators and cannot change the order in
+which they acquire the heap. Ring capacity, drop counters and the single
+consumer rule are documented in `runtime/include/nirqoba/runtime/gc_debug.h`.
