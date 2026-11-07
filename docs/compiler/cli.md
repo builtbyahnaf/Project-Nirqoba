@@ -129,7 +129,7 @@ int function main() {
 | `NRQ4005` | Error | Internal compiler error: unsupported type during MLIR lowering |
 | `NRQ5001` | Error | Cannot open source file |
 | `NRQ5002` | Error | Invalid command line argument |
-| `NRQ5003` | Error | Toolchain configuration (`toolchain.json`) not found |
+| `NRQ5003` | Error | A required toolchain component is missing (configuration or the compiler-rt profile runtime) |
 | `NRQ5004` | Error | Internal compiler or LLVM target error |
 | `NRQ5005` | Error | Linker failure or missing runtime library |
 | `NRQ5006` | Error | Generated program failed to launch |

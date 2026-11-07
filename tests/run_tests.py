@@ -109,6 +109,16 @@ def run_pgo_roundtrip(case_dir, source_file, compiler_exe, temp_dir, spec):
          "--out-dir", str(pgo_dir), "--pgo-generate"] + extra_args
     )
     if code != 0:
+        # --pgo-generate links LLVM's profile runtime, which the pinned
+        # LLVM/MLIR SDK does not ship (compiler-rt is a separate package).
+        # A toolchain without it cannot run this case at all, so it is
+        # skipped with the reason instead of reported as a compiler
+        # failure; every other failure of the same build still fails.
+        if "clang_rt.profile" in err:
+            return None, (
+                "skipped: this toolchain has no PGO profile runtime "
+                "(clang_rt.profile-x86_64.lib); install compiler-rt into "
+                "toolchain/<name>/lib/clang/<version>/lib/windows/ to run it")
         return False, f"Instrumented build failed with exit {code}.\nStderr: {err}\nStdout: {out}"
 
     executable = pgo_dir / f"{source_file.stem}.exe"
@@ -441,6 +451,7 @@ def main():
     print(f"Discovered {len(cases)} integration test cases.")
     passed = 0
     failed = 0
+    skipped = []
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
@@ -448,7 +459,10 @@ def main():
             rel_name = case.relative_to(integration_dir)
             print(f"Testing {rel_name}... ", end="", flush=True)
             ok, msg = run_case(case, compiler_exe, temp_path)
-            if ok:
+            if ok is None:
+                print("SKIP")
+                skipped.append((rel_name, msg))
+            elif ok:
                 print("PASS")
                 passed += 1
             else:
@@ -457,7 +471,10 @@ def main():
                 failed += 1
 
     print("=" * 60)
-    print(f"Total: {len(cases)} | Passed: {passed} | Failed: {failed}")
+    for rel_name, reason in skipped:
+        print(f"Skipped {rel_name}: {reason}")
+    print(f"Total: {len(cases)} | Passed: {passed} | "
+          f"Failed: {failed} | Skipped: {len(skipped)}")
     if failed > 0:
         sys.exit(1)
     sys.exit(0)

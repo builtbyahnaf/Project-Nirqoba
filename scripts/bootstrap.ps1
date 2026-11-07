@@ -262,6 +262,16 @@ if (-not $SkipToolchain) {
     Write-Ok "MLIR CMake package at $mlirDir"
     if (Test-Path $lldLink) { Write-Ok "lld-link at $lldLink" }
     else { Write-Host '  note: lld-link.exe not found; the driver falls back to MSVC link.exe.' -ForegroundColor Yellow }
+
+    # --pgo-generate links LLVM's profile runtime, which this SDK does not ship
+    # (compiler-rt is a separate package). Report it instead of failing: only
+    # instrumented builds need it, and the driver explains NRQ5003 on its own.
+    $profileGlob = Join-Path $RepoRoot 'toolchain/*/lib/clang/*/lib/windows/clang_rt.profile-x86_64.lib'
+    $profileRuntime = Get-ChildItem -Path $profileGlob -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $profileRuntime) {
+        Write-Host '  note: clang_rt.profile-x86_64.lib (compiler-rt) is absent; --pgo-generate is unavailable and the pgo round-trip tests report as skipped.' -ForegroundColor Yellow
+    }
+    else { Write-Ok "PGO profile runtime at $($profileRuntime.FullName)" }
 }
 
 # --- Record the resolved toolchain -------------------------------------------

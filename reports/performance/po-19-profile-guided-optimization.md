@@ -103,12 +103,15 @@ policy, validation, and linking.
 ### 2.4 Profile generation and runtime linking
 
 **What:** For `--pgo-generate`, the driver locates and links
-`clang_rt.profile-x86_64.lib` from the packaged clang-only toolchain. The LLVM
-SDK used for headers and libraries does not contain compiler-rt, so the search is
-limited to the expected
-`<toolchain>/<name>/lib/clang/<version>/lib/windows/` layout. If the runtime is
+`clang_rt.profile-x86_64.lib` from a clang toolchain placed beside the LLVM/MLIR
+SDK. The pinned SDK used for headers and libraries does not contain
+compiler-rt, and `scripts/bootstrap.ps1` does not install it, so the search is
+limited to the expected `<toolchain>/<name>/lib/clang/<version>/lib/windows/`
+layout below the repository's `toolchain/` directory. If the runtime is
 missing, the build fails with `NRQ5003` rather than producing an executable that
-cannot write a profile.
+cannot write a profile, and the `pgo_roundtrip` integration cases report
+themselves as skipped instead of failed: the prerequisite is a toolchain
+component, not a compiler behaviour these cases test.
 
 Instrumented executables write `default.profraw` in their current working
 directory when they exit normally. The compiler does not post-process that file;
