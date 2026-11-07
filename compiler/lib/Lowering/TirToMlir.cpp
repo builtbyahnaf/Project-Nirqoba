@@ -1253,19 +1253,26 @@ static GcRootPlan analyze_gc_root_plan(const tir::Function& function,
 
   for (const auto& entry : slot_addresses) stats.slot_addresses += entry.second.size();
 
-  // A value loaded out of a slot keeps the object alive only while its source
-  // slot still holds the reference, so the slot has to stay registered as long
-  // as any value loaded from it is live at a collection point.
+  // A value loaded out of a slot keeps the object alive only while its source slot
+  // still holds the reference, so the slot has to stay registered as long as any
+  // value loaded from it is live at a collection point. Loads are recorded against
+  // their slot in one pass; scanning the function once per slot is what made this
+  // quadratic in the size of the function.
+  std::unordered_map<int, std::unordered_set<int>> loads_of_slot;
+  stats.per_slot_scans += operations.size();
+  for (const tir::Op& op : operations) {
+    if (op.kind != tir::OpKind::Load || !op.result.is_valid()) continue;
+    const auto source = slot_of_address.find(op.lhs.id);
+    if (source == slot_of_address.end()) continue;
+    loads_of_slot[source->second].insert(op.result.id);
+    ++stats.loads;
+  }
+
   for (auto& entry : slot_addresses) {
     std::unordered_set<int> candidates = entry.second;
-    for (const tir::Op& op : operations) {
-      ++stats.per_slot_scans;
-      if (op.kind != tir::OpKind::Load || !op.result.is_valid()) continue;
-      if (entry.second.count(op.lhs.id) != 0) {
-        candidates.insert(op.result.id);
-        ++stats.loads;
-      }
-    }
+    const auto loads = loads_of_slot.find(entry.first);
+    if (loads != loads_of_slot.end())
+      candidates.insert(loads->second.begin(), loads->second.end());
     bool rooted = false;
     for (int candidate : candidates) {
       if (!live_at_any_collection_point(candidate)) continue;
