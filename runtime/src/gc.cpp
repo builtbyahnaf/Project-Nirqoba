@@ -704,6 +704,26 @@ struct SlotState {
 // plain pointer root -- without allocating a hash node per slot. See
 // slot_index.h for the table's rehash policy and the PO-27 tombstone fix.
 
+// Direct-mapped record of the slots this thread has already proven to be pointer
+// roots. A rooted allocation validates its slot on every call; the hash index
+// answers that in one probe, and this answers it in one compare for the slots a
+// construction loop reuses. An entry is retired together with the registration
+// it came from, so a hit can never outlive the slot state it describes.
+struct PointerRootCache {
+  static constexpr size_t kCapacity = 8;
+  void* slots[kCapacity]{};
+
+  static size_t index_of(void* slot) {
+    return (reinterpret_cast<uintptr_t>(slot) >> 4) & (kCapacity - 1);
+  }
+  bool contains(void* slot) const { return slots[index_of(slot)] == slot; }
+  void insert(void* slot) { slots[index_of(slot)] = slot; }
+  void forget(void* slot) {
+    void*& entry = slots[index_of(slot)];
+    if (entry == slot) entry = nullptr;
+  }
+};
+
 struct ShadowStack {
   std::mutex mutex;
   std::vector<ShadowRoot> roots;
@@ -718,6 +738,7 @@ struct ShadowStack {
   // for duplicate-layout validation and the pointer-root set that was rebuilt
   // on every frame end.
   SlotIndex<SlotState> slot_states;
+  PointerRootCache pointer_roots;
 };
 std::vector<ShadowStack*> shadow_stacks;
 thread_local ShadowStack* thread_shadow_stack = nullptr;
@@ -2330,20 +2351,27 @@ void add_slot_state(ShadowStack& stack, void* slot, const RootInfo& info,
     state->layout.assign(info.reference_offsets.begin(),
                          info.reference_offsets.size());
     state->pointer_root = pointer_root;
-    return;
+  } else {
+    if (state->object_size != info.object_size ||
+        !state->layout.matches(info.reference_offsets.begin(),
+                               info.reference_offsets.size()) ||
+        state->pointer_root != pointer_root)
+      nrq_runtime_fatal(
+          "GC root slot was registered with an incompatible layout");
+    ++state->count;
   }
-  if (state->object_size != info.object_size ||
-      !state->layout.matches(info.reference_offsets.begin(),
-                             info.reference_offsets.size()) ||
-      state->pointer_root != pointer_root)
-    nrq_runtime_fatal(
-        "GC root slot was registered with an incompatible layout");
-  ++state->count;
+  // A slot that is a pointer root stays one while it is registered, so the
+  // allocation path can answer its check from here instead of the index.
+  if (pointer_root) stack.pointer_roots.insert(slot);
 }
 
 void remove_slot_state(ShadowStack& stack, void* slot, uint32_t count = 1) {
-  if (!stack.slot_states.release(slot, count))
+  bool fully_released = false;
+  if (!stack.slot_states.release(slot, count, &fully_released))
     nrq_runtime_fatal("GC root slot registration bookkeeping is inconsistent");
+  // The last registration of a slot takes its pointer-root memo with it, so a
+  // later registration of the same address with another layout is re-validated.
+  if (fully_released) stack.pointer_roots.forget(slot);
 }
 
 // Frame ends usually release a handful of roots, and a frame can name the same
@@ -2386,7 +2414,9 @@ void remove_frame_slots(ShadowStack& stack, size_t first, size_t end) {
 }
 
 bool shadow_has_pointer_root(ShadowStack& stack, void* slot) {
-  // O(1) lookup in the per-thread slot index. Never read by the collector.
+  // The memo answers for the slots a loop reuses; anything else falls back to
+  // one probe in the per-thread index. Neither is ever read by the collector.
+  if (stack.pointer_roots.contains(slot)) return true;
   const SlotState* found = stack.slot_states.find(slot);
   return found != nullptr && found->pointer_root;
 }
