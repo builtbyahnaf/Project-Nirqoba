@@ -10,7 +10,7 @@ The Phase 1 runtime interface is defined in `runtime/include/nirqoba/runtime/`:
 | `nrq_runtime_init` | `void()` | Initialises runtime state; GC root boundary in Phase 6.5 |
 | `nrq_runtime_shutdown` | `void()` | Flushes stdout buffers; GC cleanup boundary in Phase 6.5 |
 | `nrq_runtime_fatal` | `void(const char* message)` | Writes error message to stderr and exits with code 70 |
-| `nrq_runtime_version` | `const char*()` | Returns runtime version string (`0.228-beta-phase6`) |
+| `nrq_runtime_version` | `const char*()` | Returns runtime version string (`0.231-beta-phase6`) |
 | `nrq_gc_root_register_frame` | `void(void* const* slots, size_t count, const size_t* descriptor)` | Publishes an activation's ordinary roots in one call from a read-only frame descriptor |
 
 ## 2. Direct Win32 I/O

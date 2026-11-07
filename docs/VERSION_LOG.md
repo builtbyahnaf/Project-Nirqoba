@@ -6,11 +6,21 @@
 
 ---
 
-## Version 0.228-beta (dev)
+## Version 0.231-beta (dev)
+
+### Summary of Changes (since `0.228-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.228-beta release.*
+
+---
+
+## Version 0.228-beta
 
 ### Summary of Changes (since `0.223-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.223-beta release.*
+#### 1. SlotIndex Refinement and Stress Test Fixes
+- **SlotIndex Feature Fix:** Modified the SlotIndex implementation to correctly track and index stack slots during root analysis.
+- **Stress Test 2 Script:** Edited the stress test 2 script for improved benchmarking stability.
 
 ---
 
@@ -19,9 +29,9 @@
 ### Summary of Changes (since `0.217-beta`):
 
 #### 1. Collection Progress and Runtime Lock Ordering, completed (PO-27 §2.5)
-- **Root snapshot completeness:** a cycle folds in what mutators have not published, so a pin recorded in a delta buffer and an object still in an unpublished TLAB batch both survive the snapshot; a unit test requires four such objects to stay alive across a collection and to be reclaimed once released.
-- **Registry removal:** a thread that exits with an unpublished batch and a live root slot publishes the batch, drops the stack and only then leaves the registry; a unit test reclaims everything it held, leaves no pin behind, and requires the next cycle to park and finish.
-- **Evidence:** the runtime document's lock-order section now cites the test that would fail for each requirement, including the progress test that runs a collector against the rooted allocation path.
+- **Root snapshot completeness:** A cycle folds in what mutators have not published, so a pin recorded in a delta buffer and an object still in an unpublished TLAB batch both survive the snapshot; a unit test requires four such objects to stay alive across a collection and to be reclaimed once released.
+- **Registry removal:** A thread that exits with an unpublished batch and a live root slot publishes the batch, drops the stack and only then leaves the registry; a unit test reclaims everything it held, leaves no pin behind, and requires the next cycle to park and finish.
+- **Evidence:** The runtime document's lock-order section now cites the test that would fail for each requirement, including the progress test that runs a collector against the rooted allocation path.
 
 ---
 
@@ -30,10 +40,10 @@
 ### Summary of Changes (since `0.212-beta`):
 
 #### 1. Lock Order and Collection Progress (PO-27 §2.5)
-- **Barrier wait and the caller's own region:** waiting for regions to drain skipped the calling thread's own entry, which could otherwise wait on a region belonging to the thread doing the waiting.
-- **Heap lock under a barrier wait:** the heap lock records whether the calling thread holds it, and the barrier wait reports a lock-order violation instead of deadlocking; every acquisition goes through the instrumented guard.
-- **Progress regression test:** a collector runs against a mutator on the rooted allocation path, where a barrier region takes the heap lock, so an inversion stops both threads instead of passing quietly.
-- **Documented audit:** the runtime document states the lock order and where each collection-progress requirement is enforced.
+- **Barrier wait and the caller's own region:** Waiting for regions to drain skipped the calling thread's own entry, which could otherwise wait on a region belonging to the thread doing the waiting.
+- **Heap lock under a barrier wait:** The heap lock records whether the calling thread holds it, and the barrier wait reports a lock-order violation instead of deadlocking; every acquisition goes through the instrumented guard.
+- **Progress regression test:** A collector runs against a mutator on the rooted allocation path, where a barrier region takes the heap lock, so an inversion stops both threads instead of passing quietly.
+- **Documented audit:** The runtime document states the lock order and where each collection-progress requirement is enforced.
 
 ---
 
@@ -43,10 +53,10 @@
 
 #### 1. Root-Liveness Analysis Cost and Audit (PO-27 §2.4)
 - **Measured first:** `--verbose` reports functions, slot addresses, loads, liveness probes and address scans, so the rewrite was judged by counters rather than timing.
-- **Address attribution:** derived stack addresses are attributed to their slot in one pass in program order instead of a fixed point that rescanned the function per slot; address scans fell from four times per doubling to linear (34, 66, 130, 258 for 8, 16, 32, 64 managed slots).
-- **Load indexing:** loads are recorded against their slot in one pass, replacing a rescan of every operation per slot (per-slot scans fell from 100,407 to 0 at 64 slots).
-- **Root decision:** rooted slots are decided by walking the live set at each collection point once, instead of probing liveness per candidate per point.
-- **Audit:** fixtures cover each case RC_FIX §4.4 lists, asserting both program output and the emitted root protocol. Collection-point classification was not weakened.
+- **Address attribution:** Derived stack addresses are attributed to their slot in one pass in program order instead of a fixed point that rescanned the function per slot; address scans fell from four times per doubling to linear (34, 66, 130, 258 for 8, 16, 32, 64 managed slots).
+- **Load indexing:** Loads are recorded against their slot in one pass, replacing a rescan of every operation per slot (per-slot scans fell from 100,407 to 0 at 64 slots).
+- **Root decision:** Rooted slots are decided by walking the live set at each collection point once, instead of probing liveness per candidate per point.
+- **Audit:** Fixtures cover each case RC_FIX §4.4 lists, asserting both program output and the emitted root protocol. Collection-point classification was not weakened.
 
 ---
 
