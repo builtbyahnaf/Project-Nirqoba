@@ -225,6 +225,25 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
     policy.return_noalias = true;
     return policy;
   }
+  // Development-only instrumentation. Both write the runtime's trace rings and
+  // nothing else, so neither allocates, collects or blocks a mutator: they can
+  // be called between an allocation and the statement that consumes it. The
+  // site description and the site id are read-only arguments the runtime copies.
+  if (symbol == "nrq_gc_debug_declare_site") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    policy.willreturn = true;
+    policy.memory = MemoryEffectKind::OtherReadWriteArgRead;
+    policy.nocapture_args_mask = (1u << 1);
+    return policy;
+  }
+  if (symbol == "nrq_gc_debug_tag_allocation") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    policy.willreturn = true;
+    policy.memory = MemoryEffectKind::OtherReadWrite;
+    return policy;
+  }
   // A collection waits for every other mutator to park, so it is not marked
   // willreturn; it still cannot unwind.
   if (symbol == "nrq_gc_collect") {
