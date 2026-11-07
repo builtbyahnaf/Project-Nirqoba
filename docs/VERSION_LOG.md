@@ -8,9 +8,9 @@
 
 ## Version 0.217-beta (dev)
 
-### Summary of Changes (since `0.206-beta`):
+### Summary of Changes (since `0.212-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.206-beta release.*
+*Development in progress. This version aggregates ongoing work after the 0.212-beta release.*
 
 ---
 
