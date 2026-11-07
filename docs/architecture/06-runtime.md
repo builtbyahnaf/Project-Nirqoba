@@ -73,6 +73,38 @@ within one interval of crossings, and it holds for every counter value
 (`tests/integration/positive/gc_safepoint_bound` asserts the polled back edge and
 the comparison in the optimized module).
 
+### 3.5 Lock order and collection progress
+
+The runtime holds four locks and two handshakes. The order is
+`collection_cycle_mutex` then `mutator_mutex` then `gc_mutex`, with a shadow stack's
+own mutex taken last and never held across a lock higher in the order. Anything that
+needs a lock below `mutator_mutex` while already holding `gc_mutex` would invert it,
+so no path does.
+
+Where each requirement is enforced:
+
+- **No `gc_mutex` while a fast-barrier region is open, if the collector waits for
+  that region.** The collector publishes `Preparing` under `gc_mutex`, releases it,
+  and only then waits for barrier depth to reach zero (`begin_cycle` →
+  `wait_for_fast_barriers`). No collector path holds `gc_mutex` while waiting, which
+  is what makes a barrier region that takes `gc_mutex` (a TLAB reservation inside
+  `nrq_gc_allocate_rooted`) block instead of deadlock.
+- **A mutator never waits for a cycle while registered and unparked.**
+  `acquire_collection_cycle` parks before blocking on the cycle lock, because the
+  active collector is waiting for exactly that mutator to park.
+- **A recursive function reaches a safepoint within the documented bound.** The poll
+  is emitted at every loop backedge of a function whose call graph can allocate, and
+  a recursive call is a call, so the bound is per activation, not per program
+  (`tests/integration/positive/gc_region_recursive`).
+- **TLAB publication and transfer-pin draining precede pinned-root enumeration.**
+  `prepare_cycle_locked` publishes every parked mutator's TLAB, drains remembered
+  references, folds buffered transfer pins into the table, and only then calls
+  `enqueue_roots_locked`.
+- **No mutator leaves the registry with state it still owns.** The thread's cleanup
+  publishes its TLAB, drains remembered references and transfer pins under
+  `gc_mutex`, and only then removes itself from the registry, so the removal cannot
+  drop work the collector would otherwise have seen.
+
 ### 3.4 Root-liveness audit and cost
 
 The root plan decides, per function, which stack slots and values are registered
