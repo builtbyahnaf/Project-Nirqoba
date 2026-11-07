@@ -299,6 +299,26 @@ struct alignas(std::max_align_t) ObjectHeader {
   uint64_t birth_epoch = 0;
   ReferenceLayout reference_offsets;
 
+  // Field-wise construction. Value-initialising the whole header and then
+  // overwriting most of it touched both cache lines of the object twice, on a
+  // path that runs once per managed object; this writes each member once. The
+  // list link is left to the caller because the union member differs between the
+  // published list and a thread-local batch.
+  ObjectHeader(GcPage* owning_page, size_t payload_bytes,
+               size_t payload_element_size, nrq_gc_trace_fn payload_trace,
+               bool is_young, uint64_t epoch)
+      : next(nullptr),
+        mark_next(nullptr),
+        page(owning_page),
+        size(payload_bytes),
+        element_size(payload_element_size),
+        trace(payload_trace),
+        marked(false),
+        young(is_young),
+        remembered(false),
+        age(0),
+        birth_epoch(epoch) {}
+
   // The payload immediately follows the header. It is not stored: the page
   // bump allocator always places a header `sizeof(ObjectHeader)` bytes before
   // its object, so the address is pure arithmetic.
@@ -2028,7 +2048,10 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     page->used += span;
   }
   void* header_storage = page->storage + header_offset;
-  auto* header = new (header_storage) ObjectHeader();
+  auto* header = new (header_storage) ObjectHeader(
+      page, bytes, element_size, trace,
+      generational_collection_enabled.load(std::memory_order_relaxed),
+      next_cycle_epoch.load(std::memory_order_relaxed));
   auto rollback_reservation = [&]() {
     destroy_object_storage(header);
     if (reused_span) {
@@ -2037,7 +2060,6 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
       page->used -= span;
     }
   };
-  header->page = page;
   void* object = static_cast<unsigned char*>(header_storage) + sizeof(ObjectHeader);
   std::memset(object, 0, bytes);
   try {
@@ -2055,16 +2077,10 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
         }
       }
     }
-    header->size = bytes;
-    header->element_size = element_size;
-    header->trace = trace;
-    header->young = generational_collection_enabled.load(std::memory_order_relaxed);
     if (!header->young) {
       old_object_count.fetch_add(1, std::memory_order_relaxed);
       raise_store_barrier();
     }
-    header->age = 0;
-    header->birth_epoch = next_cycle_epoch.load(std::memory_order_relaxed);
     header->next = objects;
     if (page_uses_index(page)) {
       if (!object_index.insert(object, header)) {
@@ -2223,8 +2239,10 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
 
   unsigned char* header_storage = thread_mutator.tlab_cursor;
   thread_mutator.tlab_cursor += span;
-  auto* header = new (header_storage) ObjectHeader();
-  header->page = thread_mutator.tlab_page;
+  auto* header = new (header_storage) ObjectHeader(
+      thread_mutator.tlab_page, bytes, element_size, trace,
+      generational_collection_enabled.load(std::memory_order_relaxed),
+      next_cycle_epoch.load(std::memory_order_relaxed));
   void* object = header_storage + sizeof(ObjectHeader);
   std::memset(object, 0, bytes);
   try {
@@ -2246,16 +2264,10 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     header->~ObjectHeader();
     return nullptr;
   }
-  header->size = bytes;
-  header->element_size = element_size;
-  header->trace = trace;
-  header->young = generational_collection_enabled.load(std::memory_order_relaxed);
   if (!header->young) {
     old_object_count.fetch_add(1, std::memory_order_relaxed);
     raise_store_barrier();
   }
-  header->age = 0;
-  header->birth_epoch = next_cycle_epoch.load(std::memory_order_relaxed);
   header->tlab_next = thread_mutator.pending_objects;
   thread_mutator.pending_objects = header;
   account_tlab_allocation(thread_mutator, bytes);
