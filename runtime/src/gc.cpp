@@ -3558,7 +3558,23 @@ int32_t nrq_gc_is_enabled(void) {
   return automatic_collection_enabled.load(std::memory_order_relaxed) ? 1 : 0;
 }
 
+static void unpin_value(void* object);
+
 void nrq_gc_unpin(void* object) {
+  unpin_value(object);
+}
+
+// Publishes a pinned managed result into a root slot or field and releases the
+// pin in one call. A caller that receives a pinned value and stores it does both
+// in the same operation; as two calls that operation pays two call boundaries
+// and two barrier regions. The release runs in this translation unit, so it is
+// inlined into this entry instead of being a second call.
+void nrq_gc_root_store_release(void** slot, void* value) {
+  if (slot) nrq_gc_root_store(slot, value);
+  unpin_value(value);
+}
+
+static void unpin_value(void* object) {
   if (!object) return;
   bool buffer_fell_back = false;
   // Releasing a pin this thread buffered cancels it here, and releasing a pin the
