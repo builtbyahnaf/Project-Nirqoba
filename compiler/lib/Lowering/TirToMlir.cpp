@@ -1555,9 +1555,11 @@ class FunctionTranslator {
         if (!pending_unpin) return;
         mlir::OpBuilder::InsertionGuard guard(builder_);
         builder_.setInsertionPoint(operation);
-        builder_.create<mlir::LLVM::CallOp>(
-            pending_unpin.getLoc(), pending_unpin.getCalleeAttr(),
-            mlir::ValueRange{pending_value});
+        auto unpin_fn = ensure_runtime_fn(
+            module_, builder_, "nrq_gc_unpin",
+            mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
+        builder_.create<mlir::LLVM::CallOp>(pending_unpin.getLoc(), unpin_fn,
+                                            mlir::ValueRange{pending_value});
         pending_unpin.erase();
         pending_unpin = {};
         pending_value = {};
