@@ -20,7 +20,7 @@ the path at all.
 | Free-span list ordered on bridge merge (`f1d2b42`) | Yes (`gc.cpp:1768-1810`, tail shift) | Yes (`MergedFreeRunsServeThreadLocalReserves`, per 0.260 log) | No (02 frees nothing; 03 frees whole pages) | None on 02/03 | Correctness fix; performance **UNVERIFIED** |
 | Page index for reusable runs (`1ca3c37`) | Yes (`span_pages`, `index_span_page_locked`, early exit `gc.cpp:755/1814`) | Not named in log | **No** | None on 02/03 | **UNVERIFIED** |
 | Page-ordered sweep (`e830b65`) | Yes (`sweep_chunk_locked` bitmap walk) | Not a sweep-cursor unit test | Yes | **−62 ms/col in 02 (regression)** | **Defective** |
-| Young-only minor page skip (`1646b93`) | Yes (`page->young_objects == 0` in sweep) | Not named | **No** (major only) | None | **UNVERIFIED** |
+| Young-only minor page skip (`1646b93`) | Yes (`page->young_objects == 0` in sweep) | Minor semantics tested; the page-skip performance is not | **No** (major only) | None | **UNVERIFIED** |
 | Byte-sized mark/sweep slices (`0708f75`) | Yes (`kMarkSliceBytes`, `kSweepSliceBytes`) | Not named | Yes | 34× fewer chunks, no time change | Implemented; responsiveness **UNVERIFIED** |
 
 The release note for 0.260 says page-ordered sweep is a win because
@@ -92,9 +92,9 @@ unaffected.
 | Incremental sweep resume mid-word / mid-page | The bitmap cursor is the highest-risk state in the collector | No test drives `sweep_chunk_locked` with a budget that stops mid-word |
 | Free-run bridge merge + reuse | `f1d2b42` fix | One unit test named in the log; not verified here |
 | Mixed-size allocation/reclamation in one page | Alignment + coalescing | `BumpRegionsAlignMixedObjectSizesAndReclaimEmptyPages` exists; not run in this audit |
-| Minor collection with old→young references | remembered-set correctness | No workload; no test found |
+| Minor collection with old→young references | remembered-set correctness | Unit tests exist (`MinorCollectionPromotesSurvivorsAndRetainsOldGarbage`, `OldToYoungStoreBarrierKeepsYoungObjectAliveDuringMinorCollection`); no end-to-end workload measures cost |
 | Promotion across ≥2 epochs | `age`/`birth_epoch` reset | Unit tests likely exist; no end-to-end workload |
-| Multithreaded alloc + collect | park-before-scan, barriers, TLAB publication | No committed multithreaded benchmark |
+| Multithreaded alloc + collect | park-before-scan, barriers, TLAB publication | Unit tests exist (`ConcurrentAllocationIsSerializedAndReclaimed`, `RootStoreSynchronizesConcurrentMutationAndCollection`, `CollectionMarksIncrementallyWhileMutatorsRun`, …); no committed throughput benchmark |
 | Fragmentation steady state | span_pages growth, first-fit scan length | None |
 | Malformed root descriptor in development | BO-02's stated safety property | Not verified |
 | 96-byte header static assertion after any change | `static_assert` exists; no layout test beyond it | Partial |
