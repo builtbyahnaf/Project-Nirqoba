@@ -6,11 +6,24 @@
 
 ---
 
-## Version 0.260-beta (dev)
+## Version 0.266-beta (dev)
+
+### Summary of Changes (since `0.260-beta`):
+
+*Development in progress. This version aggregates ongoing work after the 0.260-beta release.*
+
+---
+
+## Version 0.260-beta
 
 ### Summary of Changes (since `0.257-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.257-beta release.*
+#### 1. Collection Path, Step One (ColO-01, C1-C5)
+- **Free-span list integrity:** a freed run that bridged two recorded runs closed the hole in the page's ordered run list by moving the last entry into it, which left the offsets unsorted. Later frees then landed in the wrong slot, adjacent runs stopped merging, and a page fragmented while still reporting its bytes as usable - the per-round collection drift BO-01 section 4 left open. The hole now closes by shifting the tail, and a unit test holds a fixed live set across four allocate/free rounds and requires the page count not to grow.
+- **Page index for reusable runs:** pages that record a freed run sit in a compact index with a constant-time swap-remove, so first-fit reuse and thread-local refills no longer walk the page set. The cycle boundary also skips its page walk when the previous sweep emptied no page.
+- **Page-ordered sweep:** allocation no longer links every object into a heap-wide list. The sweep walks the page set in allocation order and each page's start bitmap in address order, so a page's dead runs are released in increasing offset order and each release extends the run recorded before it. Survivors stay where they are, and an oversized page keeps a small list of its own.
+- **Young-only minors:** each page carries a young-object count, and a minor passes over a page that holds none, so a minor costs O(young pages) instead of O(heap).
+- **Byte-sized slices:** mark and sweep slices are bounded by bytes of heap touched instead of 64 objects, so the number of collector-lock rounds no longer grows with the object count.
 
 ---
 
