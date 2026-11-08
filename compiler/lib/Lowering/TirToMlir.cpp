@@ -1533,9 +1533,72 @@ class FunctionTranslator {
       if (op.kind == tir::OpKind::Store) forwarded_root_values_.clear();
       if (!translate_op(op)) return false;
     }
+    fuse_handoff_releases();
     attach_cold_blocks();
     flush_gc_root_registrations();
     return true;
+  }
+
+  // A caller that receives a managed result pinned, stores it and releases the
+  // pin emits `pin_transfer`, `unpin` and a barrier store. Publishing the value
+  // and releasing the pin are one handoff, so this folds the pair into the single
+  // runtime entry that performs both. Only exact adjacency folds, and a plain
+  // store that is not a managed publication may sit between them because it
+  // cannot observe the pinned result.
+  void fuse_handoff_releases() {
+    for (mlir::Block& block : func_op_.getBody().getBlocks()) {
+      mlir::LLVM::CallOp pending_unpin;
+      mlir::Value pending_value;
+      // Releases the pending pin before `operation`, which is what the original
+      // position did whenever no publication consumed it.
+      auto flush_before = [&](mlir::Operation* operation) {
+        if (!pending_unpin) return;
+        mlir::OpBuilder::InsertionGuard guard(builder_);
+        builder_.setInsertionPoint(operation);
+        builder_.create<mlir::LLVM::CallOp>(
+            pending_unpin.getLoc(), pending_unpin.getCalleeAttr(),
+            mlir::ValueRange{pending_value});
+        pending_unpin.erase();
+        pending_unpin = {};
+        pending_value = {};
+      };
+      for (mlir::Operation& operation : llvm::make_early_inc_range(block)) {
+        if (operation.hasTrait<mlir::OpTrait::IsTerminator>()) {
+          flush_before(&operation);
+          continue;
+        }
+        auto call = mlir::dyn_cast<mlir::LLVM::CallOp>(&operation);
+        std::optional<llvm::StringRef> callee =
+            call ? call.getCallee() : std::nullopt;
+        if (!callee) continue;
+        if (*callee == "nrq_gc_unpin" && call.getNumOperands() == 1) {
+          flush_before(&operation);
+          pending_unpin = call;
+          pending_value = call.getOperand(0);
+          continue;
+        }
+        if (*callee == "nrq_gc_root_store" && call.getNumOperands() == 2 &&
+            pending_unpin && call.getOperand(1) == pending_value) {
+          mlir::Value destination = call.getOperand(0);
+          mlir::Value value = call.getOperand(1);
+          mlir::Location loc = call.getLoc();
+          mlir::OpBuilder::InsertionGuard guard(builder_);
+          builder_.setInsertionPoint(call);
+          auto fused = ensure_runtime_fn(
+              module_, builder_, "nrq_gc_root_store_release",
+              mlir::LLVM::LLVMVoidType::get(ctx_),
+              {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)});
+          builder_.create<mlir::LLVM::CallOp>(loc, fused,
+                                              mlir::ValueRange{destination, value});
+          call.erase();
+          pending_unpin.erase();
+          pending_unpin = {};
+          pending_value = {};
+          continue;
+        }
+      }
+      if (!block.empty()) flush_before(&block.back());
+    }
   }
 
  private:
