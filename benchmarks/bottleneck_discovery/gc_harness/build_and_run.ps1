@@ -28,7 +28,7 @@ New-Item -ItemType Directory -Force -Path $dest | Out-Null
 $tar = Join-Path $dest 'runtime.tar'
 & git -C $repo archive --format=tar -o $tar $Rev runtime
 if ($LASTEXITCODE -ne 0) { throw "git archive failed" }
-& tar -xf $tar -C $dest
+& "$env:SystemRoot/System32/tar.exe" -xf $tar -C $dest
 Remove-Item $tar
 
 $harness = Join-Path $PSScriptRoot 'main.cpp'

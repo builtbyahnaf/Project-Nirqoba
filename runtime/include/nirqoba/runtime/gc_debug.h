@@ -53,6 +53,13 @@ enum {
   // A root frame opened or closed. `aux` is 1 for open and 0 for close,
   // `value` is the frame marker.
   NRQ_GC_EVENT_ROOT_FRAME = 1u << 5,
+  // How much bitmap a sweep chunk examined. `aux` is the number of objects
+  // visited, `value` packs the bitmap words examined in the high 32 bits and
+  // the empty words among them in the low 32 bits.
+  NRQ_GC_EVENT_SWEEP_WORK = 1u << 6,
+  // Wall time one sweep chunk held the heap lock, in nanoseconds. `value` is
+  // the duration; `aux` is zero.
+  NRQ_GC_EVENT_SWEEP_CHUNK_NS = 1u << 7,
 };
 
 typedef struct nrq_gc_event {

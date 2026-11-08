@@ -22,6 +22,7 @@
 #include <bit>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdlib>
@@ -962,6 +963,14 @@ uint64_t major_collections = 0;
 // per object than sweeping does, so its budget is the smaller of the two.
 constexpr size_t kMarkSliceBytes = 64 * 1024;
 constexpr size_t kSweepSliceBytes = 256 * 1024;
+// A byte budget alone does not bound a sweep chunk: a page holding one live
+// object contributes one span to the budget but still costs its whole start
+// bitmap to examine, and an empty page costs a visit. Charge bitmap words as
+// work too, so a sparse heap cannot hold the collector lock for a scan bounded
+// only by its size. Dense pages reach the byte budget first (a 64 KiB page of
+// 120-byte objects is ~512 words for 2184 objects); 4096 words bounds the sparse
+// case at ~32 pages per chunk.
+constexpr size_t kSweepBitmapWordsPerChunk = 4096;
 constexpr uint8_t kPromotionAge = 2;
 // A full collection is worth its cost only when it can reclaim something a young
 // collection cannot: unreachable old objects. Those are invisible to minors, so
@@ -1592,6 +1601,11 @@ SweepCursor sweep_cursor;
 bool sweep_chunk_locked(size_t budget_bytes) {
   size_t steps = 0;
   size_t touched = 0;
+  size_t bitmap_words = 0;
+  size_t empty_words = 0;
+  std::chrono::steady_clock::time_point chunk_start;
+  if constexpr (nirq::runtime_debug_enabled)
+    chunk_start = std::chrono::steady_clock::now();
   // Promotion and reclamation both move objects between generations. The
   // generation counters used to be updated with one atomic per object, which
   // meant two shared read-modify-write operations for every survivor and one for
@@ -1678,11 +1692,18 @@ bool sweep_chunk_locked(size_t budget_bytes) {
   // never visited. The remaining mask is part of the cursor, which is what
   // makes a chunk that stops mid-word resume without re-testing anything.
   while (sweep_cursor.page < sweep_cursor.page_limit &&
-         touched < budget_bytes) {
+         touched < budget_bytes &&
+         bitmap_words < kSweepBitmapWordsPerChunk) {
     GcPage* page = gc_pages[sweep_cursor.page].get();
     if (!page || page_uses_index(page) || page->object_start_words == 0 ||
         page->live_objects == 0 ||
         (active_collection_is_minor && page->young_objects == 0)) {
+      // A page transition is work even when it examines no object: an empty
+      // page still has to be reached, tested and stepped over. Charge its whole
+      // bitmap so a run of empty pages cannot outlast the word budget.
+      bitmap_words += (page && page->object_start_words != 0)
+                          ? page->object_start_words
+                          : size_t{1};
       ++sweep_cursor.page;
       sweep_cursor.word = 0;
       sweep_cursor.mask = 0;
@@ -1690,6 +1711,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
     }
     if (sweep_cursor.mask == 0) {
       if (sweep_cursor.word >= page->object_start_words) {
+        bitmap_words += page->object_start_words;
         ++sweep_cursor.page;
         sweep_cursor.word = 0;
         continue;
@@ -1699,7 +1721,9 @@ bool sweep_chunk_locked(size_t budget_bytes) {
       // Only this sweep clears start bits, and only for objects it has already
       // consumed, so the snapshot cannot resurrect or lose one of those.
       sweep_cursor.mask = page->object_starts[sweep_cursor.word];
+      ++bitmap_words;
       if (sweep_cursor.mask == 0) {
+        ++empty_words;
         ++sweep_cursor.word;
         continue;
       }
@@ -1761,6 +1785,18 @@ bool sweep_chunk_locked(size_t budget_bytes) {
   if (promotion_raised_barrier) raise_store_barrier();
   debug_emit(NRQ_GC_EVENT_SWEEP, static_cast<uint32_t>(reclaimed_old), steps,
              nullptr);
+  debug_emit(NRQ_GC_EVENT_SWEEP_WORK, static_cast<uint32_t>(steps),
+             (static_cast<uint64_t>(bitmap_words) << 32) | empty_words,
+             nullptr);
+  if constexpr (nirq::runtime_debug_enabled) {
+    const auto elapsed = std::chrono::steady_clock::now() - chunk_start;
+    debug_emit(
+        NRQ_GC_EVENT_SWEEP_CHUNK_NS, 0,
+        static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed)
+                .count()),
+        nullptr);
+  }
   return sweep_list == nullptr && sweep_cursor.page >= sweep_cursor.page_limit;
 }
 
