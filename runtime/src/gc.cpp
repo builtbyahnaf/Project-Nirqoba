@@ -1582,7 +1582,10 @@ struct SweepCursor {
   size_t page = 0;
   size_t page_limit = 0;
   size_t word = 0;
-  size_t bit = 0;
+  // Set bits of `word` that this sweep has not examined yet. A bit position is
+  // not enough: resuming mid-word by re-testing positions would visit every
+  // zero bit between object starts, which is 94 % of a full page's bitmap.
+  uint64_t mask = 0;
 };
 SweepCursor sweep_cursor;
 
@@ -1670,7 +1673,10 @@ bool sweep_chunk_locked(size_t budget_bytes) {
     return false;
   };
 
-  // Phase 1: pages that can be walked by their own start bitmap.
+  // Phase 1: pages that can be walked by their own start bitmap. Only set bits
+  // are object starts, so each iteration consumes one set bit; zero bits are
+  // never visited. The remaining mask is part of the cursor, which is what
+  // makes a chunk that stops mid-word resume without re-testing anything.
   while (sweep_cursor.page < sweep_cursor.page_limit &&
          touched < budget_bytes) {
     GcPage* page = gc_pages[sweep_cursor.page].get();
@@ -1679,28 +1685,33 @@ bool sweep_chunk_locked(size_t budget_bytes) {
         (active_collection_is_minor && page->young_objects == 0)) {
       ++sweep_cursor.page;
       sweep_cursor.word = 0;
-      sweep_cursor.bit = 0;
+      sweep_cursor.mask = 0;
       continue;
     }
-    if (sweep_cursor.word >= page->object_start_words) {
-      ++sweep_cursor.page;
-      sweep_cursor.word = 0;
-      sweep_cursor.bit = 0;
-      continue;
+    if (sweep_cursor.mask == 0) {
+      if (sweep_cursor.word >= page->object_start_words) {
+        ++sweep_cursor.page;
+        sweep_cursor.word = 0;
+        continue;
+      }
+      // Snapshot the word. A mutator may set a start bit between slices, but
+      // that object's birth epoch is past this cycle and it is skipped below.
+      // Only this sweep clears start bits, and only for objects it has already
+      // consumed, so the snapshot cannot resurrect or lose one of those.
+      sweep_cursor.mask = page->object_starts[sweep_cursor.word];
+      if (sweep_cursor.mask == 0) {
+        ++sweep_cursor.word;
+        continue;
+      }
     }
-    const uint64_t bits = page->object_starts[sweep_cursor.word];
-    if (bits == 0 || sweep_cursor.bit >= 64) {
-      ++sweep_cursor.word;
-      sweep_cursor.bit = 0;
-      continue;
-    }
-    if (((bits >> sweep_cursor.bit) & uint64_t{1}) == 0) {
-      ++sweep_cursor.bit;
-      continue;
-    }
-    const size_t slot = sweep_cursor.word * 64 + sweep_cursor.bit;
-    // Step past the bit before the object can clear it.
-    ++sweep_cursor.bit;
+    const size_t word_index = sweep_cursor.word;
+    const uint64_t mask = sweep_cursor.mask;
+    const unsigned index = static_cast<unsigned>(std::countr_zero(mask));
+    // Consume the bit before the object can clear it, and advance the word as
+    // soon as it is empty. The cursor must be committed before any `continue`.
+    sweep_cursor.mask = mask & (mask - uint64_t{1});
+    if (sweep_cursor.mask == 0) ++sweep_cursor.word;
+    const size_t slot = word_index * 64 + index;
     const size_t payload_offset = slot * kObjectStartAlignment;
     auto* header =
         reinterpret_cast<ObjectHeader*>(page->storage + payload_offset) - 1;
