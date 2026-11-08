@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 
 #include <atomic>
 #include <condition_variable>
@@ -632,7 +633,11 @@ std::atomic<size_t> parked_mutator_count{0};
 std::atomic<bool> collection_requested{false};
 thread_local bool thread_is_collector = false;
 thread_local MutatorState thread_mutator;
-ObjectHeader* objects = nullptr;
+// Objects whose page cannot be walked by a start bitmap, in publication order.
+// Ordinary objects are found through their page instead, so allocation no longer
+// links them into a heap-wide list and the sweep has no list to keep consistent
+// while mutators allocate.
+ObjectHeader* unindexed_objects = nullptr;
 ObjectIndex object_index;
 PageDirectory page_directory;
 
@@ -665,6 +670,34 @@ ObjectHeader* find_object_locked(void* object) {
 
 constexpr size_t kGcTlabBytes = kGcPageBytes;
 std::vector<std::unique_ptr<GcPage>> gc_pages;
+
+// Visits every live object whose page is in the set, in page and address order,
+// then the objects whose page has no walkable bitmap. Diagnostics use this
+// instead of a heap-wide list, which allocation no longer maintains. Callers
+// hold gc_mutex and are outside a sweep slice; objects detached into the sweep
+// list are not visited, which matches what the old single list reported while a
+// cycle was sweeping.
+template <typename Visit>
+void for_each_live_object_locked(Visit&& visit) {
+  for (auto& entry : gc_pages) {
+    GcPage* page = entry.get();
+    if (!page || page_uses_index(page) || page->object_start_words == 0) continue;
+    for (size_t word = 0; word < page->object_start_words; ++word) {
+      uint64_t bits = page->object_starts[word];
+      while (bits != 0) {
+        const unsigned index = static_cast<unsigned>(std::countr_zero(bits));
+        bits &= bits - 1;
+        const size_t payload_offset =
+            (word * 64 + index) * kObjectStartAlignment;
+        auto* header =
+            reinterpret_cast<ObjectHeader*>(page->storage + payload_offset) - 1;
+        visit(header);
+      }
+    }
+  }
+  for (ObjectHeader* header = unindexed_objects; header; header = header->next)
+    visit(header);
+}
 // Pages that currently record at least one freed run. First-fit reuse used to
 // scan every page in allocation order, so a refill cost grew with the heap even
 // though almost every page had nothing to offer. The index holds only pages that
@@ -1031,8 +1064,11 @@ void publish_tlab_locked(MutatorState& mutator) {
       mark_object_start(*header->page, offset);
     }
     header->tlab_next = nullptr;
-    header->next = objects;
-    objects = header;
+    header->next = nullptr;
+    if (page_uses_index(header->page)) {
+      header->next = unindexed_objects;
+      unindexed_objects = header;
+    }
     if (!header->page || header->page->live_objects == SIZE_MAX)
       nrq_runtime_fatal("GC page live-object count overflow");
     ++header->page->live_objects;
@@ -1498,6 +1534,21 @@ bool mark_slice_locked(size_t budget) {
   return active_mark.worklist.empty() && active_mark.reference_count == 0;
 }
 
+// Sweep state. A cycle reclaims along the page set instead of following one
+// global list: pages are visited in allocation order and each page's start
+// bitmap in address order, which is also the order a page's spans want to be
+// released in, so each freed run extends the recorded one with no ordered
+// insert. Objects whose page has no walkable bitmap - a large-object page, or a
+// page the directory refused - keep the detached list and are swept after the
+// pages.
+struct SweepCursor {
+  size_t page = 0;
+  size_t page_limit = 0;
+  size_t word = 0;
+  size_t bit = 0;
+};
+SweepCursor sweep_cursor;
+
 bool sweep_chunk_locked(size_t budget) {
   size_t steps = 0;
   // Promotion and reclamation both move objects between generations. The
@@ -1510,21 +1561,9 @@ bool sweep_chunk_locked(size_t budget) {
   size_t reclaimed_old = 0;
   size_t promoted_young = 0;
   bool promotion_raised_barrier = false;
-  while (sweep_list && steps < budget) {
-    ObjectHeader* header = sweep_list;
-    sweep_list = header->next;
-    ++steps;
-
-    // Objects allocated after the cycle started are outside the snapshot's
-    // reachability analysis. Retain them for this cycle and consider them in
-    // the next one; marking them would leave a bit the snapshot never clears.
-    if (header->birth_epoch >= active_cycle_epoch) {
-      header->marked = false;
-      header->next = objects;
-      objects = header;
-      continue;
-    }
-
+  // Reclaims one object, or leaves it for the next cycle. Returns true when the
+  // object was freed, so the caller cannot go on to treat it as a survivor.
+  auto sweep_object = [&](ObjectHeader* header) -> bool {
     const bool collectable = !active_collection_is_minor || header->young;
     if (!header->marked && collectable) {
       const size_t object_offset = static_cast<size_t>(
@@ -1556,14 +1595,9 @@ bool sweep_chunk_locked(size_t budget) {
         ++retired_page_count;
       }
       destroy_object_storage(header);
-      continue;
+      return true;
     }
 
-    // Survivors rejoin the allocation list. New objects allocated while the
-    // sweep is in progress are already at the head of this list, so this also
-    // keeps them out of the detached snapshot.
-    header->next = objects;
-    objects = header;
     if (header->marked) {
       header->marked = false;
       if (active_collection_is_minor) {
@@ -1592,6 +1626,66 @@ bool sweep_chunk_locked(size_t budget) {
         header->remembered = false;
       }
     }
+    return false;
+  };
+
+  // Phase 1: pages that can be walked by their own start bitmap.
+  while (sweep_cursor.page < sweep_cursor.page_limit && steps < budget) {
+    GcPage* page = gc_pages[sweep_cursor.page].get();
+    if (!page || page_uses_index(page) || page->object_start_words == 0 ||
+        page->live_objects == 0) {
+      ++sweep_cursor.page;
+      sweep_cursor.word = 0;
+      sweep_cursor.bit = 0;
+      continue;
+    }
+    if (sweep_cursor.word >= page->object_start_words) {
+      ++sweep_cursor.page;
+      sweep_cursor.word = 0;
+      sweep_cursor.bit = 0;
+      continue;
+    }
+    const uint64_t bits = page->object_starts[sweep_cursor.word];
+    if (bits == 0 || sweep_cursor.bit >= 64) {
+      ++sweep_cursor.word;
+      sweep_cursor.bit = 0;
+      continue;
+    }
+    if (((bits >> sweep_cursor.bit) & uint64_t{1}) == 0) {
+      ++sweep_cursor.bit;
+      continue;
+    }
+    const size_t slot = sweep_cursor.word * 64 + sweep_cursor.bit;
+    // Step past the bit before the object can clear it.
+    ++sweep_cursor.bit;
+    const size_t payload_offset = slot * kObjectStartAlignment;
+    auto* header =
+        reinterpret_cast<ObjectHeader*>(page->storage + payload_offset) - 1;
+    ++steps;
+    // An object allocated after the cycle started is outside the snapshot's
+    // reachability analysis. It stays where it is for this cycle - there is no
+    // list to keep it out of - and the next cycle considers it.
+    if (header->birth_epoch >= active_cycle_epoch) {
+      header->marked = false;
+      continue;
+    }
+    sweep_object(header);
+  }
+
+  // Phase 2: objects whose page has no walkable start bitmap.
+  while (sweep_list && steps < budget) {
+    ObjectHeader* header = sweep_list;
+    sweep_list = header->next;
+    ++steps;
+    if (header->birth_epoch >= active_cycle_epoch) {
+      header->marked = false;
+      header->next = unindexed_objects;
+      unindexed_objects = header;
+      continue;
+    }
+    if (sweep_object(header)) continue;
+    header->next = unindexed_objects;
+    unindexed_objects = header;
   }
 
   if (reclaimed_old != 0) {
@@ -1611,7 +1705,7 @@ bool sweep_chunk_locked(size_t budget) {
   if (promotion_raised_barrier) raise_store_barrier();
   debug_emit(NRQ_GC_EVENT_SWEEP, static_cast<uint32_t>(reclaimed_old), steps,
              nullptr);
-  return sweep_list == nullptr;
+  return sweep_list == nullptr && sweep_cursor.page >= sweep_cursor.page_limit;
 }
 
 // Record space an object used to occupy so a later allocation can reuse it.
@@ -1981,6 +2075,7 @@ void prepare_cycle_locked(bool young_only) {
   }
 
   sweep_list = nullptr;
+  sweep_cursor = SweepCursor{};
   cycle_start_live_bytes = live_heap_bytes;
   active_cycle_epoch = next_cycle_epoch.fetch_add(1) + 1;
   active_collection_is_minor = young_only;
@@ -2119,11 +2214,14 @@ void run_collection(bool young_only) {
         const bool marked = mark_slice_locked(kMarkBudget);
         made_progress = true;
         if (marked) {
-          // Freeze the snapshot list before releasing the lock for sweep
-          // slices. Allocations after this point go to the ordinary list and
-          // are outside the snapshot, so the sweeper never sees a moving list.
-          sweep_list = objects;
-          objects = nullptr;
+          // Freeze the unindexed list and capture the page set before releasing
+          // the lock for sweep slices. Allocations after this point either land
+          // in a fresh page (outside the captured set) or carry a birth epoch
+          // past the cycle, so the sweeper never has to reason about them.
+          sweep_list = unindexed_objects;
+          unindexed_objects = nullptr;
+          sweep_cursor = SweepCursor{};
+          sweep_cursor.page_limit = gc_pages.size();
           collection_phase.store(CollectionPhase::Sweeping,
                                  std::memory_order_release);
           sweeping = true;
@@ -2262,7 +2360,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
       old_object_count.fetch_add(1, std::memory_order_relaxed);
       raise_store_barrier();
     }
-    header->next = objects;
+    header->next = nullptr;
     if (page_uses_index(page)) {
       if (!object_index.insert(object, header)) {
         rollback_reservation();
@@ -2277,7 +2375,12 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     rollback_reservation();
     return nullptr;
   }
-  objects = header;
+  // Only a page that cannot be walked by a bitmap needs the object listed; every
+  // other object is reachable from its page.
+  if (page_uses_index(page)) {
+    header->next = unindexed_objects;
+    unindexed_objects = header;
+  }
   ++page->live_objects;
   statistics.allocated_bytes = saturated_add(
       statistics.allocated_bytes, static_cast<uint64_t>(bytes));
@@ -3527,7 +3630,7 @@ int64_t nrq_gc_get_ref_count(void* object) {
   if (!object || !find_object_locked(object)) return 0;
   try {
     ReferenceCountTarget target{object, 0};
-    for (ObjectHeader* header = objects; header; header = header->next) {
+    for_each_live_object_locked([&](ObjectHeader* header) {
       if (header->trace)
         header->trace(header->payload(), header->size, count_reference_to_target,
                       &target);
@@ -3544,7 +3647,7 @@ int64_t nrq_gc_get_ref_count(void* object) {
           }
         }
       }
-    }
+    });
     for (const auto& root : roots) {
       auto* bytes = static_cast<const unsigned char*>(root.first);
       if (root.second.repeated_count != 0) {

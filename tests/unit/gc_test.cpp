@@ -2035,3 +2035,34 @@ TEST(GcTest, ReclaimedRunsCoalesceAndAreReusedWithoutGrowingThePageSet) {
   nrq_gc_set_threshold(1024 * 1024);
   nrq_gc_enable();
 }
+
+TEST(GcTest, LargeObjectsAreSweptThroughTheirOwnList) {
+  // A page larger than the standard 64 KB page carries no start bitmap, so its
+  // objects are not reachable from the page walk. The sweep has to keep its own
+  // list of them and reclaim exactly those that became unreachable.
+  nrq_gc_disable();
+  nrq_gc_set_threshold(static_cast<size_t>(1) << 30);
+  nrq_gc_collect();
+  const uint64_t baseline_live = nrq_gc_get_live_objects();
+  const size_t baseline_pages = nrq_gc_page_count();
+
+  void* slot = nullptr;
+  nrq_gc_root_register(&slot);
+  constexpr size_t kLarge = 512 * 1024;
+  slot = nrq_gc_allocate(kLarge, nullptr);
+  ASSERT_NE(slot, nullptr);
+  void* survivor = nrq_gc_allocate(kLarge, nullptr);
+  ASSERT_NE(survivor, nullptr);
+  nrq_gc_root_store(&slot, survivor);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline_live + 1);
+
+  nrq_gc_root_store(&slot, nullptr);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline_live);
+
+  nrq_gc_root_unregister(&slot);
+  nrq_gc_set_threshold(1024 * 1024);
+  nrq_gc_enable();
+  (void)baseline_pages;
+}
