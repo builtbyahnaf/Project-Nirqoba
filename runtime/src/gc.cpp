@@ -953,8 +953,15 @@ uint64_t major_collections = 0;
 // between slices; barriers below preserve the snapshot-at-the-beginning
 // invariant. The sweep phase serializes GC API calls with gc_mutex but does not
 // park mutators that are only executing ordinary code.
-constexpr size_t kMarkBudget = 64;
-constexpr size_t kSweepBudget = 64;
+// Slice budgets are expressed as bytes of heap touched, not as a fixed object
+// count. A constant count makes the number of lock rounds proportional to the
+// heap: 2 M live objects at 64 objects per slice is 31 000 acquisitions of
+// gc_mutex, each of which a refilling mutator can also be waiting on. A byte
+// budget keeps a slice short in wall-clock terms for any object size while the
+// number of rounds follows the bytes actually processed. Marking touches less
+// per object than sweeping does, so its budget is the smaller of the two.
+constexpr size_t kMarkSliceBytes = 64 * 1024;
+constexpr size_t kSweepSliceBytes = 256 * 1024;
 constexpr uint8_t kPromotionAge = 2;
 // A full collection is worth its cost only when it can reclaim something a young
 // collection cannot: unreachable old objects. Those are invisible to minors, so
@@ -1528,11 +1535,11 @@ void buffer_remembered(void* object) {
   append_remembered(object);
 }
 
-bool mark_slice_locked(size_t budget) {
-  size_t steps = 0;
-  while (!active_mark.worklist.empty() && steps < budget) {
+bool mark_slice_locked(size_t budget_bytes) {
+  size_t touched = 0;
+  while (!active_mark.worklist.empty() && touched < budget_bytes) {
     ObjectHeader* header = active_mark.worklist.pop();
-    ++steps;
+    touched += header->size + sizeof(ObjectHeader);
     if (active_mark.young_only && !header->young) continue;
     trace_children(header, enqueue_reference, &active_mark);
     flush_reference_batch_locked(active_mark);
@@ -1556,8 +1563,9 @@ struct SweepCursor {
 };
 SweepCursor sweep_cursor;
 
-bool sweep_chunk_locked(size_t budget) {
+bool sweep_chunk_locked(size_t budget_bytes) {
   size_t steps = 0;
+  size_t touched = 0;
   // Promotion and reclamation both move objects between generations. The
   // generation counters used to be updated with one atomic per object, which
   // meant two shared read-modify-write operations for every survivor and one for
@@ -1640,7 +1648,8 @@ bool sweep_chunk_locked(size_t budget) {
   };
 
   // Phase 1: pages that can be walked by their own start bitmap.
-  while (sweep_cursor.page < sweep_cursor.page_limit && steps < budget) {
+  while (sweep_cursor.page < sweep_cursor.page_limit &&
+         touched < budget_bytes) {
     GcPage* page = gc_pages[sweep_cursor.page].get();
     if (!page || page_uses_index(page) || page->object_start_words == 0 ||
         page->live_objects == 0 ||
@@ -1673,6 +1682,7 @@ bool sweep_chunk_locked(size_t budget) {
     auto* header =
         reinterpret_cast<ObjectHeader*>(page->storage + payload_offset) - 1;
     ++steps;
+    touched += object_span_bytes(header->size);
     // An object allocated after the cycle started is outside the snapshot's
     // reachability analysis. It stays where it is for this cycle - there is no
     // list to keep it out of - and the next cycle considers it.
@@ -1684,10 +1694,11 @@ bool sweep_chunk_locked(size_t budget) {
   }
 
   // Phase 2: objects whose page has no walkable start bitmap.
-  while (sweep_list && steps < budget) {
+  while (sweep_list && touched < budget_bytes) {
     ObjectHeader* header = sweep_list;
     sweep_list = header->next;
     ++steps;
+    touched += object_span_bytes(header->size);
     if (header->birth_epoch >= active_cycle_epoch) {
       header->marked = false;
       header->next = unindexed_objects;
@@ -2224,7 +2235,7 @@ void run_collection(bool young_only) {
     {
       HeapLockGuard lock(gc_mutex);
       if (!sweeping) {
-        const bool marked = mark_slice_locked(kMarkBudget);
+        const bool marked = mark_slice_locked(kMarkSliceBytes);
         made_progress = true;
         if (marked) {
           // Freeze the unindexed list and capture the page set before releasing
@@ -2243,11 +2254,11 @@ void run_collection(bool young_only) {
       if (sweeping) {
         // Drain barriers that ran between sweep slices before freeing the next
         // chunk. A pending marked parent may still enqueue its children.
-        if (!mark_slice_locked(kMarkBudget)) {
+        if (!mark_slice_locked(kMarkSliceBytes)) {
           made_progress = true;
         } else {
           made_progress = true;
-          if (sweep_chunk_locked(kSweepBudget)) {
+          if (sweep_chunk_locked(kSweepSliceBytes)) {
             finish_cycle_locked(young_only);
             finished = true;
           }
