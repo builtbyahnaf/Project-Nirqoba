@@ -1535,13 +1535,36 @@ void buffer_remembered(void* object) {
   append_remembered(object);
 }
 
+// The ordinary record carries one or two pointer fields and a single element, and
+// its layout is already in the header. For that shape the trace callback adds
+// nothing: it walks the same two words the marker can read here, through an
+// indirect call per object. Anything else - a callback, a typed array, a wider
+// layout - still goes through trace_children.
+void enqueue_narrow_children_locked(ObjectHeader* header, MarkContext& context) {
+  const auto* bytes = static_cast<const unsigned char*>(header->payload());
+  const size_t reference_count = header->reference_offsets.size();
+  for (size_t index = 0; index < reference_count; ++index) {
+    const size_t offset = header->reference_offsets[index];
+    if (offset > header->size || sizeof(void*) > header->size - offset) continue;
+    void* child = nullptr;
+    std::memcpy(&child, bytes + offset, sizeof(child));
+    if (child) enqueue_reference(child, &context);
+  }
+}
+
 bool mark_slice_locked(size_t budget_bytes) {
   size_t touched = 0;
   while (!active_mark.worklist.empty() && touched < budget_bytes) {
     ObjectHeader* header = active_mark.worklist.pop();
     touched += header->size + sizeof(ObjectHeader);
     if (active_mark.young_only && !header->young) continue;
-    trace_children(header, enqueue_reference, &active_mark);
+    const size_t reference_count = header->reference_offsets.size();
+    if (!header->trace && reference_count != 0 && reference_count <= 2 &&
+        header->element_size == header->size) {
+      enqueue_narrow_children_locked(header, active_mark);
+    } else {
+      trace_children(header, enqueue_reference, &active_mark);
+    }
     flush_reference_batch_locked(active_mark);
   }
   flush_reference_batch_locked(active_mark);
