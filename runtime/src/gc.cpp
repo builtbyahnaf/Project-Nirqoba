@@ -80,9 +80,16 @@ struct GcPage {
     size_t span = 0;
   };
   static constexpr size_t kMaxFreeSpans = 96;
+  static constexpr size_t kNoSpanIndex = SIZE_MAX;
   std::array<FreeSpan, kMaxFreeSpans> free_spans{};
   size_t free_span_count = 0;
   size_t free_span_bytes = 0;
+  // Position in the index of pages that record at least one freed run, or
+  // `kNoSpanIndex` while this page records none. Keeping the position here makes
+  // joining and leaving that index a constant-time swap-remove instead of a
+  // lookup, and lets every reuse path iterate only pages that can answer a
+  // request.
+  size_t span_index = kNoSpanIndex;
 };
 
 
@@ -658,6 +665,40 @@ ObjectHeader* find_object_locked(void* object) {
 
 constexpr size_t kGcTlabBytes = kGcPageBytes;
 std::vector<std::unique_ptr<GcPage>> gc_pages;
+// Pages that currently record at least one freed run. First-fit reuse used to
+// scan every page in allocation order, so a refill cost grew with the heap even
+// though almost every page had nothing to offer. The index holds only pages that
+// can answer a request, and `GcPage::span_index` makes membership a swap-remove,
+// so no path ever walks the page set to maintain it.
+std::vector<GcPage*> span_pages;
+// Number of pages marked `retired`, which are exactly the pages a cycle
+// boundary can reclaim. The prepare step keeps this count so it can skip its
+// page walk entirely when no page was emptied during the previous sweep.
+size_t retired_page_count = 0;
+
+// Join or leave the index of pages with reusable runs. Both operations are
+// constant-time and neither allocates on the removal path. A page that cannot be
+// indexed (the vector failed to grow) simply stays out of it: its runs remain
+// recorded and are still merged, but the first-fit paths will not reach them,
+// which is the behaviour the allocator had before the index existed.
+void index_span_page_locked(GcPage& page) {
+  if (page.span_index != GcPage::kNoSpanIndex) return;
+  try {
+    span_pages.push_back(&page);
+    page.span_index = span_pages.size() - 1;
+  } catch (...) {
+    page.span_index = GcPage::kNoSpanIndex;
+  }
+}
+
+void unindex_span_page_locked(GcPage& page) {
+  if (page.span_index == GcPage::kNoSpanIndex) return;
+  GcPage* last = span_pages.back();
+  span_pages[page.span_index] = last;
+  last->span_index = page.span_index;
+  span_pages.pop_back();
+  page.span_index = GcPage::kNoSpanIndex;
+}
 // Empty pages keep their backing storage across cycles. Reusing them avoids an
 // operator new / operator delete pair for every page a churn-heavy workload
 // frees at each cycle boundary. The pool is bounded so idle programs do not
@@ -1510,7 +1551,10 @@ bool sweep_chunk_locked(size_t budget) {
       if (!header->page || header->page->live_objects == 0)
         nrq_runtime_fatal("GC page live-object count underflow");
       --header->page->live_objects;
-      if (header->page->live_objects == 0) header->page->retired = true;
+      if (header->page->live_objects == 0) {
+        header->page->retired = true;
+        ++retired_page_count;
+      }
       destroy_object_storage(header);
       continue;
     }
@@ -1621,6 +1665,7 @@ void release_span_locked(GcPage& page, size_t offset, size_t span) {
   ++page.free_span_count;
   ++total_free_spans;
   page.free_span_bytes += span;
+  index_span_page_locked(page);
 }
 
 // First-fit reuse of reclaimed space. The scan visits pages in allocation order
@@ -1628,8 +1673,7 @@ void release_span_locked(GcPage& page, size_t offset, size_t span) {
 // costs one branch per page. Callers hold gc_mutex.
 GcPage* take_free_span_locked(size_t span, size_t& offset) {
   if (span == 0 || total_free_spans == 0) return nullptr;
-  for (auto& entry : gc_pages) {
-    GcPage* page = entry.get();
+  for (GcPage* page : span_pages) {
     if (!page || page->retired || page->free_span_count == 0 ||
         page->free_span_bytes < span)
       continue;
@@ -1650,6 +1694,9 @@ GcPage* take_free_span_locked(size_t span, size_t& offset) {
           page->free_spans[move] = page->free_spans[move + 1];
         --page->free_span_count;
         --total_free_spans;
+        // A page with no recorded run can never answer a request again until
+        // something is freed into it, so it leaves the index with its last run.
+        if (page->free_span_count == 0) unindex_span_page_locked(*page);
       }
       recycled_span_reuse_count = saturated_add(recycled_span_reuse_count, 1);
       return page;
@@ -1673,8 +1720,7 @@ GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t& offset,
   if (desired == 0 || minimum == 0 || minimum > desired ||
       total_free_spans == 0)
     return nullptr;
-  for (auto& entry : gc_pages) {
-    GcPage* page = entry.get();
+  for (GcPage* page : span_pages) {
     if (!page || page->retired || page->free_span_count == 0 ||
         page->free_span_bytes < minimum)
       continue;
@@ -1694,6 +1740,7 @@ GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t& offset,
           page->free_spans[move] = page->free_spans[move + 1];
         --page->free_span_count;
         --total_free_spans;
+        if (page->free_span_count == 0) unindex_span_page_locked(*page);
       }
       recycled_span_reuse_count = saturated_add(recycled_span_reuse_count, 1);
       granted = span;
@@ -1716,6 +1763,7 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
     page->live_objects = 0;
     page->retired = false;
     if (page->free_span_count != 0) {
+      unindex_span_page_locked(*page);
       total_free_spans -= page->free_span_count;
       page->free_span_count = 0;
       page->free_span_bytes = 0;
@@ -1752,6 +1800,7 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
 // no mutator can still hold a cursor into the page.
 void recycle_page(std::unique_ptr<GcPage> page) {
   if (!page) return;
+  unindex_span_page_locked(*page);
   if (page->free_span_count != 0) {
     total_free_spans -= page->free_span_count;
     page->free_span_count = 0;
@@ -1909,17 +1958,26 @@ void prepare_cycle_locked(bool young_only) {
 
   // No mutator can be inside an allocator while stop_mutators() has everyone
   // parked. Invalidate stale TLAB cursors before reclaiming empty pages.
+  //
+  // `retired_page_count` is the number of pages the previous sweep emptied, so
+  // the page set is only walked when there is something to reclaim. Every page
+  // that becomes empty is counted where it becomes empty: the sweep that frees
+  // its last object, or an allocation that reserved space and then failed.
   ++gc_page_generation;
-  for (auto page = gc_pages.begin(); page != gc_pages.end();) {
-    if ((*page)->live_objects == 0) {
-      page_directory.erase(page->get());
-      auto empty_page = std::move(*page);
-      page = gc_pages.erase(page);
-      recycle_page(std::move(empty_page));
-    } else {
-      (*page)->retired = false;
-      ++page;
+  if (retired_page_count != 0) {
+    for (auto page = gc_pages.begin(); page != gc_pages.end();) {
+      if ((*page)->live_objects == 0) {
+        if ((*page)->retired) --retired_page_count;
+        page_directory.erase(page->get());
+        auto empty_page = std::move(*page);
+        page = gc_pages.erase(page);
+        recycle_page(std::move(empty_page));
+      } else {
+        (*page)->retired = false;
+        ++page;
+      }
     }
+    retired_page_count = 0;
   }
 
   sweep_list = nullptr;
@@ -2174,6 +2232,13 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
       release_span_locked(*page, header_offset, span);
     } else {
       page->used -= span;
+    }
+    // A page that reserved space and then could not publish its first object is
+    // empty, not free for later use: mark it retired so the next cycle boundary
+    // reclaims it instead of leaving it in the page set forever.
+    if (page->live_objects == 0 && !page->retired) {
+      page->retired = true;
+      ++retired_page_count;
     }
   };
   void* object = static_cast<unsigned char*>(header_storage) + sizeof(ObjectHeader);
