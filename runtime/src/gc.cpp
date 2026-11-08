@@ -56,6 +56,12 @@ struct GcPage {
   size_t capacity = 0;
   size_t used = 0;
   size_t live_objects = 0;
+  // Young objects in this page. A minor collection can only reclaim or promote
+  // young objects, so a page where this count is zero is passed straight over:
+  // a minor never sets a mark bit on an old object
+  // (enqueue_header_locked refuses it), so there is nothing in such a page for
+  // the minor to change.
+  size_t young_objects = 0;
   // Page-local object-start metadata. One bit per max_align_t-sized slot lets
   // reference resolution validate an address and derive its header without a
   // global hash probe. Pages larger than kGcPageBytes are not indexed; their
@@ -1072,6 +1078,7 @@ void publish_tlab_locked(MutatorState& mutator) {
     if (!header->page || header->page->live_objects == SIZE_MAX)
       nrq_runtime_fatal("GC page live-object count overflow");
     ++header->page->live_objects;
+    if (header->young) ++header->page->young_objects;
     statistics.allocated_bytes = saturated_add(
         statistics.allocated_bytes, static_cast<uint64_t>(header->size));
     statistics.live_objects = saturated_add(statistics.live_objects, 1);
@@ -1590,6 +1597,7 @@ bool sweep_chunk_locked(size_t budget) {
       if (!header->page || header->page->live_objects == 0)
         nrq_runtime_fatal("GC page live-object count underflow");
       --header->page->live_objects;
+      if (header->young) --header->page->young_objects;
       if (header->page->live_objects == 0) {
         header->page->retired = true;
         ++retired_page_count;
@@ -1605,6 +1613,7 @@ bool sweep_chunk_locked(size_t budget) {
           if (header->age < UINT8_MAX) ++header->age;
           if (header->age >= kPromotionAge) {
             header->young = false;
+            --header->page->young_objects;
             header->age = 0;
             ++promoted_young;
             promotion_raised_barrier = true;
@@ -1617,6 +1626,7 @@ bool sweep_chunk_locked(size_t budget) {
       } else {
         if (header->young) {
           header->young = false;
+          --header->page->young_objects;
           ++promoted_young;
           promotion_raised_barrier = true;
           debug_emit(NRQ_GC_EVENT_PROMOTE, 0, 0,
@@ -1633,7 +1643,8 @@ bool sweep_chunk_locked(size_t budget) {
   while (sweep_cursor.page < sweep_cursor.page_limit && steps < budget) {
     GcPage* page = gc_pages[sweep_cursor.page].get();
     if (!page || page_uses_index(page) || page->object_start_words == 0 ||
-        page->live_objects == 0) {
+        page->live_objects == 0 ||
+        (active_collection_is_minor && page->young_objects == 0)) {
       ++sweep_cursor.page;
       sweep_cursor.word = 0;
       sweep_cursor.bit = 0;
@@ -1862,6 +1873,7 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
       page->free_span_count = 0;
       page->free_span_bytes = 0;
     }
+    page->young_objects = 0;
     if (page->object_starts && page->object_start_words != 0) {
       std::memset(page->object_starts.get(), 0,
                   page->object_start_words * sizeof(uint64_t));
@@ -1908,6 +1920,7 @@ void recycle_page(std::unique_ptr<GcPage> page) {
   }
   page->used = 0;
   page->live_objects = 0;
+  page->young_objects = 0;
   page->retired = false;
   page->free_span_count = 0;
   page->free_span_bytes = 0;
@@ -2382,6 +2395,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     unindexed_objects = header;
   }
   ++page->live_objects;
+  if (header->young) ++page->young_objects;
   statistics.allocated_bytes = saturated_add(
       statistics.allocated_bytes, static_cast<uint64_t>(bytes));
   statistics.live_objects = saturated_add(statistics.live_objects, 1);
