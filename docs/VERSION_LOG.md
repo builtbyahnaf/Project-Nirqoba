@@ -6,15 +6,76 @@
 
 ---
 
-## Version 0.266-beta (dev)
+## Version 0.269-beta (working build)
+
+### Summary of Changes (since `0.266-beta`):
+
+*Current working build. Collector corrections and validation work are being
+recorded here as they land. See `project_context/ColO_ROADMAP_2.md` and
+`reports/performance/colo-02-*.md` for the per-stage evidence.*
+
+---
+
+## Version 0.266-beta (defective)
+
+> **Defect notice.** This release is known-defective and is superseded by
+> 0.269-beta. It introduced unexpected performance regressions in the
+> collector domain and must not be used for performance comparisons or as a
+> baseline. The defects are understood, documented below, and are being fixed
+> by the author as part of an architecture restructuring. No new feature work
+> should be based on this tag.
 
 ### Summary of Changes (since `0.260-beta`):
 
-*Development in progress. This version aggregates ongoing work after the 0.260-beta release.*
+- **Narrow-layout marking** (`5d62abf`): enumerate a narrow record's children
+  without the trace callback.
+- **Investigation/docs** (`904aee0`): Java-gap analysis.
+- The 0.260 collector work described below is included unchanged.
+
+### Known Issues
+
+1. **Sweep scans zero bits one at a time (severe).** `sweep_chunk_locked`
+   tests every bit of each page's object-start bitmap instead of iterating set
+   bits. With 96-byte headers and 24-byte payloads, a full 64 KiB page holds
+   ~546 objects in 8,192 bit positions, so ~94 % of iterations test zero. On a
+   2.1 M-node graph this is **28.65 million zero-bit iterations per
+   collection**, costing ~62 ms per collection. Measured: test-02 collection
+   rose from 25.1 ms of sweep (86 ms total) to 87.5 ms of sweep (197 ms total);
+   test-03 sweep rose from 9.8 ms to 29.2 ms. This is a **2.3â€“3.9Ã— collection
+   regression** and is the primary reason this release is defective.
+2. **The slice budget does not bound sparse-page work.** `touched` counts object
+   bytes, not bitmap words. A page with a single live object still scans all
+   8,192 bits while charging 120 bytes, so a sweep chunk can hold `gc_mutex`
+   for far longer than the 256 KiB budget implies.
+3. **Release artifacts do not describe this version.** The committed
+   `benchmarks/stress_test_2/benchmark_results.json` was generated before the
+   0.260 collector commits and is carried forward unchanged; it reports
+   pre-regression numbers for post-regression code. It also records
+   `compilers: unknown` and `memory_bytes: null`.
+4. **Minor-collection page skip and reusable-run page index are unexercised.**
+   No committed workload creates oldâ†’young references or partially occupied
+   pages, so neither `1646b93` nor `1ca3c37` is validated by the suite.
+5. **Byte-sized mark/sweep slices did not restore performance.** They reduce
+   collector-lock rounds (31,969 â†’ 937 per collection) but not sweep time,
+   because the cost is inside each chunk.
+6. **Narrow-layout marking produced no measurable improvement** on the official
+   workloads (< 0.2 ms, within noise).
+
+### Disposition
+
+Ahnaf is aware of these regressions and is restructuring the architecture. The
+collector defect will be fixed by the author; the immediate correction is
+scheduled for **0.269-beta**, which is the working build from this point on.
+Do not tag, benchmark, or ship 0.266-beta.
 
 ---
 
 ## Version 0.260-beta
+
+> **Post-release note.** This release carries a stale benchmark artifact
+> (generated 2026-11-08T03:13, seven hours before the collector commits) and
+> introduced the sweep regression documented under 0.266-beta. Use 0.269-beta
+> for any measurement.
 
 ### Summary of Changes (since `0.257-beta`):
 
@@ -140,7 +201,7 @@
 
 ### Summary of Changes (since `0.217-beta`):
 
-#### 1. Collection Progress and Runtime Lock Ordering, completed (PO-27 §2.5)
+#### 1. Collection Progress and Runtime Lock Ordering, completed (PO-27 ï¿½2.5)
 - **Root snapshot completeness:** A cycle folds in what mutators have not published, so a pin recorded in a delta buffer and an object still in an unpublished TLAB batch both survive the snapshot; a unit test requires four such objects to stay alive across a collection and to be reclaimed once released.
 - **Registry removal:** A thread that exits with an unpublished batch and a live root slot publishes the batch, drops the stack and only then leaves the registry; a unit test reclaims everything it held, leaves no pin behind, and requires the next cycle to park and finish.
 - **Evidence:** The runtime document's lock-order section now cites the test that would fail for each requirement, including the progress test that runs a collector against the rooted allocation path.
@@ -151,7 +212,7 @@
 
 ### Summary of Changes (since `0.212-beta`):
 
-#### 1. Lock Order and Collection Progress (PO-27 §2.5)
+#### 1. Lock Order and Collection Progress (PO-27 ï¿½2.5)
 - **Barrier wait and the caller's own region:** Waiting for regions to drain skipped the calling thread's own entry, which could otherwise wait on a region belonging to the thread doing the waiting.
 - **Heap lock under a barrier wait:** The heap lock records whether the calling thread holds it, and the barrier wait reports a lock-order violation instead of deadlocking; every acquisition goes through the instrumented guard.
 - **Progress regression test:** A collector runs against a mutator on the rooted allocation path, where a barrier region takes the heap lock, so an inversion stops both threads instead of passing quietly.
@@ -163,12 +224,12 @@
 
 ### Summary of Changes (since `0.206-beta`):
 
-#### 1. Root-Liveness Analysis Cost and Audit (PO-27 §2.4)
+#### 1. Root-Liveness Analysis Cost and Audit (PO-27 ï¿½2.4)
 - **Measured first:** `--verbose` reports functions, slot addresses, loads, liveness probes and address scans, so the rewrite was judged by counters rather than timing.
 - **Address attribution:** Derived stack addresses are attributed to their slot in one pass in program order instead of a fixed point that rescanned the function per slot; address scans fell from four times per doubling to linear (34, 66, 130, 258 for 8, 16, 32, 64 managed slots).
 - **Load indexing:** Loads are recorded against their slot in one pass, replacing a rescan of every operation per slot (per-slot scans fell from 100,407 to 0 at 64 slots).
 - **Root decision:** Rooted slots are decided by walking the live set at each collection point once, instead of probing liveness per candidate per point.
-- **Audit:** Fixtures cover each case RC_FIX §4.4 lists, asserting both program output and the emitted root protocol. Collection-point classification was not weakened.
+- **Audit:** Fixtures cover each case RC_FIX ï¿½4.4 lists, asserting both program output and the emitted root protocol. Collection-point classification was not weakened.
 
 ---
 
@@ -181,7 +242,7 @@
 - **Transfer-Pin Slot Reuse:** Empty slots are reused before the high-water count grows, so returning and releasing distinct objects no longer pushes every handoff past the thirty-second onto the collector mutex; `nrq_gc_transfer_pin_fallbacks()` reports the genuine full-buffer cases.
 - **Fallback Ordering:** A fallback settles the mutator's buffered deltas under the collector mutex before applying its own operation, so a release can no longer erase an entry a buffered pin had not reached yet and leave the object pinned for the life of the process.
 
-#### 2. Mutator Region Completeness (PO-27 §2.2)
+#### 2. Mutator Region Completeness (PO-27 ï¿½2.2)
 - **Propagation:** A function needs a region when it holds a managed value or calls one that does, resolved to a fixed point over direct calls. A driver loop that only calls an allocating helper keeps one region instead of entering and leaving per iteration; runtime entry points are not propagated, so querying or toggling collection still needs no region.
 - **Recursion:** Region elision now resolves from the optimistic direction and narrows, so a direct or mutually recursive group entered once from `main` shares the outer region instead of duplicating it on every activation.
 - **Entry Wrapper:** The wrapper the C runtime calls opens and closes the region, and the elision pass sees func-level as well as LLVM calls, so everything under `main` runs in one region.
@@ -206,7 +267,7 @@
 
 ### Summary of Changes (since `0.195-beta`):
 
-#### 1. Mutator Regions Follow the Call Graph (PO-27 §2.2)
+#### 1. Mutator Regions Follow the Call Graph (PO-27 ï¿½2.2)
 - **Propagation:** A function needs a region when it holds a managed value or calls one that does, resolved to a fixed point over direct calls. A driver loop that only calls an allocating helper keeps one region instead of entering and leaving per iteration; runtime entry points are not propagated, so querying or toggling collection still needs no region.
 - **Recursion:** Region elision now resolves from the optimistic direction and narrows, so a direct or mutually recursive group entered once from `main` shares the outer region instead of duplicating it on every activation.
 - **Entry Wrapper:** The wrapper the C runtime calls opens and closes the region, and the elision pass sees func-level as well as LLVM calls, so everything under `main` runs in one region.
@@ -218,7 +279,7 @@
 
 ### Summary of Changes (since `0.192-beta`):
 
-#### 1. Transfer-Pin Delta Lifecycle (PO-27 §2.1)
+#### 1. Transfer-Pin Delta Lifecycle (PO-27 ï¿½2.1)
 - **Retirement:** A delta that cancels out clears its slot instead of leaving an entry that describes nothing but still matches later handoffs.
 - **Reuse:** Empty slots are reused before the high-water count grows, so returning and releasing distinct objects no longer pushes every handoff past the thirty-second onto the collector mutex; `nrq_gc_transfer_pin_fallbacks()` reports the genuine full-buffer cases.
 - **Ordering:** A fallback settles the mutator's buffered deltas under the collector mutex before applying its own operation, so a release can no longer erase an entry a buffered pin had not reached yet and leave the object pinned for the life of the process.
@@ -332,7 +393,7 @@
 
 ### Summary of Changes (since `0.153-beta`):
 
-#### 1. Runtime Synchronization and GC Protocol Optimization — Extended (PO-23)
+#### 1. Runtime Synchronization and GC Protocol Optimization ï¿½ Extended (PO-23)
 - **Skip Redundant Root-Store Edges:** Store barriers now check whether the new referent is already reachable from the same root frame before publishing a remembered-set edge, eliminating unnecessary per-store overhead when the edge already exists.
 - **Counter-Based Mutator Parking with Dedicated Wakeup:** Replaced the flag-based parking protocol with a per-mutator counter and a dedicated wakeup primitive, so the collector parks and resumes mutators without a shared flag cache-line ping-pong.
 - **Single-Pass Frame Root-Slot Release:** Frame teardown now clears all root slots belonging to the frame in one indexed scan instead of walking the entire root table, reducing per-frame cleanup to O(frame slots).
@@ -499,7 +560,7 @@
 - Ensured all temporary stack allocations (aggregate barrier copies, `array.allocate` reference offsets, mapped memory access buffers, profiler records) are allocated exclusively in the function entry block via `alloca_at_entry`.
 - Resolves unbounded stack growth inside loops and exposes all stack-allocated temporaries directly to LLVM's `mem2reg` and `SROA` passes.
 
-#### 4. Review Hardening & Optimizations (PO-14 / F2–F6)
+#### 4. Review Hardening & Optimizations (PO-14 / F2ï¿½F6)
 - **Parameter Attribute Derivation (F2):** `nocapture` and `readonly` attributes are now derived directly from escape fixpoint analysis and store-destination scanning instead of being blindly assigned from ownership classes.
 - **Escape Analysis Store Soundness (F3):** Refused pointer-derived stores through borrowed views, ensuring publishing pointers/references into caller-accessible memory is properly treated as an escape.
 - **Linear Stack-Allocation Analysis (F4):** Re-architected candidate descriptor lookups in stack promotion analysis using indexed hash tables, reducing escape analysis time on large view sets from cubic ($O(N^3)$) to linear ($O(N)$).
@@ -511,19 +572,19 @@
 ## Version 0.108-beta
 
 ### Changes since 0.105-beta:
-- **`eb858e7`** — `feat(opt): implement escape analysis and stack promotion for pointer allocations`
-- **`2a96640`** — `docs(report): complete alias analysis report and integration test expectation`
-- **`6fec2d7`** — `feat(compiler): alias architecture upgrade`
-- **`4bbaf93`** — `feat(compiler): Accurate Runtime Function Attributes`
-- **`a5c7a28`** — `benchmark: rerun stress test 2`
-- **`1caa5e8`** — `perf(gc): upgraded the internal mechanisms (pt 3)`
-- **`0df9174`** — `perf(gc): upgraded the internal mechanisms (pt 2)`
-- **`fdd9066`** — `perf(gc): upgraded the internal mechanisms`
+- **`eb858e7`** ï¿½ `feat(opt): implement escape analysis and stack promotion for pointer allocations`
+- **`2a96640`** ï¿½ `docs(report): complete alias analysis report and integration test expectation`
+- **`6fec2d7`** ï¿½ `feat(compiler): alias architecture upgrade`
+- **`4bbaf93`** ï¿½ `feat(compiler): Accurate Runtime Function Attributes`
+- **`a5c7a28`** ï¿½ `benchmark: rerun stress test 2`
+- **`1caa5e8`** ï¿½ `perf(gc): upgraded the internal mechanisms (pt 3)`
+- **`0df9174`** ï¿½ `perf(gc): upgraded the internal mechanisms (pt 2)`
+- **`fdd9066`** ï¿½ `perf(gc): upgraded the internal mechanisms`
 
 ---
 
 ## Version 0.105-beta
 
 ### Changes since 0.102-beta:
-- **`ede0f26`** — `feat: gc improvement and new benchmark tests`
-- **`678d7c1`** — `perf: add constant propagation and sccp to mlir cleanup`
+- **`ede0f26`** ï¿½ `feat: gc improvement and new benchmark tests`
+- **`678d7c1`** ï¿½ `perf: add constant propagation and sccp to mlir cleanup`
