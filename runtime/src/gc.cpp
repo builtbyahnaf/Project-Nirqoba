@@ -1573,6 +1573,15 @@ bool sweep_chunk_locked(size_t budget) {
 // Record space an object used to occupy so a later allocation can reuse it.
 // Callers hold gc_mutex. A page whose span list is full keeps the space
 // unusable, which is exactly the behaviour of the bump allocator.
+//
+// INVARIANT: `free_spans` is ascending by offset, runs never overlap, and
+// `free_span_bytes` is exactly the sum of the runs. Every operation in this file
+// depends on it - insertion finds its position by offset, first-fit scans from
+// the lowest offset, and the run taken for a TLAB is picked from the head. A
+// removal therefore has to close the hole by shifting the tail, never by moving
+// the last entry into it: the last entry has the highest offset, and putting it
+// in the middle leaves the array unsorted, after which adjacent runs stop
+// merging and the page fragments until it can no longer serve a reservation.
 void release_span_locked(GcPage& page, size_t offset, size_t span) {
   if (span == 0) return;
   // Runs are kept ordered by offset and always merged with a neighbour they
@@ -1590,7 +1599,9 @@ void release_span_locked(GcPage& page, size_t offset, size_t span) {
       if (index < page.free_span_count &&
           previous.offset + previous.span == page.free_spans[index].offset) {
         previous.span += page.free_spans[index].span;
-        page.free_spans[index] = page.free_spans[--page.free_span_count];
+        for (size_t move = index; move + 1 < page.free_span_count; ++move)
+          page.free_spans[move] = page.free_spans[move + 1];
+        --page.free_span_count;
         --total_free_spans;
       }
       return;

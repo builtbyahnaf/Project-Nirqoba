@@ -1958,3 +1958,80 @@ TEST(GcTest, RepeatedCollectionUnderSustainedAllocation) {
   nrq_gc_collect();
   ASSERT_EQ(nrq_gc_get_live_objects(), initial_live);
 }
+
+namespace {
+
+// Reclaimed runs that touch an existing run must coalesce with it, and the
+// coalesced run must still be found by the next allocation. The pattern below
+// frees a run between two runs that are already recorded - the case that closes
+// a hole in the middle of a page's span list - and then refills the page.
+//
+// The span list is ascending by offset. If a removal ever moves the last entry
+// into a middle hole, the list stops being sorted, later insertions land in the
+// wrong place, adjacent runs stop merging, and the page can only be served by
+// opening fresh pages. That is the fragmentation drift this test pins down: with
+// the same live set every round, the page count must not grow.
+void exercise_bridging_reclamation(uint64_t baseline_live) {
+  constexpr size_t kObjects = 1024;
+  constexpr size_t kPayload = 64;
+  static void* slots[kObjects];
+
+  for (size_t index = 0; index < kObjects; ++index) {
+    slots[index] = nrq_gc_allocate(kPayload, nullptr);
+    ASSERT_NE(slots[index], nullptr);
+    nrq_gc_root_register(&slots[index]);
+  }
+
+  size_t pages_after_warmup = 0;
+  for (int round = 0; round < 4; ++round) {
+    // Free two of every three objects. Sweeping walks the allocation list in
+    // reverse, so the survivors split the page into runs separated by live
+    // objects; the next round frees the survivors of an earlier one, which is
+    // exactly when a newly freed run bridges two recorded neighbours.
+    for (size_t index = 1; index < kObjects; index += 3)
+      nrq_gc_root_store(&slots[index], nullptr);
+    for (size_t index = 2; index < kObjects; index += 3)
+      nrq_gc_root_store(&slots[index], nullptr);
+    nrq_gc_collect();
+
+    const size_t live_after_release = kObjects / 3 + (kObjects % 3 != 0 ? 1 : 0);
+    ASSERT_EQ(nrq_gc_get_live_objects() - baseline_live, live_after_release);
+
+    if (round == 0) {
+      pages_after_warmup = nrq_gc_page_count();
+    } else {
+      // Same live set, same allocation volume: no new page may be needed once
+      // the runs are being reused. Fragmentation from a broken span list shows
+      // up here first.
+      ASSERT_TRUE(nrq_gc_page_count() <= pages_after_warmup);
+    }
+
+    // Refill the freed slots, in allocation order, exactly as many objects as
+    // were released.
+    for (size_t index = 1; index < kObjects; index += 3) {
+      slots[index] = nrq_gc_allocate(kPayload, nullptr);
+      ASSERT_NE(slots[index], nullptr);
+    }
+    for (size_t index = 2; index < kObjects; index += 3) {
+      slots[index] = nrq_gc_allocate(kPayload, nullptr);
+      ASSERT_NE(slots[index], nullptr);
+    }
+  }
+
+  for (size_t index = 0; index < kObjects; ++index)
+    nrq_gc_root_unregister(&slots[index]);
+  nrq_gc_collect();
+}
+
+}  // namespace
+
+TEST(GcTest, ReclaimedRunsCoalesceAndAreReusedWithoutGrowingThePageSet) {
+  nrq_gc_disable();
+  nrq_gc_set_threshold(static_cast<size_t>(1) << 30);
+  nrq_gc_collect();
+  const uint64_t baseline_live = nrq_gc_get_live_objects();
+  exercise_bridging_reclamation(baseline_live);
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline_live);
+  nrq_gc_set_threshold(1024 * 1024);
+  nrq_gc_enable();
+}
