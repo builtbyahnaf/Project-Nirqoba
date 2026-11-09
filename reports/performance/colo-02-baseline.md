@@ -97,9 +97,10 @@ powershell -File benchmarks/bottleneck_discovery/gc_harness/run_matrix.ps1
 python benchmarks/bottleneck_discovery/analyze.py
 ```
 
-The 0.269 build (pre-fix, same code path) is re-confirmed with three runs before
-ColO-01 lands; its numbers must fall inside the ranges above or the baseline is
-not comparable.
+The 0.269 build's runtime is code-identical to `904aee0`'s (only the docs/compiler
+fix `43c223f` sits in between, and the harness links only the runtime tree), so the
+baseline numbers above are used directly for ColO-01 rather than re-run. The
+ColO-01 report records the measured result against them.
 
 ---
 
