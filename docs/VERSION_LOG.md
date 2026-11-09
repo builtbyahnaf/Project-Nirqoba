@@ -6,12 +6,54 @@
 
 ---
 
-## Version 0.275-beta (working build)
+## Version 0.281-beta (working build)
+
+### Summary of Changes (since `0.275-beta`):
+
+*Current working build, opened for the rest of BO-01 (verification) and BO-02.
+Nothing has landed under this version yet; entries are added as changes are
+committed.*
+
+---
+
+## Version 0.275-beta (released)
 
 ### Summary of Changes (since `0.271-beta`):
 
-*Current working build, opened for the next round of collector work. Nothing has
-landed under this version yet; entries are added as changes are committed.*
+*Released. Superseded by 0.281-beta, which continues BO-01.*
+
+**BO-01 — runtime memory-effect contracts for the GC protocol (first five steps).**
+Compiler-only change; the runtime library, generated code shape and language are
+unchanged. The lowering already classified the non-GC runtime but left every GC
+entry point without a `memory(...)` attribute, so LLVM had to assume each root
+call could read and write any memory, including the caller's locals.
+
+- **Contract table audited** (`reports/performance/bo-01-contracts.md`): every
+  emitted GC entry point is classified from its implementation in `gc.cpp`, not
+  from its name — argument dereferences, TLS/global state, allocation, collection,
+  pin state, callbacks and failure paths.
+- **Root-frame protocol** (`root_frame_begin`, `root_frame_end`): `argmem: none`,
+  global/TLS effects `ModRef`, errno and target memory untouched.
+- **Root publication and registration** (`root_store`, `root_store_release`,
+  `root_copy`, `root_register`, `root_register_typed`, `root_register_frame`,
+  `root_register_frame_static`, array-root registration): argument memory is read
+  and written by contract, so the declarations now say exactly that instead of
+  leaving all effects unspecified. `root_unregister` and `unpin` are
+  `argmem: none` — they only compare the address.
+- **Allocators and pins** (`nrq_gc_allocate*`, `nrq_gc_allocate_array_typed_rooted`,
+  `pin`, `pin_transfer`): managed allocators take `argmem: none`; the rooted
+  allocate and the pin entries read/write the argument memory they really touch.
+- **Mutator, collection and statistics** (`mutator_enter/leave`, `safepoint`,
+  `collect`, `collect_minor`, `init`, `shutdown`, policy switches, counters):
+  `argmem: none`.
+- **Not narrowed:** `other` and `inaccessible` memory stay `ModRef` everywhere in
+  this group — the shadow stack, heap bookkeeping, pin table and mutexes are
+  runtime state, and no entry point is claimed side-effect free.
+- **Verification so far:** emitted IR carries the expected attributes for both
+  production and development declarations; the unit suite passes 192/192. No
+  assembly change was observed at the `build_tree` call site with `llc -O2` on the
+  emitted IR, which is recorded honestly rather than presented as a win; the
+  acceptance measurement for BO-01 is the first task under 0.281-beta.
 
 ---
 
@@ -19,7 +61,7 @@ landed under this version yet; entries are added as changes are committed.*
 
 ### Summary of Changes (since `0.269-beta`):
 
-*Working build; superseded by 0.275-beta, which changes no code so far.*
+*Superseded by 0.275-beta (BO-01 memory-effect contracts).*
 
 - **No runtime, compiler or language change.** Every file that produces the
   binary or the collector is identical to 0.269-beta; this release carries the
@@ -118,7 +160,7 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 ## Version 0.266-beta (defective)
 
 > **Defect notice.** This release is known-defective and is superseded by
-> 0.275-beta. It introduced unexpected performance regressions in the
+> 0.281-beta. It introduced unexpected performance regressions in the
 > collector domain and must not be used for performance comparisons or as a
 > baseline. The defects are understood, documented below, and are being fixed
 > by the author as part of an architecture restructuring. No new feature work
@@ -164,7 +206,7 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 
 Ahnaf is aware of these regressions and is restructuring the architecture. The
 collector defect will be fixed by the author; the immediate correction is
-scheduled for **0.269-beta** and shipped in 0.271-beta; **0.275-beta** is the working
+scheduled for **0.269-beta** and shipped in 0.271-beta; **0.281-beta** is the working
 build from this point on.
 Do not tag, benchmark, or ship 0.266-beta.
 
@@ -174,7 +216,7 @@ Do not tag, benchmark, or ship 0.266-beta.
 
 > **Post-release note.** This release carries a stale benchmark artifact
 > (generated 2026-11-08T03:13, seven hours before the collector commits) and
-> introduced the sweep regression documented under 0.266-beta. Use 0.275-beta
+> introduced the sweep regression documented under 0.266-beta. Use 0.281-beta
 > for any measurement.
 
 ### Summary of Changes (since `0.257-beta`):
