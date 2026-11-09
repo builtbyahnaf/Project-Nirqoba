@@ -119,7 +119,21 @@ so the harness `COLLECT` median is 22.92 (0.269) against 22.60 (0.257) --- parit
   workload), offset by the 1.66 ms the mark phase no longer spends walking a
   per-object list.
 
-## 6. Limitations
+## 6. Test 02 cross-check
+
+The same two-kit A/B, 16 interleaved rounds, test 02:
+
+| Kit | min | **median** | max | Samples |
+| --- | --- | --- | --- | --- |
+| 0.257 (`98a1099`) | 80.0 | **85.0** | 124.0 | 80 82 82 85 85 97 83 96 84 124 96 84 85 90 113 84 |
+| 0.269 (`9d5b6ac`) | 75.0 | **79.5** | 102.0 | 76 77 78 76 79 81 102 86 80 91 82 77 80 95 77 75 |
+
+Difference: **-5.5 ms (-6.5 %)**, 0.269 faster. That agrees in direction with the
+earlier eight-run matrix (93.5 vs 90.5, -3.2 %) and with the redistribution of
+mark cost, so 0.269 is at parity or better than 0.257 on both canonical tests.
+`[MEASURED]`
+
+## 7. Limitations
 
 * The probe measures the C++ harness workload, not the canonical `.nrqba`
   program; the production `.nrqba` path has no phase counters. The chain bisect
