@@ -41,6 +41,10 @@ Raw output: `build/kits/raw/<rev>_<mode>_run{1..8}.txt`.
 | 0.260 (`904aee0`) | 03 | 57.0 | **58.0** | 61.0 | 58, 61, 57, 58, 60, 59, 58, 58 |
 | 0.269 (`d23a2b4`) | 03 | 26.0 | **28.5** | 30.0 | 29, 30, 26, 28, 28, 29, 29, 27 |
 
+> The 0.269 test-03 row is superseded: a dedicated 16-round A/B of 0.257 against
+> 0.269 measured 24.5 vs 25.0 ms (parity). The 28.5 above is drift in this
+> longer eight-kit session. See `colo-07-residual-attribution.md` §4.
+
 `BUILD` (same runs, same driver):
 
 | revision | 02 | 03 |
@@ -59,30 +63,38 @@ object sets, so the timing comparison is not bought with different work.
 | Comparison | 02 | 03 |
 | --- | --- | --- |
 | 0.269 vs 0.260 | **-42.7 %** (158.0 -> 90.5) | **-50.9 %** (58.0 -> 28.5) |
-| 0.269 vs 0.257 | **-3.2 %** (93.5 -> 90.5) | **+9.6 %** (26.0 -> 28.5) |
+| 0.269 vs 0.257 | **-3.2 %** (93.5 -> 90.5) | **parity** (24.5 -> 25.0, +2.0 %; see below) |
 
 * The 0.260 regression is fully removed for test 02: 0.269 is at or below the last
   healthy build.
-* Test 03 is **not** fully back to 0.257: 28.5 ms against 26.0 ms, a 2.5 ms /
-  9.6 % residual that is consistent across all eight interleaved samples (0.269
-  range 26--30, 0.257 range 24--28; the medians are separated by 2.5 ms while the
-  intra-revision spread is 4 ms, so the ordering is visible but not large).
-  `[MEASURED]`
+* Test 03, **corrected**: the 28.5-vs-26.0 in the table above was session drift.
+  A dedicated 16-round interleaved A/B of just those two kits measured 0.257 at
+  24.5 ms and 0.269 at 25.0 ms, **+0.5 ms / +2.0 %**, with overlapping spreads
+  (21--27 vs 21--29). Test 03 is at parity with 0.257.
+  `reports/performance/colo-07-residual-attribution.md` §4. `[MEASURED]`
 * The 0.260 kit is slower than the other two even in `BUILD` (512.5 ms vs 467.5 /
   468.0 for 02), which confirms the defect was not confined to the sweep loop:
   the defective runtime's allocation path was also slower. `[MEASURED]`
 * 0.269 beats the gates of the roadmap (`<= 140` / `<= 40`) with large margin on
   both tests.
 
-### Cause of the 03 residual
+### Cause of the 03 regression (bisected)
 
-`[HYPOTHESIS]` The runtime between `98a1099` and `d23a2b4` contains more than the
-sweep change (versions `1ca3c37`, `1646b93`, `5d62abf`, `0708f75`, `f1d2b42`,
-`e830b65`, plus the ColO work); the residual is not attributed to a specific
-commit. It is recorded, not explained away. Test 03 allocates 875,000 nodes per
-collection and collects 1,000,000 objects with near-zero live set, so per-object
-sweep and page-recycling costs are at their most visible there; the ColO-01/02
-chunk accounting may also play a part (stage sweep 12.5 ms vs the 12 ms target).
+`reports/performance/colo-07-residual-attribution.md` bisects the runtime chain
+with the same kit method and attributes the test-03 regression to a single
+commit:
+
+* `98a1099` 24.0, `f1d2b42` 26.0, `1ca3c37` 28.5, **`e830b65` 57.0**, `1646b93`
+  67.0, `0708f75` 62.0, `5d62abf` 64.0, `9d5b6ac` 31.0 (ms, 8 interleaved
+  rounds). The step is `e830b65` (sweep pages in address order), whose per-bit
+  bitmap walk tests 10.04 million zero bits per collection against 875,000 set
+  bits: stage sweep 8.61 -> 29.89 ms.
+* 0.269 removes it (sweep 10.54 ms, zero zero-bit iterations), and the dedicated
+  A/B shows the remainder is inside noise.
+
+The residual cost in the probe's harness workload is +1.56 ms of sweep per
+collection (page-bitmap word reads) offset by 1.66 ms less mark (per-object list
+walk removed), i.e. parity in total.
 
 ## 4. Correctness at the current build
 
@@ -93,8 +105,8 @@ chunk accounting may also play a part (stage sweep 12.5 ms vs the 12 ms target).
 ## 5. Limitations
 
 * Millisecond-resolution output from the stress tests (integer `COLLECT_MS`), so
-  medians are quantised; the 0.269-vs-0.257 03 difference (2.5 ms) is above that
-  resolution.
+  medians are quantised, and the 8-kit matrix has heavy tails (single samples up
+  to 146 ms). The 03 residual claim rests on the separate 16-round two-kit A/B.
 * One driver revision (0.269) for all kits. That is what isolates the collector,
   but it means the compiler-side cost of the handoff-fusion fix (~2--3 % on BUILD,
   `43c223f`) is present in every row and is **not** part of this comparison. A
@@ -106,7 +118,8 @@ chunk accounting may also play a part (stage sweep 12.5 ms vs the 12 ms target).
 
 ## 6. Recommendation
 
-**Accept 0.269 as the working build.** It removes the 0.260 regression (-43 % / -51 %),
-matches or beats 0.257 on test 02, passes all 192 tests, and leaves one recorded
-residual: test 03 is 2.5 ms (9.6 %) slower than 0.257, unattributed. That residual
-is documented in `docs/VERSION_LOG.md` rather than presented as a win.
+**Accept 0.269 as the working build.** It removes the 0.260 regression (-43 % /
+-51 %), matches or beats 0.257 on test 02, is at parity with 0.257 on test 03
+(+0.5 ms / +2.0 %, inside spread), and passes all 192 tests. The test-03
+regression is bisected to `e830b65`'s zero-bit scan and is removed; no residual
+regression is left to excuse.
