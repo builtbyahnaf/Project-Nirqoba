@@ -127,7 +127,15 @@ replace_once(
           }
 """ % sweep_budget)
 
-if bitmap:
+if "sweep_cursor.mask" in text:
+    # Set-bit walk: every iteration is one object start, so a zero-bit count is
+    # zero by construction and there is no position loop to instrument.
+    replace_once(
+        "    const size_t slot = word_index * 64 + index;\n",
+        """    const size_t slot = word_index * 64 + index;
+    ++stage_probe_counters.set_bits;
+""")
+elif bitmap:
     replace_once(
         """    if (((bits >> sweep_cursor.bit) & uint64_t{1}) == 0) {
       ++sweep_cursor.bit;
