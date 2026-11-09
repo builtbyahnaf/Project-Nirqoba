@@ -10,8 +10,24 @@
 
 ### Summary of Changes (since `0.281-beta`):
 
-*Current working build, opened for the rest of BO-02. Nothing has landed under
-this version yet; entries are added as changes are committed.*
+*Current working build. BO-02 is complete under this version.*
+
+- **Fused frame open covered by tests** — `GcTest.FusedFrameOpenPublishesStaticRootsAndNests`
+  exercises the new entry directly: roots it publishes survive a collection, a
+  nested fused frame leaves the outer roots registered, and a zero-slot frame
+  opens and ends with a distinct marker. Unit suite 193/193.
+- **New integration case** `gc_fused_frame_open`: a recursive program with four
+  static roots per activation, asserting the fused call is emitted, the split
+  registration is not, and the result survives a collection at every level.
+  Integration 259/260; the one failure (`memory_advanced`) predates this version
+  and fails in the memory-mapping path.
+- **Evidence** (`reports/performance/bo-02-fused-frame-open.md`): one runtime call
+  site fewer per batched activation (`build_tree` 12 → 11 call sites, 10 → 9
+  runtime calls per internal node, 56 → 55 assembly instructions), no timing
+  claim, and the full correctness-coverage matrix for the changed ABI.
+- **Deliberately not done:** descriptor-backed root iteration and removing the
+  frame vector or the slot indexes — reasons recorded in the report; none of them
+  had a provable win at these slot counts.
 
 ---
 
