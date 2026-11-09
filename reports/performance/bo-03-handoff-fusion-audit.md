@@ -1,7 +1,9 @@
 # BO-03 — Handoff Fusion Audit
 
-**Status:** step 1 of 5 — audit; no code change yet
-**Version:** 0.286-beta, production configuration
+**Status:** complete — audit, corrected comments and coverage; no new pass and no
+new runtime entry point
+**Version:** audit under 0.286-beta; completion under 0.289-beta, production
+configuration
 **Date:** 2026-11-09
 
 Audit only: no second pass and no second runtime entry point were added.
@@ -96,3 +98,26 @@ the fused form is one region.
 - No measurement of a "pre-fusion binary" is taken, because no corpus program
   emits the fused form; the roadmap allows skipping measurement in exactly this
   case.
+
+## 7. Outcome (completed under 0.289-beta)
+
+- **Comments corrected** (`gc.h`, `gc.cpp`, `TirToMlir.cpp`): the fused entry is
+described as saving one call boundary, both routines are stated to open their own
+fast-barrier region, and the lowering comment names the release-then-publish order
+the pass matches and records that current emission never produces it.
+- **Fused entry exercised directly** (`GcTest.StoreReleaseRootsBeforeReleasingThePin`):
+the object survives the collection after the pin is released because the slot was
+published first; a null slot still releases the pin; clearing the slot lets the
+object go.
+- **Emission order pinned** (integration `gc_handoff_order`): a managed return
+stored into a root emits `pin_transfer` → `root_store` → `unpin`, and emits **no**
+`nrq_gc_root_store_release`. A future reorder of the lowering would now change
+this expectation rather than silently activating the pass.
+- **Suites:** unit 194/194, integration 261/261.
+- **No timing:** there is no emitted fused form in the corpus, so there is no
+call-site difference to time. The only quantitative statement this audit makes is
+the call-count one: the fused form would remove one runtime call per handoff, and
+the current emission does not use it.
+- **Left for the owner:** whether to delete the now-unmatchable pass (and its
+documented ABI entry) or to reorder the lowering to release-then-publish. Both
+change compiler or ABI behaviour, and the roadmap scopes this stage to an audit.
