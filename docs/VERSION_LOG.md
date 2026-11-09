@@ -28,7 +28,7 @@ implemented:
   unreachable old objects; a fragmentation/reuse workload and a multithreaded
   stress workload in the diagnostic harness.
 
-### Performance (measured, interleaved 8 runs per build)
+### Performance (measured, interleaved runs)
 
 Stress Test 2, same 0.269 compiler driver, only the runtime library differs
 (`reports/performance/colo-final-integrated.md`):
