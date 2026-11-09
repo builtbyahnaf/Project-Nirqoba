@@ -125,8 +125,16 @@ not rounded away.
 
 ```
 ./build269.bat                                   # vcvars64 + cmake --build build/msvc-dev --target nirqoba_unit_tests
-./build/msvc-dev/tests/nirqoba_unit_tests.exe    # 190 passed, 0 failed (at 25224b3)
+./build/msvc-dev/tests/nirqoba_unit_tests.exe
 ```
+
+* Measured at `9d5b6ac` (this stage plus ColO-02, which does not change the sweep
+  loop's correctness): **190 passed, 0 failed**.
+* Measured at the final HEAD of this roadmap: **192 passed, 0 failed** (the suite
+  gained the ColO-03 and ColO-04 tests).
+* The suite was not re-run at `25224b3` itself; the sweep code it would exercise is
+  the code measured at `9d5b6ac` and at HEAD. Recorded explicitly rather than
+  implying a run that did not happen.
 
 The harness also verifies the workload's observable result on every run:
 `LIVE_AFTER 2097151`, `PAGES 3841`, ROOT_VALUE/checksum unchanged from the
