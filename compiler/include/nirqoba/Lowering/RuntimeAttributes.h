@@ -123,11 +123,23 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
   // bypassing observable custom allocator callbacks / profiler counters).
   // Return noalias is used instead for alias analysis.
   if (symbol == "nrq_memory_allocate" || symbol == "nrq_memory_allocate_array" ||
-      symbol == "nrq_memory_shared_allocate" || symbol == "nrq_memory_secure_allocate" ||
-      symbol == "nrq_gc_allocate" || symbol == "nrq_gc_allocate_pinned") {
+      symbol == "nrq_memory_shared_allocate" || symbol == "nrq_memory_secure_allocate") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     policy.return_noalias = true;
+    return policy;
+  }
+  // The managed allocators take a size (and at most a trace callback pointer),
+  // never storage they read or write on the caller's behalf. The object they
+  // return is new memory, not argument memory, and collection they may trigger
+  // touches runtime state only.
+  if (symbol == "nrq_gc_allocate" || symbol == "nrq_gc_allocate_pinned" ||
+      symbol == "nrq_gc_allocate_array" ||
+      symbol == "nrq_gc_allocate_array_typed") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    policy.return_noalias = true;
+    policy.memory = MemoryEffectKind::ArgNoneOtherReadWrite;
     return policy;
   }
   if (symbol == "nrq_memory_allocate_from" || symbol == "nrq_memory_allocate_array_from" ||
@@ -179,10 +191,14 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
   // shadow stack, the global root table, the remembered set and allocator
   // statistics. The ones that only publish or remove bookkeeping for the
   // current activation cannot wait on another thread, so they also return.
+  // The mutator protocol takes no pointer arguments: it publishes or retires
+  // this thread's state and parks for the collector. No caller storage is
+  // reachable from it.
   if (symbol == "nrq_gc_mutator_enter" || symbol == "nrq_gc_mutator_leave" ||
       symbol == "nrq_gc_safepoint") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
+    policy.memory = MemoryEffectKind::ArgNoneOtherReadWrite;
     return policy;
   }
   // Frame begin/end touch only this thread's frame chain, the shadow-stack
@@ -245,15 +261,22 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
     policy.nocapture_args_mask = (1u << 0);
     return policy;
   }
+  // Both consult the object index and, during a cycle, read and set mark bits
+  // through the object header, so argument memory is read and written. They are
+  // not marked willreturn: the table lookup can take the collector mutex.
   if (symbol == "nrq_gc_pin" || symbol == "nrq_gc_pin_transfer") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
+    policy.memory = MemoryEffectKind::ArgReadWriteOtherReadWrite;
     return policy;
   }
+  // This one publication writes the root slot it is handed, so its argument
+  // memory is genuinely read and written.
   if (symbol == "nrq_gc_allocate_array_typed_rooted") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     policy.return_noalias = true;
+    policy.memory = MemoryEffectKind::ArgReadWriteOtherReadWrite;
     return policy;
   }
   // The configuration marker the entry wrapper calls. It does nothing, but it
@@ -288,29 +311,41 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
   }
   // A collection waits for every other mutator to park, so it is not marked
   // willreturn; it still cannot unwind.
-  if (symbol == "nrq_gc_collect") {
+  // A collection has no pointer arguments. Trace callbacks it invokes receive
+  // objects reached from the heap, not from this call's argument list, so its
+  // argument memory is untouched even though the heap and runtime state are.
+  if (symbol == "nrq_gc_collect" || symbol == "nrq_gc_collect_minor") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
+    policy.memory = MemoryEffectKind::ArgNoneOtherReadWrite;
     return policy;
   }
   // Initialization and shutdown run once around the program.
   if (symbol == "nrq_gc_init" || symbol == "nrq_gc_shutdown") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
+    policy.memory = MemoryEffectKind::ArgNoneOtherReadWrite;
     return policy;
   }
+  // Policy switches and statistics queries: no pointer argument is dereferenced;
+  // the counters and mutex they touch are runtime state.
   if (symbol == "nrq_gc_enable" || symbol == "nrq_gc_disable" ||
       symbol == "nrq_gc_set_threshold" || symbol == "nrq_gc_is_enabled" ||
       symbol == "nrq_gc_get_allocated_bytes" ||
       symbol == "nrq_gc_get_collected_bytes" ||
       symbol == "nrq_gc_get_collection_count" ||
       symbol == "nrq_gc_get_live_objects" ||
+      symbol == "nrq_gc_get_minor_collection_count" ||
+      symbol == "nrq_gc_get_major_collection_count" ||
+      symbol == "nrq_gc_get_threshold" ||
       symbol == "nrq_gc_pin_count" || symbol == "nrq_gc_pin_violations" ||
+      symbol == "nrq_gc_transfer_pin_fallbacks" ||
       symbol == "nrq_gc_ref_count_start" || symbol == "nrq_gc_ref_count_stop" ||
       symbol == "nrq_gc_get_ref_count") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     policy.willreturn = true;
+    policy.memory = MemoryEffectKind::ArgNoneOtherReadWrite;
     return policy;
   }
 
