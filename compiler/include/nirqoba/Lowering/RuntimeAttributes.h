@@ -227,7 +227,8 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
   // can reach errno, and none of it captures or keeps an argument pointer.
   if (symbol == "nrq_gc_root_register" ||
       symbol == "nrq_gc_root_register_frame" ||
-      symbol == "nrq_gc_root_register_frame_static") {
+      symbol == "nrq_gc_root_register_frame_static" ||
+      symbol == "nrq_gc_root_frame_open") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     policy.memory = MemoryEffectKind::ArgReadWriteOtherReadWrite;
