@@ -24,6 +24,22 @@
 
 cmake_minimum_required(VERSION 3.28)
 
+# The GC hot path is a chain of tiny accessors: relaxed atomic loads and stores
+# over the per-mutator state, the address helpers behind them, and the slot-index
+# probes. MSVC's RelWithDebInfo configuration compiles with /Ob1, which only
+# inlines functions it is told about explicitly, so at that setting each of those
+# accessors stayed an out-of-line call into the C++ library and a single rooted
+# allocation paid several of them. This directory - the runtime libraries, not
+# the project - uses the full inliner in that configuration too. Optimization
+# level and debug information are unchanged, the development runtime keeps every
+# check and diagnostic, and Release already built with /Ob2; MinSizeRel keeps its
+# size-oriented /Ob1 on purpose.
+if(MSVC)
+  string(REPLACE "/Ob1" "/Ob2" NIRQOBA_RUNTIME_RELWITHDEBINFO_FLAGS
+                 "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${NIRQOBA_RUNTIME_RELWITHDEBINFO_FLAGS}")
+endif()
+
 set(NIRQOBA_RUNTIME_SOURCES
   src/io_windows.cpp
   src/fatal_windows.cpp
