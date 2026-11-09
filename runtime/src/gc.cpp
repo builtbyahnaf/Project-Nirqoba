@@ -1076,7 +1076,8 @@ void publish_tlab_locked(MutatorState& mutator) {
   ObjectHeader* header = mutator.pending_objects;
   while (header) {
     ObjectHeader* next = header->tlab_next;
-    if (page_uses_index(header->page)) {
+    const bool indexed = page_uses_index(header->page);
+    if (indexed) {
       if (!object_index.insert(header->payload(), header))
         nrq_runtime_fatal("GC failed to publish a thread-local allocation");
     } else {
@@ -1085,9 +1086,13 @@ void publish_tlab_locked(MutatorState& mutator) {
           header->page->storage);
       mark_object_start(*header->page, offset);
     }
-    header->tlab_next = nullptr;
-    header->next = nullptr;
-    if (page_uses_index(header->page)) {
+    // The published state does not use the batch link: the pending list is
+    // dropped as a whole, and only an object on a page without a start bitmap is
+    // linked into `unindexed_objects`. Clearing the link here used to dirty one
+    // header cache line per object, so the traversal paid a write-back for every
+    // line it read; reuse is safe without it because the header is constructed
+    // again when its storage is handed out.
+    if (indexed) {
       header->next = unindexed_objects;
       unindexed_objects = header;
     }
