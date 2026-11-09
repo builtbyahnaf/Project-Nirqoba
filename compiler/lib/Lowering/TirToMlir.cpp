@@ -2392,15 +2392,24 @@ class FunctionTranslator {
         std::vector<uint64_t> root_offsets;
         collect_managed_reference_offsets(op.result.type, 0, root_offsets);
         if (!root_offsets.empty()) {
+          const bool rooted = gc_roots_.rooted_slots.count(op.result.id) != 0;
           // A slot whose contents no collection can observe still gets a
           // deterministic zero value, but it is not registered as a root: the
           // slot is then only reached by plain loads and stores, so mem2reg and
           // SROA can promote it like an ordinary local.
-          mlir::Value zero_value = builder_.create<mlir::LLVM::ZeroOp>(
-              loc, elem_type).getResult();
-          builder_.create<mlir::LLVM::StoreOp>(loc, zero_value, slot);
-          if (gc_roots_.rooted_slots.count(op.result.id))
-            register_gc_root(slot, op.result.type, loc);
+          //
+          // A rooted slot is different: the frame preamble clears every pending
+          // root slot before it publishes the frame, and the slot is fresh, so
+          // nothing can have written it before that preamble. Zeroing it again
+          // here repeats a store whose effect is already in the slot; the only
+          // earlier write is the preamble's, which dominates every block.
+          // Without a frame the preamble does not run, so the store stays.
+          if (!rooted || !gc_root_frame_marker_) {
+            mlir::Value zero_value = builder_.create<mlir::LLVM::ZeroOp>(
+                loc, elem_type).getResult();
+            builder_.create<mlir::LLVM::StoreOp>(loc, zero_value, slot);
+          }
+          if (rooted) register_gc_root(slot, op.result.type, loc);
         }
         set(op.result, slot);
         return true;
