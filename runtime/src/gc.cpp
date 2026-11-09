@@ -35,6 +35,10 @@
 #include <unordered_set>
 #include <vector>
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 using namespace std;
 
 // The slot index lives in a header so the unit tests can exercise the exact
@@ -1948,6 +1952,22 @@ GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t& offset,
 // Take a page of at least `capacity` bytes from the recycle pool, or create a
 // fresh one. The caller inherits storage ownership and must either publish the
 // page into gc_pages or release the storage explicitly.
+// Page storage comes straight from the OS. A GC page needs kGcPageBytes
+// alignment, and VirtualAlloc returns exactly that: it hands back a 64 KiB-aligned
+// region and commits only the bytes requested. The over-aligned `operator new` it
+// replaced has to reserve room to align the block itself, so every 64 KiB page
+// carried up to another 64 KiB of reserved and committed space - a measured 2x
+// private commit for a heap of ordinary pages. Release goes back through
+// VirtualFree so the accounting stays symmetric.
+unsigned char* commit_page_storage(size_t bytes) {
+  return static_cast<unsigned char*>(
+      ::VirtualAlloc(nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+}
+
+void release_page_storage(unsigned char* storage) {
+  if (storage) ::VirtualFree(storage, 0, MEM_RELEASE);
+}
+
 std::unique_ptr<GcPage> acquire_page(size_t capacity) {
   for (auto entry = recycled_pages.begin(); entry != recycled_pages.end();
        ++entry) {
@@ -1971,12 +1991,11 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
     recycled_page_reuse_count = saturated_add(recycled_page_reuse_count, 1);
     return page;
   }
-  void* storage =
-      ::operator new(capacity, std::align_val_t{kGcPageBytes}, std::nothrow);
+  unsigned char* storage = commit_page_storage(capacity);
   if (!storage) return nullptr;
   try {
     auto page = std::make_unique<GcPage>();
-    page->storage = static_cast<unsigned char*>(storage);
+    page->storage = storage;
     page->capacity = capacity;
     if (capacity <= kGcPageBytes) {
       const size_t slots = capacity / kObjectStartAlignment;
@@ -1986,7 +2005,7 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
     }
     return page;
   } catch (...) {
-    ::operator delete(storage, std::align_val_t{kGcPageBytes});
+    release_page_storage(storage);
     return nullptr;
   }
 }
@@ -2005,7 +2024,7 @@ void recycle_page(std::unique_ptr<GcPage> page) {
   if (recycled_pages.size() >= kMaxRecycledPages ||
       page->capacity < kGcPageBytes ||
       page->capacity > kMaxRecycledPageBytes) {
-    ::operator delete(page->storage, std::align_val_t{kGcPageBytes});
+    release_page_storage(page->storage);
     return;
   }
   page->used = 0;
@@ -2018,7 +2037,7 @@ void recycle_page(std::unique_ptr<GcPage> page) {
   try {
     recycled_pages.push_back(std::move(page));
   } catch (...) {
-    ::operator delete(raw->storage, std::align_val_t{kGcPageBytes});
+    release_page_storage(raw->storage);
   }
 }
 
@@ -2407,9 +2426,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     try {
       gc_pages.push_back(std::move(new_page));
     } catch (...) {
-      if (new_page)
-        ::operator delete(new_page->storage,
-                          std::align_val_t{kGcPageBytes});
+      if (new_page) release_page_storage(new_page->storage);
       return nullptr;
     }
     // A page that cannot be indexed by address is still usable; its objects
@@ -2552,9 +2569,7 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     try {
       gc_pages.push_back(std::move(new_page));
     } catch (...) {
-      if (new_page)
-        ::operator delete(new_page->storage,
-                          std::align_val_t{kGcPageBytes});
+      if (new_page) release_page_storage(new_page->storage);
       return false;
     }
     // A page that cannot be indexed by address is still usable; its objects
