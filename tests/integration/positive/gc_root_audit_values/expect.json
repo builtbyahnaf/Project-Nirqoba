@@ -2,6 +2,6 @@
   "mode": "build_and_run",
   "expect_stdout": "28\n",
   "expect_ir_counts": {
-    "call void @nrq_gc_root_register_frame_static(ptr": 1
+    "call i64 @nrq_gc_root_frame_open(ptr": 1
   }
 }
