@@ -1,0 +1,7 @@
+{
+  "mode": "build_and_run",
+  "expect_stdout": "7\n",
+  "expect_ir_counts": {
+    "store ptr null, ptr %": 2
+  }
+}
