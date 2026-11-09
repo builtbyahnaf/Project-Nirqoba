@@ -2076,17 +2076,39 @@ class FunctionTranslator {
           mlir::ValueRange{zero, position}).getResult();
       builder_.create<mlir::LLVM::StoreOp>(loc, roots[index].slot, element);
     }
+    mlir::Value count = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI64Type(),
+        builder_.getI64IntegerAttr(static_cast<int64_t>(roots.size()))).getResult();
     // The descriptor is the constant global this function just emitted, so the
-    // runtime does not have to re-validate it on every activation: the static
-    // entry point keeps the development build's validation and drops it from the
-    // production build.
+    // runtime does not have to re-validate it on every activation: the fused and
+    // static entry points keep the development build's validation and drop it
+    // from the production build.
+    //
+    // The frame was opened at function entry, before these slots could be
+    // published. Opening it in the same call that publishes them is the same
+    // sequence - frame record first, roots second - with one call and one
+    // shadow-stack entry instead of two. The eager begin call is erased once
+    // this call owns the frame record.
+    mlir::Operation* begin_op =
+        gc_root_frame_marker_ ? gc_root_frame_marker_.getDefiningOp() : nullptr;
+    if (begin_op) {
+      auto open_fn = ensure_runtime_fn(
+          module_, builder_, "nrq_gc_root_frame_open",
+          builder_.getI64Type(),
+          {llvm_ptr_type(ctx_), builder_.getI64Type(), llvm_ptr_type(ctx_)});
+      mlir::Value marker = builder_.create<mlir::LLVM::CallOp>(
+          loc, open_fn, mlir::ValueRange{slots, count, descriptor}).getResult();
+      // Every frame-end already emitted for this function reads the marker, and
+      // they all sit in blocks dominated by this entry-block call.
+      gc_root_frame_marker_.replaceAllUsesWith(marker);
+      gc_root_frame_marker_ = marker;
+      begin_op->erase();
+      return true;
+    }
     auto register_fn = ensure_runtime_fn(
         module_, builder_, "nrq_gc_root_register_frame_static",
         mlir::LLVM::LLVMVoidType::get(ctx_),
         {llvm_ptr_type(ctx_), builder_.getI64Type(), llvm_ptr_type(ctx_)});
-    mlir::Value count = builder_.create<mlir::LLVM::ConstantOp>(
-        loc, builder_.getI64Type(),
-        builder_.getI64IntegerAttr(static_cast<int64_t>(roots.size()))).getResult();
     builder_.create<mlir::LLVM::CallOp>(
         loc, register_fn, mlir::ValueRange{slots, count, descriptor});
     return true;
