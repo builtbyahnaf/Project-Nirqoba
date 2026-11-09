@@ -7,6 +7,7 @@ Uses only the Python standard library.
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -53,6 +54,36 @@ def find_llvm_objdump(compiler_exe):
         if candidate.exists():
             return candidate
     return None
+
+
+def compiler_runtime_version(compiler_exe):
+    """Returns the version string the runtime reports for this build.
+
+    Expectations may write `{version}` instead of pinning a literal. The runtime
+    appends its configuration to the compiler's label (`0.286-beta` becomes
+    `0.286-beta-phase6`), so a release bump cannot leave a stale expectation
+    behind the way memory_advanced was left asserting `0.266-beta-phase6`.
+    """
+    code, out, _ = run_command([str(compiler_exe), "--version"])
+    if code != 0:
+        return None
+    match = re.search(r"version\s+(\S+)\s*\(Phase\s*(\d+)\)", out)
+    if not match:
+        return None
+    return f"{match.group(1)}-phase{match.group(2)}"
+
+
+def expand_version_tokens(value, version):
+    """Replaces `{version}` in every string of an expectation value."""
+    if version is None:
+        return value
+    if isinstance(value, str):
+        return value.replace("{version}", version)
+    if isinstance(value, list):
+        return [expand_version_tokens(item, version) for item in value]
+    if isinstance(value, dict):
+        return {key: expand_version_tokens(item, version) for key, item in value.items()}
+    return value
 
 
 def check_coff_header(obj_path):
@@ -251,9 +282,9 @@ def run_case(case_dir, compiler_exe, temp_dir):
     if not expect_path.exists():
         return True, "No expect.json, skipping"
 
-    with open(expect_path, "r", encoding="utf-8") as f:
-        spec = json.load(f)
-
+    with open(expect_path, "r", encoding="utf-8") as f:        spec = json.load(f)
+    if "{version}" in json.dumps(spec):
+        spec = expand_version_tokens(spec, compiler_runtime_version(compiler_exe))
     mode = spec.get("mode", "build_and_run")
     extra_args = spec.get("args", [])
     expected_exit = spec.get("expect_exit", 0)
