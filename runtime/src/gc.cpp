@@ -1126,19 +1126,24 @@ uint64_t saturated_add(uint64_t left, uint64_t right) {
   return right > UINT64_MAX - left ? UINT64_MAX : left + right;
 }
 
-void atomic_saturating_add_size(std::atomic<size_t>& target, size_t amount) {
-  size_t current = target.load(std::memory_order_relaxed);
-  while (!target.compare_exchange_weak(
-      current, amount > SIZE_MAX - current ? SIZE_MAX : current + amount,
-      std::memory_order_relaxed, std::memory_order_relaxed)) {}
+// `bytes_since_collection` has exactly one writer-path class - the collection
+// and allocation code that runs under gc_mutex - so the update is a plain
+// saturating load and store rather than a compare-exchange loop that can never
+// retry. The trigger reads it without the lock and only needs a snapshot, which
+// a relaxed store publishes.
+void add_since_collection_locked(size_t amount) {
+  const size_t current =
+      allocation_accounting.bytes_since_collection.load(std::memory_order_relaxed);
+  allocation_accounting.bytes_since_collection.store(
+      amount > SIZE_MAX - current ? SIZE_MAX : current + amount,
+      std::memory_order_relaxed);
 }
 
 // Fold a mutator's locally batched allocation bytes into the shared trigger
 // counter. Callers hold gc_mutex.
 void flush_mutator_accounting_locked(MutatorState& mutator) {
   if (mutator.unflushed_bytes == 0) return;
-  atomic_saturating_add_size(allocation_accounting.bytes_since_collection,
-                             mutator.unflushed_bytes);
+  add_since_collection_locked(mutator.unflushed_bytes);
   mutator.unflushed_bytes = 0;
 }
 
@@ -2578,7 +2583,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
       statistics.allocated_bytes, static_cast<uint64_t>(bytes));
   statistics.live_objects = saturated_add(statistics.live_objects, 1);
   live_heap_bytes = saturated_add(live_heap_bytes, bytes);
-  atomic_saturating_add_size(allocation_accounting.bytes_since_collection, bytes);
+  add_since_collection_locked(bytes);
   debug_emit(NRQ_GC_EVENT_ALLOCATION, 0, bytes, object);
   return object;
 }
