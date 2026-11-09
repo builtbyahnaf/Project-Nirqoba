@@ -38,6 +38,9 @@
 #if defined(_WIN32)
 #include <windows.h>
 #endif
+#if defined(_MSC_VER) && defined(_M_X64)
+#include <intrin.h>
+#endif
 
 using namespace std;
 
@@ -677,6 +680,23 @@ ObjectHeader* find_object_locked(void* object) {
     return nullptr;
   }
   return object_index.find(static_cast<void*>(object));
+}
+
+// count * element_size, reporting overflow through the return value and the
+// product through `bytes`. The obvious guard divides by element_size first, and a
+// 64-bit divide is one of the most expensive instructions on the path - it cost
+// more than the rest of the entry point's arithmetic. The high half of the product
+// answers the same question with one multiply.
+bool multiply_size_overflowed(size_t count, size_t element_size, size_t& bytes) {
+#if defined(_MSC_VER) && defined(_M_X64)
+  unsigned __int64 high = 0;
+  bytes = static_cast<size_t>(_umul128(count, element_size, &high));
+  return high != 0;
+#else
+  if (element_size != 0 && count > SIZE_MAX / element_size) return true;
+  bytes = count * element_size;
+  return false;
+#endif
 }
 
 constexpr size_t kGcTlabBytes = kGcPageBytes;
@@ -2832,40 +2852,40 @@ void* nrq_gc_allocate(size_t bytes, nrq_gc_trace_fn trace) {
 
 void* nrq_gc_allocate_array(size_t count, size_t element_size,
                             nrq_gc_trace_fn trace) {
-  if (count == 0 || element_size == 0 || count > SIZE_MAX / element_size)
-    return nullptr;
+  if (count == 0 || element_size == 0) return nullptr;
+  size_t bytes = 0;
+  if (multiply_size_overflowed(count, element_size, bytes)) return nullptr;
   maybe_collect_automatically();
   bool handled = false;
-  void* object = allocate_tlab(count * element_size, element_size, trace,
-                               nullptr, 0, handled);
+  void* object = allocate_tlab(bytes, element_size, trace, nullptr, 0, handled);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
-  return allocate_locked(count * element_size, element_size, trace, nullptr, 0);
+  return allocate_locked(bytes, element_size, trace, nullptr, 0);
 }
 
 void* nrq_gc_allocate_array_typed(size_t count, size_t element_size,
                                   const size_t* reference_offsets,
                                   size_t reference_count) {
-  if (count == 0 || element_size == 0 || count > SIZE_MAX / element_size)
-    return nullptr;
+  if (count == 0 || element_size == 0) return nullptr;
+  size_t bytes = 0;
+  if (multiply_size_overflowed(count, element_size, bytes)) return nullptr;
   maybe_collect_automatically();
   bool handled = false;
-  void* object = allocate_tlab(count * element_size, element_size, nullptr,
-                               reference_offsets, reference_count, handled);
+  void* object = allocate_tlab(bytes, element_size, nullptr, reference_offsets,
+                               reference_count, handled);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
-  return allocate_locked(count * element_size, element_size, nullptr,
-                         reference_offsets, reference_count);
+  return allocate_locked(bytes, element_size, nullptr, reference_offsets,
+                         reference_count);
 }
 
 void* nrq_gc_allocate_array_typed_rooted(
     void** root_slot, size_t count, size_t element_size,
     const size_t* reference_offsets, size_t reference_count) {
-  if (!root_slot || count == 0 || element_size == 0 ||
-      count > SIZE_MAX / element_size)
-    return nullptr;
+  if (!root_slot || count == 0 || element_size == 0) return nullptr;
+  size_t bytes = 0;
+  if (multiply_size_overflowed(count, element_size, bytes)) return nullptr;
   maybe_collect_automatically();
-  const size_t bytes = count * element_size;
   if (thread_mutator.depth != 0) {
     ShadowStack& stack = ensure_shadow_stack();
     // O(1) root slot validation through the per-thread slot index.
