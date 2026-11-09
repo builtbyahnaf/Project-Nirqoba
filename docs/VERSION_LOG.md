@@ -6,12 +6,37 @@
 
 ---
 
-## Version 0.291-beta (working build)
+## Version 0.294-beta (working build)
+
+### Summary of Changes (since `0.291-beta`):
+
+*Current working build. Nothing has landed under this version yet; entries are
+added as changes are committed.*
+
+---
+
+## Version 0.291-beta (released)
 
 ### Summary of Changes (since `0.289-beta`):
 
-*Current working build, opened for the next stage. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Released. Superseded by 0.294-beta, which implements the BO-04 removal.*
+
+- **Handoff-fusion pass removed.** The pass required release-then-publish and
+  every lowering site emits publish-then-release, so it could never match; a dead
+  rewrite that would silently activate on a future emission change is worse than
+  none. Reordering the lowering to feed it was rejected: it would release a pin
+  before publishing the value, and any handoff the pass declined would leave a
+  value unpinned and unrooted. `nrq_gc_root_store_release` stays as documented ABI
+  and keeps its unit test (`reports/performance/bo-03-handoff-fusion-audit.md` §8).
+- **Effect:** emitted IR for tests 01–03 changes only in where an unpin sits among
+  non-call operations (no call or safepoint is crossed); `build_tree` assembly
+  keeps its 55 instructions with different register shuffles; unit 194/194,
+  integration 261/261, Stress 02/03 semantic output unchanged.
+- **BO-04 audited** (`reports/performance/bo-04-root-init-audit.md`): every rooted
+  slot is zeroed twice — once by the frame preamble before publication and again
+  at the alloca point — and the duplicate is dominated with no write in between,
+  so it is removable under a local structural proof. Frames already open once per
+  activation, so loop frame reuse has nothing to hoist.
 
 ---
 
@@ -253,7 +278,7 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 ## Version 0.266-beta (defective)
 
 > **Defect notice.** This release is known-defective and is superseded by
-> 0.291-beta. It introduced unexpected performance regressions in the
+> 0.294-beta. It introduced unexpected performance regressions in the
 > collector domain and must not be used for performance comparisons or as a
 > baseline. The defects are understood, documented below, and are being fixed
 > by the author as part of an architecture restructuring. No new feature work
@@ -299,7 +324,7 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 
 Ahnaf is aware of these regressions and is restructuring the architecture. The
 collector defect will be fixed by the author; the immediate correction is
-scheduled for **0.269-beta** and shipped in 0.271-beta; **0.291-beta** is the working
+scheduled for **0.269-beta** and shipped in 0.271-beta; **0.294-beta** is the working
 build from this point on.
 Do not tag, benchmark, or ship 0.266-beta.
 
@@ -309,7 +334,7 @@ Do not tag, benchmark, or ship 0.266-beta.
 
 > **Post-release note.** This release carries a stale benchmark artifact
 > (generated 2026-11-08T03:13, seven hours before the collector commits) and
-> introduced the sweep regression documented under 0.266-beta. Use 0.291-beta
+> introduced the sweep regression documented under 0.266-beta. Use 0.294-beta
 > for any measurement.
 
 ### Summary of Changes (since `0.257-beta`):
