@@ -614,6 +614,12 @@ struct MutatorState {
   // when reporting statistics, so the fast path never touches a global counter.
   std::atomic<size_t> pending_bytes{0};
   std::atomic<size_t> pending_count{0};
+  // Owner-only mirrors of the two published counters. The stores below still
+  // publish the exact value after every allocation; the loads that preceded them
+  // are gone, because only this thread writes the counters and every clear
+  // happens while the owner is parked or is the one clearing.
+  size_t pending_bytes_local = 0;
+  size_t pending_count_local = 0;
   size_t unflushed_bytes = 0;
   // Old-to-young stores buffer raw referents so ordinary stores do not need the
   // collector mutex. The owner drains this buffer at a safepoint/leave; the
@@ -1132,7 +1138,9 @@ void publish_tlab_locked(MutatorState& mutator) {
   }
   flush_mutator_accounting_locked(mutator);
   mutator.pending_objects = nullptr;
+  mutator.pending_bytes_local = 0;
   mutator.pending_bytes.store(0, std::memory_order_relaxed);
+  mutator.pending_count_local = 0;
   mutator.pending_count.store(0, std::memory_order_relaxed);
 }
 
@@ -2616,14 +2624,16 @@ void account_tlab_allocation(MutatorState& mutator, size_t bytes) {
   // value immediately visible to a statistics query - unlike batching it, which
   // would make an in-flight allocation momentarily invisible. What it drops is
   // the locked read-modify-write, which cost more than the rest of this function.
-  const size_t pending_bytes = mutator.pending_bytes.load(std::memory_order_relaxed);
-  if (pending_bytes > SIZE_MAX - bytes)
+  if (mutator.pending_bytes_local > SIZE_MAX - bytes)
     nrq_runtime_fatal("GC thread-local allocation accounting overflow");
-  mutator.pending_bytes.store(pending_bytes + bytes, std::memory_order_relaxed);
-  const size_t pending_count = mutator.pending_count.load(std::memory_order_relaxed);
-  if (pending_count == SIZE_MAX)
+  mutator.pending_bytes_local += bytes;
+  mutator.pending_bytes.store(mutator.pending_bytes_local,
+                              std::memory_order_relaxed);
+  if (mutator.pending_count_local == SIZE_MAX)
     nrq_runtime_fatal("GC thread-local allocation accounting overflow");
-  mutator.pending_count.store(pending_count + 1, std::memory_order_relaxed);
+  ++mutator.pending_count_local;
+  mutator.pending_count.store(mutator.pending_count_local,
+                              std::memory_order_relaxed);
   // The trigger only needs batch granularity, so the trackable total behind it
   // stays owner-only until the batch closes.
   if (bytes > SIZE_MAX - mutator.unflushed_bytes)
