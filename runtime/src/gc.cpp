@@ -1168,7 +1168,11 @@ void resume_mutators() {
 // guarded by gc_mutex. The increment is on the calling thread's own line, which
 // turns what used to be a contended read-modify-write on shared state into a
 // private one.
-bool begin_fast_barrier() {
+// Both sides of a barrier region are two relaxed stores and one acquire load.
+// Out of line they cost a call and a register save on each side of every rooted
+// allocation, which is a large fraction of a bump allocation; inlined, the
+// caller sees that the region only publishes the depth around its own work.
+__forceinline bool begin_fast_barrier() {
   if (thread_mutator.depth == 0) return false;
   // The counter lives on this thread's own cache line: only its owner writes it
   // and only the collector reads it, so no other thread can race the update.
@@ -1189,7 +1193,7 @@ bool begin_fast_barrier() {
   return false;
 }
 
-void end_fast_barrier() {
+__forceinline void end_fast_barrier() {
   const uint32_t previous =
       thread_mutator.barrier_depth.load(std::memory_order_relaxed);
   // Release the region's stores before the decrement becomes visible, so a
@@ -2782,7 +2786,7 @@ void remove_frame_slots(ShadowStack& stack, size_t first, size_t end) {
     remove_slot_state(stack, batch[position].slot, batch[position].count);
 }
 
-bool shadow_has_pointer_root(ShadowStack& stack, void* slot) {
+__forceinline bool shadow_has_pointer_root(ShadowStack& stack, void* slot) {
   // The memo answers for the slots a loop reuses; anything else falls back to
   // one probe in the per-thread index. Neither is ever read by the collector.
   if (stack.pointer_roots.contains(slot)) return true;
