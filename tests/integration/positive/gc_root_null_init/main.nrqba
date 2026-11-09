@@ -1,0 +1,16 @@
+struct Node {
+    int value;
+    managed<Node> next;
+}
+
+// One activation with one rooted managed local: the frame preamble clears the
+// slot before publishing it, so the slot must not be zeroed a second time at the
+// alloca point. The IR count below is the whole module, and this module has
+// exactly one rooted slot.
+int function main() {
+    var node = array.allocate<Node>(1);
+    node[0].value = 7;
+    gc.collect();
+    print(node[0].value);
+    return 0;
+}
