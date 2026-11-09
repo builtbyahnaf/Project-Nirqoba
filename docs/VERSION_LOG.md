@@ -6,11 +6,38 @@
 
 ---
 
+## Version 0.271-beta (working build)
+
+### Summary of Changes (since `0.269-beta`):
+
+*Current working build.*
+
+- **No runtime, compiler or language change.** Every file that produces the
+  binary or the collector is identical to 0.269-beta; this release carries the
+  corrected performance record.
+- **Test-03 regression bisected** (`reports/performance/colo-07-residual-attribution.md`):
+  the whole step belongs to `e830b65` (sweep pages in address order, one bitmap
+  bit at a time: +28 ms, 10.04 M zero-bit iterations per collection). The ColO-01
+  set-bit sweep removes it entirely.
+- **Residual withdrawn.** The earlier claim that test 03 is 9.6 % slower than
+  0.257 came from session drift and is not reproduced: a 16-round interleaved A/B
+  measures 24.5 ms (0.257) against 25.0 ms (0.271), and test 02 is 85.0 against
+  79.5 ms in the same protocol. `[MEASURED]`
+- The stage-03 sweep target (12 ms) is recorded as sitting on this machine's
+  measurement noise floor: 12.5 ms in one session, 10.54 ms in another.
+
+### Tests
+
+`nirqoba_unit_tests.exe`: 192/192 passing.
+
+---
+
 ## Version 0.269-beta (working build)
 
 ### Summary of Changes (since `0.266-beta`):
 
-*Current working build.* The 0.266 collector regression is removed and the
+*Working build; superseded by 0.271-beta, which changes no code.* The 0.266
+collector regression is removed and the
 collector optimisation roadmap (`project_context/ColO_ROADMAP_2.md`) is
 implemented:
 
@@ -82,7 +109,7 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 ## Version 0.266-beta (defective)
 
 > **Defect notice.** This release is known-defective and is superseded by
-> 0.269-beta. It introduced unexpected performance regressions in the
+> 0.271-beta. It introduced unexpected performance regressions in the
 > collector domain and must not be used for performance comparisons or as a
 > baseline. The defects are understood, documented below, and are being fixed
 > by the author as part of an architecture restructuring. No new feature work
@@ -128,7 +155,8 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 
 Ahnaf is aware of these regressions and is restructuring the architecture. The
 collector defect will be fixed by the author; the immediate correction is
-scheduled for **0.269-beta**, which is the working build from this point on.
+scheduled for **0.269-beta** and now shipped as **0.271-beta**, which is the working
+build from this point on.
 Do not tag, benchmark, or ship 0.266-beta.
 
 ---
@@ -137,7 +165,7 @@ Do not tag, benchmark, or ship 0.266-beta.
 
 > **Post-release note.** This release carries a stale benchmark artifact
 > (generated 2026-11-08T03:13, seven hours before the collector commits) and
-> introduced the sweep regression documented under 0.266-beta. Use 0.269-beta
+> introduced the sweep regression documented under 0.266-beta. Use 0.271-beta
 > for any measurement.
 
 ### Summary of Changes (since `0.257-beta`):
