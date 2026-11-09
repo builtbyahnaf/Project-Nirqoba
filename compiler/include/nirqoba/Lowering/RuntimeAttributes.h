@@ -201,29 +201,47 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
   if (symbol == "nrq_gc_root_register_typed") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
+    policy.memory = MemoryEffectKind::ArgReadWriteOtherReadWrite;
     policy.nocapture_args_mask = (1u << 2);
+    return policy;
+  }
+  // Every frame registration entry reads the slot addresses out of `slots`,
+  // reads the descriptor, and (during a cycle) may mark the referents those
+  // slots hold, so argument memory is genuinely read and written. Nothing here
+  // can reach errno, and none of it captures or keeps an argument pointer.
+  if (symbol == "nrq_gc_root_register" ||
+      symbol == "nrq_gc_root_register_frame" ||
+      symbol == "nrq_gc_root_register_frame_static") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    policy.memory = MemoryEffectKind::ArgReadWriteOtherReadWrite;
     return policy;
   }
   if (symbol == "nrq_gc_root_register_array" ||
       symbol == "nrq_gc_root_clear_array_references") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
+    policy.memory = MemoryEffectKind::ArgReadWriteOtherReadWrite;
     policy.nocapture_args_mask = (1u << 3);
     return policy;
   }
   // The write barriers publish a new reference into the shadow stack and the
   // remembered set. They are emitted on the assignment path, so they must not
   // be treated as throwing call sites either.
-  if (symbol == "nrq_gc_root_store" || symbol == "nrq_gc_root_copy") {
+  if (symbol == "nrq_gc_root_store" || symbol == "nrq_gc_root_store_release" ||
+      symbol == "nrq_gc_root_copy") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
+    policy.memory = MemoryEffectKind::ArgReadWriteOtherReadWrite;
     return policy;
   }
+  // The slot address is only compared, never stored or dereferenced, so no
+  // caller storage is reachable through the argument.
   if (symbol == "nrq_gc_root_unregister" || symbol == "nrq_gc_unpin") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     policy.willreturn = true;
-    // The slot address is only compared, never stored.
+    policy.memory = MemoryEffectKind::ArgNoneOtherReadWrite;
     policy.nocapture_args_mask = (1u << 0);
     return policy;
   }
