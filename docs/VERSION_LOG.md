@@ -36,19 +36,32 @@ Stress Test 2, same 0.269 compiler driver, only the runtime library differs
 | Test | 0.257 (`98a1099`) | 0.260 (`904aee0`) | 0.269 | Change vs 0.260 |
 | --- | --- | --- | --- | --- |
 | 02 mark and sweep, `COLLECT` median | 93.5 ms | 158.0 ms | **90.5 ms** | -42.7 % |
-| 03 cycles, `COLLECT` median | 26.0 ms | 58.0 ms | **28.5 ms** | -50.9 % |
+| 03 cycles, `COLLECT` median | 24.5 ms | 58.0 ms | **25.0 ms** | -56.9 % |
+
+The 0.257 and 0.269 03 figures are from the dedicated 16-round A/B
+(`colo-07-residual-attribution.md`); the single eight-kit session reported
+26.0 and 28.5 for the same two kits, which is drift.
 
 Stage probe (production flags): mode 02 sweep 21.0 ms per collection with zero
-zero-bit iterations (was 96.6 ms); mode 03 sweep 12.5 ms (was 31.8 ms, target
-12 ms).
+zero-bit iterations (was 96.6 ms); mode 03 sweep 12.5 ms (was 31.8 ms). The
+same-session interleaved probe (`colo-07` §3) measures 0.257 at 8.98 ms of
+sweep and 0.269 at 10.54 ms, with the mark phase 1.66 ms cheaper, i.e. parity
+in collection total.
 
 ### Known Issues
 
-1. **Test 03 remains ~2.5 ms (9.6 %) above 0.257.** 0.269 collects 03 in 28.5 ms
-   against 26.0 ms for the last healthy build. The gap is stable across eight
-   interleaved runs but not attributed to a specific runtime change between the
-   two revisions; recorded rather than explained.
-2. **Mode 03 stage sweep is 0.5 ms above its 12 ms target** (12.5 ms).
+1. **Test 03 is at parity with 0.257, not 9.6 % slower.** The integrated run
+   reported 28.5 ms against 26.0 ms, but a dedicated 16-round interleaved A/B of
+   the two kits measured **24.5 vs 25.0 ms (+0.5 ms, +2.0 %)**, within spread
+   (21--27 vs 21--29). The +2.5 ms was session drift and is corrected here. The
+   original 03 regression is bisected to `e830b65` (per-bit zero scan, +28 ms)
+   and is removed by the set-bit sweep (`reports/performance/colo-07-*.md`).
+   Surviving structural cost, in the harness workload only: sweep +1.56 ms per
+   collection for page-bitmap word reads, offset by 1.66 ms less mark.
+2. **Mode 03 stage sweep sits around its 12 ms target, and the verdict depends on
+   the session**: 12.5 ms in the ColO-02 session (a 4 % miss), 10.54 ms in the
+   interleaved ColO-07 session (a pass). The probe is single-process and the
+   machine drifts, so the target is neither provably met nor provably missed.
 3. **No multithreaded scaling claim.** The stress harness measures four mutators
    doing equal total work 22 % slower than one mutator; allocation-bound
    throughput does not scale across threads. No synchronisation was weakened.

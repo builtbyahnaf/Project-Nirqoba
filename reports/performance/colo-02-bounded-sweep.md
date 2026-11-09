@@ -123,7 +123,7 @@ the cycle boundary and is recorded here only so the attribution is not misread.
 | Stress 02 `COLLECT` median | <= 140 ms | 75.4 ms (interleaved) | **pass** |
 | Stress 03 `COLLECT` median | <= 40 ms | 24.6 ms (interleaved) | **pass** |
 | Stage sweep 02 | <= 35 ms | 21.0 ms | pass |
-| Stage sweep 03 | <= 12 ms | 12.5 ms | **miss (4 %)** |
+| Stage sweep 03 | <= 12 ms | 12.5 ms | **miss (4 %)**; 10.54 ms in the interleaved ColO-07 session (pass) |
 | Zero-bit inner-loop iterations | 0 | 0 | pass |
 | Words examined reported | required | `SWEEP_WORK` reports objects + words per chunk `[SOURCE]` | pass (event path), `[UNVERIFIED]` under a live listener |
 | No unbounded sparse scan per chunk | required | 4,096 words + page charge | pass `[SOURCE]` |
@@ -170,8 +170,11 @@ checksum/ROOT_VALUE versus the pre-stage binary. `[MEASURED]`
   `[UNVERIFIED]`
 * `begin` cost for 03 is reported but not attributed; it is outside this stage's
   scope.
-* Stage-level sweep for 03 remains 0.5 ms above the roadmap's target, carried over
-  from ColO-01.
+* Stage-level sweep for 03 was 0.5 ms above the roadmap's target in this session.
+  A later interleaved session (`colo-07-residual-attribution.md` §3) measures the
+  same build at 10.54 ms per collection, i.e. a pass, and 0.257 at 8.98 ms in the
+  same session. The 12 ms target is therefore around the measurement noise floor
+  on this machine, and neither verdict is stated as settled.
 
 ## 9. Recommendation
 
