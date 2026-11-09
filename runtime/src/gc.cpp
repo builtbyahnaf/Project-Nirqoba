@@ -105,6 +105,11 @@ struct GcPage {
   // lookup, and lets every reuse path iterate only pages that can answer a
   // request.
   size_t span_index = kNoSpanIndex;
+  // Position in the index of pages with unused tail space, or `kNoSpanIndex`
+  // while the page has none. Refills used to walk the whole page set looking for
+  // a page with room and find none, once per TLAB; the index answers that in
+  // constant time and holds only pages that can serve a request.
+  size_t tail_index = kNoSpanIndex;
 };
 
 
@@ -758,6 +763,41 @@ void index_span_page_locked(GcPage& page) {
     page.span_index = span_pages.size() - 1;
   } catch (...) {
     page.span_index = GcPage::kNoSpanIndex;
+  }
+}
+
+// Pages with unused tail space. A bump allocator fills the pages it takes, so in
+// a churn workload this index is empty most of the time - which is exactly the
+// answer a refill needs, and the reverse scan could not give it without walking
+// the entire page set. Membership is a swap-remove through `tail_index`.
+std::vector<GcPage*> tail_pages;
+
+void index_tail_page_locked(GcPage& page) {
+  if (page.tail_index != GcPage::kNoSpanIndex || page.retired) return;
+  try {
+    tail_pages.push_back(&page);
+    page.tail_index = tail_pages.size() - 1;
+  } catch (...) {
+    page.tail_index = GcPage::kNoSpanIndex;
+  }
+}
+
+void unindex_tail_page_locked(GcPage& page) {
+  if (page.tail_index == GcPage::kNoSpanIndex) return;
+  GcPage* last = tail_pages.back();
+  tail_pages[page.tail_index] = last;
+  last->tail_index = page.tail_index;
+  tail_pages.pop_back();
+  page.tail_index = GcPage::kNoSpanIndex;
+}
+
+// Keep the index in step with the one field it describes: a page leaves it the
+// moment its bump cursor reaches the end of the page.
+void note_page_tail_locked(GcPage& page) {
+  if (page.used >= page.capacity) {
+    unindex_tail_page_locked(page);
+  } else {
+    index_tail_page_locked(page);
   }
 }
 
@@ -2212,6 +2252,7 @@ void prepare_cycle_locked(bool young_only) {
     for (auto page = gc_pages.begin(); page != gc_pages.end();) {
       if ((*page)->live_objects == 0) {
         if ((*page)->retired) --retired_page_count;
+        unindex_tail_page_locked(**page);
         page_directory.erase(page->get());
         auto empty_page = std::move(*page);
         page = gc_pages.erase(page);
@@ -2437,11 +2478,10 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     page = thread_allocation_page;
   } else {
     thread_allocation_page = nullptr;
-    for (auto candidate = gc_pages.rbegin(); candidate != gc_pages.rend(); ++candidate) {
-      if (!(*candidate)->retired &&
-          (*candidate)->used <= (*candidate)->capacity &&
-          span <= (*candidate)->capacity - (*candidate)->used) {
-        page = candidate->get();
+    for (GcPage* candidate : tail_pages) {
+      if (!candidate || candidate->retired) continue;
+      if (span <= candidate->capacity - candidate->used) {
+        page = candidate;
         break;
       }
     }
@@ -2460,12 +2500,14 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     // A page that cannot be indexed by address is still usable; its objects
     // are tracked through the exact object index instead.
     if (!page_directory.insert(page)) page->use_object_index = true;
+    index_tail_page_locked(*page);
   }
   thread_allocation_page = page;
   thread_allocation_generation = gc_page_generation;
   if (!reused_span) {
     header_offset = page->used;
     page->used += span;
+    note_page_tail_locked(*page);
   }
   void* header_storage = page->storage + header_offset;
   auto* header = new (header_storage) ObjectHeader(
@@ -2478,6 +2520,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
       release_span_locked(*page, header_offset, span);
     } else {
       page->used -= span;
+      note_page_tail_locked(*page);
     }
     // A page that reserved space and then could not publish its first object is
     // empty, not free for later use: mark it retired so the next cycle boundary
@@ -2578,9 +2621,12 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     if (available >= minimum_span) page = thread_allocation_page;
   }
   if (!page) {
-    for (auto candidate = gc_pages.rbegin(); candidate != gc_pages.rend(); ++candidate) {
-      GcPage* possible = candidate->get();
-      if (possible->retired || possible->used > possible->capacity) continue;
+    // Newest first, as the reverse scan did: the most recently carved page is the
+    // one most likely to still be resident and partly free.
+    for (auto candidate = tail_pages.rbegin(); candidate != tail_pages.rend();
+         ++candidate) {
+      GcPage* possible = *candidate;
+      if (!possible || possible->retired) continue;
       const size_t remaining = possible->capacity - possible->used;
       if (remaining >= minimum_span) {
         page = possible;
@@ -2603,6 +2649,7 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     // A page that cannot be indexed by address is still usable; its objects
     // are tracked through the exact object index instead.
     if (!page_directory.insert(page)) page->use_object_index = true;
+    index_tail_page_locked(*page);
     available = page->capacity;
   }
   const size_t reserve = std::min(kGcTlabBytes, available);
@@ -2610,6 +2657,7 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
   mutator.tlab_page = page;
   mutator.tlab_cursor = page->storage + page->used;
   page->used += reserve;
+  note_page_tail_locked(*page);
   mutator.tlab_end = mutator.tlab_cursor + reserve;
   mutator.tlab_generation = gc_page_generation;
   thread_allocation_page = page;
