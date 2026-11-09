@@ -1,0 +1,25 @@
+struct Node {
+    int value;
+    managed<Node> next;
+}
+
+// Two managed locals in one activation: the frame protocol must publish both
+// through the fused open, and a nested call must open its own frame without
+// disturbing the roots this one still needs after it returns.
+int function depth(int levels) {
+    var head = array.allocate<Node>(1);
+    var tail = array.allocate<Node>(1);
+    head[0].value = levels;
+    tail[0].value = levels * 10;
+    head[0].next = tail;
+    if (levels > 0) {
+        head[0].value = head[0].value + depth(levels - 1);
+    }
+    gc.collect();
+    return head[0].value + tail[0].value;
+}
+
+int function main() {
+    print(depth(3));
+    return 0;
+}
