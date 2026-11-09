@@ -1,0 +1,20 @@
+struct Node {
+    int value;
+}
+
+// Returning a managed array hands the caller a pinned result. The caller stores
+// it into a root and releases the pin: publication must come first, and the
+// handoff-fusion pass must not fold this pair, because it only matches the
+// opposite order (release, then publish).
+managed<Node> function make(int value) {
+    var node = array.allocate<Node>(1);
+    node[0].value = value;
+    return node;
+}
+
+int function main() {
+    var stored = make(7);
+    gc.collect();
+    print(stored[0].value);
+    return 0;
+}
