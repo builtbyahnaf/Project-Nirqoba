@@ -1420,6 +1420,54 @@ TEST(GcTest, MergedFreeRunsServeThreadLocalReserves) {
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
 }
 
+TEST(GcTest, FreedNeighbourSpansBridgeIntoOneRun) {
+  // Freeing the object between two dead runs must extend the run before it
+  // across the middle, not leave three runs that can only serve small objects.
+  // The probe is an allocation larger than any single original span that still
+  // fits the merged run: it must be served from the same page.
+  nrq_gc_disable();
+  nrq_gc_set_generational(0);
+  nrq_gc_collect();
+
+  // Occupy most of the page so the bump tail cannot serve the probe, leaving
+  // room for exactly three spans after it.
+  void* filler = nrq_gc_allocate(60000, nullptr);
+  ASSERT_NE(filler, nullptr);
+  nrq_gc_root_register(&filler);
+
+  void* first = nrq_gc_allocate(1024, nullptr);
+  void* middle = nrq_gc_allocate(1024, nullptr);
+  void* last = nrq_gc_allocate(1024, nullptr);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(middle, nullptr);
+  ASSERT_NE(last, nullptr);
+  nrq_gc_root_register(&middle);
+
+  // first and last die; middle survives, so the page holds two separate runs.
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{2});
+
+  // Now the middle dies too and must join both neighbours into one run.
+  nrq_gc_root_unregister(&middle);
+  middle = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{1});
+
+  const size_t pages_before_probe = nrq_gc_page_count();
+  const uint64_t reuse_before_probe = nrq_gc_span_reuse_count();
+  void* probe = nrq_gc_allocate(3000, nullptr);
+  ASSERT_NE(probe, nullptr);
+  // 3096 bytes fit only in the bridged 3360-byte run; a page with three
+  // separate spans could not serve it without growing the heap.
+  ASSERT_EQ(nrq_gc_page_count(), pages_before_probe);
+  ASSERT_TRUE(nrq_gc_span_reuse_count() > reuse_before_probe);
+
+  nrq_gc_root_unregister(&filler);
+  filler = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
+}
+
 TEST(GcTest, CollectionThresholdFollowsTheLiveHeap) {
   nrq_gc_disable();
   nrq_gc_set_adaptive(1);
