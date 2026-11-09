@@ -6,13 +6,46 @@
 
 ---
 
-## Version 0.281-beta (working build)
+## Version 0.286-beta (working build)
+
+### Summary of Changes (since `0.281-beta`):
+
+*Current working build, opened for the rest of BO-02. Nothing has landed under
+this version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.281-beta (released)
 
 ### Summary of Changes (since `0.275-beta`):
 
-*Current working build, opened for the rest of BO-01 (verification) and BO-02.
-Nothing has landed under this version yet; entries are added as changes are
-committed.*
+*Released. Superseded by 0.286-beta, which continues BO-02.*
+
+- **BO-01 verified** (`reports/performance/bo-01-memory-effects.md`): the GC
+  memory-effect contracts landed in 0.275 produce instruction-identical output
+  for tests 01–03, so that branch is stopped with no performance claim. The only
+  observable difference is that LLVM can now prove some generated functions
+  cannot throw, which drops their SEH unwind entries while leaving every
+  instruction unchanged.
+- **BO-02 audited** (`reports/performance/bo-02-frame-audit.md`): the static
+  descriptor, trusted/validated split, batched registration, allocation-free
+  layout storage and open-addressed slot index already exist; the remaining
+  structural cost was the split frame protocol, two runtime calls per activation
+  for one operation.
+- **Fused frame open** (`nrq_gc_root_frame_open`): generated code can now open a
+  frame and publish that frame's static roots in one runtime call. The frame
+  record is still pushed before any root is published, and a registration failure
+  terminates before anything is observable. Single-slot and zero-slot frames keep
+  the separate begin call, where a batched slot array would cost more than it
+  saves.
+- **Lowering** emits the fused call, erases the eager begin call and rebinds the
+  marker every frame-end already reads; IR and assembly show one call site fewer
+  per batched activation (`build_tree`: 10 → 9 runtime calls per internal node,
+  56 → 55 assembly lines).
+- **Tests:** unit suite 192/192; integration 258/259 — `memory_advanced` was
+  already failing before this version (its expectation was last updated at
+  0.260 and the test aborts in the memory-mapping path, unrelated to GC frames).
+  Semantics of Stress 02/03 are identical to the pre-change binaries.
 
 ---
 
@@ -160,7 +193,7 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 ## Version 0.266-beta (defective)
 
 > **Defect notice.** This release is known-defective and is superseded by
-> 0.281-beta. It introduced unexpected performance regressions in the
+> 0.286-beta. It introduced unexpected performance regressions in the
 > collector domain and must not be used for performance comparisons or as a
 > baseline. The defects are understood, documented below, and are being fixed
 > by the author as part of an architecture restructuring. No new feature work
@@ -206,7 +239,7 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 
 Ahnaf is aware of these regressions and is restructuring the architecture. The
 collector defect will be fixed by the author; the immediate correction is
-scheduled for **0.269-beta** and shipped in 0.271-beta; **0.281-beta** is the working
+scheduled for **0.269-beta** and shipped in 0.271-beta; **0.286-beta** is the working
 build from this point on.
 Do not tag, benchmark, or ship 0.266-beta.
 
@@ -216,7 +249,7 @@ Do not tag, benchmark, or ship 0.266-beta.
 
 > **Post-release note.** This release carries a stale benchmark artifact
 > (generated 2026-11-08T03:13, seven hours before the collector commits) and
-> introduced the sweep regression documented under 0.266-beta. Use 0.281-beta
+> introduced the sweep regression documented under 0.266-beta. Use 0.286-beta
 > for any measurement.
 
 ### Summary of Changes (since `0.257-beta`):
