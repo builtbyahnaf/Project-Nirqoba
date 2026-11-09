@@ -6,11 +6,38 @@
 
 ---
 
-## Version 0.294-beta (working build)
+## Version 0.298-beta (working build)
+
+### Summary of Changes (since `0.294-beta`):
+
+*Current working build, opened after 0.294-beta. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.294-beta (released)
 
 ### Summary of Changes (since `0.291-beta`):
 
-*Current working build, opened after 0.291-beta.*
+*Released. Superseded by 0.298-beta, which continues the allocator stage.*
+
+- **AO-02: publication stops dirtying published headers.** The publication loop
+  cleared the batch link and the published link of every object, so the traversal
+  paid a write-back for every header cache line it read. Neither clear is needed.
+  Publication of 1,000,000 objects: min 9.75 → 8.45 ms, median 13.87 → 12.54 ms
+  (`reports/performance/ao-02-tlab-publication.md`).
+- **AO-02: the runtime is built with the full inliner.** `RelWithDebInfo` compiles
+  with `/Ob1`, which left the tiny accessors behind the GC hot path as out-of-line
+  calls into the C++ library: three in `begin_fast_barrier` alone. The runtime
+  directory now uses `/Ob2` for that configuration, with optimization level, debug
+  information, checks and diagnostics unchanged. 1,000,000 rooted allocations:
+  min 41.4 → 30.4 ms; Stress 03: BUILD median 128 → 89 ms, COLLECT 36 → 31 ms.
+  This resets the runtime baseline: earlier reports were taken at `/Ob1`.
+- **AO-02: barrier region and root-slot probe inlined.** The rooted entry point
+  makes four calls per allocation instead of six; min 28.4 → 27.4 ms on the probe.
+- **Measured and reverted:** page-run counter/statistics aggregation and
+  word-batched start-bitmap writes were both neutral or worse in an interleaved
+  A/B, so neither is in the tree.
 
 - **BO-04: redundant root initialisation removed.** A rooted managed slot was
   zeroed twice — once by the frame preamble before publication and again at its
@@ -290,7 +317,7 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 ## Version 0.266-beta (defective)
 
 > **Defect notice.** This release is known-defective and is superseded by
-> 0.294-beta. It introduced unexpected performance regressions in the
+> 0.298-beta. It introduced unexpected performance regressions in the
 > collector domain and must not be used for performance comparisons or as a
 > baseline. The defects are understood, documented below, and are being fixed
 > by the author as part of an architecture restructuring. No new feature work
@@ -336,7 +363,7 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 
 Ahnaf is aware of these regressions and is restructuring the architecture. The
 collector defect will be fixed by the author; the immediate correction is
-scheduled for **0.269-beta** and shipped in 0.271-beta; **0.294-beta** is the working
+scheduled for **0.269-beta** and shipped in 0.271-beta; **0.298-beta** is the working
 build from this point on.
 Do not tag, benchmark, or ship 0.266-beta.
 
@@ -346,7 +373,7 @@ Do not tag, benchmark, or ship 0.266-beta.
 
 > **Post-release note.** This release carries a stale benchmark artifact
 > (generated 2026-11-08T03:13, seven hours before the collector commits) and
-> introduced the sweep regression documented under 0.266-beta. Use 0.294-beta
+> introduced the sweep regression documented under 0.266-beta. Use 0.298-beta
 > for any measurement.
 
 ### Summary of Changes (since `0.257-beta`):
