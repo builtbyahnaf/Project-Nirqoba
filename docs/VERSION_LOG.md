@@ -6,12 +6,43 @@
 
 ---
 
-## Version 0.298-beta (working build)
+## Version 0.301-beta (working build)
+
+### Summary of Changes (since `0.298-beta`):
+
+*Current working build, opened after 0.298-beta. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.298-beta (released)
 
 ### Summary of Changes (since `0.294-beta`):
 
-*Current working build, opened after 0.294-beta. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Released. Superseded by 0.301-beta, which continues the allocator stage.*
+
+- **AO-02: GC page storage is committed and released per page.** Pages went through
+  `malloc`/`free` and a pool, which left the commit charge of an abandoned page in
+  the process. Each page is now committed with `VirtualAlloc`/`VirtualFree`. Private
+  commit at 1,000,000 objects: 238 → 122 MB (474 → 242 MB in the second round), page
+  count unchanged at 1,833. Memory only; no timing claim.
+- **AO-02: the allocation-size guard multiplies instead of dividing.** Every array
+  entry point ran a 64-bit `divq` to prove `count * element_size` fits; the high half
+  of the product answers the same question. Timing unchanged inside the noise, so
+  this is removed instructions, not a claimed speedup.
+- **AO-02: the pending counters keep an owner-side mirror.** Only the owning mutator
+  writes those counters, so the load before each store read a value the thread already
+  had. The exact value is still published after every allocation.
+- **AO-02: pages with tail space are indexed instead of rescanned.** A TLAB refill
+  walked all 1,833 pages backwards, in a workload where every page is filled to
+  capacity, so the walk never found anything. Allocation order is preserved and the
+  page and commit counts are identical; 1,000,000 rooted allocations: min 30.0 → 24.9
+  ms, median 66.5 → 60.9 ms over 18 interleaved samples each.
+- **Measured and reverted:** 128 KiB TLABs (collection 23 → 133 ms, pages stopped
+  being recyclable) and an inline memset replacement (neutral, added a branch).
+  `reports/performance/ao-02-tlab-publication.md` records both.
+- **AO-02 stage total:** 1,000,000 rooted allocations 45.1 → 24.9 ms minimum (−45%)
+  since the stage began.
 
 ---
 
@@ -363,7 +394,7 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 
 Ahnaf is aware of these regressions and is restructuring the architecture. The
 collector defect will be fixed by the author; the immediate correction is
-scheduled for **0.269-beta** and shipped in 0.271-beta; **0.298-beta** is the working
+scheduled for **0.269-beta** and shipped in 0.271-beta; **0.301-beta** is the working
 build from this point on.
 Do not tag, benchmark, or ship 0.266-beta.
 
@@ -373,7 +404,7 @@ Do not tag, benchmark, or ship 0.266-beta.
 
 > **Post-release note.** This release carries a stale benchmark artifact
 > (generated 2026-11-08T03:13, seven hours before the collector commits) and
-> introduced the sweep regression documented under 0.266-beta. Use 0.298-beta
+> introduced the sweep regression documented under 0.266-beta. Use 0.301-beta
 > for any measurement.
 
 ### Summary of Changes (since `0.257-beta`):
