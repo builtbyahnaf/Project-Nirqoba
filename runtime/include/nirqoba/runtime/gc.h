@@ -93,9 +93,10 @@ void nrq_gc_root_register_array(void* data, size_t count, size_t element_size,
 void nrq_gc_root_unregister(void** slot);
 void nrq_gc_root_store(void** slot, void* value);
 // Publishes a pinned managed result into a root slot or field and releases the
-// pin in one call. This is the handoff a caller performs on a value returned by a
-// function; emitting the store and the release separately costs two call
-// boundaries and two barrier regions for one operation.
+// pin in one call. Publishing happens first, so the value is rooted before its
+// pin is released. What this saves is one call boundary (and its argument
+// setup): both operations it performs still open their own fast-barrier region,
+// so this entry does not merge barrier regions.
 void nrq_gc_root_store_release(void** slot, void* value);
 void nrq_gc_root_copy(void* destination, const void* source, size_t bytes);
 uint64_t nrq_gc_root_frame_begin(void);
