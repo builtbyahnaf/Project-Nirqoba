@@ -6,11 +6,20 @@
 
 ---
 
-## Version 0.286-beta (working build)
+## Version 0.289-beta (working build)
+
+### Summary of Changes (since `0.286-beta`):
+
+*Current working build. Nothing has landed under this version yet; entries are
+added as changes are committed.*
+
+---
+
+## Version 0.286-beta (released)
 
 ### Summary of Changes (since `0.281-beta`):
 
-*Current working build. BO-02 is complete under this version.*
+*Released. Superseded by 0.289-beta, which finishes BO-03.*
 
 - **Fused frame open covered by tests** — `GcTest.FusedFrameOpenPublishesStaticRootsAndNests`
   exercises the new entry directly: roots it publishes survive a collection, a
@@ -28,10 +37,21 @@
 - **Deliberately not done:** descriptor-backed root iteration and removing the
   frame vector or the slot indexes — reasons recorded in the report; none of them
   had a provable win at these slot counts.
+- **`memory_advanced` repaired:** the case had been failing since the 0.271 bump
+  because it pinned the literal `0.266-beta-phase6` and the byte length of its
+  own `expect.json`. Expectations may now write `{version}`, which the runner
+  resolves from the compiler under test, and the self-referential size assertion
+  is gone. Integration suite: 260/260.
+- **BO-03 handoff-fusion audit** (`reports/performance/bo-03-handoff-fusion-audit.md`):
+  the pass still runs, but it matches release-then-publish while every lowering
+  site emits publish-then-release, so it fires on no current output. Its runtime
+  entry does not merge barrier regions; both routines it calls open their own.
+  The source comments claiming a merged region are corrected; the entry and pass
+  are kept, because removing a documented ABI entry is an owner decision.
 
 ---
 
-## Version 0.281-beta (released)
+## Version 0.281-beta
 
 ### Summary of Changes (since `0.275-beta`):
 
@@ -65,7 +85,7 @@
 
 ---
 
-## Version 0.275-beta (released)
+## Version 0.275-beta 
 
 ### Summary of Changes (since `0.271-beta`):
 
@@ -106,7 +126,7 @@ call could read and write any memory, including the caller's locals.
 
 ---
 
-## Version 0.271-beta (working build)
+## Version 0.271-beta
 
 ### Summary of Changes (since `0.269-beta`):
 
@@ -132,7 +152,7 @@ call could read and write any memory, including the caller's locals.
 
 ---
 
-## Version 0.269-beta (working build)
+## Version 0.269-beta
 
 ### Summary of Changes (since `0.266-beta`):
 
@@ -209,7 +229,7 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 ## Version 0.266-beta (defective)
 
 > **Defect notice.** This release is known-defective and is superseded by
-> 0.286-beta. It introduced unexpected performance regressions in the
+> 0.289-beta. It introduced unexpected performance regressions in the
 > collector domain and must not be used for performance comparisons or as a
 > baseline. The defects are understood, documented below, and are being fixed
 > by the author as part of an architecture restructuring. No new feature work
@@ -255,7 +275,7 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 
 Ahnaf is aware of these regressions and is restructuring the architecture. The
 collector defect will be fixed by the author; the immediate correction is
-scheduled for **0.269-beta** and shipped in 0.271-beta; **0.286-beta** is the working
+scheduled for **0.269-beta** and shipped in 0.271-beta; **0.289-beta** is the working
 build from this point on.
 Do not tag, benchmark, or ship 0.266-beta.
 
@@ -265,7 +285,7 @@ Do not tag, benchmark, or ship 0.266-beta.
 
 > **Post-release note.** This release carries a stale benchmark artifact
 > (generated 2026-11-08T03:13, seven hours before the collector commits) and
-> introduced the sweep regression documented under 0.266-beta. Use 0.286-beta
+> introduced the sweep regression documented under 0.266-beta. Use 0.289-beta
 > for any measurement.
 
 ### Summary of Changes (since `0.257-beta`):
