@@ -10,9 +10,59 @@
 
 ### Summary of Changes (since `0.266-beta`):
 
-*Current working build. Collector corrections and validation work are being
-recorded here as they land. See `project_context/ColO_ROADMAP_2.md` and
-`reports/performance/colo-02-*.md` for the per-stage evidence.*
+*Current working build.* The 0.266 collector regression is removed and the
+collector optimisation roadmap (`project_context/ColO_ROADMAP_2.md`) is
+implemented:
+
+- **Set-bit sweep** (`25224b3`): the sweep walks only set bits of each page's
+  object-start bitmap, so the zero-bit inner loop no longer exists.
+- **Bounded sweep chunks** (`9d5b6ac`): a chunk stops after 4,096 bitmap words
+  (or its object/byte budget) and charges each page it enters, so sparse pages
+  cannot make a chunk walk unbounded bitmap. Debug builds can emit per-chunk
+  work and duration events; production compiles them out.
+- **Handoff-fusion compile fix** (`43c223f`): the committed fusion in
+  `Lowering/TirToMlir.cpp` builds `nrq_gc_unpin` through `ensure_runtime_fn`, so
+  programs that reach the fusion compile again. The fusion itself is part of
+  0.269 and costs about 2--3 % on build time.
+- **Validation**: tests for bridging free-run release and for minor retention of
+  unreachable old objects; a fragmentation/reuse workload and a multithreaded
+  stress workload in the diagnostic harness.
+
+### Performance (measured, interleaved 8 runs per build)
+
+Stress Test 2, same 0.269 compiler driver, only the runtime library differs
+(`reports/performance/colo-final-integrated.md`):
+
+| Test | 0.257 (`98a1099`) | 0.260 (`904aee0`) | 0.269 | Change vs 0.260 |
+| --- | --- | --- | --- | --- |
+| 02 mark and sweep, `COLLECT` median | 93.5 ms | 158.0 ms | **90.5 ms** | -42.7 % |
+| 03 cycles, `COLLECT` median | 26.0 ms | 58.0 ms | **28.5 ms** | -50.9 % |
+
+Stage probe (production flags): mode 02 sweep 21.0 ms per collection with zero
+zero-bit iterations (was 96.6 ms); mode 03 sweep 12.5 ms (was 31.8 ms, target
+12 ms).
+
+### Known Issues
+
+1. **Test 03 remains ~2.5 ms (9.6 %) above 0.257.** 0.269 collects 03 in 28.5 ms
+   against 26.0 ms for the last healthy build. The gap is stable across eight
+   interleaved runs but not attributed to a specific runtime change between the
+   two revisions; recorded rather than explained.
+2. **Mode 03 stage sweep is 0.5 ms above its 12 ms target** (12.5 ms).
+3. **No multithreaded scaling claim.** The stress harness measures four mutators
+   doing equal total work 22 % slower than one mutator; allocation-bound
+   throughput does not scale across threads. No synchronisation was weakened.
+4. **Minor-collection cost is unmeasured.** Correctness is covered; the page
+   skip's performance remains UNVERIFIED and was not optimised.
+
+Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
+`colo-02-bounded-sweep.md`, `colo-03-reclamation.md`,
+`colo-04-minor-generational.md`, `colo-05-fragmentation.md`,
+`colo-06-multithreaded.md`, `colo-final-integrated.md`.
+
+### Tests
+
+`nirqoba_unit_tests.exe`: 192/192 passing.
 
 ---
 
