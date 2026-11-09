@@ -69,6 +69,13 @@ void nrq_gc_root_register_frame(void* const* slots, size_t slot_count,
 // above, which validates every table it is given.
 void nrq_gc_root_register_frame_static(void* const* slots, size_t slot_count,
                                        const size_t* descriptor);
+// Opens a root frame and publishes that frame's static roots in one call. Only
+// for compiler-generated code: `descriptor` must be the immutable table emitted
+// for exactly the `slots` array passed here, exactly like the static entry point
+// above. Returns the frame marker `nrq_gc_root_frame_end` expects. A caller that
+// supplies its own descriptor must use `nrq_gc_root_register_frame`.
+uint64_t nrq_gc_root_frame_open(void* const* slots, size_t slot_count,
+                                const size_t* descriptor);
 // Registers an externally owned contiguous array as a root region. Offsets are
 // relative to each element and are repeated count times with element_size as
 // the stride. The caller must unregister the data address before freeing it.

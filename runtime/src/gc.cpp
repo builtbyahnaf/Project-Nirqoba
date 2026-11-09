@@ -3238,7 +3238,7 @@ void nrq_gc_root_copy(void* destination, const void* source, size_t bytes) {
                             phase != CollectionPhase::Idle);
 }
 
-uint64_t nrq_gc_root_frame_begin(void) {
+static uint64_t start_root_frame() {
   // stack.frames, next_marker, and the root-depth checkpoint are thread-local
   // bookkeeping only. The collector never reads stack.frames; it only reads
   // stack.roots under stack.mutex. No mutex is required here.
@@ -3252,6 +3252,24 @@ uint64_t nrq_gc_root_frame_begin(void) {
     nrq_runtime_fatal("GC root frame registration failed to allocate thread metadata");
   }
   debug_emit(NRQ_GC_EVENT_ROOT_FRAME, 1, marker, nullptr);
+  return marker;
+}
+
+uint64_t nrq_gc_root_frame_begin(void) { return start_root_frame(); }
+
+// The trusted fused entry. Generated code always opens a frame immediately
+// before publishing that frame's static roots, so doing both here removes a
+// second call and a second shadow-stack re-entry per activation. The frame
+// record is pushed first, exactly as the split pair did; a registration failure
+// terminates the process before the caller can observe anything, so a frame is
+// never visible to the collector with only part of its roots published.
+// `descriptor` must be the compiler-emitted table for exactly these slots -
+// the same precondition `nrq_gc_root_register_frame_static` documents.
+uint64_t nrq_gc_root_frame_open(void* const* slots, size_t slot_count,
+                                const size_t* descriptor) {
+  const uint64_t marker = start_root_frame();
+  register_frame_roots(slots, slot_count, descriptor,
+                       /*validate=*/nirq::runtime_debug_enabled);
   return marker;
 }
 
