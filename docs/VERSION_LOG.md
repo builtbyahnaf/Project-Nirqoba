@@ -6,12 +6,36 @@
 
 ---
 
-## Version 0.289-beta (working build)
+## Version 0.291-beta (working build)
+
+### Summary of Changes (since `0.289-beta`):
+
+*Current working build, opened for the next stage. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.289-beta (released)
 
 ### Summary of Changes (since `0.286-beta`):
 
-*Current working build. Nothing has landed under this version yet; entries are
-added as changes are committed.*
+*Released. Superseded by 0.291-beta.*
+
+- **Handoff fusion audited to completion**
+  (`reports/performance/bo-03-handoff-fusion-audit.md`): the pass runs at the end
+  of every function translation, matches only release-then-publish, and every
+  lowering site emits publish-then-release — so it fires on no current output.
+  No second pass and no second runtime entry were added.
+- **`nrq_gc_root_store_release` covered** — `GcTest.StoreReleaseRootsBeforeReleasingThePin`
+  is the only way the entry is exercised: publication before release keeps the
+  object alive through a collection, a null slot releases only the pin, and
+  clearing the slot releases the object. Unit suite 194/194.
+- **Emission order pinned** — integration `gc_handoff_order` asserts
+  `pin_transfer` → `root_store` → `unpin` and the absence of the fused call, so a
+  future reorder is noticed instead of silently activating a dead pass.
+  Integration suite 261/261.
+- **No timing claim:** with no emitted fused form there is no call-site
+  difference to measure.
 
 ---
 
@@ -229,7 +253,7 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 ## Version 0.266-beta (defective)
 
 > **Defect notice.** This release is known-defective and is superseded by
-> 0.289-beta. It introduced unexpected performance regressions in the
+> 0.291-beta. It introduced unexpected performance regressions in the
 > collector domain and must not be used for performance comparisons or as a
 > baseline. The defects are understood, documented below, and are being fixed
 > by the author as part of an architecture restructuring. No new feature work
@@ -275,7 +299,7 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 
 Ahnaf is aware of these regressions and is restructuring the architecture. The
 collector defect will be fixed by the author; the immediate correction is
-scheduled for **0.269-beta** and shipped in 0.271-beta; **0.289-beta** is the working
+scheduled for **0.269-beta** and shipped in 0.271-beta; **0.291-beta** is the working
 build from this point on.
 Do not tag, benchmark, or ship 0.266-beta.
 
@@ -285,7 +309,7 @@ Do not tag, benchmark, or ship 0.266-beta.
 
 > **Post-release note.** This release carries a stale benchmark artifact
 > (generated 2026-11-08T03:13, seven hours before the collector commits) and
-> introduced the sweep regression documented under 0.266-beta. Use 0.289-beta
+> introduced the sweep regression documented under 0.266-beta. Use 0.291-beta
 > for any measurement.
 
 ### Summary of Changes (since `0.257-beta`):
