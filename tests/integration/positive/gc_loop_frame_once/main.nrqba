@@ -1,0 +1,23 @@
+struct Node {
+    int value;
+    managed<Node> next;
+}
+
+// The loop body allocates, collects and holds a managed local, so if the root
+// frame were opened per iteration this function would publish and end a frame
+// every round. It must open exactly one frame for the whole activation.
+int function churn(int rounds) {
+    var total = 0;
+    for (var i = 0; i < rounds; i += 1) {
+        var node = array.allocate<Node>(1);
+        node[0].value = i;
+        gc.collect();
+        total = total + node[0].value;
+    }
+    return total;
+}
+
+int function main() {
+    print(churn(5));
+    return 0;
+}
