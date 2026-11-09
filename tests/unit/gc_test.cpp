@@ -1468,6 +1468,56 @@ TEST(GcTest, FreedNeighbourSpansBridgeIntoOneRun) {
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
 }
 
+TEST(GcTest, MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage) {
+  // A minor skips pages with no young object for speed, but the page-skip is
+  // only allowed to skip work: an unreachable old object must survive the minor
+  // (it is not this cycle's business) and be reclaimed by the next major, while
+  // unreachable young objects must not survive.
+  nrq_gc_disable();
+  nrq_gc_set_generational(1);
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+
+  void* old_garbage = nrq_gc_allocate(64, nullptr);
+  void* old_root = nrq_gc_allocate(64, nullptr);
+  ASSERT_NE(old_garbage, nullptr);
+  ASSERT_NE(old_root, nullptr);
+  nrq_gc_root_register(&old_root);
+  // Both start reachable: a major promotes every survivor to the old
+  // generation. old_garbage is unrooted afterwards, so the minor below sees
+  // unreachable old storage.
+  nrq_gc_root_register(&old_garbage);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 2);
+
+  nrq_gc_root_unregister(&old_garbage);
+  old_garbage = nullptr;
+
+  void* young_root = nrq_gc_allocate(64, nullptr);
+  void* young_garbage = nrq_gc_allocate(64, nullptr);
+  ASSERT_NE(young_root, nullptr);
+  ASSERT_NE(young_garbage, nullptr);
+  nrq_gc_root_register(&young_root);
+
+  nrq_gc_collect_minor();
+  // young_garbage is gone; old_garbage is unreachable but old, so the minor
+  // must leave it for the next major whether or not its page is swept. Old root,
+  // old garbage and the surviving young root remain.
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 3);
+
+  nrq_gc_collect();
+  // The major reclaims the old garbage.
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 2);
+
+  nrq_gc_root_unregister(&old_root);
+  nrq_gc_root_unregister(&young_root);
+  old_root = nullptr;
+  young_root = nullptr;
+  nrq_gc_collect();
+  nrq_gc_set_generational(0);
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+}
+
 TEST(GcTest, CollectionThresholdFollowsTheLiveHeap) {
   nrq_gc_disable();
   nrq_gc_set_adaptive(1);
