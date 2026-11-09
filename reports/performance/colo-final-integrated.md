@@ -62,7 +62,7 @@ object sets, so the timing comparison is not bought with different work.
 
 | Comparison | 02 | 03 |
 | --- | --- | --- |
-| 0.269 vs 0.260 | **-42.7 %** (158.0 -> 90.5) | **-50.9 %** (58.0 -> 28.5) |
+| 0.269 vs 0.260 | **-42.7 %** (158.0 -> 90.5) | **-56.9 %** (58.0 -> 25.0) |
 | 0.269 vs 0.257 | **-3.2 %** (93.5 -> 90.5) | **parity** (24.5 -> 25.0, +2.0 %; see below) |
 
 * The 0.260 regression is fully removed for test 02: 0.269 is at or below the last
