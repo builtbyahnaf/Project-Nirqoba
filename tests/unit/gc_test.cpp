@@ -275,6 +275,52 @@ TEST(GcTest, RootFramesUnregisterOnlyTheirOwnNestedRoots) {
   nrq_gc_root_frame_end(empty_outer);
 }
 
+// The fused entry is what generated code now emits for a frame with more than
+// one static root: the frame record and the root publication happen in one call.
+// This checks that the roots it published are visible to a collection, that a
+// nested fused frame ends without touching the outer roots, and that a frame
+// with no roots still opens and ends on its own.
+TEST(GcTest, FusedFrameOpenPublishesStaticRootsAndNests) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+  auto* first = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  auto* second = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+
+  void* storage[2] = {nullptr, nullptr};
+  void* slots[2] = {&storage[0], &storage[1]};
+  // Two pointer roots: slot count, total word count, then per-slot object size,
+  // reference count and reference offsets.
+  const size_t descriptor[] = {2, 8, sizeof(void*), 1, 0, sizeof(void*), 1, 0};
+  const uint64_t outer = nrq_gc_root_frame_open(slots, 2, descriptor);
+  nrq_gc_root_store(&storage[0], first);
+  nrq_gc_root_store(&storage[1], second);
+
+  void* inner_storage = nullptr;
+  void* inner_slots[1] = {&inner_storage};
+  const size_t inner_descriptor[] = {1, 5, sizeof(void*), 1, 0};
+  const uint64_t inner = nrq_gc_root_frame_open(inner_slots, 1, inner_descriptor);
+  ASSERT_NE(inner, outer);
+  nrq_gc_root_frame_end(inner);
+
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 2);
+
+  nrq_gc_root_frame_end(outer);
+  first = nullptr;
+  second = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+
+  // A zero-slot frame publishes nothing, and its marker must still match the
+  // frame it opened.
+  const uint64_t empty = nrq_gc_root_frame_open(nullptr, 0, nullptr);
+  ASSERT_NE(empty, outer);
+  nrq_gc_root_frame_end(empty);
+}
+
 TEST(GcTest, BumpRegionsAlignMixedObjectSizesAndReclaimEmptyPages) {
   nrq_gc_disable();
   nrq_gc_collect();
