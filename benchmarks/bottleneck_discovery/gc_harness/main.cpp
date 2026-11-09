@@ -20,11 +20,14 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "nirqoba/runtime/gc.h"
@@ -253,6 +256,206 @@ void run_allocation(int64_t count) {
               static_cast<unsigned long long>(live), collect_ms);
 }
 
+// ColO-05: fragmentation and reuse. A stable set of long-lived nodes is
+// interleaved with churn, so dead spans sit inside pages that still hold live
+// objects. Reuse has to come from free runs, not page retirement.
+struct FragNode {
+  void* next;
+  int64_t value;
+};
+static_assert(sizeof(FragNode) == 16, "FragNode payload must be 16 bytes");
+constexpr size_t kFragLayout[] = {0};
+
+void trace_frag(void* object, size_t object_bytes, nrq_gc_visit_fn visit,
+                void* context) {
+  (void)object_bytes;
+  auto* node = static_cast<FragNode*>(object);
+  visit(node->next, context);
+}
+
+// Deterministic xorshift so the random-release pattern is reproducible.
+struct XorShift {
+  uint64_t state = 0x9e3779b97f4a7c15ull;
+  uint32_t next() {
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^= state << 17;
+    return static_cast<uint32_t>(state >> 32);
+  }
+};
+
+void run_fragmentation(int build_rounds, int churn_rounds, int per_round,
+                       int keep_every) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const uint64_t baseline_reuse = nrq_gc_span_reuse_count();
+  const uint64_t baseline_collections = nrq_gc_get_collection_count();
+  void* head = nullptr;
+  nrq_gc_root_register(&head);
+  std::vector<double> alloc_ms;
+  std::vector<double> collect_ms;
+  std::printf("TEST FRAG\n");
+
+  // Phase A: grow a long-lived set, interleaved with churn so the surviving
+  // objects do not occupy a contiguous region of their own.
+  for (int round = 0; round < build_rounds; ++round) {
+    for (int index = 0; index < per_round; ++index) {
+      auto* node = static_cast<FragNode*>(
+          nrq_gc_allocate(sizeof(FragNode), trace_frag));
+      node->next = nullptr;
+      node->value = index;
+      if (index % keep_every == 0) {
+        node->next = head;
+        head = node;
+      }
+    }
+    nrq_gc_collect();
+  }
+  const size_t steady_pages = nrq_gc_page_count();
+  std::printf("PHASE_A LIVE %llu PAGES %llu SPAN_REUSE %llu\n",
+              static_cast<unsigned long long>(nrq_gc_get_live_objects()),
+              static_cast<unsigned long long>(steady_pages),
+              static_cast<unsigned long long>(nrq_gc_span_reuse_count()));
+  std::fflush(stdout);
+
+  // Phase B: steady-state churn. Every round allocates varied sizes that all die
+  // at the round's collection; half the rounds release a contiguous block and
+  // half release pseudo-randomly spread objects. Fresh allocations must come
+  // from reclaimed runs, so the page set should not keep growing.
+  volatile uint64_t keep = 0;
+  XorShift random;
+  // Objects kept by a round live until the next round's prologue, so the release
+  // pattern is a cluster or a random spread rather than everything at once.
+  std::vector<void*> previous;
+  previous.reserve(static_cast<size_t>(per_round) + 1);
+  for (int round = 0; round < churn_rounds; ++round) {
+    for (size_t slot = 0; slot < previous.size(); ++slot)
+      nrq_gc_root_unregister(&previous[slot]);
+    previous.clear();
+    const bool clustered = (round % 2) == 0;
+    const size_t cluster_begin = static_cast<size_t>(round * 137) %
+                                 static_cast<size_t>(per_round / 4 + 1);
+    const int16_t sizes[] = {16, 32, 64, 128};
+    const double a0 = now_ms();
+    for (int index = 0; index < per_round; ++index) {
+      const size_t bytes = static_cast<size_t>(sizes[index % 4]);
+      auto* node = static_cast<FragNode*>(nrq_gc_allocate(bytes, trace_frag));
+      node->next = nullptr;
+      node->value = index;
+      const bool keep_this = clustered
+                                 ? (static_cast<size_t>(index) >= cluster_begin &&
+                                    static_cast<size_t>(index) < cluster_begin + 500)
+                                 : (random.next() % 32) == 0;
+      if (keep_this) {
+        previous.push_back(node);
+        nrq_gc_root_register(&previous.back());
+        ++keep;
+      }
+    }
+    const double alloc = now_ms() - a0;
+    const double c0 = now_ms();
+    nrq_gc_collect();
+    const double collect = now_ms() - c0;
+    alloc_ms.push_back(alloc);
+    collect_ms.push_back(collect);
+    std::printf("ROUND %d ALLOC_MS %.3f COLLECT_MS %.3f LIVE %llu PAGES %llu "
+                "RECYCLED %llu SPAN_REUSE %llu KEPT %llu\n",
+                round, alloc, collect,
+                static_cast<unsigned long long>(nrq_gc_get_live_objects()),
+                static_cast<unsigned long long>(nrq_gc_page_count()),
+                static_cast<unsigned long long>(nrq_gc_recycled_page_count()),
+                static_cast<unsigned long long>(nrq_gc_span_reuse_count()),
+                static_cast<unsigned long long>(keep));
+    std::fflush(stdout);
+  }
+  print_stats("ALLOC", summarize(alloc_ms));
+  print_stats("COLLECT", summarize(collect_ms));
+  std::printf("STEADY_PAGES %llu FINAL_PAGES %llu REUSE_DELTA %llu "
+              "COLLECTIONS %llu\n",
+              static_cast<unsigned long long>(steady_pages),
+              static_cast<unsigned long long>(nrq_gc_page_count()),
+              static_cast<unsigned long long>(nrq_gc_span_reuse_count() -
+                                              baseline_reuse),
+              static_cast<unsigned long long>(nrq_gc_get_collection_count() -
+                                              baseline_collections));
+  for (size_t slot = 0; slot < previous.size(); ++slot)
+    nrq_gc_root_unregister(&previous[slot]);
+  nrq_gc_root_unregister(&head);
+  head = nullptr;
+  nrq_gc_collect();
+  std::printf("LIVE_AFTER %llu\n",
+              static_cast<unsigned long long>(nrq_gc_get_live_objects()));
+}
+
+// ColO-06: several mutators allocate and publish roots while the main thread
+// collects. Correctness here is the point: every thread's TLAB is published,
+// root frames stay LIFO, and the collector's park handshake does not deadlock.
+void run_multithreaded(int threads, int per_thread) {
+  nrq_gc_disable();
+  nrq_gc_set_generational(1);
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+  std::atomic<uint64_t> allocated{0};
+  std::atomic<uint64_t> checksum{0};
+  std::atomic<uint64_t> max_alloc_ns{0};
+  std::vector<std::thread> workers;
+  workers.reserve(static_cast<size_t>(threads));
+  const double start = now_ms();
+  for (int worker = 0; worker < threads; ++worker) {
+    workers.emplace_back([&, worker]() {
+      nrq_gc_mutator_enter();
+      const uint64_t marker = nrq_gc_root_frame_begin();
+      std::vector<void*> roots;
+      roots.reserve(static_cast<size_t>(per_thread) + 1);
+      uint64_t local_sum = 0;
+      for (int index = 0; index < per_thread; ++index) {
+        const auto t0 = std::chrono::steady_clock::now();
+        void* object = nrq_gc_allocate(sizeof(CycleNode), nullptr);
+        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                 std::chrono::steady_clock::now() - t0)
+                                 .count();
+        uint64_t previous = max_alloc_ns.load(std::memory_order_relaxed);
+        while (static_cast<uint64_t>(elapsed) > previous &&
+               !max_alloc_ns.compare_exchange_weak(previous,
+                                                   static_cast<uint64_t>(elapsed),
+                                                   std::memory_order_relaxed)) {
+        }
+        static_cast<CycleNode*>(object)->value = index;
+        local_sum += static_cast<uint64_t>(index);
+        if (index % 7 == 0) {
+          roots.push_back(object);
+          nrq_gc_root_register(&roots.back());
+        }
+        allocated.fetch_add(1, std::memory_order_relaxed);
+      }
+      checksum.fetch_add(local_sum, std::memory_order_relaxed);
+      nrq_gc_root_frame_end(marker);
+      nrq_gc_mutator_leave();
+    });
+  }
+  const uint64_t total = static_cast<uint64_t>(threads) * per_thread;
+  uint64_t collections = 0;
+  while (allocated.load(std::memory_order_relaxed) < total) {
+    nrq_gc_collect();
+    ++collections;
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  for (std::thread& worker : workers) worker.join();
+  const double elapsed = now_ms() - start;
+  nrq_gc_collect();
+  std::printf(
+      "TEST MT\nTHREADS %d\nPER_THREAD %d\nALLOCATED %llu\nCOLLECTIONS %llu\n"
+      "ELAPSED_MS %.3f\nNS_PER_ALLOC %.3f\nMAX_ALLOC_NS %llu\n"
+      "LIVE_BEFORE %llu\nLIVE_AFTER %llu\nCHECKSUM %llu\n",
+      threads, per_thread, static_cast<unsigned long long>(allocated.load()),
+      static_cast<unsigned long long>(collections), elapsed,
+      elapsed * 1e6 / static_cast<double>(total),
+      static_cast<unsigned long long>(max_alloc_ns.load()),
+      static_cast<unsigned long long>(baseline),
+      static_cast<unsigned long long>(nrq_gc_get_live_objects()),
+      static_cast<unsigned long long>(checksum.load()));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -268,6 +471,12 @@ int main(int argc, char** argv) {
     run_mark_and_sweep(16, 5, 3, 5);
   } else if (mode == "03") {
     run_cyclic(500000, 2, 5);
+  } else if (mode == "frag") {
+    run_fragmentation(8, 16, 40000, 8);
+  } else if (mode == "mt") {
+    run_multithreaded(4, 500000);
+  } else if (mode == "mt1") {
+    run_multithreaded(1, 2000000);
   } else if (mode == "alloc") {
     run_allocation(500000);
   } else if (mode == "01") {
