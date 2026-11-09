@@ -1544,7 +1544,13 @@ class FunctionTranslator {
   // and releasing the pin are one handoff, so this folds the pair into the single
   // runtime entry that performs both. Only exact adjacency folds, and a plain
   // store that is not a managed publication may sit between them because it
-  // cannot observe the pinned result.
+  // cannot observe the pinned result. The folded entry saves a call boundary;
+  // it does not merge barrier regions, because both routines open their own.
+  //
+  // The order this pass matches is release-then-publish (`unpin(v)` immediately
+  // before `root_store(dst, v)`). The lowering currently emits the opposite
+  // order everywhere it hands a pinned value over, so in practice this pass
+  // matches nothing; it is kept as the safety net for a future emission order.
   void fuse_handoff_releases() {
     for (mlir::Block& block : func_op_.getBody().getBlocks()) {
       mlir::LLVM::CallOp pending_unpin;

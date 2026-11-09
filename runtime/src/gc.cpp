@@ -3630,10 +3630,10 @@ void nrq_gc_unpin(void* object) {
 }
 
 // Publishes a pinned managed result into a root slot or field and releases the
-// pin in one call. A caller that receives a pinned value and stores it does both
-// in the same operation; as two calls that operation pays two call boundaries
-// and two barrier regions. The release runs in this translation unit, so it is
-// inlined into this entry instead of being a second call.
+// pin in one call, publication first. The release runs in this translation unit,
+// so it is inlined into this entry instead of being a second call; one call
+// boundary is what this saves. Both routines it calls still open their own
+// fast-barrier region, so this entry enters two regions, not one.
 void nrq_gc_root_store_release(void** slot, void* value) {
   if (slot) nrq_gc_root_store(slot, value);
   unpin_value(value);
