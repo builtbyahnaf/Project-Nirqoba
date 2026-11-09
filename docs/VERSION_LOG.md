@@ -10,8 +10,20 @@
 
 ### Summary of Changes (since `0.291-beta`):
 
-*Current working build. Nothing has landed under this version yet; entries are
-added as changes are committed.*
+*Current working build, opened after 0.291-beta.*
+
+- **BO-04: redundant root initialisation removed.** A rooted managed slot was
+  zeroed twice — once by the frame preamble before publication and again at its
+  alloca point. The alloca-time store is gone when the preamble is guaranteed to
+  run (a root frame exists); it stays otherwise, and unobserved slots keep theirs.
+  `build_tree`: 55 → 54 instructions, one store per activation removed
+  (2,097,151 stores per Stress 02 run). No runtime speedup is claimed
+  (`reports/performance/bo-04-root-init.md`).
+- **Loop frame reuse:** audited, nothing to hoist — frames are already opened once
+  per activation. Pinned by the `gc_loop_frame_once` test.
+- **Tests:** `gc_root_null_init` (exactly one zero store per rooted slot) and
+  `gc_loop_frame_once` (one frame per activation); unit 194/194, integration
+  263/263, Stress 02/03 semantics unchanged.
 
 ---
 
