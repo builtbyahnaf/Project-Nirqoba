@@ -553,6 +553,47 @@ TEST(GcTest, RootStoreSkipsIdenticalAndNullBarrierWork) {
   ASSERT_EQ(nrq_gc_get_live_objects(), uint64_t{0});
 }
 
+// The fused handoff entry publishes the value and then releases the pin. The
+// lowering never emits it today (it publishes first and releases second), so this
+// is the only way the entry is exercised: it must root the object before the pin
+// goes away, and it must release the pin even when there is no slot to publish
+// into.
+TEST(GcTest, StoreReleaseRootsBeforeReleasingThePin) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+  auto* rooted = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(rooted, nullptr);
+
+  void* slot = nullptr;
+  nrq_gc_root_register(&slot);
+  ASSERT_EQ(nrq_gc_pin(rooted), rooted);
+  ASSERT_EQ(nrq_gc_pin_count(), uint64_t{1});
+
+  nrq_gc_root_store_release(&slot, rooted);
+  ASSERT_EQ(nrq_gc_pin_count(), uint64_t{0});
+  nrq_gc_collect();
+  // The pin is gone, but the slot holds the object.
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 1);
+
+  // No slot: the value is only released, so it dies at the next collection.
+  auto* released = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(released, nullptr);
+  ASSERT_EQ(nrq_gc_pin(released), released);
+  nrq_gc_root_store_release(nullptr, released);
+  ASSERT_EQ(nrq_gc_pin_count(), uint64_t{0});
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 1);
+
+  // Clearing the published slot lets the first object go too.
+  nrq_gc_root_store_release(&slot, nullptr);
+  nrq_gc_root_unregister(&slot);
+  rooted = nullptr;
+  released = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+}
+
 TEST(GcTest, ReferenceDiagnosticsCountHeapAndRootReferencesWhenEnabled) {
   nrq_gc_enable();
   nrq_gc_collect();
