@@ -20,6 +20,15 @@ enum class MemoryEffectKind {
   OtherReadWrite,
   // As OtherReadWrite, and also reads through a pointer argument.
   OtherReadWriteArgRead,
+  // Reads and writes runtime state (TLS, shadow stack, heap bookkeeping) but
+  // reaches no memory through a pointer argument, so argument memory is
+  // untouched. Inaccessible memory may still be touched (allocator metadata),
+  // and errno/target memory never is.
+  ArgNoneOtherReadWrite,
+  // As ArgNoneOtherReadWrite, and also reads and writes memory reached through
+  // pointer arguments. Used where the entry point dereferences its arguments but
+  // the effects still cannot reach errno or target extension memory.
+  ArgReadWriteOtherReadWrite,
 };
 
 struct RuntimeFunctionPolicy {
@@ -176,10 +185,14 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
     policy.nounwind = true;
     return policy;
   }
+  // Frame begin/end touch only this thread's frame chain, the shadow-stack
+  // vector and the debug trace ring. Neither has a pointer argument, and neither
+  // dereferences the marker, so no caller storage is reachable from the call.
   if (symbol == "nrq_gc_root_frame_begin" || symbol == "nrq_gc_root_frame_end") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     policy.willreturn = true;
+    policy.memory = MemoryEffectKind::ArgNoneOtherReadWrite;
     return policy;
   }
   // The root slot itself is retained by the shadow stack (no nocapture on
@@ -361,6 +374,24 @@ inline void apply_runtime_function_attributes(
             ? mlir::LLVM::ModRefInfo::Ref
             : mlir::LLVM::ModRefInfo::NoModRef,
         /*inaccessibleMem=*/mlir::LLVM::ModRefInfo::NoModRef,
+        /*errnoMem=*/mlir::LLVM::ModRefInfo::NoModRef,
+        /*targetMem0=*/mlir::LLVM::ModRefInfo::NoModRef,
+        /*targetMem1=*/mlir::LLVM::ModRefInfo::NoModRef);
+    func_op.setMemoryEffectsAttr(mem_attr);
+  } else if (policy.memory == MemoryEffectKind::ArgNoneOtherReadWrite ||
+             policy.memory == MemoryEffectKind::ArgReadWriteOtherReadWrite) {
+    // The GC protocol lives in TLS and file-static state, so "other" is always
+    // read and written. Its bookkeeping also includes memory the program cannot
+    // name, so "inaccessible" stays ModRef rather than an unprovable claim. What
+    // is claimed is the argument split: an entry point that never dereferences a
+    // pointer argument cannot be the reason a caller's alloca is reloaded.
+    auto mem_attr = mlir::LLVM::MemoryEffectsAttr::get(
+        builder.getContext(),
+        /*other=*/mlir::LLVM::ModRefInfo::ModRef,
+        /*argMem=*/policy.memory == MemoryEffectKind::ArgNoneOtherReadWrite
+            ? mlir::LLVM::ModRefInfo::NoModRef
+            : mlir::LLVM::ModRefInfo::ModRef,
+        /*inaccessibleMem=*/mlir::LLVM::ModRefInfo::ModRef,
         /*errnoMem=*/mlir::LLVM::ModRefInfo::NoModRef,
         /*targetMem0=*/mlir::LLVM::ModRefInfo::NoModRef,
         /*targetMem1=*/mlir::LLVM::ModRefInfo::NoModRef);
