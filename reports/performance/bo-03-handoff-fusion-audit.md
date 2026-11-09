@@ -117,7 +117,23 @@ this expectation rather than silently activating the pass.
 - **No timing:** there is no emitted fused form in the corpus, so there is no
 call-site difference to time. The only quantitative statement this audit makes is
 the call-count one: the fused form would remove one runtime call per handoff, and
-the current emission does not use it.
-- **Left for the owner:** whether to delete the now-unmatchable pass (and its
-documented ABI entry) or to reorder the lowering to release-then-publish. Both
-change compiler or ABI behaviour, and the roadmap scopes this stage to an audit.
+the current emission does not use it.## 8. Decision taken (0.291-beta)
+
+The compiler pass was **removed**; the runtime entry was **kept**.
+
+- The pass matched no emitted code, so deleting it is behaviour-neutral for
+  programs. It also removes the hazard of a dead rewrite silently activating if
+  the emission order ever changes without its semantics being re-proven.
+- Reordering the lowering to release-then-publish was rejected: it would put the
+  release before the publication, and only the pass would have restored the safe
+  order. Any sequence the pass declined to fuse would leave a value released and
+  unrooted at the same point — a correctness hazard traded for one call.
+- `nrq_gc_root_store_release` stays: it is a documented C ABI entry that performs
+  publish-then-release in one call, it is correct and now directly unit-tested,
+  and external callers can still use it. Generated code does not emit it.
+
+After removal: emitted IR for tests 01–03 changes only in where an unpin sits
+relative to the intervening non-call operations (no call or safepoint is crossed),
+assembly for `build_tree` keeps the same instruction count (55) with different
+register shuffles, unit 194/194, integration 261/261, and Stress 02/03 semantic
+output is unchanged.
