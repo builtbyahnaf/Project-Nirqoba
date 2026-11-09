@@ -1,0 +1,10 @@
+{
+  "mode": "build_and_run",
+  "expect_stdout": "7\n",
+  "expect_ir_counts": {
+    "call ptr @nrq_gc_pin_transfer(ptr": 1,
+    "call void @nrq_gc_root_store(ptr": 1,
+    "call void @nrq_gc_unpin(ptr": 1,
+    "call void @nrq_gc_root_store_release(": 0
+  }
+}
