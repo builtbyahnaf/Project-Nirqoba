@@ -6,11 +6,20 @@
 
 ---
 
+## Version 0.275-beta (working build)
+
+### Summary of Changes (since `0.271-beta`):
+
+*Current working build, opened for the next round of collector work. Nothing has
+landed under this version yet; entries are added as changes are committed.*
+
+---
+
 ## Version 0.271-beta (working build)
 
 ### Summary of Changes (since `0.269-beta`):
 
-*Current working build.*
+*Working build; superseded by 0.275-beta, which changes no code so far.*
 
 - **No runtime, compiler or language change.** Every file that produces the
   binary or the collector is identical to 0.269-beta; this release carries the
@@ -109,7 +118,7 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 ## Version 0.266-beta (defective)
 
 > **Defect notice.** This release is known-defective and is superseded by
-> 0.271-beta. It introduced unexpected performance regressions in the
+> 0.275-beta. It introduced unexpected performance regressions in the
 > collector domain and must not be used for performance comparisons or as a
 > baseline. The defects are understood, documented below, and are being fixed
 > by the author as part of an architecture restructuring. No new feature work
@@ -155,7 +164,7 @@ Full evidence: `reports/performance/colo-01-set-bit-sweep.md`,
 
 Ahnaf is aware of these regressions and is restructuring the architecture. The
 collector defect will be fixed by the author; the immediate correction is
-scheduled for **0.269-beta** and now shipped as **0.271-beta**, which is the working
+scheduled for **0.269-beta** and shipped in 0.271-beta; **0.275-beta** is the working
 build from this point on.
 Do not tag, benchmark, or ship 0.266-beta.
 
@@ -165,7 +174,7 @@ Do not tag, benchmark, or ship 0.266-beta.
 
 > **Post-release note.** This release carries a stale benchmark artifact
 > (generated 2026-11-08T03:13, seven hours before the collector commits) and
-> introduced the sweep regression documented under 0.266-beta. Use 0.271-beta
+> introduced the sweep regression documented under 0.266-beta. Use 0.275-beta
 > for any measurement.
 
 ### Summary of Changes (since `0.257-beta`):
