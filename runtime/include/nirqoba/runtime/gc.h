@@ -12,6 +12,48 @@ typedef void (*nrq_gc_visit_fn)(void* referenced_object, void* visitor_context);
 typedef void (*nrq_gc_trace_fn)(void* object, size_t object_bytes,
                                 nrq_gc_visit_fn visit, void* visitor_context);
 
+// One immutable description of an object layout, shared by every instance that
+// has the same structural requirements. A header holds a pointer to its layout
+// instead of a copy of the payload size, element size, trace callback and
+// reference map, so 10,000 instances of one record carry one description.
+//
+// A published descriptor is read-only and lives for the life of the process, so
+// its address is a stable identity and a live object can always read it. Only
+// layout creation takes a lock; tracing and allocation read through the pointer
+// without one.
+enum {
+  // The payload repeats `payload_size` byte elements and the element count is
+  // recorded per instance. Without this bit the payload is a single record.
+  NRQ_OBJECT_LAYOUT_ARRAY = 1u << 0
+};
+
+struct nrq_object_layout {
+  // Bytes of one record, or of one array element when the array bit is set.
+  uint32_t payload_size;
+  uint32_t reference_count;
+  uint32_t flags;
+  // Offsets of the payload words that hold managed references, relative to the
+  // payload for a record and to the start of one element for an array. They are
+  // uint32 so a descriptor stays compact; a payload larger than 4 GiB is
+  // described by `trace` instead.
+  const uint32_t* reference_offsets;
+  // Visits references this table cannot describe. Null when the table is
+  // complete, which is the usual case and keeps tracing table-driven.
+  nrq_gc_trace_fn trace;
+};
+
+// Returns the descriptor for a layout, creating it the first time it is seen.
+// `element_bytes` is zero for a fixed record and the element size for an array.
+// Returns null when the layout cannot be described exactly, which is the case
+// for a zero-size payload, an offset outside the record or element, or an
+// offset that does not leave room for a pointer.
+const struct nrq_object_layout* nrq_gc_layout_intern(
+    size_t payload_bytes, size_t element_bytes, nrq_gc_trace_fn trace,
+    const size_t* reference_offsets, size_t reference_count);
+// Number of distinct layouts described so far. Instances sharing a layout do
+// not increase this, which is the direct measure of descriptor sharing.
+size_t nrq_gc_layout_count(void);
+
 struct nrq_gc_stats {
   uint64_t allocated_bytes;
   uint64_t collected_bytes;

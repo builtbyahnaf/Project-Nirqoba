@@ -104,6 +104,45 @@ TEST(GcTest, ObjectHeaderStaysWithinItsMetadataBudget) {
             uintptr_t{0});
 }
 
+TEST(GcTest, OneLayoutServesEveryCompatibleInstance) {
+  // A repeated request must return the descriptor that already exists: that is
+  // the whole point of sharing, and the address is used as an identity.
+  const size_t offsets[] = {0, 8};
+  const nrq_object_layout* first = nrq_gc_layout_intern(16, 0, nullptr, offsets, 2);
+  ASSERT_NE(first, nullptr);
+  ASSERT_TRUE(nrq_gc_layout_intern(16, 0, nullptr, offsets, 2) == first);
+  ASSERT_EQ(first->payload_size, uint32_t{16});
+  ASSERT_EQ(first->reference_count, uint32_t{2});
+  ASSERT_EQ(first->reference_offsets[0], uint32_t{0});
+  ASSERT_EQ(first->reference_offsets[1], uint32_t{8});
+  ASSERT_EQ(first->flags & NRQ_OBJECT_LAYOUT_ARRAY, 0u);
+
+  // Matching sizes are not enough: the same 16 bytes with the references in the
+  // other order describe a different record and must not merge.
+  const size_t reordered[] = {8, 0};
+  const nrq_object_layout* other =
+      nrq_gc_layout_intern(16, 0, nullptr, reordered, 2);
+  ASSERT_NE(other, nullptr);
+  ASSERT_TRUE(other != first);
+
+  // A repeating payload is a distinct layout of the same bytes, so tracing
+  // knows to walk elements.
+  const nrq_object_layout* array = nrq_gc_layout_intern(24, 24, nullptr, offsets, 2);
+  ASSERT_NE(array, nullptr);
+  ASSERT_EQ(array->flags, static_cast<uint32_t>(NRQ_OBJECT_LAYOUT_ARRAY));
+
+  // A layout that cannot be described exactly is rejected instead of stored, so
+  // the descriptor count never grows with invalid requests.
+  const size_t shared = nrq_gc_layout_count();
+  ASSERT_TRUE(nrq_gc_layout_intern(16, 0, nullptr, nullptr, 3) == nullptr);
+  const size_t beyond[] = {16};
+  ASSERT_TRUE(nrq_gc_layout_intern(16, 0, nullptr, beyond, 1) == nullptr);
+  const size_t straddling[] = {12};
+  ASSERT_TRUE(nrq_gc_layout_intern(16, 0, nullptr, straddling, 1) == nullptr);
+  ASSERT_TRUE(nrq_gc_layout_intern(0, 0, nullptr, nullptr, 0) == nullptr);
+  ASSERT_EQ(nrq_gc_layout_count(), shared);
+}
+
 TEST(GcTest, PreservesReachableCyclesAndSweepsAfterRootRemoval) {
   nrq_gc_enable();
   nrq_gc_set_threshold(1024 * 1024);
