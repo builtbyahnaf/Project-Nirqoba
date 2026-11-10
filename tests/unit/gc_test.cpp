@@ -1596,6 +1596,69 @@ TEST(GcTest, FragmentedPagesServeReservedRunsWithoutRepeatingCells) {
   nrq_gc_enable();
 }
 
+TEST(GcTest, AllocationProfileMatchesWhatTheAllocatorCharges) {
+  // AO-07 needs the footprint of a payload size without allocating to find it
+  // out. The profile is only useful if it agrees with the allocator, so this
+  // pins it against a real allocation wave for a small and a page-sized payload.
+  const struct nrq_gc_allocation_facts facts = nrq_gc_get_allocation_facts();
+  ASSERT_EQ(facts.object_header_bytes, nrq_gc_object_header_bytes());
+  ASSERT_EQ(facts.page_bytes, facts.tlab_bytes);
+  ASSERT_TRUE(facts.tlab_min_slab_bytes > 0);
+  ASSERT_TRUE(facts.tlab_min_slab_bytes <= facts.tlab_bytes);
+
+  struct nrq_gc_allocation_profile small{};
+  ASSERT_EQ(nrq_gc_get_allocation_profile(64, &small), 1);
+  ASSERT_EQ(small.span_bytes, 64 + facts.object_header_bytes);
+  ASSERT_EQ(small.slots_per_page, facts.page_bytes / small.span_bytes);
+  ASSERT_EQ(small.page_slack_bytes,
+            facts.page_bytes - small.slots_per_page * small.span_bytes);
+  ASSERT_TRUE(small.page_slack_bytes < small.span_bytes);
+
+  // A span just over half a page still uses one page, and the rest of that page
+  // cannot hold a second object of the same size: one object per page.
+  struct nrq_gc_allocation_profile wide{};
+  ASSERT_EQ(nrq_gc_get_allocation_profile(32768, &wide), 1);
+  ASSERT_TRUE(wide.span_bytes > facts.page_bytes / 2);
+  ASSERT_EQ(wide.page_bytes, facts.page_bytes);
+  ASSERT_EQ(wide.slots_per_page, 1);
+  ASSERT_EQ(wide.page_slack_bytes, wide.page_bytes - wide.span_bytes);
+
+  // A payload larger than a page is charged a page of its own, exactly the span.
+  struct nrq_gc_allocation_profile huge{};
+  ASSERT_EQ(nrq_gc_get_allocation_profile(100000, &huge), 1);
+  ASSERT_EQ(huge.page_bytes, huge.span_bytes);
+  ASSERT_EQ(huge.slots_per_page, 1);
+  ASSERT_EQ(huge.page_slack_bytes, 0);
+
+  struct nrq_gc_allocation_profile ignored{};
+  ASSERT_EQ(nrq_gc_get_allocation_profile(SIZE_MAX, &ignored), 0);
+  ASSERT_EQ(nrq_gc_get_allocation_profile(64, nullptr), 0);
+
+  nrq_gc_disable();
+  nrq_gc_set_generational(1);
+  nrq_gc_set_threshold(static_cast<size_t>(1) << 30);
+  nrq_gc_collect();
+  nrq_gc_collect();
+  const size_t pages_before = nrq_gc_page_count();
+  const uint64_t refills_before = nrq_gc_tlab_refill_count();
+  constexpr int kObjects = 4090;
+  nrq_gc_mutator_enter();
+  for (int index = 0; index < kObjects; ++index)
+    ASSERT_NE(nrq_gc_allocate(64, nullptr), nullptr);
+  nrq_gc_mutator_leave();
+  const size_t pages = nrq_gc_page_count() - pages_before;
+  const uint64_t refills = nrq_gc_tlab_refill_count() - refills_before;
+  ASSERT_EQ(pages, static_cast<size_t>((kObjects + small.slots_per_page - 1) /
+                                       small.slots_per_page));
+  // One reservation fills a page exactly, so a refill per page is the floor the
+  // profile predicts.
+  ASSERT_EQ(refills, static_cast<uint64_t>(pages));
+
+  nrq_gc_collect();
+  nrq_gc_set_threshold(1024 * 1024);
+  nrq_gc_enable();
+}
+
 TEST(GcTest, ReservationsChargeWholeObjectsOnly) {
   // A reservation that ended part way through an object left the remainder
   // charged to its page and unusable: for a payload close to the slab size that

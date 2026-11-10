@@ -149,6 +149,38 @@ struct nrq_gc_stats nrq_gc_get_stats(void);
 // Reports the per-object metadata bytes the collector charges for every managed
 // allocation. Exposed so the layout can be audited by tests and tooling.
 size_t nrq_gc_object_header_bytes(void);
+// AO-07 handover: the allocator facts the header and reference-layout work needs
+// to reason about a new layout before changing it. These are constants of the
+// current implementation, not measurements - the profile below turns them into
+// the footprint of one payload size.
+struct nrq_gc_allocation_facts {
+  // Metadata charged per object, and the alignment every payload pointer keeps.
+  size_t object_header_bytes;
+  size_t payload_alignment;
+  // The ordinary page, which is also the largest thread-local slab.
+  size_t page_bytes;
+  size_t tlab_bytes;
+  // The smallest reclaimed run that is worth handing to a thread.
+  size_t tlab_min_slab_bytes;
+  // Runs one reservation holds without touching the lock again.
+  size_t spare_run_capacity;
+};
+struct nrq_gc_allocation_facts nrq_gc_get_allocation_facts(void);
+// What one payload size costs in space: the aligned span the allocator stores,
+// how many of them an ordinary page holds, the space left at the end of that
+// page, and how much a full slab reservation serves before a refill. A payload
+// whose span exceeds a page is charged a page of its own. Returns 0 for a
+// payload size that cannot be represented.
+struct nrq_gc_allocation_profile {
+  size_t payload_bytes;
+  size_t span_bytes;
+  size_t slots_per_page;
+  size_t page_slack_bytes;
+  size_t objects_per_refill;
+  size_t page_bytes;
+};
+int32_t nrq_gc_get_allocation_profile(size_t payload_bytes,
+                                  struct nrq_gc_allocation_profile* out);
 // Page-pool diagnostics. `nrq_gc_page_count` counts active bump pages,
 // `nrq_gc_recycled_page_count` counts empty pages retained for reuse, and
 // `nrq_gc_page_reuse_count` counts how often a retained page was handed back
