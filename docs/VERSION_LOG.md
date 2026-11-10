@@ -6,12 +6,48 @@
 
 ---
 
-## Version 0.315-beta (working build)
+## Version 0.318-beta (working build)
+
+### Summary of Changes (since `0.315-beta`):
+
+*Current working build, opened after 0.315-beta. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.315-beta (released)
 
 ### Summary of Changes (since `0.311-beta`):
 
-*Current working build, opened after 0.311-beta. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Released. Superseded by 0.318-beta, which continues the allocator stage.*
+
+- **AO-04: large-object pages are carved from runs at their own size.** Pages larger
+  than 64 KiB still took their own `VirtualAlloc`/`VirtualFree` pair, so a heap of
+  100 KiB arrays paid two system calls per object. They now come from the same 8 MiB
+  runs, at their own capacity rounded to the commit granularity; the 64 KiB
+  alignment is only imposed on ordinary pages, which are the ones the address-keyed
+  directory indexes. 2,000 arrays of 100,000 bytes: first round min 82.7 → 47.5 ms,
+  median 88.7 → 49.6 ms, private commit 201.2 → 203.8 MB. Carving them in whole
+  64 KiB slots was rejected first: it rounded 100 KiB up to 128 KiB and took commit
+  to 256 MB.
+- **AO-05: the allocation size is validated once, at the runtime boundary.** The
+  entry points checked the payload size and the thread-local bump path repeated the
+  same checks; the bump path now only requires that the thread is a mutator, and the
+  untyped entry gained the check it had relied on the callee to make.
+- **AO-05: a non-generational program keeps the write barrier down.** Allocating a
+  non-young object re-armed the store barrier, undoing `nrq_gc_set_generational(0)`
+  at the next allocation, and a cycle re-armed it and never disarmed it; both left a
+  program with generations off paying the write barrier on every store for remembered
+  entries no minor can use. The old-object count moved into the publication walk, so
+  counting an object no longer costs a locked instruction on the allocation path.
+  `nrq_gc_store_barrier_active` exposes the policy state and a unit test pins it.
+- **AO-05: the generated-code TLAB fast path was audited and refused.** The runtime
+  call boundary was measured with diagnostic builds that remove the per-object cycle
+  state, the accounting update, the barrier protocol, the payload zero fill and the
+  root-slot validation one at a time: no variant moved the median, so the work a
+  generated fast path could remove is below this machine's noise floor, while the
+  invariants it needs are per-thread state that would have to become a frozen public
+  ABI. See `reports/performance/ao-05-tlab-boundary.md`.
 
 ---
 
