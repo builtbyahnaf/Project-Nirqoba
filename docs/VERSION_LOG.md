@@ -6,12 +6,46 @@
 
 ---
 
-## Version 0.341-beta (working build)
+## Version 0.346-beta (working build)
+
+### Summary of Changes (since `0.341-beta`):
+
+*Current working build, opened after 0.341-beta. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.341-beta (released)
 
 ### Summary of Changes (since `0.336-beta`):
 
-*Current working build, opened after 0.336-beta. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Released. Closes the object-header investigation and Section D, and opens
+Section E. Superseded by 0.346-beta.*
+
+- **The header question is closed with numbers.** Four candidates were laid out by
+  the compiler: H48 at 48 bytes, H40 at 40 (legal only where `max_align_t` is 8),
+  H32 at 32, and H36 - which is not a size, because 36 used bytes round to
+  `sizeof` 40 and land on H40's spans while also narrowing the epoch. Span and
+  occupancy for each were computed with the runtime's own formula after checking it
+  against the allocation profile on ten payloads.
+- **`page_of()` was measured rather than assumed:** mask 0.43-0.53 ns but wrong
+  above a page quantum; the cheapest correct fallback 2.53-2.75 ns on ordinary
+  pages and 4.89-5.21 ns on large ones, against 2.15-2.75 ns for the field it would
+  replace; a per-quantum hash measured 60 ns and was disqualified.
+- **Every header field was audited** for its read and write sites: `page` is
+  written once and read 18 times, `mark_next` lives inside one mark cycle, and
+  `next`/`tlab_next` are both live during marking.
+- **H48 is authoritative and enforced in code:** the layout is documented above the
+  struct, every field offset is asserted, and the alignment rule is asserted at the
+  size. H32 is recorded as rejected, H40 as a documented target-specific
+  possibility that is not implemented.
+- **Section D audited and closed:** D1's twelve requirements, D2's preserved
+  behaviours and D3's obligations each verified, with two gaps fixed - the layout
+  was documented only in reports, and nothing checked a live object's layout
+  reference. Production/debug equivalence measured: the release preset, with
+  validation compiled out, runs the same 210 unit and 263 integration tests.
+- **A page asserts it starts on its own size boundary**, which is the premise any
+  address-masking page lookup would rest on.
 
 ---
 
