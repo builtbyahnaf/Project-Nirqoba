@@ -210,6 +210,18 @@ TEST(GcTest, AWideArrayRootUsesOneSharedElementLayout) {
   ASSERT_TRUE(nrq_gc_get_live_objects() < live);
 }
 
+TEST(GcTest, TheHeaderSplitsIntoInstanceAndSharedBytes) {
+  // The header is 48 bytes: 40 that describe one instance and 8 that name the
+  // layout every instance of that shape shares. The facts measure the split from
+  // the struct, so this test fails if a field quietly moves to the other half.
+  const nrq_gc_allocation_facts facts = nrq_gc_get_allocation_facts();
+  ASSERT_EQ(facts.object_header_bytes, static_cast<size_t>(48));
+  ASSERT_EQ(facts.object_instance_bytes, static_cast<size_t>(40));
+  ASSERT_EQ(facts.object_shared_bytes, static_cast<size_t>(8));
+  ASSERT_EQ(facts.object_instance_bytes + facts.object_shared_bytes,
+            facts.object_header_bytes);
+}
+
 TEST(GcTest, StructuralMetadataIsSharedNotRepeated) {
   // A thousand instances must not cost a thousand descriptions. The facts pair
   // descriptor count and bytes with the live-object count so sharing is
