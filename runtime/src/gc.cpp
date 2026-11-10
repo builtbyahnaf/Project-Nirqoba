@@ -100,6 +100,16 @@ struct GcPage {
   std::array<FreeSpan, kMaxFreeSpans> free_spans{};
   size_t free_span_count = 0;
   size_t free_span_bytes = 0;
+  // Largest run currently recorded in this page. It lets a refill ask whether a
+  // page can host a slab without walking the run list, and lets a single-object
+  // search reject a page with one comparison. Kept exact incrementally: a
+  // release can only raise it, and a take only matters when it consumes the last
+  // run of that size, which `max_free_span_count` identifies.
+  size_t max_free_span = 0;
+  // Number of recorded runs whose span equals `max_free_span`. Consuming one of
+  // several equal runs leaves the maximum unchanged, so the O(runs) rescan that
+  // recomputes it runs once per page rather than once per refill.
+  size_t max_free_span_count = 0;
   // Position in the index of pages that record at least one freed run, or
   // `kNoSpanIndex` while this page records none. Keeping the position here makes
   // joining and leaving that index a constant-time swap-remove instead of a
@@ -712,6 +722,10 @@ bool multiply_size_overflowed(size_t count, size_t element_size, size_t& bytes) 
 }
 
 constexpr size_t kGcTlabBytes = kGcPageBytes;
+// The smallest reclaimed run worth a reservation. A short run still serves
+// allocations, but taking one for a slab spends a lock acquisition on a few
+// cells; see reserve_tlab_locked.
+constexpr size_t kGcTlabMinSlabBytes = kGcTlabBytes / 8;
 std::vector<std::unique_ptr<GcPage>> gc_pages;
 
 // Visits every live object whose page is in the set, in page and address order,
@@ -847,6 +861,11 @@ uint64_t tlab_refill_count = 0;
 // from a page's untouched tail.
 uint64_t recycled_span_reuse_count = 0;
 size_t total_free_spans = 0;
+// Number of pages whose largest recorded run can host a TLAB slab. A refill asks
+// this one word before searching the run index, so a fragmented heap answers
+// "no slab anywhere" in constant time instead of proving it by walking every
+// page once per few allocations. Maintained under gc_mutex with the page maxima.
+size_t pages_with_slab_run = 0;
 // Cache the current bump page per allocating thread. Collection increments the
 // generation so a thread that resumes after another thread reclaimed its page
 // discards the stale pointer before dereferencing it.
@@ -1916,6 +1935,81 @@ bool sweep_chunk_locked(size_t budget_bytes) {
   return sweep_list == nullptr && sweep_cursor.page >= sweep_cursor.page_limit;
 }
 
+// Largest run currently recorded in a page, and how many runs have that size.
+// The count lets a take keep the maximum exact in constant time while another
+// run of the same size remains; only the last one forces a rescan. The debug
+// build re-derives both so a missed update fails the test suite instead of
+// silently sending refills down the wrong path.
+size_t largest_free_run(const GcPage& page, size_t& count) {
+  size_t largest = 0;
+  count = 0;
+  for (size_t index = 0; index < page.free_span_count; ++index) {
+    const size_t span = page.free_spans[index].span;
+    if (span > largest) {
+      largest = span;
+      count = 1;
+    } else if (span == largest) {
+      ++count;
+    }
+  }
+  return largest;
+}
+
+void set_page_max_free_span_locked(GcPage& page, size_t span, size_t count) {
+  if constexpr (nirq::runtime_debug_enabled) {
+    size_t actual_count = 0;
+    const size_t actual = largest_free_run(page, actual_count);
+    if (actual != span || actual_count != count)
+      nrq_runtime_fatal("GC free-run size index is inconsistent");
+  }
+  const bool was_slab = page.max_free_span >= kGcTlabMinSlabBytes;
+  page.max_free_span = span;
+  page.max_free_span_count = count;
+  const bool is_slab = span >= kGcTlabMinSlabBytes;
+  if (was_slab == is_slab) return;
+  if (is_slab) {
+    ++pages_with_slab_run;
+  } else {
+    if (pages_with_slab_run == 0)
+      nrq_runtime_fatal("GC slab-run page count underflow");
+    --pages_with_slab_run;
+  }
+}
+
+void refresh_page_max_free_span_locked(GcPage& page) {
+  size_t count = 0;
+  const size_t largest = largest_free_run(page, count);
+  set_page_max_free_span_locked(page, largest, count);
+}
+
+// Account for one run changing from `before` bytes to `after` bytes (0 means it
+// was inserted or removed). Maintaining the count of maximum-sized runs is what
+// keeps this O(1): only the disappearance of the last run of the maximum size
+// needs the run list walked again.
+void adjust_page_max_free_span_locked(GcPage& page, size_t before,
+                                      size_t after) {
+  const size_t maximum = page.max_free_span;
+  if (before == maximum && before != 0) {
+    if (after > maximum) {
+      set_page_max_free_span_locked(page, after, 1);
+    } else if (after < maximum) {
+      if (page.max_free_span_count > 1) {
+        set_page_max_free_span_locked(page, maximum,
+                                      page.max_free_span_count - 1);
+      } else {
+        refresh_page_max_free_span_locked(page);
+      }
+    }
+    return;
+  }
+  // The changed run was below the maximum, so it can only raise it or join it.
+  if (after > maximum) {
+    set_page_max_free_span_locked(page, after, 1);
+  } else if (after != 0 && after == maximum) {
+    set_page_max_free_span_locked(page, maximum, page.max_free_span_count + 1);
+  }
+}
+
 // Record space an object used to occupy so a later allocation can reuse it.
 // Callers hold gc_mutex. A page whose span list is full keeps the space
 // unusable, which is exactly the behaviour of the bump allocator.
@@ -1940,24 +2034,33 @@ void release_span_locked(GcPage& page, size_t offset, size_t span) {
   if (index > 0) {
     GcPage::FreeSpan& previous = page.free_spans[index - 1];
     if (previous.offset + previous.span == offset) {
+      const size_t previous_before = previous.span;
+      size_t next_before = 0;
       previous.span += span;
       page.free_span_bytes += span;
       if (index < page.free_span_count &&
           previous.offset + previous.span == page.free_spans[index].offset) {
-        previous.span += page.free_spans[index].span;
+        next_before = page.free_spans[index].span;
+        previous.span += next_before;
         for (size_t move = index; move + 1 < page.free_span_count; ++move)
           page.free_spans[move] = page.free_spans[move + 1];
         --page.free_span_count;
         --total_free_spans;
       }
+      adjust_page_max_free_span_locked(page, previous_before, previous.span);
+      if (next_before != 0)
+        adjust_page_max_free_span_locked(page, next_before, 0);
       return;
     }
   }
   if (index < page.free_span_count &&
       offset + span == page.free_spans[index].offset) {
-    page.free_spans[index].offset = offset;
-    page.free_spans[index].span += span;
+    GcPage::FreeSpan& next = page.free_spans[index];
+    const size_t before = next.span;
+    next.offset = offset;
+    next.span += span;
     page.free_span_bytes += span;
+    adjust_page_max_free_span_locked(page, before, next.span);
     return;
   }
   if (page.free_span_count >= GcPage::kMaxFreeSpans) return;
@@ -1967,6 +2070,7 @@ void release_span_locked(GcPage& page, size_t offset, size_t span) {
   ++page.free_span_count;
   ++total_free_spans;
   page.free_span_bytes += span;
+  adjust_page_max_free_span_locked(page, 0, span);
   index_span_page_locked(page);
 }
 
@@ -1976,11 +2080,12 @@ void release_span_locked(GcPage& page, size_t offset, size_t span) {
 GcPage* take_free_span_locked(size_t span, size_t& offset) {
   if (span == 0 || total_free_spans == 0) return nullptr;
   for (GcPage* page : span_pages) {
-    if (!page || page->free_span_count == 0 || page->free_span_bytes < span)
+    if (!page || page->free_span_count == 0 || page->max_free_span < span)
       continue;
     for (size_t index = 0; index < page->free_span_count; ++index) {
       GcPage::FreeSpan& candidate = page->free_spans[index];
       if (candidate.span < span) continue;
+      const size_t candidate_before = candidate.span;
       unretire_page_locked(*page);
       offset = candidate.offset;
       page->free_span_bytes -= span;
@@ -1989,6 +2094,8 @@ GcPage* take_free_span_locked(size_t span, size_t& offset) {
         // the payload alignment, so the new start keeps that alignment.
         candidate.offset += span;
         candidate.span -= span;
+        adjust_page_max_free_span_locked(*page, candidate_before,
+                                         candidate.span);
       } else {
         // Runs are ordered by offset, so removal shifts the tail down instead of
         // swapping the last run into the hole.
@@ -1999,6 +2106,7 @@ GcPage* take_free_span_locked(size_t span, size_t& offset) {
         // A page with no recorded run can never answer a request again until
         // something is freed into it, so it leaves the index with its last run.
         if (page->free_span_count == 0) unindex_span_page_locked(*page);
+        adjust_page_max_free_span_locked(*page, candidate_before, 0);
       }
       recycled_span_reuse_count = saturated_add(recycled_span_reuse_count, 1);
       return page;
@@ -2023,11 +2131,12 @@ GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t& offset,
       total_free_spans == 0)
     return nullptr;
   for (GcPage* page : span_pages) {
-    if (!page || page->free_span_count == 0 || page->free_span_bytes < minimum)
+    if (!page || page->free_span_count == 0 || page->max_free_span < minimum)
       continue;
     for (size_t index = 0; index < page->free_span_count; ++index) {
       GcPage::FreeSpan& candidate = page->free_spans[index];
       if (candidate.span < minimum) continue;
+      const size_t candidate_before = candidate.span;
       unretire_page_locked(*page);
       const size_t span = std::min(candidate.span, desired);
       offset = candidate.offset;
@@ -2037,12 +2146,15 @@ GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t& offset,
         // both its alignment and its position in the ordered run list.
         candidate.offset += span;
         candidate.span -= span;
+        adjust_page_max_free_span_locked(*page, candidate_before,
+                                         candidate.span);
       } else {
         for (size_t move = index; move + 1 < page->free_span_count; ++move)
           page->free_spans[move] = page->free_spans[move + 1];
         --page->free_span_count;
         --total_free_spans;
         if (page->free_span_count == 0) unindex_span_page_locked(*page);
+        adjust_page_max_free_span_locked(*page, candidate_before, 0);
       }
       recycled_span_reuse_count = saturated_add(recycled_span_reuse_count, 1);
       granted = span;
@@ -2249,6 +2361,7 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
       page->free_span_count = 0;
       page->free_span_bytes = 0;
     }
+    set_page_max_free_span_locked(*page, 0, 0);
     page->young_objects = 0;
     if (page->object_starts && page->object_start_words != 0) {
       std::memset(page->object_starts.get(), 0,
@@ -2287,6 +2400,7 @@ void recycle_page(std::unique_ptr<GcPage> page) {
     page->free_span_count = 0;
     page->free_span_bytes = 0;
   }
+  set_page_max_free_span_locked(*page, 0, 0);
   if (recycled_pages.size() >= kMaxRecycledPages ||
       page->capacity < kGcPageBytes ||
       page->capacity > kMaxRecycledPageBytes) {
@@ -2798,9 +2912,13 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
   // Taking it here is what turns a fragmented page back into a usable bump
   // region instead of leaving it permanently half empty - and taking all of it,
   // rather than a fixed small slice, is what keeps a recycled heap from being
-  // carved into pieces that later reservations cannot use. A short run is still
-  // accepted: in a heap whose largest free block is a few cells, the alternative
-  // is to grow the heap while committed space sits unused.
+  // carved into pieces that later reservations cannot use.
+  //
+  // A slab-sized run is preferred, but only when one exists:
+  // `pages_with_slab_run` answers that in one load. Proving the negative by
+  // walking the run index made a fragmented heap pay a full page scan for every
+  // few allocations. Short runs are still reused, after the committed page tails
+  // below, which cost nothing to hand out.
   auto take_run = [&](size_t wanted_minimum) {
     size_t run_offset = 0;
     size_t run_span = 0;
@@ -2815,7 +2933,15 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     thread_allocation_generation = gc_page_generation;
     return true;
   };
-  if (take_run(minimum_span)) return true;
+  if (minimum_span > kGcTlabMinSlabBytes) {
+    // A single object larger than the slab minimum needs a run of its own size;
+    // the slab counter cannot answer for that, so search directly. Such
+    // allocations are rare, so the walk is not on the hot path.
+    if (take_run(minimum_span)) return true;
+  } else if (pages_with_slab_run != 0 &&
+             take_run(kGcTlabMinSlabBytes)) {
+    return true;
+  }
   GcPage* page = nullptr;
   size_t available = 0;
   if (thread_allocation_generation != gc_page_generation) {
@@ -2842,6 +2968,10 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
       }
     }
   }
+  // Now reuse a short reclaimed run. This is the path that serves a heap whose
+  // largest free block is a few cells; it is tried only after the committed page
+  // tails, which need no index maintenance.
+  if (!page && take_run(minimum_span)) return true;
   if (!page) {
     const size_t capacity = std::max(kGcPageBytes, kGcTlabBytes);
     auto new_page = acquire_page(capacity);
