@@ -669,7 +669,7 @@ struct MutatorState {
   // and a thread that leaves folds its totals into the global counters.
   uint64_t tlab_tail_bytes = 0;
   uint64_t tlab_tail_max_bytes = 0;
-
+  uint64_t tlab_tail_reclaimed_bytes = 0;
 };
 void drain_transfer_pins_locked(MutatorState& mutator);
 
@@ -891,6 +891,9 @@ size_t total_free_spans = 0;// AO-06 observation. `reused_span_bytes` is how muc
 uint64_t reused_span_bytes = 0;
 uint64_t tlab_tail_bytes_total = 0;
 uint64_t tlab_tail_max_bytes_total = 0;
+// Reservation space returned to its page at a safepoint, which is what turns an
+// abandoned slab tail from stranded bytes into reusable free space.
+uint64_t tlab_tail_reclaimed_bytes_total = 0;
 // Number of pages whose largest recorded run can host a TLAB slab. A refill asks
 // this one word before searching the run index, so a fragmented heap answers
 // "no slab anywhere" in constant time instead of proving it by walking every
@@ -2272,6 +2275,28 @@ void account_tlab_tail(MutatorState& mutator) {
   if (tail > mutator.tlab_tail_max_bytes) mutator.tlab_tail_max_bytes = tail;
 }
 
+// Returns the unused end of this thread's reservation to its page. The space was
+// charged to the page when the reservation was taken and nothing was ever
+// published in it, so at a safepoint it is ordinary free space again: leaving it
+// charged kept most of a slab unusable until the whole page was recycled, which
+// is the one cost a larger reservation would otherwise not pay for.
+//
+// Callers hold gc_mutex and this mutator is parked or finished. The cursor is
+// cleared so the tail is never released twice.
+void release_tlab_tail_locked(MutatorState& mutator) {
+  if (mutator.tlab_page && mutator.tlab_cursor &&
+      mutator.tlab_end > mutator.tlab_cursor) {
+    const size_t offset =
+        static_cast<size_t>(mutator.tlab_cursor - mutator.tlab_page->storage);
+    const size_t span = static_cast<size_t>(mutator.tlab_end - mutator.tlab_cursor);
+    mutator.tlab_tail_reclaimed_bytes =
+        saturated_add(mutator.tlab_tail_reclaimed_bytes, span);
+    release_span_locked(*mutator.tlab_page, offset, span);
+  }
+  mutator.tlab_page = nullptr;
+  mutator.tlab_cursor = nullptr;
+  mutator.tlab_end = nullptr;
+}
 // Installs a new thread-local cursor, accounting whatever the thread is giving
 // up. Every path that starts a reservation goes through here, so a tail is
 // never replaced without being counted.
@@ -2736,7 +2761,11 @@ void prepare_cycle_locked(bool young_only) {
   // or recorded as free, and a run sitting on a mutator's list is neither.
   for (MutatorState* mutator : mutators)
     if (mutator) flush_spare_runs_locked(*mutator);
-
+  // The unused end of each live reservation is the same argument one level
+  // closer: it holds no published object, so at this safepoint it is free space
+  // and the next reservation in that page can use it.
+  for (MutatorState* mutator : mutators)
+    if (mutator) release_tlab_tail_locked(*mutator);
   // A fast old-to-young store may have filled its buffer without taking the
   // collector lock. Publish every mutator's TLAB first, then drain, so buffered
   // references to objects that were still thread-local become visible. Any
@@ -4079,12 +4108,14 @@ void nrq_gc_mutator_leave(void) {
     // This thread is never visited by cycle preparation again, so the space it
     // reserved has to be returned to its pages here.
     flush_spare_runs_locked(thread_mutator);
-
+    release_tlab_tail_locked(thread_mutator);
     tlab_tail_bytes_total =
         saturated_add(tlab_tail_bytes_total, thread_mutator.tlab_tail_bytes);
     if (thread_mutator.tlab_tail_max_bytes > tlab_tail_max_bytes_total)
       tlab_tail_max_bytes_total = thread_mutator.tlab_tail_max_bytes;
-
+    tlab_tail_reclaimed_bytes_total = saturated_add(
+        tlab_tail_reclaimed_bytes_total,
+        thread_mutator.tlab_tail_reclaimed_bytes);
     drain_remembered_locked(thread_mutator, /*defer_unresolved=*/true);
     // A thread that leaves the registry is never visited by cycle preparation
     // again, so its buffered handoffs have to be settled here.
@@ -4209,6 +4240,13 @@ uint64_t nrq_gc_tlab_tail_max_bytes(void) {
   return largest;
 }
 
+uint64_t nrq_gc_tlab_tail_reclaimed_bytes(void) {
+  HeapLockGuard lock(gc_mutex);
+  uint64_t total = tlab_tail_reclaimed_bytes_total;
+  for (const MutatorState* mutator : mutators)
+    if (mutator) total = saturated_add(total, mutator->tlab_tail_reclaimed_bytes);
+  return total;
+}
 size_t nrq_gc_free_run_count(void) {
   HeapLockGuard lock(gc_mutex);
   return total_free_spans;
