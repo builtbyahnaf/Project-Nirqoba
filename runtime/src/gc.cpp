@@ -91,11 +91,18 @@ struct GcPage {
   // space. Reuse is first-fit within the page and requires no allocation: a fixed
   // array keeps the bookkeeping inline, and a page that fills it simply behaves
   // like the bump allocator it used to be.
+  // Page-relative and 32-bit: a page is at most `kGcPageBytes` for the ordinary
+  // case, and the whole representation is bounded by the 4 GiB payload limit the
+  // layout descriptor enforces. Eight bytes per run doubles the number of runs a
+  // page can remember for the same 1.5 KiB, which matters now that a denser
+  // header packs twice as many objects into a page: churn over 128-byte objects
+  // leaves one run per two dead objects, and the old 16-byte entry capped a page
+  // at 96 of them and silently dropped the rest.
   struct FreeSpan {
-    size_t offset = 0;
-    size_t span = 0;
+    uint32_t offset = 0;
+    uint32_t span = 0;
   };
-  static constexpr size_t kMaxFreeSpans = 96;
+  static constexpr size_t kMaxFreeSpans = 192;
   static constexpr size_t kNoSpanIndex = SIZE_MAX;
   std::array<FreeSpan, kMaxFreeSpans> free_spans{};
   size_t free_span_count = 0;
@@ -344,8 +351,9 @@ struct alignas(std::max_align_t) ObjectHeader {
   // contiguous vector that minor collections scan in address order of insertion.
   bool remembered = false;
   uint8_t age = 0;
+  // Wall-clock-free cycle epoch the object was born in; the sweep retains every
+  // object born during the cycle it is collecting.
   uint64_t birth_epoch = 0;
-  ReferenceLayout reference_offsets;
 
   // Field-wise construction. Value-initialising the whole header and then
   // overwriting most of it touched both cache lines of the object twice, on a
@@ -376,11 +384,13 @@ struct alignas(std::max_align_t) ObjectHeader {
   }
 };
 
-// Managed allocation cost includes one header per object. Keep the header at
-// six pointer words plus the flags/epoch and reference layout; a regression
-// here silently raises the cost of every small allocation.
-static_assert(sizeof(ObjectHeader) == 96,
-              "ObjectHeader metadata must stay within 96 bytes");
+// Managed allocation cost includes one header per object. The reference map,
+// payload size and trace callback now live in the shared layout descriptor, so
+// what remains is what genuinely differs per instance: one list link, the mark
+// link, the owning page, the payload size, the layout pointer, the flags and the
+// birth epoch. A regression here silently raises the cost of every allocation.
+static_assert(sizeof(ObjectHeader) == 64,
+              "ObjectHeader metadata must stay within 64 bytes");
 static_assert(alignof(ObjectHeader) == alignof(std::max_align_t),
               "ObjectHeader must keep payloads max_align_t aligned");
 // Storage a managed object occupies, header included, rounded up to the payload
@@ -1511,16 +1521,20 @@ void trace_children(ObjectHeader* header, nrq_gc_visit_fn visit,
   if (!layout) nrq_runtime_fatal("GC object has no layout descriptor");
   if (layout->trace)
     layout->trace(header->payload(), header->size, visit, context);
-  if (header->reference_offsets.empty() || header->element_size == 0) return;
+  // The reference map lives in the descriptor: one table for all instances,
+  // already proven to fit one element, so the walk needs one bounds test per
+  // base rather than one per offset.
+  if (layout->reference_count == 0) return;
+  const size_t stride = (layout->flags & NRQ_OBJECT_LAYOUT_ARRAY)
+                            ? layout->payload_size
+                            : header->size;
+  if (stride == 0) return;
   const auto* bytes = static_cast<const unsigned char*>(header->payload());
-  for (size_t base = 0; base + header->element_size <= header->size;
-       base += header->element_size) {
-    for (size_t offset_index = 0;
-         offset_index < header->reference_offsets.size(); ++offset_index) {
-      const size_t offset = header->reference_offsets[offset_index];
-      if (offset > header->element_size ||
-          sizeof(void*) > header->element_size - offset)
-        continue;
+  for (size_t base = 0; base + stride <= header->size; base += stride) {
+    for (uint32_t offset_index = 0; offset_index < layout->reference_count;
+         ++offset_index) {
+      const size_t offset = layout->reference_offsets[offset_index];
+      if (offset > stride || sizeof(void*) > stride - offset) continue;
       void* child = nullptr;
       std::memcpy(&child, bytes + base + offset, sizeof(child));
       visit(child, context);
@@ -1832,9 +1846,9 @@ void buffer_remembered(void* object) {
 // layout - still goes through trace_children.
 void enqueue_narrow_children_locked(ObjectHeader* header, MarkContext& context) {
   const auto* bytes = static_cast<const unsigned char*>(header->payload());
-  const size_t reference_count = header->reference_offsets.size();
-  for (size_t index = 0; index < reference_count; ++index) {
-    const size_t offset = header->reference_offsets[index];
+  const nrq_object_layout* layout = header->layout;
+  for (uint32_t index = 0; index < layout->reference_count; ++index) {
+    const size_t offset = layout->reference_offsets[index];
     if (offset > header->size || sizeof(void*) > header->size - offset) continue;
     void* child = nullptr;
     std::memcpy(&child, bytes + offset, sizeof(child));
@@ -1848,7 +1862,7 @@ bool mark_slice_locked(size_t budget_bytes) {
     ObjectHeader* header = active_mark.worklist.pop();
     touched += header->size + sizeof(ObjectHeader);
     if (active_mark.young_only && !header->young) continue;
-    const size_t reference_count = header->reference_offsets.size();
+    const size_t reference_count = header->layout->reference_count;
     if (!header->layout->trace && reference_count != 0 && reference_count <= 2 &&
         header->element_size == header->size) {
       enqueue_narrow_children_locked(header, active_mark);
@@ -2170,6 +2184,9 @@ void adjust_page_max_free_span_locked(GcPage& page, size_t before,
 // merging and the page fragments until it can no longer serve a reservation.
 void release_span_locked(GcPage& page, size_t offset, size_t span) {
   if (span == 0) return;
+  // A run the representation cannot describe would be recorded as a negative
+  // length; such a page simply keeps behaving like the bump allocator it was.
+  if (offset > UINT32_MAX || span > UINT32_MAX) return;
   // Runs are kept ordered by offset and always merged with a neighbour they
   // touch. Sweeping visits objects in list order, not address order, so a run
   // that is freed in pieces has to coalesce back into one region; otherwise the
@@ -2212,7 +2229,8 @@ void release_span_locked(GcPage& page, size_t offset, size_t span) {
   if (page.free_span_count >= GcPage::kMaxFreeSpans) return;
   for (size_t move = page.free_span_count; move > index; --move)
     page.free_spans[move] = page.free_spans[move - 1];
-  page.free_spans[index] = GcPage::FreeSpan{offset, span};
+  page.free_spans[index] = GcPage::FreeSpan{
+      static_cast<uint32_t>(offset), static_cast<uint32_t>(span)};
   ++page.free_span_count;
   ++total_free_spans;
   page.free_span_bytes += span;
@@ -2294,7 +2312,8 @@ GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t multiple,
       GcPage::FreeSpan& candidate = page->free_spans[index];
       if (candidate.span < minimum) continue;
       const size_t candidate_before = candidate.span;
-      const size_t span = whole_object_grant(std::min(candidate.span, desired), multiple);
+      const size_t span = whole_object_grant(
+          std::min(static_cast<size_t>(candidate.span), desired), multiple);
       if (span < minimum) continue;
       unretire_page_locked(*page);
       offset = candidate.offset;
@@ -2357,8 +2376,8 @@ size_t take_free_runs_locked(size_t minimum, size_t byte_budget, size_t max_runs
     --index;
     GcPage::FreeSpan& run = target->free_spans[index];
     if (run.span < minimum) continue;
-    const size_t grant =
-        whole_object_grant(std::min(run.span, kGcTlabBytes), multiple);
+    const size_t grant = whole_object_grant(
+        std::min(static_cast<size_t>(run.span), kGcTlabBytes), multiple);
     if (grant < minimum) continue;
     if (taken != 0 && taken_bytes + grant > byte_budget) break;
     // A run is taken from its top, so a partial take only moves the run's own
@@ -3207,10 +3226,8 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   void* object = static_cast<unsigned char*>(header_storage) + sizeof(ObjectHeader);
   std::memset(object, 0, bytes);
   try {
-    // The descriptor already proved every offset fits the payload, so this is
-    // the copy alone.
-    if (reference_count != 0)
-      header->reference_offsets.assign(reference_offsets, reference_count);
+    // The reference map is the descriptor's, so an object with any number of
+    // reference words costs no per-instance storage and no allocation.
     // Counted, not published: this allocation is already live, and the barrier
     // policy is the only thing that raises the store barrier (see allocate_tlab).
     if (!header->young)
@@ -3425,15 +3442,8 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
       next_cycle_epoch.load(std::memory_order_relaxed));
   void* object = header_storage + sizeof(ObjectHeader);
   std::memset(object, 0, bytes);
-  try {
-    // The descriptor already proved every offset fits the payload, so this is
-    // the copy alone.
-    if (reference_count != 0)
-      header->reference_offsets.assign(reference_offsets, reference_count);
-  } catch (...) {
-    header->~ObjectHeader();
-    return nullptr;
-  }
+  // The reference map is the descriptor's, so an object with any number of
+  // reference words costs no per-instance storage and no allocation.
   // A non-young object only has to be counted: the count feeds the generational
   // policy, and the store barrier is raised by the policy itself (`begin_cycle`
   // covers a cycle, `nrq_gc_set_generational` covers the switch). Raising it here
@@ -4704,24 +4714,10 @@ int64_t nrq_gc_get_ref_count(void* object) {
   if (!object || !find_object_locked(object)) return 0;
   try {
     ReferenceCountTarget target{object, 0};
+    // The diagnostic walks exactly what the marker walks, through the same
+    // descriptor, so a reference count can never disagree with marking.
     for_each_live_object_locked([&](ObjectHeader* header) {
-      if (header->layout->trace)
-        header->layout->trace(header->payload(), header->size,
-                              count_reference_to_target,
-                      &target);
-      if (!header->reference_offsets.empty() && header->element_size != 0) {
-        const auto* bytes = static_cast<const unsigned char*>(header->payload());
-        for (size_t base = 0; base + header->element_size <= header->size;
-             base += header->element_size) {
-          for (size_t offset_index = 0;
-               offset_index < header->reference_offsets.size(); ++offset_index) {
-            const size_t offset = header->reference_offsets[offset_index];
-            void* reference = nullptr;
-            std::memcpy(&reference, bytes + base + offset, sizeof(reference));
-            count_reference_to_target(reference, &target);
-          }
-        }
-      }
+      trace_children(header, count_reference_to_target, &target);
     });
     for (const auto& root : roots) {
       auto* bytes = static_cast<const unsigned char*>(root.first);
