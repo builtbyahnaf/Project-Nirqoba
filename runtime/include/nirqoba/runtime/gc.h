@@ -213,6 +213,12 @@ size_t nrq_gc_object_header_bytes(void);
 struct nrq_gc_allocation_facts {
   // Metadata charged per object, and the alignment every payload pointer keeps.
   size_t object_header_bytes;
+  // How that header splits: the bytes that describe this one instance, and the
+  // bytes that only name metadata shared with every other instance of the same
+  // layout. They sum to `object_header_bytes`, so growth in either half is
+  // visible without reading the header definition.
+  size_t object_instance_bytes;
+  size_t object_shared_bytes;
   size_t payload_alignment;
   // The ordinary page, which is also the largest thread-local slab.
   size_t page_bytes;

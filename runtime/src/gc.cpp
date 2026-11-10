@@ -4542,6 +4542,10 @@ size_t nrq_gc_layout_bytes(void) {
 nrq_gc_allocation_facts nrq_gc_get_allocation_facts(void) {
   nrq_gc_allocation_facts facts{};
   facts.object_header_bytes = sizeof(ObjectHeader);
+  // Measured from the layout rather than restated, so the split cannot drift
+  // away from the struct it describes; the layout pointer is declared last.
+  facts.object_instance_bytes = offsetof(ObjectHeader, layout);
+  facts.object_shared_bytes = sizeof(ObjectHeader) - offsetof(ObjectHeader, layout);
   facts.payload_alignment = kObjectStartAlignment;
   facts.page_bytes = kGcPageBytes;
   facts.tlab_bytes = kGcTlabBytes;
