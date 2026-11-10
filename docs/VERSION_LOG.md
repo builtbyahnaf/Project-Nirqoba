@@ -6,12 +6,40 @@
 
 ---
 
-## Version 0.309-beta (working build)
+## Version 0.315-beta (working build)
+
+### Summary of Changes (since `0.311-beta`):
+
+*Current working build, opened after 0.311-beta. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.311-beta (released)
 
 ### Summary of Changes (since `0.301-beta`):
 
-*Current working build, opened after 0.301-beta. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Released. Superseded by 0.315-beta, which continues the page-storage stage.*
+
+- **AO-04: allocation reuses the space a sweep freed before the next cycle
+  boundary.** An emptied page still cannot be recycled while a mutator may hold a
+  cursor into it, but its reclaimed runs are safe to hand out: the sweep skips
+  objects born after the cycle started, and clearing the retirement mark keeps the
+  boundary from reclaiming a page that is in use again. 1,000,000 rooted
+  allocations per round: private commit after the second round 241.6 → 122.0 MB,
+  peak working set 247.6 → 128.4 MB, second-round allocation min 72.1 → 22.2 ms
+  and median 74.4 → 24.3 ms, page count unchanged at 1,833.
+- **AO-04: ordinary page storage is carved from 8 MiB runs.** A growing heap used
+  to pay a `VirtualAlloc` reservation and a `VirtualFree` release per 64 KiB page;
+  pages now come from runs committed in 1 MiB chunks and carved into aligned
+  64 KiB slots, with released slots reused through a bounded free list. First
+  (heap-growing) round: min 66.6 → 45.7 ms, median 69.9 → 50.8 ms; steady state
+  unchanged; private commit 122.0 → 122.5 MB of bounded chunk slack.
+- **AO-04: the idle page pool is bounded and decommitted slots are reusable.** The
+  recycle pool held up to 2,048 shells (128 MB committed) after a program stopped
+  allocating; it now holds one run's worth (128), and a page that leaves the pool
+  decommits its slot while keeping the address for a later wave. Idle private
+  commit 145.0 → 19.4 MB, returning to 146.4 MB on a full second wave.
 
 ---
 
