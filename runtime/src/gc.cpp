@@ -392,6 +392,29 @@ static_assert(sizeof(ObjectHeader) == 48,
               "ObjectHeader metadata must stay within 64 bytes");
 static_assert(alignof(ObjectHeader) == alignof(std::max_align_t),
               "ObjectHeader must keep payloads max_align_t aligned");
+// This header is authoritative. H48 was chosen after the candidates in
+// reports/performance/ohr-section-c2.md were measured: H32 is rejected on this
+// collector (relocating the mark-worklist link or adding page resolution costs
+// more than the 16 bytes save), H40 is a target-specific possibility that is not
+// implemented, and 24 is not viable under `max_align_t` alignment. The three
+// link-like fields are adopted, not placeholders: `page`, `mark_next` and the
+// `next`/`tlab_next` union each carry a path that has no cheaper equivalent, so
+// code may rely on them being here.
+//
+// The offsets are asserted below for the same reason: a field silently moving is
+// how a "temporary" layout change becomes permanent. Reordering requires editing
+// this block, which is the point at which the cost has to be argued again.
+static_assert(offsetof(ObjectHeader, next) == 0, "ObjectHeader layout changed");
+static_assert(offsetof(ObjectHeader, mark_next) == 8, "ObjectHeader layout changed");
+static_assert(offsetof(ObjectHeader, page) == 16, "ObjectHeader layout changed");
+static_assert(offsetof(ObjectHeader, birth_epoch) == 24,
+              "ObjectHeader layout changed");
+static_assert(offsetof(ObjectHeader, element_count) == 32,
+              "ObjectHeader layout changed");
+static_assert(offsetof(ObjectHeader, state) == 36, "ObjectHeader layout changed");
+static_assert(offsetof(ObjectHeader, layout) == 40, "ObjectHeader layout changed");
+static_assert(offsetof(ObjectHeader, state) % alignof(uint32_t) == 0,
+              "the state word would be unaligned");
 // The payload starts at `header + 1`, and object starts are spaced by
 // `alignof(std::max_align_t)`, so the header's size is what keeps every payload
 // aligned. A header size that is not a multiple of that alignment would misalign
