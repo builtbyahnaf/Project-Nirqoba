@@ -410,6 +410,36 @@ TEST(GcTest, EmptiedPagesServeAllocationsBeforeTheNextBoundary) {
   nrq_gc_enable();
 }
 
+TEST(GcTest, IdleHeapRetainsOnlyABoundedPagePool) {
+  nrq_gc_disable();
+  nrq_gc_set_threshold(1024 * 1024 * 1024);
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+
+  // Enough 1 KiB objects to need several hundred pages, so the pool has to turn
+  // pages away rather than absorbing them all.
+  constexpr size_t kObjectCount = 24000;
+  for (size_t index = 0; index < kObjectCount; ++index)
+    ASSERT_NE(nrq_gc_allocate(1024, nullptr), nullptr);
+  ASSERT_TRUE(nrq_gc_page_count() > 256);
+
+  // The first sweep empties the pages, the next boundary hands what it can to the
+  // pool. A program that stops allocating must not keep a heap's worth of storage.
+  nrq_gc_collect();
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_page_count(), size_t{0});
+  ASSERT_TRUE(nrq_gc_recycled_page_count() <= 256);
+  ASSERT_TRUE(nrq_gc_get_live_objects() == baseline);
+
+  // A wave after the shrink still allocates, taking storage back from the run.
+  for (size_t index = 0; index < 1000; ++index)
+    ASSERT_NE(nrq_gc_allocate(1024, nullptr), nullptr);
+  ASSERT_TRUE(nrq_gc_get_live_objects() == baseline + 1000);
+  nrq_gc_collect();
+  nrq_gc_set_threshold(1024 * 1024);
+  nrq_gc_enable();
+}
+
 TEST(GcTest, AllocationPageCacheIsInvalidatedAfterCollection) {
   nrq_gc_disable();
   nrq_gc_collect();

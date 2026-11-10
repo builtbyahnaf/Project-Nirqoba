@@ -829,7 +829,11 @@ void unindex_span_page_locked(GcPage& page) {
 // frees at each cycle boundary. The pool is bounded so idle programs do not
 // retain an unbounded amount of address space.
 std::vector<std::unique_ptr<GcPage>> recycled_pages;
-constexpr size_t kMaxRecycledPages = 2048;
+// One run's worth of shells. The pool exists to skip the page-struct and start
+// bitmap setup for a heap that is about to grow again, not to hold a heap's worth
+// of storage for a program that has stopped allocating: a page that leaves the pool
+// goes back to its run and its commit charge goes back to the OS.
+constexpr size_t kMaxRecycledPages = 128;
 // Large-object pages can be much bigger than kGcPageBytes. Retaining a pool of
 // them would make the page-count bound meaningless, so only ordinary-sized
 // pages are recycled and oversized pages return to the process heap.
@@ -2074,6 +2078,10 @@ PageRun* active_page_run = nullptr;
 // Slots that were released and are still committed, ready to be handed out
 // again. A released slot is reused before any run is carved further.
 std::vector<unsigned char*> free_slot_storage;
+// Slots whose commit charge went back to the OS but whose address space the run
+// still owns. They are recommitted when the heap needs storage again, so a program
+// that peaks and shrinks does not lose the addresses it already reserved.
+std::vector<unsigned char*> released_slot_storage;
 // One run's worth of slots, so a busy heap never holds more than this much
 // committed-but-unused storage in the free list. Anything beyond it is
 // decommitted immediately.
@@ -2106,6 +2114,13 @@ unsigned char* take_page_run_slot() {
     unsigned char* storage = free_slot_storage.back();
     free_slot_storage.pop_back();
     return storage;
+  }
+  if (!released_slot_storage.empty()) {
+    unsigned char* storage = released_slot_storage.back();
+    if (::VirtualAlloc(storage, kGcPageBytes, MEM_COMMIT, PAGE_READWRITE)) {
+      released_slot_storage.pop_back();
+      return storage;
+    }
   }
   for (;;) {
     if (active_page_run && active_page_run->carved >= kPageRunSlots)
@@ -2160,7 +2175,12 @@ void release_page_storage(unsigned char* storage) {
       } catch (...) {
       }
     }
-    ::VirtualFree(storage, kGcPageBytes, MEM_DECOMMIT);
+    if (::VirtualFree(storage, kGcPageBytes, MEM_DECOMMIT)) {
+      try {
+        released_slot_storage.push_back(storage);
+      } catch (...) {
+      }
+    }
     return;
   }
   ::VirtualFree(storage, 0, MEM_RELEASE);
