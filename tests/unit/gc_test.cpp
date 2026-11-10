@@ -190,6 +190,38 @@ TEST(GcTest, StructuralMetadataIsSharedNotRepeated) {
   ASSERT_TRUE(after.layout_bytes <= before.layout_bytes + 64);
 }
 
+TEST(GcTest, AStaticDescriptorIsUsedAsGiven) {
+  // This is the shape the compiler emits: read-only data the runtime neither
+  // copies nor interns. The object must report exactly that address, because the
+  // address is the identity used to compare layouts.
+  static const uint32_t offsets[] = {0, 8};
+  static const nrq_object_layout record{32, 2, 0, offsets, nullptr};
+  const size_t described = nrq_gc_layout_count();
+  void* object = nrq_gc_allocate_layout(&record);
+  ASSERT_NE(object, nullptr);
+  ASSERT_TRUE(nrq_gc_object_layout(object) == &record);
+  ASSERT_EQ(nrq_gc_layout_count(), described);
+
+  static const nrq_object_layout array{24, 2, NRQ_OBJECT_LAYOUT_ARRAY, offsets,
+                                       nullptr};
+  const uint64_t before = nrq_gc_get_allocated_bytes();
+  void* elements = nrq_gc_allocate_array_layout(&array, 5);
+  ASSERT_NE(elements, nullptr);
+  ASSERT_TRUE(nrq_gc_object_layout(elements) == &array);
+  ASSERT_EQ(nrq_gc_get_allocated_bytes() - before, uint64_t{120});
+
+  // The flag distinguishes the two kinds, so a caller cannot describe an array
+  // as a record or the other way round and get a silently different payload.
+  ASSERT_TRUE(nrq_gc_allocate_layout(&array) == nullptr);
+  ASSERT_TRUE(nrq_gc_allocate_array_layout(&record, 4) == nullptr);
+
+  // A table that does not fit its payload is refused by the development
+  // configuration instead of being trusted into tracing.
+  static const uint32_t straddling[] = {12};
+  static const nrq_object_layout invalid{16, 1, 0, straddling, nullptr};
+  ASSERT_TRUE(nrq_gc_allocate_layout(&invalid) == nullptr);
+}
+
 TEST(GcTest, AllocationProfileCountsTheCompactHeader) {
   // The profile is what the header work is judged against, so it must describe
   // the layout that actually exists: 48 bytes of metadata, a 112-byte span for a

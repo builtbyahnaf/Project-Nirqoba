@@ -3167,11 +3167,17 @@ void maybe_collect_automatically() {
 }
 
 void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
-                      const size_t* reference_offsets, size_t reference_count) {
+                      const size_t* reference_offsets, size_t reference_count,
+                      const nrq_object_layout* resolved) {
   if (bytes == 0 || bytes > SIZE_MAX - sizeof(ObjectHeader) || element_size == 0)
     return nullptr;
-  const nrq_object_layout* layout = layout_for_allocation(
-      bytes, element_size, trace, reference_offsets, reference_count);
+  // A caller that already owns an immutable descriptor hands it over directly:
+  // it is the identity the object stores, so this path neither interns nor
+  // compares tables.
+  const nrq_object_layout* layout =
+      resolved ? resolved
+               : layout_for_allocation(bytes, element_size, trace,
+                                       reference_offsets, reference_count);
   if (!layout) return nullptr;
   constexpr size_t alignment = alignof(std::max_align_t);
   const size_t raw_span = sizeof(ObjectHeader) + bytes;
@@ -3432,7 +3438,7 @@ void account_tlab_allocation(MutatorState& mutator, size_t bytes) {
 // path share one validation instead of each repeating it.
 void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
                     const size_t* reference_offsets, size_t reference_count,
-                    bool& handled) {
+                    bool& handled, const nrq_object_layout* resolved) {
   handled = false;
   if (thread_mutator.depth == 0) return nullptr;
   constexpr size_t alignment = alignof(std::max_align_t);
@@ -3441,8 +3447,10 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   const size_t span = (raw_span + alignment - 1) & ~(alignment - 1);
   if (span > kGcTlabBytes) return nullptr;
   handled = true;
-  const nrq_object_layout* layout = layout_for_allocation(
-      bytes, element_size, trace, reference_offsets, reference_count);
+  const nrq_object_layout* layout =
+      resolved ? resolved
+               : layout_for_allocation(bytes, element_size, trace,
+                                       reference_offsets, reference_count);
   if (!layout) return nullptr;
 
   if (thread_mutator.tlab_generation != gc_page_generation)
@@ -3625,45 +3633,128 @@ void* nrq_gc_allocate(size_t bytes, nrq_gc_trace_fn trace) {
   if (bytes == 0 || bytes > SIZE_MAX - sizeof(ObjectHeader)) return nullptr;
   maybe_collect_automatically();
   bool handled = false;
-  void* object = allocate_tlab(bytes, bytes, trace, nullptr, 0, handled);
+  void* object = allocate_tlab(bytes, bytes, trace, nullptr, 0, handled, nullptr);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
-  return allocate_locked(bytes, bytes, trace, nullptr, 0);
+  return allocate_locked(bytes, bytes, trace, nullptr, 0, nullptr);
 }
 
 void* nrq_gc_allocate_array(size_t count, size_t element_size,
                             nrq_gc_trace_fn trace) {
   if (count == 0 || element_size == 0) return nullptr;
+  // The instance records its element count in 32 bits, so a longer array is
+  // rejected rather than truncated.
+  if (count > UINT32_MAX) return nullptr;
   size_t bytes = 0;
   if (multiply_size_overflowed(count, element_size, bytes)) return nullptr;
   maybe_collect_automatically();
   bool handled = false;
-  void* object = allocate_tlab(bytes, element_size, trace, nullptr, 0, handled);
+  void* object = allocate_tlab(bytes, element_size, trace, nullptr, 0, handled, nullptr);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
-  return allocate_locked(bytes, element_size, trace, nullptr, 0);
+  return allocate_locked(bytes, element_size, trace, nullptr, 0, nullptr);
 }
 
 void* nrq_gc_allocate_array_typed(size_t count, size_t element_size,
                                   const size_t* reference_offsets,
                                   size_t reference_count) {
   if (count == 0 || element_size == 0) return nullptr;
+  // The instance records its element count in 32 bits, so a longer array is
+  // rejected rather than truncated.
+  if (count > UINT32_MAX) return nullptr;
   size_t bytes = 0;
   if (multiply_size_overflowed(count, element_size, bytes)) return nullptr;
   maybe_collect_automatically();
   bool handled = false;
   void* object = allocate_tlab(bytes, element_size, nullptr, reference_offsets,
-                               reference_count, handled);
+                               reference_count, handled, nullptr);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
   return allocate_locked(bytes, element_size, nullptr, reference_offsets,
-                         reference_count);
+                         reference_count, nullptr);
 }
 
-void* nrq_gc_allocate_array_typed_rooted(
-    void** root_slot, size_t count, size_t element_size,
-    const size_t* reference_offsets, size_t reference_count) {
+void* allocate_array_rooted_impl(void** root_slot, size_t count,
+                                 size_t element_size,
+                                 const size_t* reference_offsets,
+                                 size_t reference_count,
+                                 const nrq_object_layout* resolved);
+
+// A descriptor the compiler emits is read-only data, so the production
+// configuration trusts it: no validation runs on an allocation path. The
+// development configuration proves every field, because a table that disagrees
+// with its payload would corrupt tracing rather than fail an allocation.
+bool layout_is_consistent(const nrq_object_layout& layout) {
+  if (layout.payload_size == 0) return false;
+  if ((layout.flags & ~static_cast<uint32_t>(NRQ_OBJECT_LAYOUT_ARRAY)) != 0)
+    return false;
+  if (layout.reference_count == 0) return true;
+  if (!layout.reference_offsets) return false;
+  for (uint32_t index = 0; index < layout.reference_count; ++index) {
+    const size_t offset = layout.reference_offsets[index];
+    if (offset > layout.payload_size ||
+        sizeof(void*) > layout.payload_size - offset)
+      return false;
+  }
+  return true;
+}
+
+void* nrq_gc_allocate_layout(const nrq_object_layout* layout) {
+  if (!layout || (layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) != 0) return nullptr;
+  if constexpr (nirq::runtime_debug_enabled)
+    if (!layout_is_consistent(*layout)) return nullptr;
+  const size_t bytes = layout->payload_size;
+  if (bytes == 0 || bytes > SIZE_MAX - sizeof(ObjectHeader)) return nullptr;
+  maybe_collect_automatically();
+  bool handled = false;
+  void* object =
+      allocate_tlab(bytes, bytes, layout->trace, nullptr, 0, handled, layout);
+  if (handled) return object;
+  HeapLockGuard lock(gc_mutex);
+  return allocate_locked(bytes, bytes, layout->trace, nullptr, 0, layout);
+}
+
+void* nrq_gc_allocate_array_layout(const nrq_object_layout* layout,
+                                   size_t count) {
+  if (!layout || count == 0) return nullptr;
+  if ((layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0) return nullptr;
+  if constexpr (nirq::runtime_debug_enabled)
+    if (!layout_is_consistent(*layout)) return nullptr;
+  if (count > UINT32_MAX) return nullptr;
+  size_t bytes = 0;
+  if (multiply_size_overflowed(count, layout->payload_size, bytes))
+    return nullptr;
+  maybe_collect_automatically();
+  bool handled = false;
+  void* object = allocate_tlab(bytes, layout->payload_size, layout->trace,
+                              nullptr, 0, handled, layout);
+  if (handled) return object;
+  HeapLockGuard lock(gc_mutex);
+  return allocate_locked(bytes, layout->payload_size, layout->trace, nullptr,
+                         0, layout);
+}
+
+void* nrq_gc_allocate_array_layout_rooted(void** root_slot,
+                                          const nrq_object_layout* layout,
+                                          size_t count) {
+  if (!root_slot || !layout || count == 0) return nullptr;
+  if ((layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0) return nullptr;
+  if constexpr (nirq::runtime_debug_enabled)
+    if (!layout_is_consistent(*layout)) return nullptr;
+  if (count > UINT32_MAX) return nullptr;
+  return allocate_array_rooted_impl(root_slot, count, layout->payload_size,
+                                    nullptr, 0, layout);
+}
+// Rooted allocation shared by the offset-table and the descriptor entry points:
+// the root slot is published inside the same barrier region as the allocation,
+// so a collection can never see the object before the root names it.
+void* allocate_array_rooted_impl(void** root_slot, size_t count,
+                                 size_t element_size,
+                                 const size_t* reference_offsets,
+                                 size_t reference_count,
+                                 const nrq_object_layout* resolved) {
   if (!root_slot || count == 0 || element_size == 0) return nullptr;
+  if (count > UINT32_MAX) return nullptr;
   size_t bytes = 0;
   if (multiply_size_overflowed(count, element_size, bytes)) return nullptr;
   maybe_collect_automatically();
@@ -3679,7 +3770,8 @@ void* nrq_gc_allocate_array_typed_rooted(
     if (begin_fast_barrier()) {
       bool handled = false;
       void* object = allocate_tlab(bytes, element_size, nullptr,
-                                   reference_offsets, reference_count, handled);
+                                   reference_offsets, reference_count, handled,
+                                   resolved);
       if (handled) {
         *root_slot = object;
         end_fast_barrier();
@@ -3695,9 +3787,17 @@ void* nrq_gc_allocate_array_typed_rooted(
     nrq_runtime_fatal(
         "rooted GC allocation requires a registered pointer root slot");
   void* object = allocate_locked(bytes, element_size, nullptr,
-                                 reference_offsets, reference_count);
+                                 reference_offsets, reference_count, resolved);
   store_root_value_locked(root_slot, object);
   return object;
+}
+
+void* nrq_gc_allocate_array_typed_rooted(
+    void** root_slot, size_t count, size_t element_size,
+    const size_t* reference_offsets, size_t reference_count) {
+  return allocate_array_rooted_impl(root_slot, count, element_size,
+                                    reference_offsets, reference_count,
+                                    nullptr);
 }
 
 void nrq_gc_root_register(void** slot) {
