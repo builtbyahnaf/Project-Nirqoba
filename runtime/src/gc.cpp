@@ -2061,13 +2061,18 @@ GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t& offset,
 // it.
 constexpr size_t kPageRunBytes = size_t{8} << 20;
 constexpr size_t kPageRunCommitBytes = size_t{1} << 20;
-constexpr size_t kPageRunSlots = kPageRunBytes / kGcPageBytes;
+// Commit granularity of the OS. A carve's extent is the commit extent as well.
+constexpr size_t kPageCommitGranularity = size_t{4} << 10;
 
 struct PageRun {
   unsigned char* base = nullptr;
-  // Bytes committed from `base`, kept as a high-water mark: a slot is handed out
+  // Bytes committed from `base`, kept as a high-water mark: a carve is handed out
   // once, so nothing below the mark is ever un-committed here.
   size_t committed = 0;
+  // Bytes carved from `base`. An ordinary page starts on a kGcPageBytes boundary
+  // and occupies exactly one page; a larger page is carved at whatever 4 KiB
+  // boundary comes next and occupies its own capacity, so a page that is not a
+  // multiple of 64 KiB does not pay for the rounding.
   size_t carved = 0;
 };
 // A deque, so the carving cursor below stays valid when another run is recorded.
@@ -2075,17 +2080,27 @@ std::deque<PageRun> page_runs;
 // The run carving continues from. Only it can have un-carved slots, so the
 // allocation path never has to look at the other runs.
 PageRun* active_page_run = nullptr;
-// Slots that were released and are still committed, ready to be handed out
-// again. A released slot is reused before any run is carved further.
-std::vector<unsigned char*> free_slot_storage;
-// Slots whose commit charge went back to the OS but whose address space the run
-// still owns. They are recommitted when the heap needs storage again, so a program
-// that peaks and shrinks does not lose the addresses it already reserved.
-std::vector<unsigned char*> released_slot_storage;
-// One run's worth of slots, so a busy heap never holds more than this much
-// committed-but-unused storage in the free list. Anything beyond it is
-// decommitted immediately.
-constexpr size_t kMaxRetainedSlots = 128;
+// Storage handed back and ready to be used again. One entry is one carve: a single
+// slot for an ordinary page, a contiguous group of slots for a page larger than
+// 64 KiB. Entries are matched by exact size, which keeps every page's capacity and
+// its mapping in step.
+struct FreePageStorage {
+  unsigned char* storage = nullptr;
+  size_t bytes = 0;
+};
+std::vector<FreePageStorage> free_page_storage;
+// Storage whose commit charge went back to the OS but whose address space the run
+// still owns. It is recommitted when the heap needs it again, so a program that
+// peaks and shrinks does not lose the addresses it already reserved.
+std::vector<FreePageStorage> released_page_storage;
+// One run's worth of bytes, so a busy heap never holds more than this much
+// committed-but-unused storage in the free list. Anything beyond it is decommitted
+// immediately.
+constexpr size_t kMaxRetainedBytes = kPageRunBytes;
+size_t retained_page_bytes = 0;
+// The largest page a run will carve. A single object can be far larger than a run,
+// and that case still needs the direct mapping.
+constexpr size_t kPageRunMaxCarveBytes = kPageRunBytes / 2;
 
 PageRun* find_page_run(unsigned char* storage) {
   for (PageRun& run : page_runs) {
@@ -2094,12 +2109,11 @@ PageRun* find_page_run(unsigned char* storage) {
   return nullptr;
 }
 
-// Commit enough of a run to cover `slots`. Returns false when the OS refuses.
-bool commit_run_slots(PageRun& run, size_t slots) {
-  const size_t needed = slots * kGcPageBytes;
-  if (needed <= run.committed) return true;
+// Commit enough of a run to cover `end` bytes. Returns false when the OS refuses.
+bool commit_run_bytes(PageRun& run, size_t end) {
+  if (end <= run.committed) return true;
   size_t target = run.committed + kPageRunCommitBytes;
-  if (target < needed) target = needed;
+  if (target < end) target = end;
   if (target > kPageRunBytes) target = kPageRunBytes;
   if (!::VirtualAlloc(run.base + run.committed, target - run.committed,
                       MEM_COMMIT, PAGE_READWRITE))
@@ -2108,26 +2122,39 @@ bool commit_run_slots(PageRun& run, size_t slots) {
   return true;
 }
 
-// A 64 KiB slot from a run, or nullptr when no run can serve the request.
-unsigned char* take_page_run_slot() {
-  if (!free_slot_storage.empty()) {
-    unsigned char* storage = free_slot_storage.back();
-    free_slot_storage.pop_back();
+// Hand back a released carve of exactly `bytes`, recommitting it when its commit
+// charge had already been returned.
+unsigned char* take_released_page_storage(size_t bytes) {
+  for (auto entry = free_page_storage.rbegin(); entry != free_page_storage.rend();
+       ++entry) {
+    if (entry->bytes != bytes) continue;
+    unsigned char* storage = entry->storage;
+    *entry = free_page_storage.back();
+    free_page_storage.pop_back();
+    if (retained_page_bytes >= bytes) retained_page_bytes -= bytes;
     return storage;
   }
-  if (!released_slot_storage.empty()) {
-    unsigned char* storage = released_slot_storage.back();
-    if (::VirtualAlloc(storage, kGcPageBytes, MEM_COMMIT, PAGE_READWRITE)) {
-      released_slot_storage.pop_back();
-      return storage;
-    }
+  for (auto entry = released_page_storage.rbegin();
+       entry != released_page_storage.rend(); ++entry) {
+    if (entry->bytes != bytes) continue;
+    if (!::VirtualAlloc(entry->storage, bytes, MEM_COMMIT, PAGE_READWRITE))
+      return nullptr;
+    unsigned char* storage = entry->storage;
+    *entry = released_page_storage.back();
+    released_page_storage.pop_back();
+    return storage;
   }
+  return nullptr;
+}
+
+// Carve a page of `bytes` from a run. Ordinary pages keep the 64 KiB alignment
+// the page directory keys on; a larger page needs no such alignment (it is never
+// indexed by address) and is carved at its own size.
+unsigned char* carve_page_run(size_t bytes) {
+  const size_t extent =
+      (bytes + kPageCommitGranularity - 1) & ~(kPageCommitGranularity - 1);
   for (;;) {
-    if (active_page_run && active_page_run->carved >= kPageRunSlots)
-      active_page_run = nullptr;
     if (!active_page_run) {
-      // The vector may move its elements, so the run is recorded first and the
-      // carving cursor is only taken afterwards.
       try {
         PageRun run;
         run.base = static_cast<unsigned char*>(
@@ -2139,45 +2166,55 @@ unsigned char* take_page_run_slot() {
       }
       active_page_run = &page_runs.back();
     }
-    if (!commit_run_slots(*active_page_run, active_page_run->carved + 1)) {
-      // A run that cannot commit any more is abandoned; the next request opens a
+    size_t offset = active_page_run->carved;
+    if (bytes <= kGcPageBytes)
+      offset = (offset + kGcPageBytes - 1) & ~(kGcPageBytes - 1);
+    if (offset >= kPageRunBytes || extent > kPageRunBytes - offset) {
+      // A run that cannot serve this request is closed; the next request opens a
       // new one instead of retrying this one forever.
-      active_page_run->carved = kPageRunSlots;
+      active_page_run->carved = kPageRunBytes;
       active_page_run = nullptr;
       continue;
     }
-    unsigned char* storage =
-        active_page_run->base + active_page_run->carved * kGcPageBytes;
-    ++active_page_run->carved;
-    return storage;
+    if (!commit_run_bytes(*active_page_run, offset + extent)) {
+      active_page_run->carved = kPageRunBytes;
+      active_page_run = nullptr;
+      continue;
+    }
+    active_page_run->carved = offset + extent;
+    return active_page_run->base + offset;
   }
 }
 
-// Storage for one page: a slot from a run, or a direct mapping when the page is
-// larger than a slot or the runs cannot serve the request.
+// Storage for one page: a released carve of the same size, a fresh carve from a
+// run, or a direct mapping when the page is too large for a run or the runs cannot
+// serve the request.
 unsigned char* commit_page_storage(size_t bytes) {
-  if (bytes <= kGcPageBytes) {
-    if (unsigned char* slot = take_page_run_slot()) return slot;
+  if (bytes <= kPageRunMaxCarveBytes) {
+    if (unsigned char* storage = take_released_page_storage(bytes))
+      return storage;
+    if (unsigned char* storage = carve_page_run(bytes)) return storage;
   }
   return static_cast<unsigned char*>(
       ::VirtualAlloc(nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
 }
 
 // Return storage to the run that owns it, or to the OS when it was a direct
-// mapping. Slots are kept for reuse until the free lists are full.
-void release_page_storage(unsigned char* storage) {
+// mapping. Carves are kept for reuse until the free list is full.
+void release_page_storage(unsigned char* storage, size_t bytes) {
   if (!storage) return;
   if (find_page_run(storage)) {
-    if (free_slot_storage.size() < kMaxRetainedSlots) {
+    if (retained_page_bytes + bytes <= kMaxRetainedBytes) {
       try {
-        free_slot_storage.push_back(storage);
+        free_page_storage.push_back(FreePageStorage{storage, bytes});
+        retained_page_bytes += bytes;
         return;
       } catch (...) {
       }
     }
-    if (::VirtualFree(storage, kGcPageBytes, MEM_DECOMMIT)) {
+    if (::VirtualFree(storage, bytes, MEM_DECOMMIT)) {
       try {
-        released_slot_storage.push_back(storage);
+        released_page_storage.push_back(FreePageStorage{storage, bytes});
       } catch (...) {
       }
     }
@@ -2223,7 +2260,7 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
     }
     return page;
   } catch (...) {
-    release_page_storage(storage);
+    release_page_storage(storage, capacity);
     return nullptr;
   }
 }
@@ -2242,7 +2279,7 @@ void recycle_page(std::unique_ptr<GcPage> page) {
   if (recycled_pages.size() >= kMaxRecycledPages ||
       page->capacity < kGcPageBytes ||
       page->capacity > kMaxRecycledPageBytes) {
-    release_page_storage(page->storage);
+    release_page_storage(page->storage, page->capacity);
     return;
   }
   page->used = 0;
@@ -2255,7 +2292,7 @@ void recycle_page(std::unique_ptr<GcPage> page) {
   try {
     recycled_pages.push_back(std::move(page));
   } catch (...) {
-    release_page_storage(raw->storage);
+    release_page_storage(raw->storage, raw->capacity);
   }
 }
 
@@ -2644,7 +2681,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     try {
       gc_pages.push_back(std::move(new_page));
     } catch (...) {
-      if (new_page) release_page_storage(new_page->storage);
+      if (new_page) release_page_storage(new_page->storage, new_page->capacity);
       return nullptr;
     }
     // A page that cannot be indexed by address is still usable; its objects
@@ -2794,7 +2831,7 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     try {
       gc_pages.push_back(std::move(new_page));
     } catch (...) {
-      if (new_page) release_page_storage(new_page->storage);
+      if (new_page) release_page_storage(new_page->storage, new_page->capacity);
       return false;
     }
     // A page that cannot be indexed by address is still usable; its objects
