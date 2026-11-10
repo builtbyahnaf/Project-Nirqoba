@@ -10,8 +10,20 @@
 
 ### Summary of Changes (since `0.341-beta`):
 
-*Current working build, opened after 0.341-beta. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Current working build, opened after 0.341-beta for Section E. Two of the four
+upgrades planned for this window have landed; the version moves to 0.351 when the
+fourth does.*
+
+- **The layout report separates interior from trailing padding.** Only the first is
+  waste; the second is what makes the stride a multiple of the alignment. The report
+  also counts fields that begin past the first cache line, which is the quantity an
+  E2 hot/cold decision would have to move.
+- **A mixed-width struct is pinned at 16 bytes with no interior gap** (2 trailing,
+  24 in declaration order), so an ordering change that starts inserting interior
+  padding fails a test instead of showing up as a slower profile.
+- **Section E1 inspected and recorded:** the LLVM struct type, access indices, GC
+  reference-offset table and layout report all read the one `DataLayout` walk, and
+  interior padding is zero by construction for descending power-of-two alignments.
 
 ---
 
