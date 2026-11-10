@@ -50,6 +50,19 @@ struct nrq_object_layout {
 const struct nrq_object_layout* nrq_gc_layout_intern(
     size_t payload_bytes, size_t element_bytes, nrq_gc_trace_fn trace,
     const size_t* reference_offsets, size_t reference_count);
+// Allocation through a descriptor the caller owns. No copy is made and no
+// interning lookup runs: the pointer the object stores is the one passed here.
+// The descriptor must be immutable and must outlive every object allocated with
+// it, which is what makes compiler-emitted read-only descriptors the preferred
+// source. An array entry point requires the array flag and a record entry point
+// rejects it. The development configuration validates the descriptor; the
+// production one trusts it.
+void* nrq_gc_allocate_layout(const struct nrq_object_layout* layout);
+void* nrq_gc_allocate_array_layout(const struct nrq_object_layout* layout,
+                                   size_t count);
+void* nrq_gc_allocate_array_layout_rooted(void** root_slot,
+                                          const struct nrq_object_layout* layout,
+                                          size_t count);
 // Number of distinct layouts described so far. Instances sharing a layout do
 // not increase this, which is the direct measure of descriptor sharing.
 size_t nrq_gc_layout_count(void);
