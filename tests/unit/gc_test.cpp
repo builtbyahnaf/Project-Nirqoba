@@ -175,6 +175,41 @@ TEST(GcTest, InstancesOfOneRecordShareOneDescriptor) {
   ASSERT_TRUE(nrq_gc_object_layout(other) != shared);
 }
 
+TEST(GcTest, AWideArrayRootUsesOneSharedElementLayout) {
+  // An external array root describes its element once, however many elements it
+  // has and however many reference words each element holds. The referents must
+  // survive a collection through the descriptor's table alone.
+  struct Wide {
+    void* a;
+    void* b;
+    void* c;
+    void* d;
+  };
+  const size_t offsets[] = {offsetof(Wide, a), offsetof(Wide, b),
+                            offsetof(Wide, c), offsetof(Wide, d)};
+  const size_t described = nrq_gc_layout_count();
+  constexpr size_t kElements = 3;
+  std::vector<Wide> elements(kElements);
+  for (Wide& element : elements) {
+    element.a = nrq_gc_allocate(sizeof(Node), trace_node);
+    element.b = nrq_gc_allocate(sizeof(Node), trace_node);
+    element.c = nrq_gc_allocate(sizeof(Node), trace_node);
+    element.d = nrq_gc_allocate(sizeof(Node), trace_node);
+    ASSERT_NE(element.a, nullptr);
+  }
+  nrq_gc_root_register_array(elements.data(), elements.size(), sizeof(Wide),
+                             offsets, 4);
+  nrq_gc_collect();
+  const uint64_t live = nrq_gc_get_live_objects();
+  ASSERT_TRUE(live >= kElements * 4);
+  // One layout for the whole array, not one per element.
+  ASSERT_TRUE(nrq_gc_layout_count() <= described + 1);
+
+  nrq_gc_root_unregister(reinterpret_cast<void**>(elements.data()));
+  nrq_gc_collect();
+  ASSERT_TRUE(nrq_gc_get_live_objects() < live);
+}
+
 TEST(GcTest, StructuralMetadataIsSharedNotRepeated) {
   // A thousand instances must not cost a thousand descriptions. The facts pair
   // descriptor count and bytes with the live-object count so sharing is
