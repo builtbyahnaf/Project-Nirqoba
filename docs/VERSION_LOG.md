@@ -6,12 +6,40 @@
 
 ---
 
-## Version 0.333-beta (working build)
+## Version 0.336-beta (working build)
+
+### Summary of Changes (since `0.333-beta`):
+
+*Current working build, opened after 0.333-beta. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.333-beta (released)
 
 ### Summary of Changes (since `0.331-beta`):
 
-*Current working build, opened after 0.331-beta. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Released. Opened OHR Section B: compact per-instance metadata. Superseded by
+0.336-beta, which continues the section.*
+
+- **One state word with explicit masks replaces four flag bytes.** The marked,
+  young and remembered flags and the promotion age were separate fields that the
+  sweep rewrote one after another. They are now bits in a single word, defined by
+  shifts the runtime owns rather than by C++ bitfield allocation, so the collector
+  reads the word once and changes one field without touching a neighbour.
+- **A survivor's word is written once.** Clearing the mark, incrementing the age
+  and clearing the remembered flag were three read-modify-writes of the same
+  word, each re-reading what the previous one had written; the sweep now computes
+  the next word from the one it read and stores it once.
+- **The flag hot paths read the word once.** Mark enqueue and remembered-set
+  insertion each read the same word twice through accessors; both take one read.
+- **The facts report the instance/shared split.** The header is 40 bytes that
+  describe one instance and 8 that name the shared layout, measured from the
+  struct's own field offsets so the split cannot drift from the definition.
+- **The encoding is observable.** A diagnostic returns an object's raw state
+  word beside its field masks, and a test asserts each field through its own mask
+  rather than inferring the encoding from collection outcomes. 209/209 unit,
+  263/263 integration.
 
 ---
 
