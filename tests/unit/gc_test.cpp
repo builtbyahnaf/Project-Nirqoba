@@ -1,6 +1,7 @@
 #include "test_harness.h"
 
 #include <cstddef>
+#include <algorithm>
 #include <atomic>
 #include <array>
 #include <chrono>
@@ -1544,6 +1545,82 @@ TEST(GcTest, YoungChurnDoesNotForceRepeatedFullCollections) {
   ASSERT_TRUE(minors > 5);
   ASSERT_TRUE(majors * 5 <= minors);
   nrq_gc_set_generational(1);
+}
+
+TEST(GcTest, FragmentedPagesServeReservedRunsWithoutRepeatingCells) {
+  // A page that keeps one object in four can only offer few-cell runs. The
+  // refill reserves a batch of them, so the wave after the sweep pays the
+  // allocator lock once per batch instead of once per run - and every reserved
+  // cell is handed out exactly once, which is what the address check proves.
+  nrq_gc_disable();
+  nrq_gc_set_generational(1);
+  nrq_gc_set_threshold(static_cast<size_t>(1) << 30);
+  nrq_gc_collect();
+  const uint64_t baseline_live = nrq_gc_get_live_objects();
+
+  nrq_gc_mutator_enter();
+  constexpr int kObjects = 4000;
+  vector<void*> survivors;
+  survivors.reserve(kObjects / 4);
+  for (int index = 0; index < kObjects; ++index) {
+    void* object = nrq_gc_allocate(64, nullptr);
+    ASSERT_NE(object, nullptr);
+    if (index % 4 == 0) {
+      ASSERT_EQ(nrq_gc_pin(object), object);
+      survivors.push_back(object);
+    }
+  }
+  nrq_gc_collect();
+  const uint64_t refills_before = nrq_gc_tlab_refill_count();
+
+  vector<void*> wave;
+  wave.reserve(kObjects);
+  for (int index = 0; index < kObjects; ++index) {
+    void* object = nrq_gc_allocate(64, nullptr);
+    ASSERT_NE(object, nullptr);
+    wave.push_back(object);
+  }
+  const uint64_t refills = nrq_gc_tlab_refill_count() - refills_before;
+  sort(wave.begin(), wave.end());
+  // A cell handed out twice would show up as a repeated address here.
+  ASSERT_TRUE(unique(wave.begin(), wave.end()) == wave.end());
+  // One locked refill per surviving run would be one per four objects; a batch
+  // makes it one per batch of runs.
+  ASSERT_TRUE(refills < static_cast<uint64_t>(kObjects) / 8);
+
+  for (void* object : survivors) nrq_gc_unpin(object);
+  nrq_gc_mutator_leave();
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline_live);
+  nrq_gc_set_threshold(1024 * 1024);
+  nrq_gc_enable();
+}
+
+TEST(GcTest, ReservedRunsReturnToTheirPagesAtTheCycleBoundary) {
+  // Space a thread reserves and never uses has to go back to its page, or every
+  // cycle would leak the unused end of a batch and the heap would grow wave after
+  // wave. Four waves over the same footprint must not add pages.
+  nrq_gc_disable();
+  nrq_gc_set_generational(1);
+  nrq_gc_set_threshold(static_cast<size_t>(1) << 30);
+  nrq_gc_collect();
+  const uint64_t baseline_live = nrq_gc_get_live_objects();
+
+  nrq_gc_mutator_enter();
+  size_t first_wave_pages = 0;
+  for (int wave = 0; wave < 4; ++wave) {
+    for (int index = 0; index < 3000; ++index)
+      ASSERT_NE(nrq_gc_allocate(64, nullptr), nullptr);
+    nrq_gc_collect();
+    if (wave == 0) first_wave_pages = nrq_gc_page_count();
+    ASSERT_EQ(nrq_gc_get_live_objects(), baseline_live);
+  }
+  ASSERT_TRUE(nrq_gc_page_count() <= first_wave_pages);
+
+  nrq_gc_mutator_leave();
+  nrq_gc_collect();
+  nrq_gc_set_threshold(1024 * 1024);
+  nrq_gc_enable();
 }
 
 TEST(GcTest, MergedFreeRunsServeThreadLocalReserves) {

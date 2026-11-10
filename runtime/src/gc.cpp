@@ -646,6 +646,24 @@ struct MutatorState {
   // global pin table. Owner-only; the collector reads it after parking.
   TransferPinDelta transfer_pins[kTransferPinBufferCapacity]{};
   size_t transfer_pin_count = 0;
+  // Short reclaimed runs this thread has taken but not handed out yet. A heap
+  // whose free space is a scatter of few-object runs can only answer a refill
+  // with a few cells, and paying the allocator lock once per few allocations
+  // costs more than those cells are worth. The list is thread-owned, so taking a
+  // run from it is a decrement, not a lock.
+  //
+  // It never survives a cycle boundary: prepare_cycle_locked returns whatever is
+  // left to its page before the reclaimer runs. A page can only be recycled once
+  // all of its space is either published or recorded as free, and a run held
+  // here is neither.
+  struct SpareRun {
+    GcPage* page = nullptr;
+    size_t offset = 0;
+    size_t span = 0;
+  };
+  static constexpr size_t kSpareRunCapacity = 24;
+  SpareRun spare_runs[kSpareRunCapacity];
+  size_t spare_run_count = 0;
 };
 void drain_transfer_pins_locked(MutatorState& mutator);
 
@@ -2164,6 +2182,83 @@ GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t& offset,
   return nullptr;
 }
 
+// Returns every run this thread reserved and did not hand out. The caller holds
+// gc_mutex and this mutator is not running: the cycle boundary flushes before it
+// reclaims empty pages, and a thread leaving the registry flushes so the space it
+// reserved is not lost with the mutator.
+void flush_spare_runs_locked(MutatorState& mutator) {
+  while (mutator.spare_run_count != 0) {
+    const MutatorState::SpareRun spare =
+        mutator.spare_runs[--mutator.spare_run_count];
+    if (!spare.page) continue;
+    release_span_locked(*spare.page, spare.offset, spare.span);
+  }
+}
+
+// Pops a reserved run into the thread-local cursor. No lock: the list is owned by
+// this thread and every entry was already removed from its page under the lock,
+// so no other thread can be handed the same cells. A run too small for this
+// request stays on the list for a smaller object.
+bool take_spare_run(MutatorState& mutator, size_t minimum_span) {
+  size_t index = mutator.spare_run_count;
+  while (index != 0) {
+    --index;
+    const MutatorState::SpareRun spare = mutator.spare_runs[index];
+    if (spare.span < minimum_span) continue;
+    mutator.spare_runs[index] = mutator.spare_runs[--mutator.spare_run_count];
+    mutator.tlab_page = spare.page;
+    mutator.tlab_cursor = spare.page->storage + spare.offset;
+    mutator.tlab_end = mutator.tlab_cursor + spare.span;
+    mutator.tlab_generation = gc_page_generation;
+    thread_allocation_page = spare.page;
+    thread_allocation_generation = gc_page_generation;
+    return true;
+  }
+  return false;
+}
+
+// Reserves short runs in one pass and leaves them on the thread's list. Each
+// reservation is the same first-fit take the single-run path made, so the page's
+// run list, its largest-run record and the index stay exact; what changes is that
+// one lock acquisition now answers the next `kSpareRunCapacity` refills. The batch
+// is bounded by bytes as well as by count, so a heap that still has medium runs
+// cannot have a large slice reserved by a thread that may not need it.
+bool reserve_spare_runs_locked(MutatorState& mutator, size_t minimum_span) {
+  constexpr size_t byte_budget = kGcTlabBytes * 2;
+  size_t reserved_bytes = 0;
+  while (mutator.spare_run_count < MutatorState::kSpareRunCapacity &&
+         reserved_bytes < byte_budget) {
+    size_t run_offset = 0;
+    size_t run_span = 0;
+    GcPage* reused =
+        take_free_run_locked(kGcTlabBytes, minimum_span, run_offset, run_span);
+    if (!reused) break;
+    MutatorState::SpareRun& spare = mutator.spare_runs[mutator.spare_run_count];
+    spare.page = reused;
+    spare.offset = run_offset;
+    spare.span = run_span;
+    ++mutator.spare_run_count;
+    reserved_bytes += run_span;
+  }
+  return mutator.spare_run_count != 0;
+}
+
+// Drops a cursor the cycle boundary invalidated. Reserved runs are returned by
+// that boundary too, so a non-empty list here means that step was skipped and the
+// pages it points into may already have been recycled: debug builds trap it, a
+// release build abandons the list rather than touch storage that may be gone.
+void discard_stale_tlab(MutatorState& mutator) {
+  mutator.tlab_page = nullptr;
+  mutator.tlab_cursor = nullptr;
+  mutator.tlab_end = nullptr;
+  mutator.tlab_generation = gc_page_generation;
+  if (mutator.spare_run_count != 0) {
+    if constexpr (nirq::runtime_debug_enabled)
+      nrq_runtime_fatal("GC reserved runs outlived a cycle boundary");
+    mutator.spare_run_count = 0;
+  }
+}
+
 // Take a page of at least `capacity` bytes from the recycle pool, or create a
 // fresh one. The caller inherits storage ownership and must either publish the
 // page into gc_pages or release the storage explicitly.
@@ -2540,6 +2635,12 @@ void drain_transfer_pins_locked(MutatorState& mutator) {
 void prepare_cycle_locked(bool young_only) {
   for (MutatorState* mutator : mutators)
     if (mutator) publish_tlab_locked(*mutator);
+  // Every reserved-but-unused run goes back to its page here, before the
+  // generation stamp moves and before the reclaimer decides which pages are
+  // empty. A page can only be recycled once all of its space is either published
+  // or recorded as free, and a run sitting on a mutator's list is neither.
+  for (MutatorState* mutator : mutators)
+    if (mutator) flush_spare_runs_locked(*mutator);
   // A fast old-to-young store may have filled its buffer without taking the
   // collector lock. Publish every mutator's TLAB first, then drain, so buffered
   // references to objects that were still thread-local become visible. Any
@@ -2902,12 +3003,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
 
 bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
   tlab_refill_count = saturated_add(tlab_refill_count, 1);
-  if (mutator.tlab_generation != gc_page_generation) {
-    mutator.tlab_page = nullptr;
-    mutator.tlab_cursor = nullptr;
-    mutator.tlab_end = nullptr;
-    mutator.tlab_generation = gc_page_generation;
-  }
+  if (mutator.tlab_generation != gc_page_generation) discard_stale_tlab(mutator);
   // A merged run of reclaimed space can host a whole thread-local reservation.
   // Taking it here is what turns a fragmented page back into a usable bump
   // region instead of leaving it permanently half empty - and taking all of it,
@@ -2938,8 +3034,9 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     // the slab counter cannot answer for that, so search directly. Such
     // allocations are rare, so the walk is not on the hot path.
     if (take_run(minimum_span)) return true;
-  } else if (pages_with_slab_run != 0 &&
-             take_run(kGcTlabMinSlabBytes)) {
+  } else if (pages_with_slab_run != 0 && take_run(kGcTlabMinSlabBytes)) {
+    // A page can host a whole reservation, so take it: one refill then serves a
+    // full slab instead of a handful of cells.
     return true;
   }
   GcPage* page = nullptr;
@@ -2968,10 +3065,15 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
       }
     }
   }
-  // Now reuse a short reclaimed run. This is the path that serves a heap whose
+  // Now reuse short reclaimed runs. This is the path that serves a heap whose
   // largest free block is a few cells; it is tried only after the committed page
-  // tails, which need no index maintenance.
-  if (!page && take_run(minimum_span)) return true;
+  // tails, which need no index maintenance. One take would hand back a few
+  // hundred bytes and make the next two or three allocations pay this lock again,
+  // so the batch is reserved here and handed out by `take_spare_run` for free.
+  if (!page && reserve_spare_runs_locked(mutator, minimum_span) &&
+      take_spare_run(mutator, minimum_span)) {
+    return true;
+  }
   if (!page) {
     const size_t capacity = std::max(kGcPageBytes, kGcTlabBytes);
     auto new_page = acquire_page(capacity);
@@ -3050,18 +3152,18 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   if (span > kGcTlabBytes) return nullptr;
   handled = true;
 
-  if (thread_mutator.tlab_generation != gc_page_generation) {
-    thread_mutator.tlab_page = nullptr;
-    thread_mutator.tlab_cursor = nullptr;
-    thread_mutator.tlab_end = nullptr;
-    thread_mutator.tlab_generation = gc_page_generation;
-  }
+  if (thread_mutator.tlab_generation != gc_page_generation)
+    discard_stale_tlab(thread_mutator);
   if (!thread_mutator.tlab_cursor || !thread_mutator.tlab_end ||
       thread_mutator.tlab_cursor > thread_mutator.tlab_end ||
       span > static_cast<size_t>(thread_mutator.tlab_end -
                                  thread_mutator.tlab_cursor)) {
-    HeapLockGuard lock(gc_mutex);
-    if (!reserve_tlab_locked(thread_mutator, span)) return nullptr;
+    // A run reserved earlier answers this without the allocator lock: that is
+    // what a fragmented heap needs, because its runs are only a few cells each.
+    if (!take_spare_run(thread_mutator, span)) {
+      HeapLockGuard lock(gc_mutex);
+      if (!reserve_tlab_locked(thread_mutator, span)) return nullptr;
+    }
   }
 
   unsigned char* header_storage = thread_mutator.tlab_cursor;
@@ -3888,6 +3990,9 @@ void nrq_gc_mutator_leave(void) {
   {
     HeapLockGuard heap_lock(gc_mutex);
     publish_tlab_locked(thread_mutator);
+    // This thread is never visited by cycle preparation again, so the space it
+    // reserved has to be returned to its pages here.
+    flush_spare_runs_locked(thread_mutator);
     drain_remembered_locked(thread_mutator, /*defer_unresolved=*/true);
     // A thread that leaves the registry is never visited by cycle preparation
     // again, so its buffered handoffs have to be settled here.
