@@ -109,9 +109,15 @@ removing fields, and each removal has a precondition:
 4. **`birth_epoch`** — derivable from the page if pages carry the epoch they were
    filled in, which they do not today.
 
-Steps 1 and 2 only pay off together: removing one pointer leaves 40 bytes, and 40
-is not a multiple of 16, so the payload would stop being `max_align_t` aligned.
-The pair takes the header to 32 bytes, which is why they are one unit of work.
+Correction to an earlier version of this section: I wrote that steps 1 and 2 only
+pay off together because 40 bytes would break payload alignment. On this target
+that is wrong - `alignof(ObjectHeader)` is 8 and the object start alignment is
+`alignof(std::max_align_t)`, which MSVC reports as 8, so a 40-byte header keeps
+every payload aligned here. It is not wrong everywhere: libstdc++ reports
+`max_align_t` as 16, and a 40-byte header would then put every payload at an
+8-byte-misaligned address. Any header whose size is not a multiple of 16 therefore
+has to be a per-target choice, not a constant, which is exactly the kind of
+variant Section C2 has to build and measure rather than assume.
 
 ## 6. Verification
 
