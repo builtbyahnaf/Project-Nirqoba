@@ -450,6 +450,9 @@ struct LayoutKeyHash {
 // allocation and tracing read the descriptor through a plain pointer.
 std::mutex layout_mutex;
 std::unordered_map<LayoutKey, const nrq_object_layout*, LayoutKeyHash> layout_pool;
+// Bytes the published descriptors and their offset tables occupy. They are never
+// freed, so this is the whole structural cost of sharing.
+size_t layout_bytes_total = 0;
 
 // Allocation must not take the pool lock. A thread remembers the last layout it
 // asked for and proves the match by comparing the offset table itself, so a
@@ -4384,6 +4387,7 @@ const nrq_object_layout* nrq_gc_layout_intern(
     return nullptr;
   }
   try {
+    layout_bytes_total += sizeof(nrq_object_layout) + key.offsets.size() * sizeof(uint32_t);
     layout_pool.emplace(std::move(key), descriptor);
   } catch (...) {
     delete descriptor;
@@ -4397,6 +4401,10 @@ size_t nrq_gc_layout_count(void) {
   std::lock_guard<std::mutex> lock(layout_mutex);
   return layout_pool.size();
 }
+size_t nrq_gc_layout_bytes(void) {
+  std::lock_guard<std::mutex> lock(layout_mutex);
+  return layout_bytes_total;
+}
 
 nrq_gc_allocation_facts nrq_gc_get_allocation_facts(void) {
   nrq_gc_allocation_facts facts{};
@@ -4406,6 +4414,8 @@ nrq_gc_allocation_facts nrq_gc_get_allocation_facts(void) {
   facts.tlab_bytes = kGcTlabBytes;
   facts.tlab_min_slab_bytes = kGcTlabMinSlabBytes;
   facts.spare_run_capacity = MutatorState::kSpareRunCapacity;
+  facts.layout_descriptors = nrq_gc_layout_count();
+  facts.layout_bytes = nrq_gc_layout_bytes();
   return facts;
 }
 
