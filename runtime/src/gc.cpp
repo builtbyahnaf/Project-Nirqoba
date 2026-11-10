@@ -4226,6 +4226,42 @@ uint64_t nrq_gc_last_reclaimed_bytes(void) {
 
 size_t nrq_gc_object_header_bytes(void) { return sizeof(ObjectHeader); }
 
+nrq_gc_allocation_facts nrq_gc_get_allocation_facts(void) {
+  nrq_gc_allocation_facts facts{};
+  facts.object_header_bytes = sizeof(ObjectHeader);
+  facts.payload_alignment = kObjectStartAlignment;
+  facts.page_bytes = kGcPageBytes;
+  facts.tlab_bytes = kGcTlabBytes;
+  facts.tlab_min_slab_bytes = kGcTlabMinSlabBytes;
+  facts.spare_run_capacity = MutatorState::kSpareRunCapacity;
+  return facts;
+}
+
+int32_t nrq_gc_get_allocation_profile(size_t payload_bytes,
+                                  nrq_gc_allocation_profile* out) {
+  if (!out) return 0;
+  if (payload_bytes > SIZE_MAX - sizeof(ObjectHeader) - kObjectStartAlignment)
+    return 0;
+  const size_t raw_span = sizeof(ObjectHeader) + payload_bytes;
+  const size_t span =
+      (raw_span + kObjectStartAlignment - 1) & ~(kObjectStartAlignment - 1);
+  // A page is at least as large as the span it must hold, exactly as
+  // take_span_locked sizes it.
+  const size_t capacity = std::max(kGcPageBytes, span);
+  const size_t slots = capacity / span;
+  nrq_gc_allocation_profile profile{};
+  profile.payload_bytes = payload_bytes;
+  profile.span_bytes = span;
+  profile.slots_per_page = slots;
+  profile.page_slack_bytes = capacity - slots * span;
+  profile.page_bytes = capacity;
+  // A reservation never spans a page boundary, so one slab serves the objects a
+  // page holds - or one, when a single object fills the page.
+  profile.objects_per_refill = slots;
+  *out = profile;
+  return 1;
+}
+
 size_t nrq_gc_page_count(void) {
   HeapLockGuard lock(gc_mutex);
   return gc_pages.size();
