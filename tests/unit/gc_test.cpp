@@ -175,6 +175,35 @@ TEST(GcTest, InstancesOfOneRecordShareOneDescriptor) {
   ASSERT_TRUE(nrq_gc_object_layout(other) != shared);
 }
 
+TEST(GcTest, StructuralMetadataIsSharedNotRepeated) {
+  // A thousand instances must not cost a thousand descriptions. The facts pair
+  // descriptor count and bytes with the live-object count so sharing is
+  // measurable rather than assumed.
+  nrq_gc_enable();
+  const nrq_gc_allocation_facts before = nrq_gc_get_allocation_facts();
+  ASSERT_EQ(before.object_header_bytes, size_t{48});
+  for (int index = 0; index < 1000; ++index)
+    ASSERT_NE(nrq_gc_allocate(sizeof(Node), trace_node), nullptr);
+  const nrq_gc_allocation_facts after = nrq_gc_get_allocation_facts();
+  ASSERT_TRUE(after.layout_descriptors <= before.layout_descriptors + 1);
+  // descriptor + two offsets at most, whatever the instance count.
+  ASSERT_TRUE(after.layout_bytes <= before.layout_bytes + 64);
+}
+
+TEST(GcTest, AllocationProfileCountsTheCompactHeader) {
+  // The profile is what the header work is judged against, so it must describe
+  // the layout that actually exists: 48 bytes of metadata, a 112-byte span for a
+  // 64-byte payload, and 585 of those in a 64 KiB page.
+  nrq_gc_allocation_profile profile{};
+  ASSERT_TRUE(nrq_gc_get_allocation_profile(64, &profile) != 0);
+  ASSERT_EQ(profile.payload_bytes, size_t{64});
+  ASSERT_EQ(profile.span_bytes, size_t{112});
+  ASSERT_EQ(profile.page_bytes, size_t{65536});
+  ASSERT_EQ(profile.slots_per_page, size_t{585});
+  ASSERT_EQ(profile.page_slack_bytes,
+            size_t{65536 - 585 * 112});
+}
+
 TEST(GcTest, PreservesReachableCyclesAndSweepsAfterRootRemoval) {
   nrq_gc_enable();
   nrq_gc_set_threshold(1024 * 1024);

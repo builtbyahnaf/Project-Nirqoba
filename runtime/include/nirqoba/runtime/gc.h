@@ -53,6 +53,8 @@ const struct nrq_object_layout* nrq_gc_layout_intern(
 // Number of distinct layouts described so far. Instances sharing a layout do
 // not increase this, which is the direct measure of descriptor sharing.
 size_t nrq_gc_layout_count(void);
+// Bytes those descriptors and their offset tables occupy. They are never freed.
+size_t nrq_gc_layout_bytes(void);
 
 struct nrq_gc_stats {
   uint64_t allocated_bytes;
@@ -206,6 +208,12 @@ struct nrq_gc_allocation_facts {
   size_t tlab_min_slab_bytes;
   // Runs one reservation holds without touching the lock again.
   size_t spare_run_capacity;
+  // Structural metadata that is shared rather than repeated: how many immutable
+  // layout descriptors exist, and the bytes they and their offset tables hold.
+  // Instances sharing a layout do not increase either, so these two numbers next
+  // to the live-object count are the direct measure of descriptor sharing.
+  size_t layout_descriptors;
+  size_t layout_bytes;
 };
 struct nrq_gc_allocation_facts nrq_gc_get_allocation_facts(void);
 // What one payload size costs in space: the aligned span the allocator stores,
