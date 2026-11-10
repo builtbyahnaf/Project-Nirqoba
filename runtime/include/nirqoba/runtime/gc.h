@@ -175,7 +175,10 @@ uint64_t nrq_gc_span_reuse_count(void);
 // reuse hit rate is that over `nrq_gc_get_allocated_bytes()`.
 uint64_t nrq_gc_tlab_tail_bytes(void);
 uint64_t nrq_gc_tlab_tail_max_bytes(void);
-
+// Reservation space actually returned to its page at a safepoint. With the
+// stranded total above, this is what a reservation size decision is judged on:
+// waste that comes back is a delay, waste that does not is a leak.
+uint64_t nrq_gc_tlab_tail_reclaimed_bytes(void);
 size_t nrq_gc_free_run_count(void);
 size_t nrq_gc_page_with_runs_count(void);
 uint64_t nrq_gc_reused_span_bytes(void);
