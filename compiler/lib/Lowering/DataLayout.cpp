@@ -142,6 +142,7 @@ AggregateLayout describe_aggregate(const Type& type) {
   const bool is_struct = type.is_struct();
   uint64_t offset = 0;
   uint64_t used = 0;
+  uint64_t interior_padding = 0;
   for (std::size_t physical = 0; physical < order.size(); ++physical) {
     const std::size_t declaration = order[physical];
     FieldLayout field;
@@ -153,14 +154,22 @@ AggregateLayout describe_aggregate(const Type& type) {
       field.type = type.tuple_elements()[declaration];
     }
     field.alignment = type_alignment(field.type);
-    offset = (offset + field.alignment - 1) & ~(field.alignment - 1);
+    const uint64_t aligned = (offset + field.alignment - 1) & ~(field.alignment - 1);
+    interior_padding += aligned - offset;
+    offset = aligned;
     field.offset = offset;
+    if (offset >= 64) ++layout.fields_beyond_first_line;
     field.size = type_size(field.type);
     offset += field.size;
     used += field.size;
     layout.fields.push_back(std::move(field));
   }
-  layout.padding = layout.size > used ? layout.size - used : 0;
+  layout.interior_padding = interior_padding;
+  layout.trailing_padding = layout.size > used + interior_padding
+                                ? layout.size - used - interior_padding
+                                : 0;
+  layout.padding = layout.interior_padding + layout.trailing_padding;
+  layout.cache_lines = layout.size == 0 ? 0 : (layout.size + 63) / 64;
 
   // Same fields, declaration order: the difference is the padding the physical
   // order removed.
@@ -213,7 +222,10 @@ std::string print_data_layout(const tir::Module& module) {
     const uint64_t per_line = layout.size == 0 ? 0 : (64 + layout.size - 1) / layout.size;
     out << "struct " << layout.name << " {\n";
     out << "  size " << layout.size << " align " << layout.alignment
-        << " padding " << layout.padding << " elements_per_cache_line " << per_line
+        << " padding " << layout.padding << " (interior " << layout.interior_padding
+        << ", trailing " << layout.trailing_padding << ") cache-lines "
+        << layout.cache_lines << " fields-beyond-line "
+        << layout.fields_beyond_first_line << " elements_per_cache_line " << per_line
         << " declared " << layout.declaration_size << "\n";
     for (const FieldLayout& field : layout.fields) {
       out << "  " << field.name << " : " << field.type.to_string() << " @ " << field.offset

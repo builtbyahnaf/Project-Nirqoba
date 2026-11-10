@@ -1,0 +1,12 @@
+{
+  "mode": "build",
+  "args": ["--emit=layout"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "size 16 align 8 padding 2 (interior 0, trailing 2) cache-lines 1 fields-beyond-line 0 elements_per_cache_line 4 declared 24",
+    "wide : int @ 0 (8 bytes, align 8)",
+    "letter : char @ 8 (4 bytes, align 4)",
+    "small : bool @ 12 (1 bytes, align 1)",
+    "trailing : bool @ 13 (1 bytes, align 1)"
+  ]
+}

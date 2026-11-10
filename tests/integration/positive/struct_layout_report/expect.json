@@ -4,7 +4,7 @@
   "expect_exit": 0,
   "expect_stdout_contains": [
     "struct Wide {",
-    "size 24 align 8 padding 3 elements_per_cache_line 3 declared 32",
+    "size 24 align 8 padding 3 (interior 0, trailing 3) cache-lines 1 fields-beyond-line 0 elements_per_cache_line 3 declared 32",
     "first : int @ 0 (8 bytes, align 8)",
     "second : int @ 8 (8 bytes, align 8)",
     "tag : char @ 16 (4 bytes, align 4)",
