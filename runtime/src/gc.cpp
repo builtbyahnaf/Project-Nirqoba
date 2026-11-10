@@ -3649,6 +3649,21 @@ void* allocate_array_rooted_impl(void** root_slot, size_t count,
 // configuration trusts it: no validation runs on an allocation path. The
 // development configuration proves every field, because a table that disagrees
 // with its payload would corrupt tracing rather than fail an allocation.
+// The development configuration proves a caller-supplied descriptor before it is
+// trusted. The descriptor is immutable and its address is its identity, so each
+// thread only has to prove a given one once: a repeated allocation through the
+// same constant table compares one pointer instead of re-walking the offset
+// table. Production runs no validation at all and does not reach this code.
+bool layout_is_consistent(const nrq_object_layout& layout);
+bool layout_is_trusted(const nrq_object_layout* layout) {
+  if (!layout) return false;
+  thread_local const nrq_object_layout* last_validated = nullptr;
+  if (last_validated == layout) return true;
+  if (!layout_is_consistent(*layout)) return false;
+  last_validated = layout;
+  return true;
+}
+
 bool layout_is_consistent(const nrq_object_layout& layout) {
   if (layout.payload_size == 0) return false;
   if ((layout.flags & ~static_cast<uint32_t>(NRQ_OBJECT_LAYOUT_ARRAY)) != 0)
@@ -3667,7 +3682,7 @@ bool layout_is_consistent(const nrq_object_layout& layout) {
 void* nrq_gc_allocate_layout(const nrq_object_layout* layout) {
   if (!layout || (layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) != 0) return nullptr;
   if constexpr (nirq::runtime_debug_enabled)
-    if (!layout_is_consistent(*layout)) return nullptr;
+    if (!layout_is_trusted(layout)) return nullptr;
   const size_t bytes = layout->payload_size;
   if (bytes == 0 || bytes > SIZE_MAX - sizeof(ObjectHeader)) return nullptr;
   maybe_collect_automatically();
@@ -3685,7 +3700,7 @@ void* nrq_gc_allocate_array_layout(const nrq_object_layout* layout,
   if (!layout || count == 0) return nullptr;
   if ((layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0) return nullptr;
   if constexpr (nirq::runtime_debug_enabled)
-    if (!layout_is_consistent(*layout)) return nullptr;
+    if (!layout_is_trusted(layout)) return nullptr;
   if (count > UINT32_MAX) return nullptr;
   size_t bytes = 0;
   if (multiply_size_overflowed(count, layout->payload_size, bytes))
@@ -3706,7 +3721,7 @@ void* nrq_gc_allocate_array_layout_rooted(void** root_slot,
   if (!root_slot || !layout || count == 0) return nullptr;
   if ((layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0) return nullptr;
   if constexpr (nirq::runtime_debug_enabled)
-    if (!layout_is_consistent(*layout)) return nullptr;
+    if (!layout_is_trusted(layout)) return nullptr;
   if (count > UINT32_MAX) return nullptr;
   return allocate_array_rooted_impl(root_slot, count, layout->payload_size,
                                     nullptr, 0, layout);
