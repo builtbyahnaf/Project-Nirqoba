@@ -164,6 +164,21 @@ uint64_t nrq_gc_tlab_refill_count(void);
 // existing page instead of advancing that page's bump cursor. Together with the
 // page counts this makes reclamation locality observable.
 uint64_t nrq_gc_span_reuse_count(void);
+// AO-06 observation: the quantities a thread-local reservation size decision has
+// to be made on. `nrq_gc_tlab_tail_bytes` is the total unused reservation space
+// threads gave up when moving to another slab or across a cycle, and
+// `nrq_gc_tlab_tail_max_bytes` the largest single tail, so stranded memory is
+// measured rather than assumed. `nrq_gc_free_run_count` is how many reclaimed
+// runs are recorded over all pages and `nrq_gc_page_with_runs_count` how many
+// pages hold them, which is the fragmentation those refills work from.
+// `nrq_gc_reused_span_bytes` is how much of it has been handed back out; the
+// reuse hit rate is that over `nrq_gc_get_allocated_bytes()`.
+uint64_t nrq_gc_tlab_tail_bytes(void);
+uint64_t nrq_gc_tlab_tail_max_bytes(void);
+
+size_t nrq_gc_free_run_count(void);
+size_t nrq_gc_page_with_runs_count(void);
+uint64_t nrq_gc_reused_span_bytes(void);
 // Reports how many objects are tracked by the exact address index. Objects that
 // live in a page with start metadata are discovered without the index, so this
 // stays proportional to the number of large-object pages rather than the heap.
