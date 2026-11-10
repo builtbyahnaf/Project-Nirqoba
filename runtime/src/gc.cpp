@@ -2779,6 +2779,16 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
     auto page = std::make_unique<GcPage>();
     page->storage = storage;
     page->capacity = capacity;
+    // An ordinary page is carved on a kGcPageBytes boundary inside a reserved run,
+    // so its base is recoverable from any address inside it by masking off the low
+    // bits. Large-object pages are larger than that and are not, which is why the
+    // page directory keys ordinary pages by address and large ones by exact object.
+    // The premise is asserted where the page is made, not assumed where it is used.
+    if constexpr (nirq::runtime_debug_enabled) {
+      if (capacity <= kGcPageBytes &&
+          (reinterpret_cast<uintptr_t>(storage) & (kGcPageBytes - 1)) != 0)
+        nrq_runtime_fatal("GC page is not aligned to its own size");
+    }
     if (capacity <= kGcPageBytes) {
       const size_t slots = capacity / kObjectStartAlignment;
       const size_t words = (slots + 63) / 64;
