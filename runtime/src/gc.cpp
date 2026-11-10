@@ -811,6 +811,18 @@ void index_span_page_locked(GcPage& page) {
 // the entire page set. Membership is a swap-remove through `tail_index`.
 std::vector<GcPage*> tail_pages;
 
+// Upper bound on the tail space of any indexed page. A page whose tail cannot
+// serve the request used to cost nothing because a reservation always charged
+// the whole page; now that a tail is left behind, a large payload can face
+// thousands of indexed pages that all hold too little. This answers "can any of
+// them serve?" in one comparison, and a full scan that finds nothing recomputes
+// it exactly, so the walk happens once per heap state rather than per refill.
+size_t max_indexed_tail_bytes = 0;
+
+size_t indexed_tail_bytes(const GcPage& page) {
+  return page.capacity > page.used ? page.capacity - page.used : 0;
+}
+
 void index_tail_page_locked(GcPage& page) {
   if (page.tail_index != GcPage::kNoSpanIndex || page.retired) return;
   try {
@@ -837,6 +849,8 @@ void note_page_tail_locked(GcPage& page) {
     unindex_tail_page_locked(page);
   } else {
     index_tail_page_locked(page);
+    const size_t remaining = indexed_tail_bytes(page);
+    if (remaining > max_indexed_tail_bytes) max_indexed_tail_bytes = remaining;
   }
 }
 
@@ -2107,6 +2121,16 @@ void release_span_locked(GcPage& page, size_t offset, size_t span) {
   index_span_page_locked(page);
 }
 
+// A reservation is charged to its page in full, so ending it part way through an
+// object leaves a remainder that no allocation of that size can use - up to a
+// whole slab for a payload close to the slab size. Grants are therefore cut to a
+// whole number of objects, and everything past the last one stays free space in
+// the page, where a smaller object can still have it.
+size_t whole_object_grant(size_t grant, size_t span) {
+  if (span == 0) return grant;
+  const size_t whole = (grant / span) * span;
+  return whole != 0 ? whole : grant;
+}
 // First-fit reuse of reclaimed space. The scan visits pages in allocation order
 // and only pages that currently hold a free run, so a heap with nothing to reuse
 // costs one branch per page. Callers hold gc_mutex.
@@ -2159,8 +2183,8 @@ GcPage* take_free_span_locked(size_t span, size_t& offset) {
 // instead of sixteen, and it still accepts a shorter run as long as it can serve
 // one object. `granted` reports the length actually taken.
 // Callers hold gc_mutex.
-GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t& offset,
-                             size_t& granted) {
+GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t multiple,
+                             size_t& offset, size_t& granted) {
   if (desired == 0 || minimum == 0 || minimum > desired ||
       total_free_spans == 0)
     return nullptr;
@@ -2171,8 +2195,9 @@ GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t& offset,
       GcPage::FreeSpan& candidate = page->free_spans[index];
       if (candidate.span < minimum) continue;
       const size_t candidate_before = candidate.span;
+      const size_t span = whole_object_grant(std::min(candidate.span, desired), multiple);
+      if (span < minimum) continue;
       unretire_page_locked(*page);
-      const size_t span = std::min(candidate.span, desired);
       offset = candidate.offset;
       page->free_span_bytes -= span;
       if (candidate.span > span) {
@@ -2210,7 +2235,8 @@ GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t& offset,
 // many runs were written and, in `page`, the page they came from - a batch is one
 // page's holes, which keeps the space a thread reserves in one place.
 size_t take_free_runs_locked(size_t minimum, size_t byte_budget, size_t max_runs,
-                             GcPage*& page, GcPage::FreeSpan* out) {
+                             size_t multiple, GcPage*& page,
+                             GcPage::FreeSpan* out) {
   page = nullptr;
   if (minimum == 0 || max_runs == 0 || total_free_spans == 0) return 0;
   GcPage* target = nullptr;
@@ -2232,7 +2258,9 @@ size_t take_free_runs_locked(size_t minimum, size_t byte_budget, size_t max_runs
     --index;
     GcPage::FreeSpan& run = target->free_spans[index];
     if (run.span < minimum) continue;
-    const size_t grant = std::min(run.span, kGcTlabBytes);
+    const size_t grant =
+        whole_object_grant(std::min(run.span, kGcTlabBytes), multiple);
+    if (grant < minimum) continue;
     if (taken != 0 && taken_bytes + grant > byte_budget) break;
     // A run is taken from its top, so a partial take only moves the run's own
     // start and the entry keeps its place in the ascending list.
@@ -2350,7 +2378,8 @@ bool reserve_spare_runs_locked(MutatorState& mutator, size_t minimum_span) {
   GcPage::FreeSpan runs[MutatorState::kSpareRunCapacity];
   GcPage* page = nullptr;
   const size_t taken = take_free_runs_locked(
-      minimum_span, byte_budget, MutatorState::kSpareRunCapacity, page, runs);
+      minimum_span, byte_budget, MutatorState::kSpareRunCapacity, minimum_span,
+      page, runs);
   if (taken == 0) return false;
   for (size_t index = 0; index < taken; ++index) {
     MutatorState::SpareRun& spare = mutator.spare_runs[mutator.spare_run_count];
@@ -3143,8 +3172,8 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
   auto take_run = [&](size_t wanted_minimum) {
     size_t run_offset = 0;
     size_t run_span = 0;
-    GcPage* reused =
-        take_free_run_locked(kGcTlabBytes, wanted_minimum, run_offset, run_span);
+    GcPage* reused = take_free_run_locked(kGcTlabBytes, wanted_minimum,
+                                          minimum_span, run_offset, run_span);
     if (!reused) return false;
     install_tlab(mutator, reused, run_offset, run_span);
     return true;
@@ -3170,19 +3199,30 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     available = thread_allocation_page->capacity - thread_allocation_page->used;
     if (available >= minimum_span) page = thread_allocation_page;
   }
-  if (!page) {
+  if (!page && max_indexed_tail_bytes >= minimum_span) {
     // Newest first, as the reverse scan did: the most recently carved page is the
     // one most likely to still be resident and partly free.
     for (auto candidate = tail_pages.rbegin(); candidate != tail_pages.rend();
          ++candidate) {
       GcPage* possible = *candidate;
       if (!possible) continue;
-      const size_t remaining = possible->capacity - possible->used;
+      const size_t remaining = indexed_tail_bytes(*possible);
       if (remaining >= minimum_span) {
         page = possible;
         available = remaining;
         break;
       }
+    }
+    if (!page) {
+      // Nothing indexed can serve this size. Record that exactly, so the next
+      // refill of the same size skips the walk instead of repeating it.
+      max_indexed_tail_bytes = 0;
+      for (const GcPage* possible : tail_pages)
+        if (possible) {
+          const size_t remaining = indexed_tail_bytes(*possible);
+          if (remaining > max_indexed_tail_bytes)
+            max_indexed_tail_bytes = remaining;
+        }
     }
   }
   // Now reuse short reclaimed runs. This is the path that serves a heap whose
@@ -3211,7 +3251,8 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     index_tail_page_locked(*page);
     available = page->capacity;
   }
-  const size_t reserve = std::min(kGcTlabBytes, available);
+  const size_t reserve =
+      whole_object_grant(std::min(kGcTlabBytes, available), minimum_span);
   if (reserve < minimum_span) return false;
   unretire_page_locked(*page);
   install_tlab(mutator, page, page->used, reserve);
