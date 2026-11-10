@@ -301,13 +301,39 @@ struct alignas(std::max_align_t) ObjectHeader {
   // per-instance thing an array has beyond its descriptor. The payload size
   // itself is `element_count * layout->payload_size`, so no instance stores it.
   uint32_t element_count = 1;
-  bool marked = false;
-  bool young = true;
-  // Set while this object is listed in the remembered set. Deduplication is a
-  // flag test instead of a hash lookup, and the entry itself lives in one
-  // contiguous vector that minor collections scan in address order of insertion.
-  bool remembered = false;
-  uint8_t age = 0;
+  // Everything that changes about an instance, packed into one word with
+  // explicit masks rather than C++ bitfields: the collector reads one word and
+  // updates one flag without touching a neighbour, and the encoding is defined by
+  // the shifts below rather than by the compiler's allocation strategy.
+  //
+  // `young`, `remembered` and `age` share the word because they change together
+  // in a sweep; only `marked` is written on its own, and it is still one
+  // read-modify-write of a word the marker already has in cache.
+  uint32_t state = kYoungBit;
+  static constexpr uint32_t kMarkedBit = 1u << 0;
+  static constexpr uint32_t kYoungBit = 1u << 1;
+  static constexpr uint32_t kRememberedBit = 1u << 2;
+  // Promotion age occupies the next byte; 255 collections without promotion is
+  // past anything the policy reaches.
+  static constexpr uint32_t kAgeShift = 8;
+  static constexpr uint32_t kAgeMask = 0xFFu << kAgeShift;
+
+  bool marked() const { return (state & kMarkedBit) != 0; }
+  void set_marked(bool value) {
+    state = value ? (state | kMarkedBit) : (state & ~kMarkedBit);
+  }
+  bool young() const { return (state & kYoungBit) != 0; }
+  void set_young(bool value) {
+    state = value ? (state | kYoungBit) : (state & ~kYoungBit);
+  }
+  bool remembered() const { return (state & kRememberedBit) != 0; }
+  void set_remembered(bool value) {
+    state = value ? (state | kRememberedBit) : (state & ~kRememberedBit);
+  }
+  uint32_t age() const { return (state & kAgeMask) >> kAgeShift; }
+  void set_age(uint32_t value) {
+    state = (state & ~kAgeMask) | ((value << kAgeShift) & kAgeMask);
+  }
   // The shared, immutable description of this object's payload: its size and
   // shape, how to visit its references, and its custom trace callback. It is
   // declared last so the per-instance fields stay in the first cache line, and
@@ -327,12 +353,9 @@ struct alignas(std::max_align_t) ObjectHeader {
         mark_next(nullptr),
         page(owning_page),
         birth_epoch(epoch),
-        marked(false),
-        young(is_young),
-        remembered(false),
-        age(0),
-        layout(object_layout),
-        element_count(elements) {}
+        element_count(elements),
+        state(is_young ? kYoungBit : 0),
+        layout(object_layout) {}
 
   // The payload immediately follows the header. It is not stored: the page
   // bump allocator always places a header `sizeof(ObjectHeader)` bytes before
@@ -1341,7 +1364,7 @@ void publish_tlab_locked(MutatorState& mutator) {
     if (!header->page || header->page->live_objects == SIZE_MAX)
       nrq_runtime_fatal("GC page live-object count overflow");
     ++header->page->live_objects;
-    if (header->young) {
+    if (header->young()) {
       ++header->page->young_objects;
     } else {
       // Objects become visible here, so this is where the generational policy's
@@ -1518,14 +1541,14 @@ void trace_children(ObjectHeader* header, nrq_gc_visit_fn visit,
 }
 
 void enqueue_header_locked(ObjectHeader* header, MarkContext& context) {
-  if (!header || header->marked) return;
+  if (!header || header->marked()) return;
   // Objects born during this cycle are retained by the sweep's birth-epoch
   // check. Marking them would leave a mark bit that the snapshot never clears.
   // The epoch comes from the context, so the hot path never loads the shared
   // cycle state.
   if (header->birth_epoch >= context.epoch) return;
-  if (context.young_only && !header->young) return;
-  header->marked = true;
+  if (context.young_only && !header->young()) return;
+  header->set_marked(true);
   context.worklist.push(header);
 }
 
@@ -1640,12 +1663,12 @@ void enqueue_roots_locked(MarkContext& context) {
 // already there. The flag is what makes the flat list a set, so a repeated
 // old-to-young store costs one bool test instead of a hash probe.
 void add_remembered_locked(ObjectHeader* header) {
-  if (!header || header->remembered) return;
-  header->remembered = true;
+  if (!header || header->remembered()) return;
+  header->set_remembered(true);
   try {
     remembered_young.push_back(header);
   } catch (...) {
-    header->remembered = false;
+    header->set_remembered(false);
     nrq_runtime_fatal("GC remembered-set insertion failed");
   }
 }
@@ -1658,7 +1681,7 @@ void compact_remembered_locked() {
   remembered_young.erase(
       std::remove_if(remembered_young.begin(), remembered_young.end(),
                      [](ObjectHeader* header) {
-                       return !header || !header->remembered;
+                       return !header || !header->remembered();
                      }),
       remembered_young.end());
   if (remembered_young.capacity() > 1024 &&
@@ -1671,7 +1694,7 @@ void remember_reference(void* object, void* opaque_context) {
   (void)opaque_context;
   if (!object) return;
   ObjectHeader* found = find_object_locked(object);
-  if (!found || !found->young) return;
+  if (!found || !found->young()) return;
   add_remembered_locked(found);
 }
 
@@ -1681,7 +1704,7 @@ void remember_young_locked(void* object) {
       !object)
     return;
   ObjectHeader* found = find_object_locked(object);
-  if (found && found->young) add_remembered_locked(found);
+  if (found && found->young()) add_remembered_locked(found);
 }
 
 void remember_children_locked(ObjectHeader* header) {
@@ -1692,7 +1715,7 @@ void defer_remembered_locked(void* object) {
   if (!object || !generational_barrier_active.load(std::memory_order_acquire))
     return;
   ObjectHeader* found = find_object_locked(object);
-  if (found && found->young) {
+  if (found && found->young()) {
     add_remembered_locked(found);
     return;
   }
@@ -1710,7 +1733,7 @@ void drain_remembered_locked(MutatorState& mutator, bool defer_unresolved) {
     void* object = mutator.remembered[index];
     if (!object) continue;
     ObjectHeader* found = find_object_locked(object);
-    if (found && found->young) {
+    if (found && found->young()) {
       add_remembered_locked(found);
     } else if (!found && defer_unresolved) {
       try {
@@ -1760,7 +1783,7 @@ ThreadGcStateCleanup::~ThreadGcStateCleanup() {
 void resolve_unresolved_remembered_locked() {
   for (void* object : unresolved_remembered) {
     ObjectHeader* found = find_object_locked(object);
-    if (!found || !found->young) continue;
+    if (!found || !found->young()) continue;
     add_remembered_locked(found);
   }
   unresolved_remembered.clear();
@@ -1826,7 +1849,7 @@ bool mark_slice_locked(size_t budget_bytes) {
   while (!active_mark.worklist.empty() && touched < budget_bytes) {
     ObjectHeader* header = active_mark.worklist.pop();
     touched += object_payload_bytes(*header) + sizeof(ObjectHeader);
-    if (active_mark.young_only && !header->young) continue;
+    if (active_mark.young_only && !header->young()) continue;
     const size_t reference_count = header->layout->reference_count;
     if (!header->layout->trace && reference_count != 0 && reference_count <= 2 &&
         (header->layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0) {
@@ -1879,8 +1902,8 @@ bool sweep_chunk_locked(size_t budget_bytes) {
   // Reclaims one object, or leaves it for the next cycle. Returns true when the
   // object was freed, so the caller cannot go on to treat it as a survivor.
   auto sweep_object = [&](ObjectHeader* header) -> bool {
-    const bool collectable = !active_collection_is_minor || header->young;
-    if (!header->marked && collectable) {
+    const bool collectable = !active_collection_is_minor || header->young();
+    if (!header->marked() && collectable) {
       const size_t object_offset = static_cast<size_t>(
           static_cast<unsigned char*>(header->payload()) -
           header->page->storage);
@@ -1894,8 +1917,8 @@ bool sweep_chunk_locked(size_t budget_bytes) {
       release_span_locked(*header->page,
                           object_offset - sizeof(ObjectHeader),
                           object_span_bytes(object_payload_bytes(*header)));
-      header->remembered = false;
-      if (!header->young) ++reclaimed_old;
+      header->set_remembered(false);
+      if (!header->young()) ++reclaimed_old;
       statistics.collected_bytes = saturated_add(
           statistics.collected_bytes,
           static_cast<uint64_t>(object_payload_bytes(*header)));
@@ -1907,7 +1930,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
       if (!header->page || header->page->live_objects == 0)
         nrq_runtime_fatal("GC page live-object count underflow");
       --header->page->live_objects;
-      if (header->young) --header->page->young_objects;
+      if (header->young()) --header->page->young_objects;
       if (header->page->live_objects == 0) {
         header->page->retired = true;
         ++retired_page_count;
@@ -1916,34 +1939,34 @@ bool sweep_chunk_locked(size_t budget_bytes) {
       return true;
     }
 
-    if (header->marked) {
-      header->marked = false;
+    if (header->marked()) {
+      header->set_marked(false);
       if (active_collection_is_minor) {
-        if (header->young) {
-          if (header->age < UINT8_MAX) ++header->age;
-          if (header->age >= kPromotionAge) {
-            header->young = false;
+        if (header->young()) {
+          if (header->age() < UINT8_MAX) header->set_age(header->age() + 1);
+          if (header->age() >= kPromotionAge) {
+            header->set_young(false);
             --header->page->young_objects;
-            header->age = 0;
+            header->set_age(0);
             ++promoted_young;
             promotion_raised_barrier = true;
             remember_children_locked(header);
-            header->remembered = false;
+            header->set_remembered(false);
             debug_emit(NRQ_GC_EVENT_PROMOTE, 0, 0,
                        static_cast<void*>(header + 1));
           }
         }
       } else {
-        if (header->young) {
-          header->young = false;
+        if (header->young()) {
+          header->set_young(false);
           --header->page->young_objects;
           ++promoted_young;
           promotion_raised_barrier = true;
           debug_emit(NRQ_GC_EVENT_PROMOTE, 0, 0,
                      static_cast<void*>(header + 1));
         }
-        header->age = 0;
-        header->remembered = false;
+        header->set_age(0);
+        header->set_remembered(false);
       }
     }
     return false;
@@ -2007,7 +2030,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
     // reachability analysis. It stays where it is for this cycle - there is no
     // list to keep it out of - and the next cycle considers it.
     if (header->birth_epoch >= active_cycle_epoch) {
-      header->marked = false;
+      header->set_marked(false);
       continue;
     }
     sweep_object(header);
@@ -2020,7 +2043,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
     ++steps;
     touched += object_span_bytes(object_payload_bytes(*header));
     if (header->birth_epoch >= active_cycle_epoch) {
-      header->marked = false;
+      header->set_marked(false);
       header->next = unindexed_objects;
       unindexed_objects = header;
       continue;
@@ -3204,7 +3227,7 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
     // reference words costs no per-instance storage and no allocation.
     // Counted, not published: this allocation is already live, and the barrier
     // policy is the only thing that raises the store barrier (see allocate_tlab).
-    if (!header->young)
+    if (!header->young())
       old_object_count.fetch_add(1, std::memory_order_relaxed);
     header->next = nullptr;
     if (page_uses_index(page)) {
@@ -3228,7 +3251,7 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
     unindexed_objects = header;
   }
   ++page->live_objects;
-  if (header->young) ++page->young_objects;
+  if (header->young()) ++page->young_objects;
   statistics.allocated_bytes = saturated_add(
       statistics.allocated_bytes, static_cast<uint64_t>(bytes));
   statistics.live_objects = saturated_add(statistics.live_objects, 1);
