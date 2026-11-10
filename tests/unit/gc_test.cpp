@@ -252,6 +252,42 @@ TEST(GcTest, TheStateWordEncodesEachFieldIndependently) {
   ASSERT_EQ(nrq_gc_object_state_bits(slot), uint32_t{0});
 }
 
+TEST(GcTest, RebuildingTheSameStackOffsetTableGetsTheRightLayout) {
+  // The typed entry points document that the collector copies the offset table,
+  // which is what lets callers build it on the stack. Two calls therefore hand the
+  // allocator the same array at the same address holding different contents, and
+  // the descriptor memo must notice: an address-equal table is not an equal table,
+  // and a descriptor remembered from the first call would misdescribe the second.
+  struct Four { void* a; void* b; void* c; void* d; };
+  size_t offsets[2];
+  offsets[0] = offsetof(Four, a);
+  offsets[1] = offsetof(Four, b);
+  void* first = nrq_gc_allocate_array_typed(2, sizeof(Four), offsets, 2);
+  ASSERT_NE(first, nullptr);
+  const nrq_object_layout* first_layout = nrq_gc_object_layout(first);
+  ASSERT_NE(first_layout, nullptr);
+  const void* first_table = static_cast<const void*>(first_layout->reference_offsets);
+
+  // Rebuild the same storage with different contents and a different count.
+  offsets[0] = offsetof(Four, c);
+  offsets[1] = offsetof(Four, d);
+  void* second = nrq_gc_allocate_array_typed(2, sizeof(Four), offsets, 2);
+  ASSERT_NE(second, nullptr);
+  const nrq_object_layout* second_layout = nrq_gc_object_layout(second);
+  ASSERT_NE(second_layout, nullptr);
+
+  ASSERT_TRUE(first_layout != second_layout);
+  ASSERT_TRUE(first_table !=
+              static_cast<const void*>(second_layout->reference_offsets));
+  ASSERT_EQ(second_layout->reference_count, uint32_t{2});
+  ASSERT_EQ(second_layout->reference_offsets[0], uint32_t{offsetof(Four, c)});
+  ASSERT_EQ(second_layout->reference_offsets[1], uint32_t{offsetof(Four, d)});
+  // The first descriptor must still describe the first table: the runtime owns it
+  // and the second call is not allowed to have reinterpreted it.
+  ASSERT_EQ(first_layout->reference_offsets[0], uint32_t{offsetof(Four, a)});
+  ASSERT_EQ(first_layout->reference_offsets[1], uint32_t{offsetof(Four, b)});
+}
+
 TEST(GcTest, StructuralMetadataIsSharedNotRepeated) {
   // A thousand instances must not cost a thousand descriptions. The facts pair
   // descriptor count and bytes with the live-object count so sharing is

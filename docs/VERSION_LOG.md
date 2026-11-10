@@ -66,10 +66,13 @@ version yet; entries are added as changes are committed.*
   derived by dividing the payload by the element size for a number the caller
   already had. 300,000 four-element arrays: 19.5 ms median before, 18.4 ms after
   (ranges overlap, so this is small; the division is gone in all cases).
-- **A caller-supplied descriptor is proved once per thread.** The development
-  configuration re-walked the offset table on every allocation through the same
-  constant table; it now validates a given descriptor once. Production runs no
-  check at all.
+- **A caller-supplied descriptor is validated, not cached.** The development
+  configuration proves every field of a caller-supplied descriptor on each
+  allocation. It is deliberately not memoised by address: a descriptor's
+  address can be reused by different contents once the first one is gone.
+  Production runs no check on an allocation path. Interned descriptors are a
+  different case, and the allocation memo compares against their owned offset
+  tables rather than against the caller's.
 - **Wide array roots are pinned by a test:** three elements of four reference
   words survive a collection through one shared element layout.
 - The measured detail and the remaining Section A work are in
