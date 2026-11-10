@@ -320,7 +320,7 @@ struct alignas(std::max_align_t) ObjectHeader {
   // path that runs once per managed object; this writes each member once. The
   // list link is left to the caller because the union member differs between the
   // published list and a thread-local batch.
-  ObjectHeader(GcPage* owning_page, size_t payload_bytes,
+  ObjectHeader(GcPage* owning_page, uint32_t elements,
                const nrq_object_layout* object_layout, bool is_young,
                uint64_t epoch)
       : next(nullptr),
@@ -331,15 +331,8 @@ struct alignas(std::max_align_t) ObjectHeader {
         young(is_young),
         remembered(false),
         age(0),
-        layout(object_layout) {
-    // An array records how many elements it holds; a record is exactly one. The
-    // division runs only for a repeating payload, and only because the caller
-    // hands the span over as bytes.
-    if ((object_layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) != 0 &&
-        object_layout->payload_size != 0)
-      element_count =
-          static_cast<uint32_t>(payload_bytes / object_layout->payload_size);
-  }
+        layout(object_layout),
+        element_count(elements) {}
 
   // The payload immediately follows the header. It is not stored: the page
   // bump allocator always places a header `sizeof(ObjectHeader)` bytes before
@@ -3115,8 +3108,9 @@ void maybe_collect_automatically() {
   run_collection(young_only);
 }
 
-void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
-                      const size_t* reference_offsets, size_t reference_count,
+void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
+                      nrq_gc_trace_fn trace, const size_t* reference_offsets,
+                      size_t reference_count,
                       const nrq_object_layout* resolved) {
   if (bytes == 0 || bytes > SIZE_MAX - sizeof(ObjectHeader) || element_size == 0)
     return nullptr;
@@ -3184,7 +3178,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   }
   void* header_storage = page->storage + header_offset;
   auto* header = new (header_storage) ObjectHeader(
-      page, bytes, layout,
+      page, static_cast<uint32_t>(elements), layout,
       generational_collection_enabled.load(std::memory_order_relaxed),
       next_cycle_epoch.load(std::memory_order_relaxed));
   auto rollback_reservation = [&]() {
@@ -3385,9 +3379,10 @@ void account_tlab_allocation(MutatorState& mutator, size_t bytes) {
 // so the only precondition left is that this thread is a mutator with a usable
 // TLAB. Keeping the checks at the boundary means the validated path and the slow
 // path share one validation instead of each repeating it.
-void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
-                    const size_t* reference_offsets, size_t reference_count,
-                    bool& handled, const nrq_object_layout* resolved) {
+void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
+                    nrq_gc_trace_fn trace, const size_t* reference_offsets,
+                    size_t reference_count, bool& handled,
+                    const nrq_object_layout* resolved) {
   handled = false;
   if (thread_mutator.depth == 0) return nullptr;
   constexpr size_t alignment = alignof(std::max_align_t);
@@ -3419,7 +3414,7 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   unsigned char* header_storage = thread_mutator.tlab_cursor;
   thread_mutator.tlab_cursor += span;
   auto* header = new (header_storage) ObjectHeader(
-      thread_mutator.tlab_page, bytes, layout,
+      thread_mutator.tlab_page, static_cast<uint32_t>(elements), layout,
       generational_collection_enabled.load(std::memory_order_relaxed),
       next_cycle_epoch.load(std::memory_order_relaxed));
   void* object = header_storage + sizeof(ObjectHeader);
@@ -3601,10 +3596,10 @@ void* nrq_gc_allocate(size_t bytes, nrq_gc_trace_fn trace) {
   if (bytes == 0 || bytes > SIZE_MAX - sizeof(ObjectHeader)) return nullptr;
   maybe_collect_automatically();
   bool handled = false;
-  void* object = allocate_tlab(bytes, bytes, trace, nullptr, 0, handled, nullptr);
+  void* object = allocate_tlab(bytes, bytes, 1, trace, nullptr, 0, handled, nullptr);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
-  return allocate_locked(bytes, bytes, trace, nullptr, 0, nullptr);
+  return allocate_locked(bytes, bytes, 1, trace, nullptr, 0, nullptr);
 }
 
 void* nrq_gc_allocate_array(size_t count, size_t element_size,
@@ -3617,10 +3612,11 @@ void* nrq_gc_allocate_array(size_t count, size_t element_size,
   if (multiply_size_overflowed(count, element_size, bytes)) return nullptr;
   maybe_collect_automatically();
   bool handled = false;
-  void* object = allocate_tlab(bytes, element_size, trace, nullptr, 0, handled, nullptr);
+  void* object = allocate_tlab(bytes, element_size, count, trace, nullptr, 0, handled,
+                     nullptr);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
-  return allocate_locked(bytes, element_size, trace, nullptr, 0, nullptr);
+  return allocate_locked(bytes, element_size, count, trace, nullptr, 0, nullptr);
 }
 
 void* nrq_gc_allocate_array_typed(size_t count, size_t element_size,
@@ -3634,12 +3630,13 @@ void* nrq_gc_allocate_array_typed(size_t count, size_t element_size,
   if (multiply_size_overflowed(count, element_size, bytes)) return nullptr;
   maybe_collect_automatically();
   bool handled = false;
-  void* object = allocate_tlab(bytes, element_size, nullptr, reference_offsets,
-                               reference_count, handled, nullptr);
+  void* object = allocate_tlab(bytes, element_size, count, nullptr,
+                               reference_offsets, reference_count, handled,
+                               nullptr);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
-  return allocate_locked(bytes, element_size, nullptr, reference_offsets,
-                         reference_count, nullptr);
+  return allocate_locked(bytes, element_size, count, nullptr,
+                         reference_offsets, reference_count, nullptr);
 }
 
 void* allocate_array_rooted_impl(void** root_slot, size_t count,
@@ -3676,10 +3673,11 @@ void* nrq_gc_allocate_layout(const nrq_object_layout* layout) {
   maybe_collect_automatically();
   bool handled = false;
   void* object =
-      allocate_tlab(bytes, bytes, layout->trace, nullptr, 0, handled, layout);
+      allocate_tlab(bytes, bytes, 1, layout->trace, nullptr, 0, handled,
+                    layout);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
-  return allocate_locked(bytes, bytes, layout->trace, nullptr, 0, layout);
+  return allocate_locked(bytes, bytes, 1, layout->trace, nullptr, 0, layout);
 }
 
 void* nrq_gc_allocate_array_layout(const nrq_object_layout* layout,
@@ -3694,12 +3692,12 @@ void* nrq_gc_allocate_array_layout(const nrq_object_layout* layout,
     return nullptr;
   maybe_collect_automatically();
   bool handled = false;
-  void* object = allocate_tlab(bytes, layout->payload_size, layout->trace,
+  void* object = allocate_tlab(bytes, layout->payload_size, count, layout->trace,
                               nullptr, 0, handled, layout);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
-  return allocate_locked(bytes, layout->payload_size, layout->trace, nullptr,
-                         0, layout);
+  return allocate_locked(bytes, layout->payload_size, count, layout->trace,
+                         nullptr, 0, layout);
 }
 
 void* nrq_gc_allocate_array_layout_rooted(void** root_slot,
@@ -3737,7 +3735,7 @@ void* allocate_array_rooted_impl(void** root_slot, size_t count,
     // reachable before any snapshot can decide it is garbage.
     if (begin_fast_barrier()) {
       bool handled = false;
-      void* object = allocate_tlab(bytes, element_size, nullptr,
+      void* object = allocate_tlab(bytes, element_size, count, nullptr,
                                    reference_offsets, reference_count, handled,
                                    resolved);
       if (handled) {
@@ -3754,7 +3752,7 @@ void* allocate_array_rooted_impl(void** root_slot, size_t count,
       !shadow_has_pointer_root(*thread_shadow_stack, root_slot))
     nrq_runtime_fatal(
         "rooted GC allocation requires a registered pointer root slot");
-  void* object = allocate_locked(bytes, element_size, nullptr,
+  void* object = allocate_locked(bytes, element_size, count, nullptr,
                                  reference_offsets, reference_count, resolved);
   store_root_value_locked(root_slot, object);
   return object;
