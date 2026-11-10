@@ -6,12 +6,56 @@
 
 ---
 
-## Version 0.321-beta (working build)
+## Version 0.327-beta (working build)
+
+### Summary of Changes (since `0.321-beta`):
+
+*Current working build, opened after 0.321-beta. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.321-beta (released)
 
 ### Summary of Changes (since `0.318-beta`):
 
-*Current working build, opened after 0.318-beta. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Released. Superseded by 0.327-beta, which continues the allocator stage.*
+
+- **A fragmented page's free list is walked once per refill, not once per run.**
+  Taking runs restarted the walk for each one, re-reading tombstones and
+  refreshing the page maximum each time. One tombstone-and-compaction pass now
+  yields a batch and refreshes the maximum once: the fragmentation probe drops
+  from 8.42 ms to 7.20 ms median, four mutators from 13.26 ms to 10.01 ms, and
+  the mixed churn probe from 7.08 ms to 6.52 ms, with identical refills, pages
+  and commit. See `reports/performance/ao-06-tlab-sizing.md`.
+- **The cost of a reservation is observable.** New getters report the stranded
+  tail (bytes and per-cycle maximum), the number of free runs, the pages that
+  hold them, and the bytes handed out by span reuse, and every cursor install now
+  charges the same accounting. Before this, a heap reported 394 MB committed for
+  196 MB live and nothing explained the difference.
+- **An unused reservation tail goes back to its page at the next safepoint.** It
+  is returned while the collection is prepared (before the page generation moves,
+  so no mutator can still hold the cursor) and on mutator leave: stranded tail
+  74,048 -> 0 B per cycle, per-cycle maximum 62,144 -> 0 B, 61,280 B reclaimed and
+  reused. Commit and peak working set are unchanged.
+- **A reservation never ends part way through an object.** A grant now rounds down
+  to a whole number of object spans, so the page tail stays free space instead of
+  charged-but-unusable space: 32,672 B per page for a 32 KiB payload and
+  195,999,328 B over 6,000 objects became 0, and 4 KiB payloads went from
+  3,540,448 B of tail to 0, at identical page counts and commit. A tail index
+  upper bound keeps the larger payloads from scanning pages they cannot use, which
+  is what the first version of the change cost them (25%, now neutral).
+- **TLAB size, page size and object header are unchanged, on measurement.** Refills
+  are already one per page at every payload size measured (64 B: one per 408
+  objects), the stranded tail is zero, and what remains is the 96-byte object
+  header and page quantisation above half a page - neither of which a larger slab
+  fixes. A larger slab would trade refills for stranded memory.
+- **AO-07 handover: the allocation facts the header work needs are now callable.**
+  `nrq_gc_get_allocation_facts` reports the header size, payload alignment, page and
+  slab bytes, the minimum slab run and the spare-run capacity;
+  `nrq_gc_get_allocation_profile` turns a payload size into its aligned span, the
+  objects per page, the slack at the end of that page and the objects one
+  reservation serves. A unit test pins the model to the allocator.
 
 ---
 
