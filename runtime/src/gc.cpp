@@ -2181,6 +2181,72 @@ GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t& offset,
   }
   return nullptr;
 }
+// Reserves a batch of runs from the first page in the index that can serve the
+// request, in one pass over that page's run list. Taking runs one at a time made
+// the list maintenance the cost of a fragmented refill: every take closed its gap
+// by shifting the tail of an array that can hold 96 runs, so handing out a page's
+// holes one by one moved ~24x more entries than it handed out bytes. Here the
+// runs come off the top of the list, a partial take only moves its own start, and
+// the removals are compacted in a single pass afterwards.
+//
+// Callers hold gc_mutex. `out` must have room for `max_runs` entries. Returns how
+// many runs were written and, in `page`, the page they came from - a batch is one
+// page's holes, which keeps the space a thread reserves in one place.
+size_t take_free_runs_locked(size_t minimum, size_t byte_budget, size_t max_runs,
+                             GcPage*& page, GcPage::FreeSpan* out) {
+  page = nullptr;
+  if (minimum == 0 || max_runs == 0 || total_free_spans == 0) return 0;
+  GcPage* target = nullptr;
+  for (GcPage* candidate : span_pages) {
+    if (!candidate || candidate->free_span_count == 0 ||
+        candidate->max_free_span < minimum)
+      continue;
+    target = candidate;
+    break;
+  }
+  if (!target) return 0;
+  unretire_page_locked(*target);
+
+  size_t taken = 0;
+  size_t taken_bytes = 0;
+  bool removed_any = false;
+  size_t index = target->free_span_count;
+  while (index != 0 && taken < max_runs) {
+    --index;
+    GcPage::FreeSpan& run = target->free_spans[index];
+    if (run.span < minimum) continue;
+    const size_t grant = std::min(run.span, kGcTlabBytes);
+    if (taken != 0 && taken_bytes + grant > byte_budget) break;
+    // A run is taken from its top, so a partial take only moves the run's own
+    // start and the entry keeps its place in the ascending list.
+    out[taken].offset = run.offset + (run.span - grant);
+    out[taken].span = grant;
+    ++taken;
+    taken_bytes += grant;
+    target->free_span_bytes -= grant;
+    recycled_span_reuse_count = saturated_add(recycled_span_reuse_count, 1);
+    if (grant == run.span) {
+      run.span = 0;  // tombstone: compacted below, never observed elsewhere
+      removed_any = true;
+      --total_free_spans;
+    } else {
+      run.span -= grant;
+    }
+  }
+  if (removed_any) {
+    size_t write = 0;
+    for (size_t read = 0; read < target->free_span_count; ++read) {
+      if (target->free_spans[read].span == 0) continue;
+      if (write != read) target->free_spans[write] = target->free_spans[read];
+      ++write;
+    }
+    target->free_span_count = write;
+    if (write == 0) unindex_span_page_locked(*target);
+  }
+  if (taken != 0) refresh_page_max_free_span_locked(*target);
+  page = target;
+  return taken;
+}
 
 // Returns every run this thread reserved and did not hand out. The caller holds
 // gc_mutex and this mutator is not running: the cycle boundary flushes before it
@@ -2225,22 +2291,19 @@ bool take_spare_run(MutatorState& mutator, size_t minimum_span) {
 // cannot have a large slice reserved by a thread that may not need it.
 bool reserve_spare_runs_locked(MutatorState& mutator, size_t minimum_span) {
   constexpr size_t byte_budget = kGcTlabBytes * 2;
-  size_t reserved_bytes = 0;
-  while (mutator.spare_run_count < MutatorState::kSpareRunCapacity &&
-         reserved_bytes < byte_budget) {
-    size_t run_offset = 0;
-    size_t run_span = 0;
-    GcPage* reused =
-        take_free_run_locked(kGcTlabBytes, minimum_span, run_offset, run_span);
-    if (!reused) break;
+  GcPage::FreeSpan runs[MutatorState::kSpareRunCapacity];
+  GcPage* page = nullptr;
+  const size_t taken = take_free_runs_locked(
+      minimum_span, byte_budget, MutatorState::kSpareRunCapacity, page, runs);
+  if (taken == 0) return false;
+  for (size_t index = 0; index < taken; ++index) {
     MutatorState::SpareRun& spare = mutator.spare_runs[mutator.spare_run_count];
-    spare.page = reused;
-    spare.offset = run_offset;
-    spare.span = run_span;
+    spare.page = page;
+    spare.offset = runs[index].offset;
+    spare.span = runs[index].span;
     ++mutator.spare_run_count;
-    reserved_bytes += run_span;
   }
-  return mutator.spare_run_count != 0;
+  return true;
 }
 
 // Drops a cursor the cycle boundary invalidated. Reserved runs are returned by
