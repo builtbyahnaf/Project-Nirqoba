@@ -126,3 +126,32 @@ least as reliable:
   payload sizes: matches.
 - `sizeof`/`alignof`/`offsetof` are compiler output for the candidate structs, not
   arithmetic done by hand.
+
+## 6. Decision record — closed
+
+This investigation is **closed**. The outcome is a decision, not a backlog item:
+
+- **H48 is the authoritative production header.** `page`, `mark_next` and the
+  `next`/`tlab_next` union are adopted permanently on this architecture. They are
+  not placeholders awaiting a replacement, and no code path is to be written in a
+  way that assumes their removal.
+- **H32 is rejected**, not deferred. Its 16-byte reduction is not sufficient
+  justification for relocating mark-worklist storage out of the header or for
+  adding page-resolution work to paths that currently load one pointer. The
+  measurements behind that rejection are in §1–§3: the only correct cheap-enough
+  `page_of` fallback measured at or above the cost of the field it would remove,
+  and every `mark_next` replacement either costs the same bytes elsewhere or
+  allocates during marking. It stays in this document as a rejected candidate for
+  the collector as it exists, not as unfinished implementation work.
+- **H40 is documented only.** It is a legal target-specific optimisation where
+  `alignof(std::max_align_t)` is 8, and it is not implemented now. Adopting it would
+  require a per-target header size and a sweep that hoists one page resolution per
+  object; neither exists, and the microbenchmarks above do not justify either.
+- **Header-size optimisation is closed** unless a new measurement or a materially
+  different collector design changes the trade-off. A future attempt should start
+  from the numbers in this document rather than from the target percentage.
+
+The object-representation work therefore continues with H48 as the fixed header, and
+the remaining effort goes to implementation: compiler-emitted descriptors, so
+generated code allocates through a read-only descriptor instead of the interning
+memo, and the acceptance work that depends on it.
