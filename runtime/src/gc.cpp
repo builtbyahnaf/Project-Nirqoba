@@ -331,6 +331,11 @@ struct alignas(std::max_align_t) ObjectHeader {
     state = value ? (state | kRememberedBit) : (state & ~kRememberedBit);
   }
   uint32_t age() const { return (state & kAgeMask) >> kAgeShift; }
+  // The whole word, for a transition that changes several fields at once: the
+  // survivor path computes its next state locally and stores it once, instead of
+  // three read-modify-writes of the same cache line.
+  uint32_t state_word() const { return state; }
+  void set_state(uint32_t value) { state = value; }
   void set_age(uint32_t value) {
     state = (state & ~kAgeMask) | ((value << kAgeShift) & kAgeMask);
   }
@@ -1917,7 +1922,6 @@ bool sweep_chunk_locked(size_t budget_bytes) {
       release_span_locked(*header->page,
                           object_offset - sizeof(ObjectHeader),
                           object_span_bytes(object_payload_bytes(*header)));
-      header->set_remembered(false);
       if (!header->young()) ++reclaimed_old;
       statistics.collected_bytes = saturated_add(
           statistics.collected_bytes,
@@ -1940,33 +1944,45 @@ bool sweep_chunk_locked(size_t budget_bytes) {
     }
 
     if (header->marked()) {
-      header->set_marked(false);
+      // Everything the survivor needs to become one word: the mark is always
+      // cleared, and an aging or promoting object also rewrites its age. The
+      // fields left untouched keep their bits, which a mask guarantees and a
+      // sequence of separate flag stores cannot.
+      uint32_t survived = header->state_word() & ~ObjectHeader::kMarkedBit;
+      const bool was_young =
+          (survived & ObjectHeader::kYoungBit) != 0;
       if (active_collection_is_minor) {
-        if (header->young()) {
-          if (header->age() < UINT8_MAX) header->set_age(header->age() + 1);
-          if (header->age() >= kPromotionAge) {
-            header->set_young(false);
+        if (was_young) {
+          uint32_t age = (survived & ObjectHeader::kAgeMask) >>
+                         ObjectHeader::kAgeShift;
+          if (age < UINT8_MAX) ++age;
+          if (age >= kPromotionAge) {
+            survived &= ~(ObjectHeader::kYoungBit | ObjectHeader::kAgeMask |
+                          ObjectHeader::kRememberedBit);
+            header->set_state(survived);
             --header->page->young_objects;
-            header->set_age(0);
             ++promoted_young;
             promotion_raised_barrier = true;
             remember_children_locked(header);
-            header->set_remembered(false);
             debug_emit(NRQ_GC_EVENT_PROMOTE, 0, 0,
                        static_cast<void*>(header + 1));
+            return false;
           }
+          survived = (survived & ~ObjectHeader::kAgeMask) |
+                     (age << ObjectHeader::kAgeShift);
         }
+        header->set_state(survived);
       } else {
-        if (header->young()) {
-          header->set_young(false);
+        if (was_young) {
           --header->page->young_objects;
           ++promoted_young;
           promotion_raised_barrier = true;
-          debug_emit(NRQ_GC_EVENT_PROMOTE, 0, 0,
-                     static_cast<void*>(header + 1));
         }
-        header->set_age(0);
-        header->set_remembered(false);
+        survived &= ~(ObjectHeader::kYoungBit | ObjectHeader::kAgeMask |
+                      ObjectHeader::kRememberedBit);
+        header->set_state(survived);
+        if (was_young)
+          debug_emit(NRQ_GC_EVENT_PROMOTE, 0, 0, static_cast<void*>(header + 1));
       }
     }
     return false;
