@@ -6,12 +6,46 @@
 
 ---
 
-## Version 0.331-beta (working build)
+## Version 0.333-beta (working build)
+
+### Summary of Changes (since `0.331-beta`):
+
+*Current working build, opened after 0.331-beta. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.331-beta (released)
 
 ### Summary of Changes (since `0.327-beta`):
 
-*Current working build, opened after 0.327-beta. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Released. Superseded by 0.333-beta, which continues OHR Section A.*
+
+- **Roots describe themselves with the same immutable layouts as objects.** A
+  root registration copied its reference layout into the shadow stack and again
+  into the per-slot index, with an owned vector for anything wider than two
+  offsets. Roots now share the interned descriptor, a conflicting
+  re-registration is one pointer compare, and marking a root, the barrier's root
+  walk, the reference-count diagnostic and the debug snapshot all read the same
+  table.
+- **Registration does not take the interning lock on a repeat.** Frame entry
+  uses the same thread-local memo as allocation, so a layout this thread has
+  already resolved costs one table compare and no allocation.
+- **The per-instance reference layout is gone.** `ReferenceLayout`, its inline
+  pair, its overflow vector and its matching helper had no callers left; deleting
+  them makes the descriptor representation the only one.
+- **Array allocation no longer divides per object.** The element count was
+  derived by dividing the payload by the element size for a number the caller
+  already had. 300,000 four-element arrays: 19.5 ms median before, 18.4 ms after
+  (ranges overlap, so this is small; the division is gone in all cases).
+- **A caller-supplied descriptor is proved once per thread.** The development
+  configuration re-walked the offset table on every allocation through the same
+  constant table; it now validates a given descriptor once. Production runs no
+  check at all.
+- **Wide array roots are pinned by a test:** three elements of four reference
+  words survive a collection through one shared element layout.
+- The measured detail and the remaining Section A work are in
+  `reports/performance/ohr-section-a.md`. 207/207 unit, 263/263 integration.
 
 ---
 
