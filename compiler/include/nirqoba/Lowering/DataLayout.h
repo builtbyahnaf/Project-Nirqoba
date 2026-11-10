@@ -50,7 +50,16 @@ struct AggregateLayout {
   std::string name;
   uint64_t size = 0;
   uint64_t alignment = 1;
+  // `padding` is `interior_padding + trailing_padding`. The split matters: an
+  // interior gap is waste that ordering could remove, while trailing padding is
+  // what makes the stride a multiple of the alignment and is unavoidable.
   uint64_t padding = 0;
+  uint64_t interior_padding = 0;
+  uint64_t trailing_padding = 0;
+  // Cache lines the value can touch, and how many fields begin past the first
+  // line. Both are what a hot/cold decision would have to improve.
+  uint64_t cache_lines = 0;
+  uint64_t fields_beyond_first_line = 0;
   // What the same fields would have cost in declaration order, so the padding
   // eliminated by the physical order is visible in the report.
   uint64_t declaration_size = 0;

@@ -1,0 +1,17 @@
+// Widest-alignment-first ordering with descending power-of-two alignments leaves
+// no interior gap: every field's offset is a multiple of its own alignment. What
+// remains is trailing padding, which is what makes the stride a multiple of the
+// struct's alignment. This test pins that claim, so an ordering change that starts
+// inserting interior padding is caught here rather than in a profile.
+struct Mix {
+    bool small;
+    char letter;
+    int wide;
+    bool trailing;
+}
+
+int function main(string[] args) {
+    var m = Mix { small: args.length > 0, letter: 'm', wide: 7, trailing: false };
+    print(m.wide);
+    return 0;
+}
