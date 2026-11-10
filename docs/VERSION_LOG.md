@@ -6,12 +6,35 @@
 
 ---
 
-## Version 0.301-beta (working build)
+## Version 0.309-beta (working build)
+
+### Summary of Changes (since `0.301-beta`):
+
+*Current working build, opened after 0.301-beta. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.301-beta (released)
 
 ### Summary of Changes (since `0.298-beta`):
 
-*Current working build, opened after 0.298-beta. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Released. Superseded by 0.309-beta, which continues with the allocator stage.*
+
+- **AO-03: the allocation counters were audited and the exactness contract is
+  documented.** Every counter is now classified as exact-immediately,
+  exact-after-flush, internal trigger state or debug telemetry, with the writers and
+  readers of each recorded in `reports/performance/ao-03-allocation-accounting.md`.
+  No public statistic became approximate and no trigger boundary moved.
+- **AO-03: the trigger counter is updated with a store, not a compare-exchange.** All
+  three writers of `bytes_since_collection` run under the heap lock, so the retry loop
+  could never fail; the flush now does a saturating load and store and the
+  locked-instruction loop is gone. No observable change; not claimed as a speedup.
+- **AO-03: evaluating the collection trigger once per batch instead of once per
+  allocation was measured and refused.** A diagnostic build that skipped the per-object
+  phase, threshold and counter reads was slower, not faster (min 25.5 → 26.8 ms,
+  median 59.3 → 60.3 ms over 18 interleaved samples), so the fast-path reads stay and
+  the trigger is still evaluated per allocation.
 
 ---
 
