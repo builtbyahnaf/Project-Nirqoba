@@ -839,6 +839,10 @@ constexpr size_t kMaxRecycledPages = 128;
 // pages are recycled and oversized pages return to the process heap.
 constexpr size_t kMaxRecycledPageBytes = 2 * kGcPageBytes;
 uint64_t recycled_page_reuse_count = 0;
+// Counts thread-local slab reservations, the allocation call's slow path. A heap
+// that cannot hand out a useful slab turns every few objects into a refill, so the
+// count is the direct measure of that cost.
+uint64_t tlab_refill_count = 0;
 // Counts allocations served from space freed by an earlier sweep rather than
 // from a page's untouched tail.
 uint64_t recycled_span_reuse_count = 0;
@@ -2783,6 +2787,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
 }
 
 bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
+  tlab_refill_count = saturated_add(tlab_refill_count, 1);
   if (mutator.tlab_generation != gc_page_generation) {
     mutator.tlab_page = nullptr;
     mutator.tlab_cursor = nullptr;
@@ -2793,21 +2798,24 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
   // Taking it here is what turns a fragmented page back into a usable bump
   // region instead of leaving it permanently half empty - and taking all of it,
   // rather than a fixed small slice, is what keeps a recycled heap from being
-  // carved into pieces that later reservations cannot use.
-  {
+  // carved into pieces that later reservations cannot use. A short run is still
+  // accepted: in a heap whose largest free block is a few cells, the alternative
+  // is to grow the heap while committed space sits unused.
+  auto take_run = [&](size_t wanted_minimum) {
     size_t run_offset = 0;
     size_t run_span = 0;
-    if (GcPage* reused =
-            take_free_run_locked(kGcTlabBytes, minimum_span, run_offset, run_span)) {
-      mutator.tlab_page = reused;
-      mutator.tlab_cursor = reused->storage + run_offset;
-      mutator.tlab_end = mutator.tlab_cursor + run_span;
-      mutator.tlab_generation = gc_page_generation;
-      thread_allocation_page = reused;
-      thread_allocation_generation = gc_page_generation;
-      return true;
-    }
-  }
+    GcPage* reused =
+        take_free_run_locked(kGcTlabBytes, wanted_minimum, run_offset, run_span);
+    if (!reused) return false;
+    mutator.tlab_page = reused;
+    mutator.tlab_cursor = reused->storage + run_offset;
+    mutator.tlab_end = mutator.tlab_cursor + run_span;
+    mutator.tlab_generation = gc_page_generation;
+    thread_allocation_page = reused;
+    thread_allocation_generation = gc_page_generation;
+    return true;
+  };
+  if (take_run(minimum_span)) return true;
   GcPage* page = nullptr;
   size_t available = 0;
   if (thread_allocation_generation != gc_page_generation) {
@@ -3851,6 +3859,11 @@ int32_t nrq_gc_pointer_is_managed(void* object) {
 
 int32_t nrq_gc_store_barrier_active(void) {
   return store_barrier_active.load(std::memory_order_acquire) ? 1 : 0;
+}
+
+uint64_t nrq_gc_tlab_refill_count(void) {
+  HeapLockGuard lock(gc_mutex);
+  return tlab_refill_count;
 }
 
 nrq_gc_stats nrq_gc_get_stats(void) {

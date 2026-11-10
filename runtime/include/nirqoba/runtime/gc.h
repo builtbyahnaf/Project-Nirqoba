@@ -156,6 +156,10 @@ size_t nrq_gc_object_header_bytes(void);
 size_t nrq_gc_page_count(void);
 size_t nrq_gc_recycled_page_count(void);
 uint64_t nrq_gc_page_reuse_count(void);
+// Counts thread-local slab reservations: the allocation call's slow path. A
+// heap that can only hand out short reclaimed runs turns every few objects
+// into a refill, which this makes observable.
+uint64_t nrq_gc_tlab_refill_count(void);
 // Counts allocations that reused space freed by an earlier sweep inside an
 // existing page instead of advancing that page's bump cursor. Together with the
 // page counts this makes reclamation locality observable.
