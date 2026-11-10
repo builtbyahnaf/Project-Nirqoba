@@ -48,8 +48,11 @@ tracing never merge. Layouts that cannot be described exactly (zero payload, an
 offset that does not leave room for a pointer) are rejected instead of stored.
 
 Allocation never takes the interning lock on a repeat: each thread memoises the
-last layout it resolved and proves a hit by comparing the offset table (by
-pointer for a compiler constant, by value for a rebuilt one).
+last descriptor it resolved. A hit is proved by comparing the incoming offset
+table against the descriptor's own table, which the runtime owns and never
+frees. The caller's table is never retained: the typed entry points document
+that it is copied, so callers build it on the stack and its address says
+nothing about its contents or its lifetime.
 
 ## 3. Header after the change
 

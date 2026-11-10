@@ -437,27 +437,42 @@ size_t layout_bytes_total = 0;
 // compiler-emitted constant table and a caller that rebuilds the same table on
 // its stack both hit without touching the pool. Only a genuinely new layout
 // reaches the interning table.
+// The memo holds the interned descriptor and nothing else. Every field it checks
+// comes from that descriptor, which the runtime owns for the life of the process,
+// so a hit is decided without touching storage the caller owns.
+//
+// It must not cache the caller's offset table. The typed allocation entry points
+// document that the collector copies the table, which means callers rebuild it on
+// the stack and pass a pointer whose lifetime is the call: caching that pointer
+// would read expired storage on the next allocation, and comparing two calls by
+// it would accept a table that has since been rebuilt with different contents.
 struct LayoutMemo {
-  size_t payload_bytes = 0;
-  size_t element_bytes = 0;
-  nrq_gc_trace_fn trace = nullptr;
-  const size_t* offsets = nullptr;
-  size_t count = 0;
   const nrq_object_layout* layout = nullptr;
 };
 thread_local LayoutMemo layout_memo;
 
-bool layout_memo_matches(const LayoutMemo& memo, size_t payload_bytes,
-                         size_t element_bytes, nrq_gc_trace_fn trace,
+bool layout_memo_matches(const LayoutMemo& memo, size_t bytes,
+                         size_t element_size, nrq_gc_trace_fn trace,
                          const size_t* offsets, size_t count) {
-  if (!memo.layout || memo.payload_bytes != payload_bytes ||
-      memo.element_bytes != element_bytes || memo.trace != trace ||
-      memo.count != count)
-    return false;
+  const nrq_object_layout* layout = memo.layout;
+  if (!layout) return false;
+  // The descriptor describes exactly this shape, or it does not: same element
+  // size, same tracing, same reference count, same array/record kind.
+  if (layout->payload_size != element_size) return false;
+  if (layout->trace != trace) return false;
+  if (layout->reference_count != count) return false;
+  const bool describes_an_array =
+      (layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) != 0;
+  if (describes_an_array != (element_size != bytes)) return false;
   if (count == 0) return true;
-  if (memo.offsets == offsets) return true;
-  for (size_t index = 0; index < count; ++index)
-    if (memo.offsets[index] != offsets[index]) return false;
+  const uint32_t* owned = layout->reference_offsets;
+  if (!owned || !offsets) return false;
+  // Compared against the descriptor's table, which is immutable and outlives
+  // every caller. The incoming table is read only while its caller is on the
+  // stack, which is exactly the window in which it is alive.
+  for (size_t index = 0; index < count; ++index) {
+    if (static_cast<size_t>(owned[index]) != offsets[index]) return false;
+  }
   return true;
 }
 
@@ -472,19 +487,12 @@ const nrq_object_layout* layout_for_allocation(size_t bytes,
                                                size_t count) {
   const size_t payload_bytes = element_size;
   const size_t element_bytes = element_size == bytes ? 0 : element_size;
-  if (layout_memo_matches(layout_memo, payload_bytes, element_bytes, trace,
-                          offsets, count))
+  if (layout_memo_matches(layout_memo, bytes, element_size, trace, offsets,
+                          count))
     return layout_memo.layout;
   const nrq_object_layout* layout = nrq_gc_layout_intern(
       payload_bytes, element_bytes, trace, offsets, count);
-  if (layout) {
-    layout_memo.payload_bytes = payload_bytes;
-    layout_memo.element_bytes = element_bytes;
-    layout_memo.trace = trace;
-    layout_memo.offsets = offsets;
-    layout_memo.count = count;
-    layout_memo.layout = layout;
-  }
+  if (layout) layout_memo.layout = layout;
   return layout;
 }
 
@@ -3696,21 +3704,13 @@ void* allocate_array_rooted_impl(void** root_slot, size_t count,
 // configuration trusts it: no validation runs on an allocation path. The
 // development configuration proves every field, because a table that disagrees
 // with its payload would corrupt tracing rather than fail an allocation.
-// The development configuration proves a caller-supplied descriptor before it is
-// trusted. The descriptor is immutable and its address is its identity, so each
-// thread only has to prove a given one once: a repeated allocation through the
-// same constant table compares one pointer instead of re-walking the offset
-// table. Production runs no validation at all and does not reach this code.
-bool layout_is_consistent(const nrq_object_layout& layout);
-bool layout_is_trusted(const nrq_object_layout* layout) {
-  if (!layout) return false;
-  thread_local const nrq_object_layout* last_validated = nullptr;
-  if (last_validated == layout) return true;
-  if (!layout_is_consistent(*layout)) return false;
-  last_validated = layout;
-  return true;
-}
-
+//
+// It proves a caller-supplied descriptor on every call. That descriptor's
+// address is not a stable identity to cache: the contract asks for storage
+// that outlives the objects, but an address can be reused by a different
+// descriptor once the first one is gone, and a pointer key would then skip the
+// check that exists to catch exactly that. Only the interned pool has
+// addresses whose identity the runtime owns.
 bool layout_is_consistent(const nrq_object_layout& layout) {
   if (layout.payload_size == 0) return false;
   if ((layout.flags & ~static_cast<uint32_t>(NRQ_OBJECT_LAYOUT_ARRAY)) != 0)
@@ -3729,7 +3729,7 @@ bool layout_is_consistent(const nrq_object_layout& layout) {
 void* nrq_gc_allocate_layout(const nrq_object_layout* layout) {
   if (!layout || (layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) != 0) return nullptr;
   if constexpr (nirq::runtime_debug_enabled)
-    if (!layout_is_trusted(layout)) return nullptr;
+    if (!layout_is_consistent(*layout)) return nullptr;
   const size_t bytes = layout->payload_size;
   if (bytes == 0 || bytes > SIZE_MAX - sizeof(ObjectHeader)) return nullptr;
   maybe_collect_automatically();
@@ -3747,7 +3747,7 @@ void* nrq_gc_allocate_array_layout(const nrq_object_layout* layout,
   if (!layout || count == 0) return nullptr;
   if ((layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0) return nullptr;
   if constexpr (nirq::runtime_debug_enabled)
-    if (!layout_is_trusted(layout)) return nullptr;
+    if (!layout_is_consistent(*layout)) return nullptr;
   if (count > UINT32_MAX) return nullptr;
   size_t bytes = 0;
   if (multiply_size_overflowed(count, layout->payload_size, bytes))
@@ -3768,7 +3768,7 @@ void* nrq_gc_allocate_array_layout_rooted(void** root_slot,
   if (!root_slot || !layout || count == 0) return nullptr;
   if ((layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0) return nullptr;
   if constexpr (nirq::runtime_debug_enabled)
-    if (!layout_is_trusted(layout)) return nullptr;
+    if (!layout_is_consistent(*layout)) return nullptr;
   if (count > UINT32_MAX) return nullptr;
   return allocate_array_rooted_impl(root_slot, count, layout->payload_size,
                                     nullptr, 0, layout);
