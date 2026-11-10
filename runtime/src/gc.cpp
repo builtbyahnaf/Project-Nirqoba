@@ -1047,8 +1047,10 @@ struct RootInfo {
   size_t references = 0;
   size_t object_size = 0;
   size_t repeated_count = 0;
-  size_t element_size = 0;
-  ReferenceLayout reference_offsets;
+  // Roots describe layouts exactly like objects do, so they share the same
+  // immutable descriptor instead of carrying their own offset copy. A repeated
+  // array root is an array layout whose payload is one element.
+  const nrq_object_layout* layout = nullptr;
 };
 std::unordered_map<void*, RootInfo> roots;
 // Thread-local shadow stacks hold ordinary roots. Array/external roots stay in
@@ -1064,7 +1066,9 @@ struct ShadowRoot {
 struct SlotState {
   size_t count = 0;
   size_t object_size = 0;
-  ReferenceLayout layout;
+  // The descriptor of the first registration. A repeat must agree on the
+  // pointer itself, which is one compare instead of an offset walk.
+  const nrq_object_layout* layout = nullptr;
   bool pointer_root = false;
 };
 // Thread-local index of active root slots. It answers the three questions the
@@ -1609,26 +1613,20 @@ void mark_value_locked(void* object) {
 }
 
 void mark_root_values_locked(void* storage, const RootInfo& root) {
-  if (root.repeated_count != 0) {
-    auto* bytes = static_cast<unsigned char*>(storage);
-    for (size_t element = 0; element < root.repeated_count; ++element) {
-      for (size_t offset : root.reference_offsets) {
-        void* reference = nullptr;
-        std::memcpy(&reference, bytes + element * root.element_size + offset,
-                    sizeof(reference));
-        mark_value_locked(reference);
-      }
-    }
-    return;
-  }
+  const nrq_object_layout* layout = root.layout;
+  if (!layout || layout->reference_count == 0) return;
   auto* bytes = static_cast<unsigned char*>(storage);
-  for (size_t offset : root.reference_offsets) {
-    if (offset > root.object_size ||
-        sizeof(void*) > root.object_size - offset)
-      continue;
-    void* reference = nullptr;
-    std::memcpy(&reference, bytes + offset, sizeof(reference));
-    mark_value_locked(reference);
+  const size_t stride = layout->payload_size;
+  const size_t elements = root.repeated_count != 0 ? root.repeated_count : 1;
+  for (size_t element = 0; element < elements; ++element) {
+    for (uint32_t index = 0; index < layout->reference_count; ++index) {
+      const size_t offset = layout->reference_offsets[index];
+      if (offset > stride || sizeof(void*) > stride - offset) continue;
+      void* reference = nullptr;
+      std::memcpy(&reference, bytes + element * stride + offset,
+                  sizeof(reference));
+      mark_value_locked(reference);
+    }
   }
 }
 
@@ -1649,24 +1647,18 @@ void count_reference_to_target(void* object, void* opaque_context) {
 
 void enqueue_root_locked(void* root_storage, const RootInfo& root,
                          MarkContext& context) {
+  const nrq_object_layout* layout = root.layout;
+  if (!layout || layout->reference_count == 0) return;
   auto* bytes = static_cast<const unsigned char*>(root_storage);
-  if (root.reference_offsets.empty()) return;
-  if (root.repeated_count != 0) {
-    for (size_t element = 0; element < root.repeated_count; ++element) {
-      const unsigned char* element_bytes = bytes + element * root.element_size;
-      for (size_t offset : root.reference_offsets) {
-        void* reference = nullptr;
-        std::memcpy(&reference, element_bytes + offset, sizeof(reference));
-        enqueue_reference(reference, &context);
-      }
-    }
-  } else {
-    for (size_t offset : root.reference_offsets) {
-      if (offset > root.object_size ||
-          sizeof(void*) > root.object_size - offset)
-        continue;
+  const size_t stride = layout->payload_size;
+  const size_t elements = root.repeated_count != 0 ? root.repeated_count : 1;
+  for (size_t element = 0; element < elements; ++element) {
+    const unsigned char* element_bytes = bytes + element * stride;
+    for (uint32_t index = 0; index < layout->reference_count; ++index) {
+      const size_t offset = layout->reference_offsets[index];
+      if (offset > stride || sizeof(void*) > stride - offset) continue;
       void* reference = nullptr;
-      std::memcpy(&reference, bytes + offset, sizeof(reference));
+      std::memcpy(&reference, element_bytes + offset, sizeof(reference));
       enqueue_reference(reference, &context);
     }
   }
@@ -3533,7 +3525,27 @@ ShadowStack& ensure_shadow_stack() {
 
 bool is_pointer_root(const RootInfo& root) {
   return root.repeated_count == 0 && root.object_size == sizeof(void*) &&
-         root.reference_offsets.size() == 1 && root.reference_offsets[0] == 0;
+         root.layout && root.layout->reference_count == 1 &&
+         root.layout->reference_offsets[0] == 0;
+}
+
+// The descriptor for a root registration: the same interning path objects use.
+// A repeated array root is described by one element, so the stride and the
+// offset bounds are the element's; a single record is described by its size.
+const nrq_object_layout* root_layout(size_t object_size, size_t element_size,
+                                     size_t repeated_count,
+                                     const size_t* reference_offsets,
+                                     size_t reference_count) {
+  // Registration runs once per root per frame entry, so it uses the same
+  // thread-local memo as allocation: a slot with the layout this thread saw last
+  // resolves without the interning lock, and only a genuinely new shape pays for
+  // the table. The compiler's tables are module constants, so the memo compares
+  // them by pointer.
+  if (repeated_count != 0)
+    return layout_for_allocation(object_size, element_size, nullptr,
+                                 reference_offsets, reference_count);
+  return layout_for_allocation(object_size, object_size, nullptr,
+                               reference_offsets, reference_count);
 }
 
 void add_slot_state(ShadowStack& stack, void* slot, const RootInfo& info,
@@ -3544,13 +3556,12 @@ void add_slot_state(ShadowStack& stack, void* slot, const RootInfo& info,
   if (state->count == 0) {
     state->count = 1;
     state->object_size = info.object_size;
-    state->layout.assign(info.reference_offsets.begin(),
-                         info.reference_offsets.size());
+    state->layout = info.layout;
     state->pointer_root = pointer_root;
   } else {
+    // Descriptor identity is layout identity, so agreement is one compare.
     if (state->object_size != info.object_size ||
-        !state->layout.matches(info.reference_offsets.begin(),
-                               info.reference_offsets.size()) ||
+        state->layout != info.layout ||
         state->pointer_root != pointer_root)
       nrq_runtime_fatal(
           "GC root slot was registered with an incompatible layout");
@@ -3817,11 +3828,11 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
   }
   RootInfo info;
   info.object_size = object_size;
-  try {
-    info.reference_offsets.assign(reference_offsets, reference_count);
-  } catch (...) {
-    nrq_runtime_fatal("GC root registration failed to allocate root metadata");
-  }
+  info.references = reference_count;
+  info.layout = root_layout(object_size, object_size, 0, reference_offsets,
+                            reference_count);
+  if (!info.layout)
+    nrq_runtime_fatal("GC root registration received an undescribable layout");
 
   ShadowStack& stack = ensure_shadow_stack();
   auto push_root = [&]() {
@@ -3938,11 +3949,11 @@ static void register_frame_roots(void* const* slots, size_t slot_count,
     RootInfo info;
     info.object_size = descriptor[cursor++];
     const size_t reference_count = descriptor[cursor++];
-    try {
-      info.reference_offsets.assign(descriptor + cursor, reference_count);
-    } catch (...) {
-      nrq_runtime_fatal("GC root registration failed to allocate root metadata");
-    }
+    info.references = reference_count;
+    info.layout = root_layout(info.object_size, info.object_size, 0,
+                              descriptor + cursor, reference_count);
+    if (!info.layout)
+      nrq_runtime_fatal("GC root registration received an undescribable layout");
     cursor += reference_count;
     const bool is_ptr_root = is_pointer_root(info);
     try {
@@ -3985,8 +3996,11 @@ static void register_frame_roots(void* const* slots, size_t slot_count,
         RootInfo info;
         info.object_size = descriptor[cursor];
         const size_t reference_count = descriptor[cursor + 1];
-        info.reference_offsets.assign(descriptor + cursor + 2,
-                                      reference_count);
+        info.layout = root_layout(info.object_size, info.object_size, 0,
+                                  descriptor + cursor + 2, reference_count);
+        if (!info.layout)
+          nrq_runtime_fatal(
+              "GC root registration received an undescribable layout");
         mark_root_values_locked(slots[index], info);
       }
       push_root(slots[index], cursor);
@@ -4036,8 +4050,11 @@ void nrq_gc_root_register_array(void* data, size_t count, size_t element_size,
     root.references = 1;
     root.object_size = count * element_size;
     root.repeated_count = count;
-    root.element_size = element_size;
-    root.reference_offsets.assign(reference_offsets, reference_count);
+    root.layout = root_layout(root.object_size, element_size, count,
+                              reference_offsets, reference_count);
+    if (!root.layout)
+      nrq_runtime_fatal(
+          "GC array-root registration received an undescribable layout");
     roots.emplace(data, std::move(root));
   } catch (...) {
     nrq_runtime_fatal("GC array-root registration failed to allocate metadata");
@@ -4262,19 +4279,18 @@ size_t nrq_gc_debug_snapshot_roots(nrq_gc_debug_root* out, size_t capacity) {
     nrq_gc_debug_root& entry = out[written++];
     entry = nrq_gc_debug_root{};
     entry.slot = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(slot));
-    entry.reference_count =
-        static_cast<uint32_t>(info.reference_offsets.size());
-    entry.element_size = static_cast<uint32_t>(info.element_size);
+    const nrq_object_layout* layout = info.layout;
+    entry.reference_count = layout ? layout->reference_count : 0u;
+    entry.element_size = static_cast<uint32_t>(layout ? layout->payload_size : 0);
     entry.element_count = info.repeated_count != 0
                              ? static_cast<uint32_t>(info.repeated_count)
                              : 1u;
     entry.is_pointer_root = is_pointer_root(info) ? 1u : 0u;
-    if (!slot || info.reference_offsets.empty()) return;
+    if (!slot || !layout || layout->reference_count == 0) return;
     // Report the object the slot currently holds at its first reference offset.
     // For an array root that is the first element's first reference.
-    const size_t span = info.repeated_count != 0 ? info.element_size
-                                                : info.object_size;
-    const size_t offset = info.reference_offsets[0];
+    const size_t span = layout->payload_size;
+    const size_t offset = layout->reference_offsets[0];
     if (offset > span || sizeof(void*) > span - offset) return;
     void* referent = nullptr;
     std::memcpy(&referent, static_cast<const unsigned char*>(slot) + offset,
@@ -4851,55 +4867,30 @@ int64_t nrq_gc_get_ref_count(void* object) {
     for_each_live_object_locked([&](ObjectHeader* header) {
       trace_children(header, count_reference_to_target, &target);
     });
-    for (const auto& root : roots) {
-      auto* bytes = static_cast<const unsigned char*>(root.first);
-      if (root.second.repeated_count != 0) {
-        for (size_t element = 0; element < root.second.repeated_count; ++element) {
-          const unsigned char* element_bytes =
-              bytes + element * root.second.element_size;
-          for (size_t offset : root.second.reference_offsets) {
-            void* reference = nullptr;
-            std::memcpy(&reference, element_bytes + offset, sizeof(reference));
-            count_reference_to_target(reference, &target);
-          }
-        }
-      } else {
-        for (size_t offset : root.second.reference_offsets) {
-          if (offset > root.second.object_size ||
-              sizeof(void*) > root.second.object_size - offset) continue;
+    // Counts exactly what marking reads: the same descriptor, the same walk.
+    auto count_root = [&](const void* storage, const RootInfo& info) {
+      const nrq_object_layout* layout = info.layout;
+      if (!layout || layout->reference_count == 0) return;
+      const auto* bytes = static_cast<const unsigned char*>(storage);
+      const size_t stride = layout->payload_size;
+      const size_t elements = info.repeated_count != 0 ? info.repeated_count : 1;
+      for (size_t element = 0; element < elements; ++element) {
+        for (uint32_t index = 0; index < layout->reference_count; ++index) {
+          const size_t offset = layout->reference_offsets[index];
+          if (offset > stride || sizeof(void*) > stride - offset) continue;
           void* reference = nullptr;
-          std::memcpy(&reference, bytes + offset, sizeof(reference));
+          std::memcpy(&reference, bytes + element * stride + offset,
+                      sizeof(reference));
           count_reference_to_target(reference, &target);
         }
       }
-    }
+    };
+    for (const auto& root : roots) count_root(root.first, root.second);
     for (ShadowStack* stack : shadow_stacks) {
       if (!stack) continue;
       std::lock_guard<std::mutex> stack_lock(stack->mutex);
-      for (const ShadowRoot& root : stack->roots) {
-        auto* bytes = static_cast<const unsigned char*>(root.slot);
-        if (root.info.repeated_count != 0) {
-          for (size_t element = 0; element < root.info.repeated_count;
-               ++element) {
-            const unsigned char* element_bytes =
-                bytes + element * root.info.element_size;
-            for (size_t offset : root.info.reference_offsets) {
-              void* reference = nullptr;
-              std::memcpy(&reference, element_bytes + offset, sizeof(reference));
-              count_reference_to_target(reference, &target);
-            }
-          }
-        } else {
-          for (size_t offset : root.info.reference_offsets) {
-            if (offset > root.info.object_size ||
-                sizeof(void*) > root.info.object_size - offset)
-              continue;
-            void* reference = nullptr;
-            std::memcpy(&reference, bytes + offset, sizeof(reference));
-            count_reference_to_target(reference, &target);
-          }
-        }
-      }
+      for (const ShadowRoot& root : stack->roots)
+        count_root(root.slot, root.info);
     }
     auto pinned = pinned_objects.find(object);
     if (pinned != pinned_objects.end())
