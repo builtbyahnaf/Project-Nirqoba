@@ -6,12 +6,36 @@
 
 ---
 
-## Version 0.336-beta (working build)
+## Version 0.341-beta (working build)
+
+### Summary of Changes (since `0.336-beta`):
+
+*Current working build, opened after 0.336-beta. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.336-beta (released)
 
 ### Summary of Changes (since `0.333-beta`):
 
-*Current working build, opened after 0.333-beta. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Released. Continues OHR Section B (compact per-instance metadata). Superseded by
+0.341-beta.*
+
+- **The allocation memo never retains the caller's offset table.** The memo cached
+  the pointer to the table a caller passed and compared two calls by that pointer.
+  The typed entry points document that the collector copies the table, so callers
+  build it on the stack: a later allocation could read expired storage, and a
+  rebuilt table at the same address was accepted as the previous table. The memo
+  now holds only the interned descriptor and compares against the table that
+  descriptor owns. The development validator no longer caches caller-supplied
+  descriptors by address, for the same reason. Pinned by a test that gives two
+  calls the same stack array with different contents, which fails on the previous
+  code.
+- The five Section B upgrades of 0.333 are listed above and unchanged: one masked
+  state word, one write per survivor, one read per flag decision, the
+  instance/shared split in the facts, and an assertable encoding.
+- Section B is not finished. 210/210 unit, 263/263 integration.
 
 ---
 
