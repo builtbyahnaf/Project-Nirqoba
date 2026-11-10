@@ -4617,6 +4617,12 @@ const nrq_object_layout* nrq_gc_object_layout(void* object) {
   return header ? header->layout : nullptr;
 }
 
+uint32_t nrq_gc_object_state_bits(void* object) {
+  HeapLockGuard lock(gc_mutex);
+  const ObjectHeader* header = find_object_locked(object);
+  return header ? header->state_word() : 0;
+}
+
 int32_t nrq_gc_store_barrier_active(void) {
   return store_barrier_active.load(std::memory_order_acquire) ? 1 : 0;
 }

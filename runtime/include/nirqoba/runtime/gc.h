@@ -295,6 +295,15 @@ int32_t nrq_gc_pointer_is_managed(void* object);
 // address is not a live managed object. A diagnostic: because instances of one
 // layout share a descriptor, equal pointers mean equal layout.
 const struct nrq_object_layout* nrq_gc_object_layout(void* object);
+// The object's packed state word, as the collector encodes it: bit 0 marked,
+// bit 1 young, bit 2 remembered, bits 8-15 the promotion age. A diagnostic that
+// exists so the encoding can be asserted field by field instead of inferred from
+// collection outcomes; it reports 0 for an address that is not a live object.
+#define NRQ_GC_STATE_MARKED (1u << 0)
+#define NRQ_GC_STATE_YOUNG (1u << 1)
+#define NRQ_GC_STATE_REMEMBERED (1u << 2)
+#define NRQ_GC_STATE_AGE_SHIFT 8u
+uint32_t nrq_gc_object_state_bits(void* object);
 // Reports whether the old-to-young store barrier is armed. Allocation must not
 // touch this state: it is raised by a collection cycle and by
 // `nrq_gc_set_generational`, and a program that turned generations off must keep
