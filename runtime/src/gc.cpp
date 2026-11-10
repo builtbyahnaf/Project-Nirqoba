@@ -801,6 +801,20 @@ void note_page_tail_locked(GcPage& page) {
   }
 }
 
+// A page the sweep emptied stays in the page set until the next cycle boundary -
+// the first moment its storage may go back to the recycle pool, because until then
+// a mutator that has not reached a safepoint may still hold a cursor into it. The
+// space it freed is not off limits, though: the sweep already decided about every
+// object it covered, and an object materialised afterwards carries a birth epoch
+// past the cycle, so handing that space out again is ordinary reuse inside a page
+// the heap already owns. Clearing the mark is what tells the boundary the page is
+// occupied again and must not be reclaimed.
+void unretire_page_locked(GcPage& page) {
+  if (!page.retired) return;
+  page.retired = false;
+  if (retired_page_count != 0) --retired_page_count;
+}
+
 void unindex_span_page_locked(GcPage& page) {
   if (page.span_index == GcPage::kNoSpanIndex) return;
   GcPage* last = span_pages.back();
@@ -1946,12 +1960,12 @@ void release_span_locked(GcPage& page, size_t offset, size_t span) {
 GcPage* take_free_span_locked(size_t span, size_t& offset) {
   if (span == 0 || total_free_spans == 0) return nullptr;
   for (GcPage* page : span_pages) {
-    if (!page || page->retired || page->free_span_count == 0 ||
-        page->free_span_bytes < span)
+    if (!page || page->free_span_count == 0 || page->free_span_bytes < span)
       continue;
     for (size_t index = 0; index < page->free_span_count; ++index) {
       GcPage::FreeSpan& candidate = page->free_spans[index];
       if (candidate.span < span) continue;
+      unretire_page_locked(*page);
       offset = candidate.offset;
       page->free_span_bytes -= span;
       if (candidate.span > span) {
@@ -1993,12 +2007,12 @@ GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t& offset,
       total_free_spans == 0)
     return nullptr;
   for (GcPage* page : span_pages) {
-    if (!page || page->retired || page->free_span_count == 0 ||
-        page->free_span_bytes < minimum)
+    if (!page || page->free_span_count == 0 || page->free_span_bytes < minimum)
       continue;
     for (size_t index = 0; index < page->free_span_count; ++index) {
       GcPage::FreeSpan& candidate = page->free_spans[index];
       if (candidate.span < minimum) continue;
+      unretire_page_locked(*page);
       const size_t span = std::min(candidate.span, desired);
       offset = candidate.offset;
       page->free_span_bytes -= span;
@@ -2477,14 +2491,14 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   page = take_free_span_locked(span, header_offset);
   if (page) {
     reused_span = true;
-  } else if (thread_allocation_page && !thread_allocation_page->retired &&
+  } else if (thread_allocation_page &&
       thread_allocation_page->used <= thread_allocation_page->capacity &&
       span <= thread_allocation_page->capacity - thread_allocation_page->used) {
     page = thread_allocation_page;
   } else {
     thread_allocation_page = nullptr;
     for (GcPage* candidate : tail_pages) {
-      if (!candidate || candidate->retired) continue;
+      if (!candidate) continue;
       if (span <= candidate->capacity - candidate->used) {
         page = candidate;
         break;
@@ -2507,6 +2521,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     if (!page_directory.insert(page)) page->use_object_index = true;
     index_tail_page_locked(*page);
   }
+  unretire_page_locked(*page);
   thread_allocation_page = page;
   thread_allocation_generation = gc_page_generation;
   if (!reused_span) {
@@ -2620,7 +2635,7 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     thread_allocation_page = nullptr;
     thread_allocation_generation = gc_page_generation;
   }
-  if (thread_allocation_page && !thread_allocation_page->retired &&
+  if (thread_allocation_page &&
       thread_allocation_page->used <= thread_allocation_page->capacity) {
     available = thread_allocation_page->capacity - thread_allocation_page->used;
     if (available >= minimum_span) page = thread_allocation_page;
@@ -2631,7 +2646,7 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     for (auto candidate = tail_pages.rbegin(); candidate != tail_pages.rend();
          ++candidate) {
       GcPage* possible = *candidate;
-      if (!possible || possible->retired) continue;
+      if (!possible) continue;
       const size_t remaining = possible->capacity - possible->used;
       if (remaining >= minimum_span) {
         page = possible;
@@ -2659,6 +2674,7 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
   }
   const size_t reserve = std::min(kGcTlabBytes, available);
   if (reserve < minimum_span) return false;
+  unretire_page_locked(*page);
   mutator.tlab_page = page;
   mutator.tlab_cursor = page->storage + page->used;
   page->used += reserve;
