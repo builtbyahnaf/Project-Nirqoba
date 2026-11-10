@@ -2884,13 +2884,16 @@ void account_tlab_allocation(MutatorState& mutator, size_t bytes) {
   flush_mutator_accounting_locked(mutator);
 }
 
+// Thread-local bump allocation. The payload size is already checked by the entry
+// point that computed it, and `element_size` is only carried into the header, so
+// the only precondition left is that this thread is a mutator. Keeping the size
+// checks at the boundary means the validated path and the slow path share one
+// validation instead of each repeating it.
 void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
                     const size_t* reference_offsets, size_t reference_count,
                     bool& handled) {
   handled = false;
-  if (thread_mutator.depth == 0 || bytes == 0 || element_size == 0 ||
-      bytes > SIZE_MAX - sizeof(ObjectHeader))
-    return nullptr;
+  if (thread_mutator.depth == 0) return nullptr;
   constexpr size_t alignment = alignof(std::max_align_t);
   const size_t raw_span = sizeof(ObjectHeader) + bytes;
   if (raw_span > SIZE_MAX - (alignment - 1)) return nullptr;
@@ -3089,6 +3092,7 @@ ObjectHeader* find_pending_header(MutatorState& mutator, void* object) {
 extern "C" {
 
 void* nrq_gc_allocate(size_t bytes, nrq_gc_trace_fn trace) {
+  if (bytes == 0 || bytes > SIZE_MAX - sizeof(ObjectHeader)) return nullptr;
   maybe_collect_automatically();
   bool handled = false;
   void* object = allocate_tlab(bytes, bytes, trace, nullptr, 0, handled);
