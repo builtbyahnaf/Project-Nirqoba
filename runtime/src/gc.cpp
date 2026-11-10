@@ -337,13 +337,13 @@ struct alignas(std::max_align_t) ObjectHeader {
   };
   ObjectHeader* mark_next = nullptr;
   GcPage* page = nullptr;
-  size_t size = 0;
-  size_t element_size = 0;
-  // The shared, immutable description of this object's payload: its size and
-  // shape, how to visit its references, and its custom trace callback. Every
-  // instance of the same layout points at the same descriptor instead of
-  // carrying its own copy.
-  const nrq_object_layout* layout = nullptr;
+  // Wall-clock-free cycle epoch the object was born in; the sweep retains every
+  // object born during the cycle it is collecting.
+  uint64_t birth_epoch = 0;
+  // How many elements the payload repeats. One for a fixed record; the only
+  // per-instance thing an array has beyond its descriptor. The payload size
+  // itself is `element_count * layout->payload_size`, so no instance stores it.
+  uint32_t element_count = 1;
   bool marked = false;
   bool young = true;
   // Set while this object is listed in the remembered set. Deduplication is a
@@ -351,9 +351,12 @@ struct alignas(std::max_align_t) ObjectHeader {
   // contiguous vector that minor collections scan in address order of insertion.
   bool remembered = false;
   uint8_t age = 0;
-  // Wall-clock-free cycle epoch the object was born in; the sweep retains every
-  // object born during the cycle it is collecting.
-  uint64_t birth_epoch = 0;
+  // The shared, immutable description of this object's payload: its size and
+  // shape, how to visit its references, and its custom trace callback. It is
+  // declared last so the per-instance fields stay in the first cache line, and
+  // it replaces the payload size, element size and trace callback each instance
+  // used to carry.
+  const nrq_object_layout* layout = nullptr;
 
   // Field-wise construction. Value-initialising the whole header and then
   // overwriting most of it touched both cache lines of the object twice, on a
@@ -361,20 +364,25 @@ struct alignas(std::max_align_t) ObjectHeader {
   // list link is left to the caller because the union member differs between the
   // published list and a thread-local batch.
   ObjectHeader(GcPage* owning_page, size_t payload_bytes,
-               size_t payload_element_size,
                const nrq_object_layout* object_layout, bool is_young,
                uint64_t epoch)
       : next(nullptr),
         mark_next(nullptr),
         page(owning_page),
-        size(payload_bytes),
-        element_size(payload_element_size),
-        layout(object_layout),
+        birth_epoch(epoch),
         marked(false),
         young(is_young),
         remembered(false),
         age(0),
-        birth_epoch(epoch) {}
+        layout(object_layout) {
+    // An array records how many elements it holds; a record is exactly one. The
+    // division runs only for a repeating payload, and only because the caller
+    // hands the span over as bytes.
+    if ((object_layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) != 0 &&
+        object_layout->payload_size != 0)
+      element_count =
+          static_cast<uint32_t>(payload_bytes / object_layout->payload_size);
+  }
 
   // The payload immediately follows the header. It is not stored: the page
   // bump allocator always places a header `sizeof(ObjectHeader)` bytes before
@@ -385,14 +393,22 @@ struct alignas(std::max_align_t) ObjectHeader {
 };
 
 // Managed allocation cost includes one header per object. The reference map,
-// payload size and trace callback now live in the shared layout descriptor, so
-// what remains is what genuinely differs per instance: one list link, the mark
-// link, the owning page, the payload size, the layout pointer, the flags and the
-// birth epoch. A regression here silently raises the cost of every allocation.
-static_assert(sizeof(ObjectHeader) == 64,
+// payload size, element size and trace callback now live in the shared layout
+// descriptor, so what remains is what genuinely differs per instance: one list
+// link, the mark link, the owning page, the layout pointer, the element count,
+// the flags and the birth epoch. A regression here raises the cost of every
+// allocation, which is why the size is asserted rather than assumed.
+static_assert(sizeof(ObjectHeader) == 48,
               "ObjectHeader metadata must stay within 64 bytes");
 static_assert(alignof(ObjectHeader) == alignof(std::max_align_t),
               "ObjectHeader must keep payloads max_align_t aligned");
+// The payload size an object reports: its element count times the element size
+// its shared descriptor names. One multiply, no per-instance size field, and it
+// cannot disagree with the descriptor.
+inline size_t object_payload_bytes(const ObjectHeader& header) {
+  return static_cast<size_t>(header.element_count) * header.layout->payload_size;
+}
+
 // Storage a managed object occupies, header included, rounded up to the payload
 // alignment the bump allocator uses.
 size_t object_span_bytes(size_t payload_bytes) {
@@ -1376,10 +1392,11 @@ void publish_tlab_locked(MutatorState& mutator) {
       // per allocation, which keeps a locked instruction off the fast path.
       old_object_count.fetch_add(1, std::memory_order_relaxed);
     }
-    statistics.allocated_bytes = saturated_add(
-        statistics.allocated_bytes, static_cast<uint64_t>(header->size));
+    const size_t payload_bytes = object_payload_bytes(*header);
+    statistics.allocated_bytes =
+        saturated_add(statistics.allocated_bytes, payload_bytes);
     statistics.live_objects = saturated_add(statistics.live_objects, 1);
-    live_heap_bytes = saturated_add(live_heap_bytes, header->size);
+    live_heap_bytes = saturated_add(live_heap_bytes, payload_bytes);
     header = next;
   }
   flush_mutator_accounting_locked(mutator);
@@ -1519,18 +1536,19 @@ void trace_children(ObjectHeader* header, nrq_gc_visit_fn visit,
   // common path is one dependent load rather than one per object field.
   const nrq_object_layout* layout = header->layout;
   if (!layout) nrq_runtime_fatal("GC object has no layout descriptor");
+  const size_t payload_bytes = object_payload_bytes(*header);
   if (layout->trace)
-    layout->trace(header->payload(), header->size, visit, context);
+    layout->trace(header->payload(), payload_bytes, visit, context);
   // The reference map lives in the descriptor: one table for all instances,
   // already proven to fit one element, so the walk needs one bounds test per
   // base rather than one per offset.
   if (layout->reference_count == 0) return;
   const size_t stride = (layout->flags & NRQ_OBJECT_LAYOUT_ARRAY)
                             ? layout->payload_size
-                            : header->size;
+                            : payload_bytes;
   if (stride == 0) return;
   const auto* bytes = static_cast<const unsigned char*>(header->payload());
-  for (size_t base = 0; base + stride <= header->size; base += stride) {
+  for (size_t base = 0; base + stride <= payload_bytes; base += stride) {
     for (uint32_t offset_index = 0; offset_index < layout->reference_count;
          ++offset_index) {
       const size_t offset = layout->reference_offsets[offset_index];
@@ -1849,7 +1867,9 @@ void enqueue_narrow_children_locked(ObjectHeader* header, MarkContext& context) 
   const nrq_object_layout* layout = header->layout;
   for (uint32_t index = 0; index < layout->reference_count; ++index) {
     const size_t offset = layout->reference_offsets[index];
-    if (offset > header->size || sizeof(void*) > header->size - offset) continue;
+    if (offset > object_payload_bytes(*header) ||
+        sizeof(void*) > object_payload_bytes(*header) - offset)
+      continue;
     void* child = nullptr;
     std::memcpy(&child, bytes + offset, sizeof(child));
     if (child) enqueue_reference(child, &context);
@@ -1860,11 +1880,11 @@ bool mark_slice_locked(size_t budget_bytes) {
   size_t touched = 0;
   while (!active_mark.worklist.empty() && touched < budget_bytes) {
     ObjectHeader* header = active_mark.worklist.pop();
-    touched += header->size + sizeof(ObjectHeader);
+    touched += object_payload_bytes(*header) + sizeof(ObjectHeader);
     if (active_mark.young_only && !header->young) continue;
     const size_t reference_count = header->layout->reference_count;
     if (!header->layout->trace && reference_count != 0 && reference_count <= 2 &&
-        header->element_size == header->size) {
+        (header->layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0) {
       enqueue_narrow_children_locked(header, active_mark);
     } else {
       trace_children(header, enqueue_reference, &active_mark);
@@ -1928,14 +1948,16 @@ bool sweep_chunk_locked(size_t budget_bytes) {
       // being lost to the bump cursor.
       release_span_locked(*header->page,
                           object_offset - sizeof(ObjectHeader),
-                          object_span_bytes(header->size));
+                          object_span_bytes(object_payload_bytes(*header)));
       header->remembered = false;
       if (!header->young) ++reclaimed_old;
       statistics.collected_bytes = saturated_add(
-          statistics.collected_bytes, static_cast<uint64_t>(header->size));
+          statistics.collected_bytes,
+          static_cast<uint64_t>(object_payload_bytes(*header)));
       if (statistics.live_objects != 0) --statistics.live_objects;
-      live_heap_bytes = live_heap_bytes > header->size
-                            ? live_heap_bytes - header->size
+      const size_t payload_bytes = object_payload_bytes(*header);
+      live_heap_bytes = live_heap_bytes > payload_bytes
+                            ? live_heap_bytes - payload_bytes
                             : 0;
       if (!header->page || header->page->live_objects == 0)
         nrq_runtime_fatal("GC page live-object count underflow");
@@ -2035,7 +2057,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
     auto* header =
         reinterpret_cast<ObjectHeader*>(page->storage + payload_offset) - 1;
     ++steps;
-    touched += object_span_bytes(header->size);
+    touched += object_span_bytes(object_payload_bytes(*header));
     // An object allocated after the cycle started is outside the snapshot's
     // reachability analysis. It stays where it is for this cycle - there is no
     // list to keep it out of - and the next cycle considers it.
@@ -2051,7 +2073,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
     ObjectHeader* header = sweep_list;
     sweep_list = header->next;
     ++steps;
-    touched += object_span_bytes(header->size);
+    touched += object_span_bytes(object_payload_bytes(*header));
     if (header->birth_epoch >= active_cycle_epoch) {
       header->marked = false;
       header->next = unindexed_objects;
@@ -3204,7 +3226,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   }
   void* header_storage = page->storage + header_offset;
   auto* header = new (header_storage) ObjectHeader(
-      page, bytes, element_size, layout,
+      page, bytes, layout,
       generational_collection_enabled.load(std::memory_order_relaxed),
       next_cycle_epoch.load(std::memory_order_relaxed));
   auto rollback_reservation = [&]() {
@@ -3437,7 +3459,7 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   unsigned char* header_storage = thread_mutator.tlab_cursor;
   thread_mutator.tlab_cursor += span;
   auto* header = new (header_storage) ObjectHeader(
-      thread_mutator.tlab_page, bytes, element_size, layout,
+      thread_mutator.tlab_page, bytes, layout,
       generational_collection_enabled.load(std::memory_order_relaxed),
       next_cycle_epoch.load(std::memory_order_relaxed));
   void* object = header_storage + sizeof(ObjectHeader);
