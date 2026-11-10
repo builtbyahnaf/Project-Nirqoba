@@ -6,12 +6,46 @@
 
 ---
 
-## Version 0.318-beta (working build)
+## Version 0.321-beta (working build)
+
+### Summary of Changes (since `0.318-beta`):
+
+*Current working build, opened after 0.318-beta. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.318-beta (released)
 
 ### Summary of Changes (since `0.315-beta`):
 
-*Current working build, opened after 0.315-beta. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Released. Superseded by 0.321-beta, which continues the allocator stage.*
+
+- **The allocation slow path no longer proves a negative over the page index.** A
+  refill that preferred a slab-sized run could only reject a short run by walking
+  every indexed page, and in a fragmented heap that walk always failed and was paid
+  once per four allocations: the second 200,000-object wave of the fragmentation probe
+  took 920-940 ms against 7-8 ms when the first-fit short-run order is restored. The
+  slab preference is now answered by an incrementally maintained per-page maximum run
+  and a page counter, so the search is skipped in O(1) when no page can host a slab.
+  See `reports/performance/ao-02-tlab-refill-order.md`.
+- **Short reclaimed runs are reserved in batches.** The refill took one run per lock
+  entry, which in a fragmented heap is one entry per 4.2 allocations. It now takes up
+  to 24 runs under that one lock and hands them out from the thread without it, so the
+  same probe drops from 47,090 locked refills to 2,102 and, with four mutators, from
+  17.3 ms to 12.4 ms median (-28%). Reserved runs are returned to their pages at every
+  cycle boundary and at thread exit, before the reclaimer can recycle a page.
+
+- **AO-05 boundary audit:** each component of the allocation entry point (per-object
+  cycle state, accounting, barrier protocol, payload zero fill, root-slot validation)
+  was measured as below this machine's resolution, and the generated-code fast path was
+  refused on that evidence. See `reports/performance/ao-05-tlab-boundary.md`.
+
+- **The write barrier stays down for a non-generational program.** Allocating a
+  non-young object re-armed the store barrier and the cycle never disarmed it, so a
+  program with generations off paid the write-barrier path on every store for
+  remembered entries no minor can use. `nrq_gc_store_barrier_active` exposes the policy
+  state and a unit test pins it.
 
 ---
 
