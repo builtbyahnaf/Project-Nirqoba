@@ -6,12 +6,52 @@
 
 ---
 
-## Version 0.327-beta (working build)
+## Version 0.331-beta (working build)
+
+### Summary of Changes (since `0.327-beta`):
+
+*Current working build, opened after 0.327-beta. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.327-beta (released)
 
 ### Summary of Changes (since `0.321-beta`):
 
-*Current working build, opened after 0.321-beta. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Released. Superseded by 0.331-beta, which continues the object-representation
+stage (OHR Section A).*
+
+- **Structural metadata is shared instead of repeated.** A new immutable
+  `nrq_object_layout` describes a payload once - its size, whether it repeats,
+  how to visit its references, and any custom trace callback - and every
+  instance holds a pointer to it. Layouts are interned by every property that
+  changes interpretation, so equal sizes with different reference order or
+  different tracing never merge.
+- **Allocation does not lock to find a layout.** Each thread remembers the last
+  descriptor it used and proves a hit by comparing the offset table: a compiler
+  constant table compares by pointer, a rebuilt one by value. Only a genuinely
+  new shape reaches the interning table, and descriptors are never reclaimed,
+  so a live object can always read its own layout.
+- **The object header is 48 bytes, down from 96.** Tracing reads the reference
+  map from the descriptor, so a wide record no longer allocates an overflow
+  vector per instance, and the payload size and element size are derived from
+  `element_count * layout->payload_size` instead of being stored. 100,000
+  objects of a 64-byte payload now take 171 pages instead of 245: 408 to 585
+  objects per page, 15.7 to 11.2 MB of page storage.
+- **A page remembers twice as many reclaimed runs.** The denser header packs a
+  page exactly, and the test that holds a live set steady across rounds exposed
+  a pre-existing silent drop: a page recorded at most 96 free runs and threw the
+  rest away, so churn lost reclaimed space and the heap grew a page per round.
+  Run entries are now two 32-bit page-relative fields - the same 1.5 KiB holds
+  192 runs - and the pattern stays at 2 pages where it used to reach 3.
+- **Descriptor sharing is observable.** The allocation facts report the number
+  of live descriptors and the bytes they occupy, and the allocation profile
+  reports the 48-byte header, the 112-byte span for a 64-byte payload and 585
+  objects per page. 1,000 instances add at most one descriptor and 64 bytes.
+- **Limit recorded, not hidden.** A payload beyond 4 GiB, or an array with more
+  than 2^32 elements, is rejected rather than represented, because the
+  descriptor and the element count are 32-bit. `element_count` cannot truncate.
 
 ---
 
