@@ -331,6 +331,18 @@ struct alignas(std::max_align_t) ObjectHeader {
     state = value ? (state | kRememberedBit) : (state & ~kRememberedBit);
   }
   uint32_t age() const { return (state & kAgeMask) >> kAgeShift; }
+  // The encoding is a contract, so it is asserted rather than described: the
+  // fields may not overlap, the age may not run past the word, and the whole
+  // thing has to fit in the field the header gives it.
+  static_assert((kMarkedBit & kYoungBit) == 0, "state fields overlap");
+  static_assert((kMarkedBit & kRememberedBit) == 0, "state fields overlap");
+  static_assert((kYoungBit & kRememberedBit) == 0, "state fields overlap");
+  static_assert((kMarkedBit & kAgeMask) == 0, "state fields overlap");
+  static_assert((kYoungBit & kAgeMask) == 0, "state fields overlap");
+  static_assert((kRememberedBit & kAgeMask) == 0, "state fields overlap");
+  static_assert(kAgeShift + 8 <= 32, "the age does not fit the state word");
+  static_assert(kAgeMask <= 0xFFFFFFFFu, "the age mask leaves the word");
+  static_assert(sizeof(uint32_t) * 8 >= kAgeShift + 8, "state word too narrow");
   // The whole word, for a transition that changes several fields at once: the
   // survivor path computes its next state locally and stores it once, instead of
   // three read-modify-writes of the same cache line.
