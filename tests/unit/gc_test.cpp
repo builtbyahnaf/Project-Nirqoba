@@ -1596,6 +1596,39 @@ TEST(GcTest, FragmentedPagesServeReservedRunsWithoutRepeatingCells) {
   nrq_gc_enable();
 }
 
+TEST(GcTest, ReservationsChargeWholeObjectsOnly) {
+  // A reservation that ended part way through an object left the remainder
+  // charged to its page and unusable: for a payload close to the slab size that
+  // was most of a page, per object. Every grant now ends on an object boundary,
+  // so the space past the last object stays free in the page.
+  nrq_gc_disable();
+  nrq_gc_set_generational(1);
+  nrq_gc_set_threshold(static_cast<size_t>(1) << 30);
+  nrq_gc_collect();
+  const uint64_t tail_before = nrq_gc_tlab_tail_bytes();
+  const size_t pages_before = nrq_gc_page_count();
+
+  constexpr size_t kPayload = 32000;
+  const size_t span = kPayload + nrq_gc_object_header_bytes();
+  nrq_gc_mutator_enter();
+  for (int index = 0; index < 200; ++index)
+    ASSERT_NE(nrq_gc_allocate(kPayload, nullptr), nullptr);
+  nrq_gc_mutator_leave();
+
+  const uint64_t tail = nrq_gc_tlab_tail_bytes() - tail_before;
+  // The last reservation can end with a partial object at most, never with a
+  // slab's worth of it.
+  ASSERT_TRUE(tail < span);
+  // One 32 KB object per 64 KB page is what the page size allows, so the count is
+  // the object count either way - the change is that the rest of each page is now
+  // free space instead of charged dead space.
+  ASSERT_TRUE(nrq_gc_page_count() - pages_before <= 201);
+
+  nrq_gc_collect();
+  nrq_gc_set_threshold(1024 * 1024);
+  nrq_gc_enable();
+}
+
 TEST(GcTest, ReservedRunsReturnToTheirPagesAtTheCycleBoundary) {
   // Space a thread reserves and never uses has to go back to its page, or every
   // cycle would leak the unused end of a batch and the heap would grow wave after
