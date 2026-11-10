@@ -222,6 +222,36 @@ TEST(GcTest, TheHeaderSplitsIntoInstanceAndSharedBytes) {
             facts.object_header_bytes);
 }
 
+TEST(GcTest, TheStateWordEncodesEachFieldIndependently) {
+  // The packed word is the whole of an object's mutable metadata: bit 0 marked,
+  // bit 1 young, bit 2 remembered, bits 8-15 the promotion age. Each field is
+  // checked through its own mask, so a shift that overlapped a neighbour would
+  // fail here instead of showing up later as a promotion anomaly.
+  void* slot = nrq_gc_allocate(sizeof(Node), trace_node);
+  ASSERT_NE(slot, nullptr);
+  const uint32_t fresh = nrq_gc_object_state_bits(slot);
+  ASSERT_TRUE((fresh & NRQ_GC_STATE_MARKED) == 0);
+  ASSERT_TRUE((fresh & NRQ_GC_STATE_REMEMBERED) == 0);
+  ASSERT_EQ(fresh >> NRQ_GC_STATE_AGE_SHIFT, uint32_t{0});
+  ASSERT_EQ((fresh & NRQ_GC_STATE_YOUNG) != 0,
+            nrq_gc_is_generational() != 0);
+
+  nrq_gc_root_register(&slot);
+  nrq_gc_collect();
+  // A full collection leaves no mark behind and promotes every young survivor,
+  // so the surviving object's word is empty: that is the encoding's zero state,
+  // not a missing update.
+  const uint32_t survived = nrq_gc_object_state_bits(slot);
+  ASSERT_TRUE((survived & NRQ_GC_STATE_MARKED) == 0);
+  ASSERT_TRUE((survived & NRQ_GC_STATE_YOUNG) == 0);
+  ASSERT_EQ(survived >> NRQ_GC_STATE_AGE_SHIFT, uint32_t{0});
+
+  nrq_gc_root_unregister(reinterpret_cast<void**>(&slot));
+  nrq_gc_collect();
+  ASSERT_TRUE(nrq_gc_pointer_is_managed(slot) == 0);
+  ASSERT_EQ(nrq_gc_object_state_bits(slot), uint32_t{0});
+}
+
 TEST(GcTest, StructuralMetadataIsSharedNotRepeated) {
   // A thousand instances must not cost a thousand descriptions. The facts pair
   // descriptor count and bytes with the live-object count so sharing is
