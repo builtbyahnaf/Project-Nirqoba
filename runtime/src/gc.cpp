@@ -1193,7 +1193,14 @@ void publish_tlab_locked(MutatorState& mutator) {
     if (!header->page || header->page->live_objects == SIZE_MAX)
       nrq_runtime_fatal("GC page live-object count overflow");
     ++header->page->live_objects;
-    if (header->young) ++header->page->young_objects;
+    if (header->young) {
+      ++header->page->young_objects;
+    } else {
+      // Objects become visible here, so this is where the generational policy's
+      // old-object count is updated - once per published batch instead of once
+      // per allocation, which keeps a locked instruction off the fast path.
+      old_object_count.fetch_add(1, std::memory_order_relaxed);
+    }
     statistics.allocated_bytes = saturated_add(
         statistics.allocated_bytes, static_cast<uint64_t>(header->size));
     statistics.live_objects = saturated_add(statistics.live_objects, 1);
@@ -2735,10 +2742,10 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
         }
       }
     }
-    if (!header->young) {
+    // Counted, not published: this allocation is already live, and the barrier
+    // policy is the only thing that raises the store barrier (see allocate_tlab).
+    if (!header->young)
       old_object_count.fetch_add(1, std::memory_order_relaxed);
-      raise_store_barrier();
-    }
     header->next = nullptr;
     if (page_uses_index(page)) {
       if (!object_index.insert(object, header)) {
@@ -2884,11 +2891,11 @@ void account_tlab_allocation(MutatorState& mutator, size_t bytes) {
   flush_mutator_accounting_locked(mutator);
 }
 
-// Thread-local bump allocation. The payload size is already checked by the entry
-// point that computed it, and `element_size` is only carried into the header, so
-// the only precondition left is that this thread is a mutator. Keeping the size
-// checks at the boundary means the validated path and the slow path share one
-// validation instead of each repeating it.
+// Thread-local bump allocation. The payload size has already been checked by the
+// entry point that computed it, and `element_size` is only carried into the header,
+// so the only precondition left is that this thread is a mutator with a usable
+// TLAB. Keeping the checks at the boundary means the validated path and the slow
+// path share one validation instead of each repeating it.
 void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
                     const size_t* reference_offsets, size_t reference_count,
                     bool& handled) {
@@ -2942,10 +2949,13 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
     header->~ObjectHeader();
     return nullptr;
   }
-  if (!header->young) {
-    old_object_count.fetch_add(1, std::memory_order_relaxed);
-    raise_store_barrier();
-  }
+  // A non-young object only has to be counted: the count feeds the generational
+  // policy, and the store barrier is raised by the policy itself (`begin_cycle`
+  // covers a cycle, `nrq_gc_set_generational` covers the switch). Raising it here
+  // as well would undo `nrq_gc_set_generational(0)` on the next allocation and
+  // make every later store record a remembered entry that no minor can use, and
+  // the counter update would be a locked instruction on the allocation path. The
+  // count is folded in where the batch is published.
   header->tlab_next = thread_mutator.pending_objects;
   thread_mutator.pending_objects = header;
   account_tlab_allocation(thread_mutator, bytes);
