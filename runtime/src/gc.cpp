@@ -401,6 +401,19 @@ static_assert(alignof(ObjectHeader) == alignof(std::max_align_t),
 // `next`/`tlab_next` union each carry a path that has no cheaper equivalent, so
 // code may rely on them being here.
 //
+// The layout, with the phase that writes each field. The payload begins at offset
+// 48, so a record's address is `header + 1` and its size is
+// `element_count * layout->payload_size`:
+//
+//   offset  field            bytes  written by
+//        0  next / tlab_next    8  allocation (unpublished batch) and publication
+//        8  mark_next           8  the mark worklist's overflow, within one cycle
+//       16  page               8  allocation, never mutated
+//       24  birth_epoch        8  allocation, from the cycle counter
+//       32  element_count      4  allocation, 1 for a record
+//       36  state              4  marking, the store barrier, the sweep
+//       40  layout             8  allocation, the shared descriptor
+//
 // The offsets are asserted below for the same reason: a field silently moving is
 // how a "temporary" layout change becomes permanent. Reordering requires editing
 // this block, which is the point at which the cost has to be argued again.
@@ -4666,7 +4679,17 @@ int32_t nrq_gc_pointer_is_managed(void* object) {
 const nrq_object_layout* nrq_gc_object_layout(void* object) {
   HeapLockGuard lock(gc_mutex);
   const ObjectHeader* header = find_object_locked(object);
-  return header ? header->layout : nullptr;
+  if (!header) return nullptr;
+  if constexpr (nirq::runtime_debug_enabled) {
+    // Every live object must name a descriptor this runtime can read. The
+    // development configuration checks the reference here rather than trusting it,
+    // so an inspection reports the damage instead of handing back a pointer that
+    // the next trace would fault on. Allocation already refuses an inconsistent
+    // descriptor, so a failure here means the header itself was corrupted.
+    if (!header->layout || !layout_is_consistent(*header->layout))
+      nrq_runtime_fatal("GC object holds an invalid layout reference");
+  }
+  return header->layout;
 }
 
 uint32_t nrq_gc_object_state_bits(void* object) {
