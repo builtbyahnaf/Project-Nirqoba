@@ -392,6 +392,13 @@ static_assert(sizeof(ObjectHeader) == 48,
               "ObjectHeader metadata must stay within 64 bytes");
 static_assert(alignof(ObjectHeader) == alignof(std::max_align_t),
               "ObjectHeader must keep payloads max_align_t aligned");
+// The payload starts at `header + 1`, and object starts are spaced by
+// `alignof(std::max_align_t)`, so the header's size is what keeps every payload
+// aligned. A header size that is not a multiple of that alignment would misalign
+// every payload on a target where it is 16, which is why the rule is asserted at
+// the size rather than trusted at the call sites.
+static_assert(sizeof(ObjectHeader) % alignof(std::max_align_t) == 0,
+              "a header of this size misaligns payloads on this target");
 // The payload size an object reports: its element count times the element size
 // its shared descriptor names. One multiply, no per-instance size field, and it
 // cannot disagree with the descriptor.
