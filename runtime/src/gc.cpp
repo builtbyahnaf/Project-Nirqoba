@@ -664,6 +664,12 @@ struct MutatorState {
   static constexpr size_t kSpareRunCapacity = 24;
   SpareRun spare_runs[kSpareRunCapacity];
   size_t spare_run_count = 0;
+  // Unused reservation space this thread has given up, and the largest single
+  // tail. Owner-only: only the owner can move its cursor, so no lock is needed,
+  // and a thread that leaves folds its totals into the global counters.
+  uint64_t tlab_tail_bytes = 0;
+  uint64_t tlab_tail_max_bytes = 0;
+
 };
 void drain_transfer_pins_locked(MutatorState& mutator);
 
@@ -878,7 +884,13 @@ uint64_t tlab_refill_count = 0;
 // Counts allocations served from space freed by an earlier sweep rather than
 // from a page's untouched tail.
 uint64_t recycled_span_reuse_count = 0;
-size_t total_free_spans = 0;
+size_t total_free_spans = 0;// AO-06 observation. `reused_span_bytes` is how much reclaimed space has been
+// handed back out, which with the allocated total gives the reuse hit rate;
+// `tlab_tail_bytes_total` folds in the reservations of threads that have left
+// the registry, so the tail counters stay per-mutator and race-free.
+uint64_t reused_span_bytes = 0;
+uint64_t tlab_tail_bytes_total = 0;
+uint64_t tlab_tail_max_bytes_total = 0;
 // Number of pages whose largest recorded run can host a TLAB slab. A refill asks
 // this one word before searching the run index, so a fragmented heap answers
 // "no slab anywhere" in constant time instead of proving it by walking every
@@ -2127,6 +2139,7 @@ GcPage* take_free_span_locked(size_t span, size_t& offset) {
         adjust_page_max_free_span_locked(*page, candidate_before, 0);
       }
       recycled_span_reuse_count = saturated_add(recycled_span_reuse_count, 1);
+      reused_span_bytes = saturated_add(reused_span_bytes, span);
       return page;
     }
   }
@@ -2175,6 +2188,7 @@ GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t& offset,
         adjust_page_max_free_span_locked(*page, candidate_before, 0);
       }
       recycled_span_reuse_count = saturated_add(recycled_span_reuse_count, 1);
+      reused_span_bytes = saturated_add(reused_span_bytes, span);
       granted = span;
       return page;
     }
@@ -2248,6 +2262,28 @@ size_t take_free_runs_locked(size_t minimum, size_t byte_budget, size_t max_runs
   return taken;
 }
 
+// Records the unused remainder of the reservation this thread is leaving behind.
+// The space stays charged to its page until the page is recycled, so this is the
+// only measurement of what an abandoned slab costs.
+void account_tlab_tail(MutatorState& mutator) {
+  if (!mutator.tlab_cursor || mutator.tlab_end <= mutator.tlab_cursor) return;
+  const size_t tail = static_cast<size_t>(mutator.tlab_end - mutator.tlab_cursor);
+  mutator.tlab_tail_bytes = saturated_add(mutator.tlab_tail_bytes, tail);
+  if (tail > mutator.tlab_tail_max_bytes) mutator.tlab_tail_max_bytes = tail;
+}
+
+// Installs a new thread-local cursor, accounting whatever the thread is giving
+// up. Every path that starts a reservation goes through here, so a tail is
+// never replaced without being counted.
+void install_tlab(MutatorState& mutator, GcPage* page, size_t offset, size_t span) {
+  account_tlab_tail(mutator);
+  mutator.tlab_page = page;
+  mutator.tlab_cursor = page->storage + offset;
+  mutator.tlab_end = mutator.tlab_cursor + span;
+  mutator.tlab_generation = gc_page_generation;
+  thread_allocation_page = page;
+  thread_allocation_generation = gc_page_generation;
+}
 // Returns every run this thread reserved and did not hand out. The caller holds
 // gc_mutex and this mutator is not running: the cycle boundary flushes before it
 // reclaims empty pages, and a thread leaving the registry flushes so the space it
@@ -2272,12 +2308,7 @@ bool take_spare_run(MutatorState& mutator, size_t minimum_span) {
     const MutatorState::SpareRun spare = mutator.spare_runs[index];
     if (spare.span < minimum_span) continue;
     mutator.spare_runs[index] = mutator.spare_runs[--mutator.spare_run_count];
-    mutator.tlab_page = spare.page;
-    mutator.tlab_cursor = spare.page->storage + spare.offset;
-    mutator.tlab_end = mutator.tlab_cursor + spare.span;
-    mutator.tlab_generation = gc_page_generation;
-    thread_allocation_page = spare.page;
-    thread_allocation_generation = gc_page_generation;
+    install_tlab(mutator, spare.page, spare.offset, spare.span);
     return true;
   }
   return false;
@@ -2311,6 +2342,7 @@ bool reserve_spare_runs_locked(MutatorState& mutator, size_t minimum_span) {
 // pages it points into may already have been recycled: debug builds trap it, a
 // release build abandons the list rather than touch storage that may be gone.
 void discard_stale_tlab(MutatorState& mutator) {
+  account_tlab_tail(mutator);
   mutator.tlab_page = nullptr;
   mutator.tlab_cursor = nullptr;
   mutator.tlab_end = nullptr;
@@ -2704,6 +2736,7 @@ void prepare_cycle_locked(bool young_only) {
   // or recorded as free, and a run sitting on a mutator's list is neither.
   for (MutatorState* mutator : mutators)
     if (mutator) flush_spare_runs_locked(*mutator);
+
   // A fast old-to-young store may have filled its buffer without taking the
   // collector lock. Publish every mutator's TLAB first, then drain, so buffered
   // references to objects that were still thread-local become visible. Any
@@ -3084,12 +3117,7 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     GcPage* reused =
         take_free_run_locked(kGcTlabBytes, wanted_minimum, run_offset, run_span);
     if (!reused) return false;
-    mutator.tlab_page = reused;
-    mutator.tlab_cursor = reused->storage + run_offset;
-    mutator.tlab_end = mutator.tlab_cursor + run_span;
-    mutator.tlab_generation = gc_page_generation;
-    thread_allocation_page = reused;
-    thread_allocation_generation = gc_page_generation;
+    install_tlab(mutator, reused, run_offset, run_span);
     return true;
   };
   if (minimum_span > kGcTlabMinSlabBytes) {
@@ -3157,14 +3185,9 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
   const size_t reserve = std::min(kGcTlabBytes, available);
   if (reserve < minimum_span) return false;
   unretire_page_locked(*page);
-  mutator.tlab_page = page;
-  mutator.tlab_cursor = page->storage + page->used;
+  install_tlab(mutator, page, page->used, reserve);
   page->used += reserve;
   note_page_tail_locked(*page);
-  mutator.tlab_end = mutator.tlab_cursor + reserve;
-  mutator.tlab_generation = gc_page_generation;
-  thread_allocation_page = page;
-  thread_allocation_generation = gc_page_generation;
   return true;
 }
 
@@ -4056,6 +4079,12 @@ void nrq_gc_mutator_leave(void) {
     // This thread is never visited by cycle preparation again, so the space it
     // reserved has to be returned to its pages here.
     flush_spare_runs_locked(thread_mutator);
+
+    tlab_tail_bytes_total =
+        saturated_add(tlab_tail_bytes_total, thread_mutator.tlab_tail_bytes);
+    if (thread_mutator.tlab_tail_max_bytes > tlab_tail_max_bytes_total)
+      tlab_tail_max_bytes_total = thread_mutator.tlab_tail_max_bytes;
+
     drain_remembered_locked(thread_mutator, /*defer_unresolved=*/true);
     // A thread that leaves the registry is never visited by cycle preparation
     // again, so its buffered handoffs have to be settled here.
@@ -4162,6 +4191,37 @@ int32_t nrq_gc_store_barrier_active(void) {
 uint64_t nrq_gc_tlab_refill_count(void) {
   HeapLockGuard lock(gc_mutex);
   return tlab_refill_count;
+}
+uint64_t nrq_gc_tlab_tail_bytes(void) {
+  HeapLockGuard lock(gc_mutex);
+  uint64_t total = tlab_tail_bytes_total;
+  for (const MutatorState* mutator : mutators)
+    if (mutator) total = saturated_add(total, mutator->tlab_tail_bytes);
+  return total;
+}
+
+uint64_t nrq_gc_tlab_tail_max_bytes(void) {
+  HeapLockGuard lock(gc_mutex);
+  uint64_t largest = tlab_tail_max_bytes_total;
+  for (const MutatorState* mutator : mutators)
+    if (mutator && mutator->tlab_tail_max_bytes > largest)
+      largest = mutator->tlab_tail_max_bytes;
+  return largest;
+}
+
+size_t nrq_gc_free_run_count(void) {
+  HeapLockGuard lock(gc_mutex);
+  return total_free_spans;
+}
+
+size_t nrq_gc_page_with_runs_count(void) {
+  HeapLockGuard lock(gc_mutex);
+  return span_pages.size();
+}
+
+uint64_t nrq_gc_reused_span_bytes(void) {
+  HeapLockGuard lock(gc_mutex);
+  return reused_span_bytes;
 }
 
 nrq_gc_stats nrq_gc_get_stats(void) {
