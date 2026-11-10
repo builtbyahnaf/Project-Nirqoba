@@ -1546,13 +1546,19 @@ void trace_children(ObjectHeader* header, nrq_gc_visit_fn visit,
 }
 
 void enqueue_header_locked(ObjectHeader* header, MarkContext& context) {
-  if (!header || header->marked()) return;
+  if (!header) return;
+  // One read of the state word answers both flag questions. The word is read
+  // before the epoch test because the compile-time filters are the common case
+  // for an already-marked object, and the store below only happens once the
+  // object is known to be entering the worklist.
+  const uint32_t state = header->state_word();
+  if ((state & ObjectHeader::kMarkedBit) != 0) return;
   // Objects born during this cycle are retained by the sweep's birth-epoch
   // check. Marking them would leave a mark bit that the snapshot never clears.
   // The epoch comes from the context, so the hot path never loads the shared
   // cycle state.
   if (header->birth_epoch >= context.epoch) return;
-  if (context.young_only && !header->young()) return;
+  if (context.young_only && (state & ObjectHeader::kYoungBit) == 0) return;
   header->set_marked(true);
   context.worklist.push(header);
 }
@@ -1668,7 +1674,9 @@ void enqueue_roots_locked(MarkContext& context) {
 // already there. The flag is what makes the flat list a set, so a repeated
 // old-to-young store costs one bool test instead of a hash probe.
 void add_remembered_locked(ObjectHeader* header) {
-  if (!header || header->remembered()) return;
+  if (!header) return;
+  // The flag is the deduplication test, so it is one masked read of the word.
+  if ((header->state_word() & ObjectHeader::kRememberedBit) != 0) return;
   header->set_remembered(true);
   try {
     remembered_young.push_back(header);
