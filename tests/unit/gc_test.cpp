@@ -440,6 +440,27 @@ TEST(GcTest, IdleHeapRetainsOnlyABoundedPagePool) {
   nrq_gc_enable();
 }
 
+TEST(GcTest, NonGenerationalAllocationKeepsTheStoreBarrierDown) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  nrq_gc_set_generational(0);
+  ASSERT_EQ(nrq_gc_store_barrier_active(), 0);
+
+  // Objects allocated with generations off are old. Neither the allocation nor
+  // the cycle that reclaims them may leave the write barrier armed: no minor can
+  // run, so there is no old-to-young edge for a remembered entry to record.
+  for (int index = 0; index < 64; ++index)
+    ASSERT_NE(nrq_gc_allocate(32, nullptr), nullptr);
+  ASSERT_EQ(nrq_gc_store_barrier_active(), 0);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_store_barrier_active(), 0);
+
+  // Turning generations back on arms it, because a minor can run again.
+  nrq_gc_set_generational(1);
+  ASSERT_EQ(nrq_gc_store_barrier_active(), 1);
+  nrq_gc_enable();
+}
+
 TEST(GcTest, AllocationPageCacheIsInvalidatedAfterCollection) {
   nrq_gc_disable();
   nrq_gc_collect();

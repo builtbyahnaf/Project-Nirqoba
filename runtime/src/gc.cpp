@@ -2545,7 +2545,11 @@ void finish_cycle_locked(bool young_only) {
   // survivors as it sweeps, while young objects allocated during the cycle
   // remain young and may be referenced only by old objects; their remembered
   // entries must survive into the next minor collection.
-  if (generational_collection_enabled.load(std::memory_order_relaxed) &&
+  // The barrier is only useful while a minor can run: with generations off they
+  // never do, and with no old objects there is no old-to-young edge for the
+  // remembered set to record. Leaving it raised in either case would put the
+  // write barrier back on every store of a program that does not need it.
+  if (!generational_collection_enabled.load(std::memory_order_relaxed) ||
       old_object_count.load(std::memory_order_relaxed) == 0)
     lower_store_barrier();
   active_mark = MarkContext{};
@@ -3843,6 +3847,10 @@ size_t nrq_gc_object_index_entries(void) {
 int32_t nrq_gc_pointer_is_managed(void* object) {
   HeapLockGuard lock(gc_mutex);
   return find_object_locked(object) ? 1 : 0;
+}
+
+int32_t nrq_gc_store_barrier_active(void) {
+  return store_barrier_active.load(std::memory_order_acquire) ? 1 : 0;
 }
 
 nrq_gc_stats nrq_gc_get_stats(void) {

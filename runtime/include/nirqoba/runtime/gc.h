@@ -168,6 +168,11 @@ size_t nrq_gc_object_index_entries(void);
 // Interior pointers, stale addresses, and arbitrary invalid references report 0.
 // This exposes the collector's object-discovery path for auditing and tests.
 int32_t nrq_gc_pointer_is_managed(void* object);
+// Reports whether the old-to-young store barrier is armed. Allocation must not
+// touch this state: it is raised by a collection cycle and by
+// `nrq_gc_set_generational`, and a program that turned generations off must keep
+// its fast store path.
+int32_t nrq_gc_store_barrier_active(void);
 uint64_t nrq_gc_get_allocated_bytes(void);
 uint64_t nrq_gc_get_collected_bytes(void);
 uint64_t nrq_gc_get_collection_count(void);
