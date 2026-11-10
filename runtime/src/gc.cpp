@@ -386,6 +386,40 @@ size_t object_span_bytes(size_t payload_bytes) {
   return (raw + alignment - 1) & ~(alignment - 1);
 }
 
+// Layout descriptors are interned by every property that changes how the
+// payload is interpreted. Matching sizes alone is not enough: two records of the
+// same size with reference words at different offsets, or with a different trace
+// callback, must not share a descriptor.
+struct LayoutKey {
+  size_t payload_bytes;
+  size_t element_bytes;
+  nrq_gc_trace_fn trace;
+  std::vector<uint32_t> offsets;
+
+  bool operator==(const LayoutKey& other) const {
+    return payload_bytes == other.payload_bytes &&
+           element_bytes == other.element_bytes && trace == other.trace &&
+           offsets == other.offsets;
+  }
+};
+
+struct LayoutKeyHash {
+  size_t operator()(const LayoutKey& key) const {
+    size_t hash = key.payload_bytes * static_cast<size_t>(0x9E3779B97F4A7C15ull);
+    hash ^= key.element_bytes * static_cast<size_t>(0xC2B2AE3D27D4EB4Full);
+    hash ^= reinterpret_cast<size_t>(key.trace) >> 4;
+    for (const uint32_t offset : key.offsets) hash = (hash * 31u) ^ offset;
+    return hash;
+  }
+};
+
+// Descriptors and their offset tables are never reclaimed, so a live object can
+// always read the layout it was born with and pointer equality is a valid
+// identity test. The table itself is only touched while a layout is created;
+// allocation and tracing read the descriptor through a plain pointer.
+std::mutex layout_mutex;
+std::unordered_map<LayoutKey, const nrq_object_layout*, LayoutKeyHash> layout_pool;
+
 // Reclaimed storage is tracked per page so later allocations can reuse it;
 // defined with the page pool below, declared here because sweeping reaches them.
 void release_span_locked(GcPage& page, size_t offset, size_t span);
@@ -4225,6 +4259,61 @@ uint64_t nrq_gc_last_reclaimed_bytes(void) {
 }
 
 size_t nrq_gc_object_header_bytes(void) { return sizeof(ObjectHeader); }
+
+const nrq_object_layout* nrq_gc_layout_intern(
+    size_t payload_bytes, size_t element_bytes, nrq_gc_trace_fn trace,
+    const size_t* reference_offsets, size_t reference_count) {
+  // The descriptor stores these as 32-bit fields; a payload larger than that is
+  // left to a custom trace callback rather than described by a table.
+  if (payload_bytes == 0 || payload_bytes > UINT32_MAX) return nullptr;
+  if (reference_count > UINT32_MAX) return nullptr;
+  // An array element and its payload are the same bytes: `element_bytes` only
+  // says whether the payload repeats.
+  if (element_bytes != 0 && element_bytes != payload_bytes) return nullptr;
+  if (reference_count != 0 && !reference_offsets) return nullptr;
+  LayoutKey key{payload_bytes, element_bytes, trace, {}};
+  key.offsets.reserve(reference_count);
+  for (size_t index = 0; index < reference_count; ++index) {
+    const size_t offset = reference_offsets[index];
+    // A reference word must fit inside the record (or one element, which is the
+    // payload of an array). Rejecting it here keeps every reader able to load a
+    // pointer without a bounds test.
+    if (offset > payload_bytes || sizeof(void*) > payload_bytes - offset)
+      return nullptr;
+    key.offsets.push_back(static_cast<uint32_t>(offset));
+  }
+
+  std::lock_guard<std::mutex> lock(layout_mutex);
+  const auto existing = layout_pool.find(key);
+  if (existing != layout_pool.end()) return existing->second;
+
+  auto* offsets = new (std::nothrow) uint32_t[key.offsets.size()];
+  if (!offsets && !key.offsets.empty()) return nullptr;
+  for (size_t index = 0; index < key.offsets.size(); ++index)
+    offsets[index] = key.offsets[index];
+  auto* descriptor = new (std::nothrow) nrq_object_layout{
+      static_cast<uint32_t>(payload_bytes),
+      static_cast<uint32_t>(key.offsets.size()),
+      element_bytes != 0 ? static_cast<uint32_t>(NRQ_OBJECT_LAYOUT_ARRAY) : 0u,
+      offsets, trace};
+  if (!descriptor) {
+    delete[] offsets;
+    return nullptr;
+  }
+  try {
+    layout_pool.emplace(std::move(key), descriptor);
+  } catch (...) {
+    delete descriptor;
+    delete[] offsets;
+    return nullptr;
+  }
+  return descriptor;
+}
+
+size_t nrq_gc_layout_count(void) {
+  std::lock_guard<std::mutex> lock(layout_mutex);
+  return layout_pool.size();
+}
 
 nrq_gc_allocation_facts nrq_gc_get_allocation_facts(void) {
   nrq_gc_allocation_facts facts{};
