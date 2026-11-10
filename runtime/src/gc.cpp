@@ -332,7 +332,11 @@ struct alignas(std::max_align_t) ObjectHeader {
   GcPage* page = nullptr;
   size_t size = 0;
   size_t element_size = 0;
-  nrq_gc_trace_fn trace = nullptr;
+  // The shared, immutable description of this object's payload: its size and
+  // shape, how to visit its references, and its custom trace callback. Every
+  // instance of the same layout points at the same descriptor instead of
+  // carrying its own copy.
+  const nrq_object_layout* layout = nullptr;
   bool marked = false;
   bool young = true;
   // Set while this object is listed in the remembered set. Deduplication is a
@@ -349,14 +353,15 @@ struct alignas(std::max_align_t) ObjectHeader {
   // list link is left to the caller because the union member differs between the
   // published list and a thread-local batch.
   ObjectHeader(GcPage* owning_page, size_t payload_bytes,
-               size_t payload_element_size, nrq_gc_trace_fn payload_trace,
-               bool is_young, uint64_t epoch)
+               size_t payload_element_size,
+               const nrq_object_layout* object_layout, bool is_young,
+               uint64_t epoch)
       : next(nullptr),
         mark_next(nullptr),
         page(owning_page),
         size(payload_bytes),
         element_size(payload_element_size),
-        trace(payload_trace),
+        layout(object_layout),
         marked(false),
         young(is_young),
         remembered(false),
@@ -419,6 +424,62 @@ struct LayoutKeyHash {
 // allocation and tracing read the descriptor through a plain pointer.
 std::mutex layout_mutex;
 std::unordered_map<LayoutKey, const nrq_object_layout*, LayoutKeyHash> layout_pool;
+
+// Allocation must not take the pool lock. A thread remembers the last layout it
+// asked for and proves the match by comparing the offset table itself, so a
+// compiler-emitted constant table and a caller that rebuilds the same table on
+// its stack both hit without touching the pool. Only a genuinely new layout
+// reaches the interning table.
+struct LayoutMemo {
+  size_t payload_bytes = 0;
+  size_t element_bytes = 0;
+  nrq_gc_trace_fn trace = nullptr;
+  const size_t* offsets = nullptr;
+  size_t count = 0;
+  const nrq_object_layout* layout = nullptr;
+};
+thread_local LayoutMemo layout_memo;
+
+bool layout_memo_matches(const LayoutMemo& memo, size_t payload_bytes,
+                         size_t element_bytes, nrq_gc_trace_fn trace,
+                         const size_t* offsets, size_t count) {
+  if (!memo.layout || memo.payload_bytes != payload_bytes ||
+      memo.element_bytes != element_bytes || memo.trace != trace ||
+      memo.count != count)
+    return false;
+  if (count == 0) return true;
+  if (memo.offsets == offsets) return true;
+  for (size_t index = 0; index < count; ++index)
+    if (memo.offsets[index] != offsets[index]) return false;
+  return true;
+}
+
+// The descriptor a payload uses. A record passes its size as both bytes and
+// element size; an array passes its element stride, which repeats. Payload
+// offsets are always relative to the element, which is the whole record for a
+// fixed layout.
+const nrq_object_layout* layout_for_allocation(size_t bytes,
+                                               size_t element_size,
+                                               nrq_gc_trace_fn trace,
+                                               const size_t* offsets,
+                                               size_t count) {
+  const size_t payload_bytes = element_size;
+  const size_t element_bytes = element_size == bytes ? 0 : element_size;
+  if (layout_memo_matches(layout_memo, payload_bytes, element_bytes, trace,
+                          offsets, count))
+    return layout_memo.layout;
+  const nrq_object_layout* layout = nrq_gc_layout_intern(
+      payload_bytes, element_bytes, trace, offsets, count);
+  if (layout) {
+    layout_memo.payload_bytes = payload_bytes;
+    layout_memo.element_bytes = element_bytes;
+    layout_memo.trace = trace;
+    layout_memo.offsets = offsets;
+    layout_memo.count = count;
+    layout_memo.layout = layout;
+  }
+  return layout;
+}
 
 // Reclaimed storage is tracked per page so later allocations can reuse it;
 // defined with the page pool below, declared here because sweeping reaches them.
@@ -1444,8 +1505,12 @@ void wait_for_fast_barriers() {
 
 void trace_children(ObjectHeader* header, nrq_gc_visit_fn visit,
                     void* context) {
-  if (header->trace)
-    header->trace(header->payload(), header->size, visit, context);
+  // The descriptor is read once and holds the whole tracing contract, so the
+  // common path is one dependent load rather than one per object field.
+  const nrq_object_layout* layout = header->layout;
+  if (!layout) nrq_runtime_fatal("GC object has no layout descriptor");
+  if (layout->trace)
+    layout->trace(header->payload(), header->size, visit, context);
   if (header->reference_offsets.empty() || header->element_size == 0) return;
   const auto* bytes = static_cast<const unsigned char*>(header->payload());
   for (size_t base = 0; base + header->element_size <= header->size;
@@ -1784,7 +1849,7 @@ bool mark_slice_locked(size_t budget_bytes) {
     touched += header->size + sizeof(ObjectHeader);
     if (active_mark.young_only && !header->young) continue;
     const size_t reference_count = header->reference_offsets.size();
-    if (!header->trace && reference_count != 0 && reference_count <= 2 &&
+    if (!header->layout->trace && reference_count != 0 && reference_count <= 2 &&
         header->element_size == header->size) {
       enqueue_narrow_children_locked(header, active_mark);
     } else {
@@ -3061,6 +3126,9 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
                       const size_t* reference_offsets, size_t reference_count) {
   if (bytes == 0 || bytes > SIZE_MAX - sizeof(ObjectHeader) || element_size == 0)
     return nullptr;
+  const nrq_object_layout* layout = layout_for_allocation(
+      bytes, element_size, trace, reference_offsets, reference_count);
+  if (!layout) return nullptr;
   constexpr size_t alignment = alignof(std::max_align_t);
   const size_t raw_span = sizeof(ObjectHeader) + bytes;
   if (raw_span > SIZE_MAX - (alignment - 1)) return nullptr;
@@ -3117,7 +3185,7 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   }
   void* header_storage = page->storage + header_offset;
   auto* header = new (header_storage) ObjectHeader(
-      page, bytes, element_size, trace,
+      page, bytes, element_size, layout,
       generational_collection_enabled.load(std::memory_order_relaxed),
       next_cycle_epoch.load(std::memory_order_relaxed));
   auto rollback_reservation = [&]() {
@@ -3139,20 +3207,10 @@ void* allocate_locked(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   void* object = static_cast<unsigned char*>(header_storage) + sizeof(ObjectHeader);
   std::memset(object, 0, bytes);
   try {
-    if (reference_count != 0) {
-      if (!reference_offsets || reference_count > SIZE_MAX / sizeof(size_t)) {
-        rollback_reservation();
-        return nullptr;
-      }
+    // The descriptor already proved every offset fits the payload, so this is
+    // the copy alone.
+    if (reference_count != 0)
       header->reference_offsets.assign(reference_offsets, reference_count);
-      for (size_t index = 0; index < header->reference_offsets.size(); ++index) {
-        const size_t offset = header->reference_offsets[index];
-        if (offset > element_size || sizeof(void*) > element_size - offset) {
-          rollback_reservation();
-          return nullptr;
-        }
-      }
-    }
     // Counted, not published: this allocation is already live, and the barrier
     // policy is the only thing that raises the store barrier (see allocate_tlab).
     if (!header->young)
@@ -3341,6 +3399,9 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   const size_t span = (raw_span + alignment - 1) & ~(alignment - 1);
   if (span > kGcTlabBytes) return nullptr;
   handled = true;
+  const nrq_object_layout* layout = layout_for_allocation(
+      bytes, element_size, trace, reference_offsets, reference_count);
+  if (!layout) return nullptr;
 
   if (thread_mutator.tlab_generation != gc_page_generation)
     discard_stale_tlab(thread_mutator);
@@ -3359,26 +3420,16 @@ void* allocate_tlab(size_t bytes, size_t element_size, nrq_gc_trace_fn trace,
   unsigned char* header_storage = thread_mutator.tlab_cursor;
   thread_mutator.tlab_cursor += span;
   auto* header = new (header_storage) ObjectHeader(
-      thread_mutator.tlab_page, bytes, element_size, trace,
+      thread_mutator.tlab_page, bytes, element_size, layout,
       generational_collection_enabled.load(std::memory_order_relaxed),
       next_cycle_epoch.load(std::memory_order_relaxed));
   void* object = header_storage + sizeof(ObjectHeader);
   std::memset(object, 0, bytes);
   try {
-    if (reference_count != 0) {
-      if (!reference_offsets || reference_count > SIZE_MAX / sizeof(size_t)) {
-        header->~ObjectHeader();
-        return nullptr;
-      }
+    // The descriptor already proved every offset fits the payload, so this is
+    // the copy alone.
+    if (reference_count != 0)
       header->reference_offsets.assign(reference_offsets, reference_count);
-      for (size_t index = 0; index < header->reference_offsets.size(); ++index) {
-        const size_t offset = header->reference_offsets[index];
-        if (offset > element_size || sizeof(void*) > element_size - offset) {
-          header->~ObjectHeader();
-          return nullptr;
-        }
-      }
-    }
   } catch (...) {
     header->~ObjectHeader();
     return nullptr;
@@ -4381,6 +4432,12 @@ int32_t nrq_gc_pointer_is_managed(void* object) {
   return find_object_locked(object) ? 1 : 0;
 }
 
+const nrq_object_layout* nrq_gc_object_layout(void* object) {
+  HeapLockGuard lock(gc_mutex);
+  const ObjectHeader* header = find_object_locked(object);
+  return header ? header->layout : nullptr;
+}
+
 int32_t nrq_gc_store_barrier_active(void) {
   return store_barrier_active.load(std::memory_order_acquire) ? 1 : 0;
 }
@@ -4648,8 +4705,9 @@ int64_t nrq_gc_get_ref_count(void* object) {
   try {
     ReferenceCountTarget target{object, 0};
     for_each_live_object_locked([&](ObjectHeader* header) {
-      if (header->trace)
-        header->trace(header->payload(), header->size, count_reference_to_target,
+      if (header->layout->trace)
+        header->layout->trace(header->payload(), header->size,
+                              count_reference_to_target,
                       &target);
       if (!header->reference_offsets.empty() && header->element_size != 0) {
         const auto* bytes = static_cast<const unsigned char*>(header->payload());

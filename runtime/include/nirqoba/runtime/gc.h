@@ -264,6 +264,10 @@ size_t nrq_gc_object_index_entries(void);
 // Interior pointers, stale addresses, and arbitrary invalid references report 0.
 // This exposes the collector's object-discovery path for auditing and tests.
 int32_t nrq_gc_pointer_is_managed(void* object);
+// The shared layout descriptor the object was allocated with, or null when the
+// address is not a live managed object. A diagnostic: because instances of one
+// layout share a descriptor, equal pointers mean equal layout.
+const struct nrq_object_layout* nrq_gc_object_layout(void* object);
 // Reports whether the old-to-young store barrier is armed. Allocation must not
 // touch this state: it is raised by a collection cycle and by
 // `nrq_gc_set_generational`, and a program that turned generations off must keep

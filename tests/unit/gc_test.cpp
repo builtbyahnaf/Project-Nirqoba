@@ -143,6 +143,36 @@ TEST(GcTest, OneLayoutServesEveryCompatibleInstance) {
   ASSERT_EQ(nrq_gc_layout_count(), shared);
 }
 
+TEST(GcTest, InstancesOfOneRecordShareOneDescriptor) {
+  // 64 instances of one record must describe themselves once. The descriptor is
+  // attached at allocation and read back through the object, which is how the
+  // collector will later find the trace contract.
+  nrq_gc_enable();
+  std::vector<Node*> nodes;
+  auto* first = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(first, nullptr);
+  const size_t described = nrq_gc_layout_count();
+  nodes.push_back(first);
+  for (int index = 1; index < 64; ++index) {
+    auto* node = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+    ASSERT_NE(node, nullptr);
+    nodes.push_back(node);
+  }
+  const nrq_object_layout* shared = nrq_gc_object_layout(first);
+  ASSERT_NE(shared, nullptr);
+  ASSERT_EQ(shared->payload_size, static_cast<uint32_t>(sizeof(Node)));
+  ASSERT_TRUE(shared->trace == trace_node);
+  ASSERT_EQ(shared->flags & NRQ_OBJECT_LAYOUT_ARRAY, 0u);
+  for (Node* node : nodes) ASSERT_TRUE(nrq_gc_object_layout(node) == shared);
+  ASSERT_EQ(nrq_gc_layout_count(), described);
+
+  // A different shape of the same size is a different descriptor.
+  auto* other = static_cast<PairReferences*>(
+      nrq_gc_allocate(sizeof(PairReferences), nullptr));
+  ASSERT_NE(other, nullptr);
+  ASSERT_TRUE(nrq_gc_object_layout(other) != shared);
+}
+
 TEST(GcTest, PreservesReachableCyclesAndSweepsAfterRootRemoval) {
   nrq_gc_enable();
   nrq_gc_set_threshold(1024 * 1024);
