@@ -284,49 +284,6 @@ void clear_object_start(GcPage& page, size_t offset) {
   page.object_starts[index / 64] &= ~(uint64_t{1} << (index % 64));
 }
 
-// Most managed records contain only one or two GC references. Store those
-// offsets in the object header itself so traced objects do not need a separate
-// heap allocation for layout metadata. Unusually wide records keep an overflow
-// vector without changing the exact tracing representation.
-class ReferenceLayout {
- public:
-  void assign(const size_t* offsets, size_t count) {
-    if (count <= inline_offsets_.size()) {
-      for (size_t index = 0; index < count; ++index)
-        inline_offsets_[index] = offsets[index];
-      overflow_offsets_.reset();
-      size_ = count;
-      return;
-    }
-    overflow_offsets_ = std::make_unique<std::vector<size_t>>(
-        offsets, offsets + count);
-    size_ = count;
-  }
-
-  bool empty() const { return size_ == 0; }
-  size_t size() const { return size_; }
-  size_t operator[](size_t index) const {
-    return size_ <= inline_offsets_.size()
-        ? inline_offsets_[index] : (*overflow_offsets_)[index];
-  }
-  const size_t* begin() const {
-    return size_ <= inline_offsets_.size()
-        ? inline_offsets_.data() : overflow_offsets_->data();
-  }
-  const size_t* end() const { return begin() + size_; }
-  bool matches(const size_t* offsets, size_t count) const {
-    if (count != size_) return false;
-    for (size_t index = 0; index < count; ++index)
-      if ((*this)[index] != offsets[index]) return false;
-    return true;
-  }
-
- private:
-  std::array<size_t, 2> inline_offsets_{};
-  std::unique_ptr<std::vector<size_t>> overflow_offsets_;
-  size_t size_ = 0;
-};
-
 struct alignas(std::max_align_t) ObjectHeader {
   // An object is linked exactly once. While it is still in its owning mutator's
   // unpublished TLAB batch it uses `tlab_next`; once published it uses `next`.
