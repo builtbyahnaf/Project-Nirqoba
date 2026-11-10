@@ -371,6 +371,45 @@ TEST(GcTest, EmptiedPagesAreRecycledAcrossCollections) {
   nrq_gc_enable();
 }
 
+TEST(GcTest, EmptiedPagesServeAllocationsBeforeTheNextBoundary) {
+  nrq_gc_disable();
+  nrq_gc_set_threshold(1024 * 1024 * 1024);
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+
+  constexpr size_t kObjectCount = 2048;
+  for (size_t index = 0; index < kObjectCount; ++index)
+    ASSERT_NE(nrq_gc_allocate(48, nullptr), nullptr);
+  const size_t pages_before = nrq_gc_page_count();
+  ASSERT_TRUE(pages_before > 0);
+  const uint64_t spans_before = nrq_gc_span_reuse_count();
+
+  // The sweep empties those pages, but the boundary is the first moment their
+  // storage may go back to the pool: a mutator that has not parked could still
+  // hold a cursor into one of them.
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+  ASSERT_EQ(nrq_gc_page_count(), pages_before);
+
+  // The space they freed is available immediately, so a wave that fits inside it
+  // must reuse runs instead of asking for new page storage.
+  constexpr size_t kSecondWave = kObjectCount / 2;
+  for (size_t index = 0; index < kSecondWave; ++index)
+    ASSERT_NE(nrq_gc_allocate(48, nullptr), nullptr);
+  ASSERT_EQ(nrq_gc_span_reuse_count() - spans_before,
+            static_cast<uint64_t>(kSecondWave));
+  ASSERT_EQ(nrq_gc_page_count(), pages_before);
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + kSecondWave);
+
+  // The objects are ordinary young objects: collecting them again reclaims them
+  // and leaves the page count where it was or below.
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+  ASSERT_TRUE(nrq_gc_page_count() <= pages_before);
+  nrq_gc_set_threshold(1024 * 1024);
+  nrq_gc_enable();
+}
+
 TEST(GcTest, AllocationPageCacheIsInvalidatedAfterCollection) {
   nrq_gc_disable();
   nrq_gc_collect();
