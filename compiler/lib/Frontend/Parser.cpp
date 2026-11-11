@@ -316,8 +316,11 @@ unique_ptr<StructDecl> Parser::parse_struct(Visibility visibility) {
     Type field_type = parse_type_annotation();
     // `owned ptr T` becomes the owning pointer type, so move-only copying and
     // generated field destruction apply without a side table.
-    if (owned_field && field_type.is_pointer() && !field_type.is_owned_pointer())
-      field_type = Type::owned_pointer_type(field_type.element_type());
+    if (owned_field && field_type.is_pointer() && !field_type.is_owned_pointer()) {
+      field_type = resource_domain.empty()
+          ? Type::owned_pointer_type(field_type.element_type())
+          : Type::owned_pointer_type(field_type.element_type(), resource_domain);
+    }
     // `shared ptr T` becomes the reference-counted pointer type, so copying and
     // destruction can see the field's ownership from the type alone.
     if (shared && field_type.is_pointer() && !field_type.is_shared_pointer())
