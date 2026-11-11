@@ -74,7 +74,7 @@ TEST(LexerTest, UnterminatedString) {
 
 TEST(LexerTest, UnexpectedCharacter) {
   DiagnosticEngine diag;
-  SourceFile src("illegal.nrqba", "int main @");
+  SourceFile src("illegal.nrqba", "int main $");
   Lexer lexer(src, diag);
   auto tokens = lexer.tokenize();
 

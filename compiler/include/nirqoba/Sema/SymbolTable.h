@@ -33,6 +33,9 @@ struct Symbol {
   std::string cleanup_callee;
   bool borrowed = false;
   bool mutable_borrow = false;
+  // Set for '@Nullable' pointer bindings: the value may be nullptr, so dereference
+  // requires a non-null proof in the current branch.
+  bool nullable = false;
   // A partial aggregate move clears the corresponding runtime field. Keep the
   // path in semantic state so later reads and branch merges cannot resurrect it.
   std::unordered_set<std::string> moved_fields;

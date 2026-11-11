@@ -192,3 +192,13 @@ checks), pointer interpolation, assignment of `nullptr` to an existing binding, 
 cross-function lifetime analysis remain unimplemented. `nullptr` may be assigned to an
 existing pointer binding, and `is` / `is not` compare a pointer with `nullptr`, adopting
 the pointer's type; comparing `nullptr` with a non-pointer is rejected.
+
+## Nullable pointer bindings (0.379-beta)
+
+`@Nullable` on a `var`/`let` declaration lets a pointer binding hold `nullptr`; plain
+pointer bindings reject `nullptr` at initialization. The nullable flag lives in symbol
+state, and `*p` is legal only while the checker has a non-null proof for that name.
+Proofs come from `p is not nullptr` in a then-branch and from `p is nullptr` in the
+else-branch or after a then-branch that cannot fall through; they are branch-scoped
+and dropped by any assignment. Nullability is a property of the binding, so it does
+not follow a copy into another binding or a function signature yet.

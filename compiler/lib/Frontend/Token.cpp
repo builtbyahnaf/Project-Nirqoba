@@ -64,6 +64,7 @@ string_view token_kind_name(TokenKind kind) {
     case TokenKind::Colon: return ":";
     case TokenKind::Dot: return ".";
     case TokenKind::Arrow: return "->";
+    case TokenKind::At: return "@";
     case TokenKind::Plus: return "+";
     case TokenKind::Minus: return "-";
     case TokenKind::Star: return "*";

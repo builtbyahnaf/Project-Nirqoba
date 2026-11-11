@@ -42,7 +42,7 @@ class Parser {
   // Statements.
   std::unique_ptr<BlockStmt> parse_block();
   StmtPtr parse_statement();
-  StmtPtr parse_variable_declaration();
+  StmtPtr parse_variable_declaration(bool nullable = false);
   StmtPtr parse_destructuring();
   StmtPtr parse_assignment_or_expression();
   StmtPtr parse_if();
