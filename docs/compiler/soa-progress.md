@@ -191,6 +191,44 @@ and nothing else. Sites:
 4. Test: write and read every field of every index, including the last index, then
    force `gc.collect()` with the container reachable.
 
+### Findings from the first implementation pass (0.363)
+
+The obvious route - let indexing produce an element pointer, then let ordinary field
+access offset into it - is wrong, and the reason is structural rather than a missing
+detail. A container element has no address of its own: its columns live at unrelated
+offsets, each scaled by the element count. So the two ops the frontend would produce
+today, `GEP(container, i)` followed by `GEP(ptr<Point>, f)`, can express only
+`base + i * sizeof(Point) + offsetof(Point, f)`, which is the array-of-structs
+address. Accepting it would read and write the wrong bytes, so indexing stays rejected
+until the column form exists.
+
+What the correct form needs:
+
+- `count`, which is not carried by the container value. It is `header->element_count`,
+  at offset 32 of the object header, and the payload starts 48 bytes in, so
+  `count = load i32 at payload - 16`. One extra load per column access, from the same
+  cache line as the rest of the header.
+- A single addressing step, because the column base and the row stride have different
+  scales: `payload + column.index_in_bytes * count + i * column.element_bytes`.
+- A decision about `ps[i]` on its own. It has no representable value, because there is
+  no struct to load, so sema must keep rejecting it as a value and accept it only as
+  the base of a member access. That check is context-sensitive: the outer
+  `MemberAccess` is checked first and can type the column, but the inner `IndexExpr` is
+  still visited on its own, so sema has to remember which index expressions were
+  already claimed as column bases.
+
+Order of work, so each step is safe alone:
+
+1. Sema: claim `Index`-over-container when it is the base of a member access, type that
+   member from the element struct, and keep rejecting a bare `ps[i]`.
+2. Builder: emit one `GetElementPtr` for the claimed pair, carrying the container as
+   `lhs`, the row index as `operand` and the field as `field_index`, instead of the
+   two-op chain. This reuses the existing op and needs no new op kind.
+3. Lowering: when `lhs.type.is_soa()`, compute the mixed offset in i64 and take an `i8`
+   GEP, then record the column alignment rather than the struct's.
+4. Tests: write and read every field of every index including the last, then force a
+   major collection with the container still reachable.
+
 ## Invariants that must not be broken
 
 - Ordinary structs, AoS layout, and their tests are untouched by every stage.
