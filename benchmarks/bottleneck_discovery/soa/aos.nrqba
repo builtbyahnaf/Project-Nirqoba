@@ -1,0 +1,12 @@
+struct Particle { int x; int y; int mass; }
+int function main() {
+    var n = 2000000;
+    var a = memory.owned_array<Particle>(n);
+    for (var i = 0; i < n; i += 1) { a[i].x = i; a[i].y = i * 2; a[i].mass = 7; }
+    var sum = 0;
+    for (var r = 0; r < 200; r += 1) {
+        for (var j = 0; j < n; j += 1) { sum += a[j].x; }
+    }
+    print(sum);
+    return 0;
+}

@@ -1,0 +1,17 @@
+// Explicit SoA: the container owns one owned array per column. Identity is the
+// container's; each column is a separately owned array, so a borrowed view of a
+// column is an ordinary borrowed array view and destruction is the container's
+// columns going out of scope.
+int function main() {
+    var n = 2000000;
+    var x = memory.owned_array<int>(n);
+    var y = memory.owned_array<int>(n);
+    var mass = memory.owned_array<int>(n);
+    for (var i = 0; i < n; i += 1) { x[i] = i; y[i] = i * 2; mass[i] = 7; }
+    var sum = 0;
+    for (var r = 0; r < 200; r += 1) {
+        for (var j = 0; j < n; j += 1) { sum += x[j]; }
+    }
+    print(sum);
+    return 0;
+}
