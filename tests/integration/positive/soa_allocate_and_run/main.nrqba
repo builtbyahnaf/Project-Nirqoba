@@ -1,0 +1,10 @@
+// Stage 2c: a container can be created. Its payload is one object holding every
+// column, so this exercises the allocation, the root registration and the
+// deterministic release of an owned value whose element type is a struct.
+struct Point { int x; int y; }
+
+int function main() {
+    var points = memory.owned_soa<Point>(4);
+    print(1);
+    return 0;
+}

@@ -95,7 +95,8 @@ static bool contains_array_view(const Type& type) {
 }
 
 static string cleanup_for_type(const Type& type) {
-  if (type.is_owned_array() || type.is_soa()) return "array.owned_release";
+  if (type.is_soa()) return "soa.owned_release";
+  if (type.is_owned_array()) return "array.owned_release";
   if (type.is_owned_pointer()) return "memory.deallocate";
   return contains_owned_array(type) ? "aggregate.owned_drop" : string{};
 }
@@ -120,6 +121,7 @@ static bool expression_creates_owned_pointer(const Expr& expr) {
          callee == "memory.map_file" || callee == "memory.shared_allocate" ||
          callee == "memory.shared_retain" || callee == "mutex.create" ||
          callee == "memory.owned_array" ||
+         callee == "memory.owned_soa" ||
          callee == "memory.owned_array_aligned" || callee == "socket.connect";
 }
 
@@ -2540,6 +2542,32 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "array view conflicts with a live mutable borrow");
     }
     return Type::array_view_type(element_type);
+  }
+  // `memory.owned_soa<T>(n)` is the only way to create a container, so the
+  // restrictions here are what keep the runtime safe: no reference columns until
+  // the strided trace callback exists, and a struct element only.
+  if (call.callee() == "memory.owned_soa" && call.has_generic_argument()) {
+    Type element = resolve_aggregate_type(call.generic_argument());
+    if (!element.is_struct()) {
+      diagnostics_.error(diag::kTypeMismatch, call.location(),
+                         "soa<T> requires a struct type, found " + element.to_string());
+      return Type::error();
+    }
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kTypeMismatch, call.location(),
+                         "'memory.owned_soa<T>' takes an element count");
+      return Type::error();
+    }
+    for (const auto& field : element.struct_fields()) {
+      if (field.second.is_managed_pointer()) {
+        diagnostics_.error(
+            diag::kTypeMismatch, call.location(),
+            "soa<" + element.struct_name() + "> cannot own column '" + field.first +
+                "': reference columns need strided tracing, which is not implemented yet");
+        return Type::error();
+      }
+    }
+    return Type::soa_type(element);
   }
   if ((call.callee() == "memory.owned_array" ||
        call.callee() == "memory.owned_array_aligned") &&

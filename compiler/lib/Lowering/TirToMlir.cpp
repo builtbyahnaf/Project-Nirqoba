@@ -28,6 +28,9 @@ namespace {
 
 static mlir::Type tir_type_to_mlir(const Type& type, mlir::MLIRContext* ctx,
                                    mlir::Builder& builder) {
+  // A container is one block of columns, so its value is a pointer to that block;
+  // the same representation an owned array's data pointer uses.
+  if (type.is_soa()) return mlir::LLVM::LLVMPointerType::get(ctx);
   if (type.is_bool()) return builder.getI1Type();
   if (type.is_char()) return builder.getI32Type();
   if (type.is_f32()) return builder.getF32Type();
@@ -2726,6 +2729,57 @@ class FunctionTranslator {
           if (arg_val) args.push_back(arg_val);
         }
 
+        // A container is one GC object whose payload is every column, packed in
+        // physical field order. `describe_soa` is the only authority for that
+        // geometry: the byte extent is count * element_bytes, and the element size
+        // passed to the runtime is that same element_bytes, so the header records
+        // the element count and the payload size agrees with the descriptor.
+        if (op.callee == "memory.owned_soa" && op.result.is_valid() &&
+            op.result.type.is_soa()) {
+          const SoaLayout layout = describe_soa(op.result.type);
+          if (layout.element_bytes == 0 || args.size() != 1) {
+            diag_.error("NRQ4005", op.location,
+                        "internal: invalid soa<T> layout or missing count");
+            return false;
+          }
+          mlir::Value count = args[0];
+          const mlir::Type i64 = builder_.getI64Type();
+          if (count.getType() != i64) {
+            const unsigned bits = count.getType().getIntOrFloatBitWidth();
+            count = bits < 64
+                ? builder_.create<mlir::LLVM::ZExtOp>(loc, i64, count).getResult()
+                : builder_.create<mlir::LLVM::TruncOp>(loc, i64, count).getResult();
+          }
+          mlir::Value root_slot = alloca_at_entry(llvm_ptr_type(ctx_), loc);
+          if (!root_slot) {
+            diag_.error("NRQ4005", op.location,
+                        "internal: no entry block for a managed allocation root");
+            return false;
+          }
+          register_gc_root(root_slot, op.result.type, loc);
+          auto fn = ensure_runtime_fn(module_, builder_,
+                                      "nrq_gc_allocate_array_typed_rooted",
+                                      llvm_ptr_type(ctx_),
+                                      {llvm_ptr_type(ctx_), builder_.getI64Type(),
+                                       builder_.getI64Type(),
+                                       llvm_ptr_type(ctx_), builder_.getI64Type()});
+          mlir::Value size = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, builder_.getI64Type(),
+              builder_.getI64IntegerAttr(static_cast<int64_t>(layout.element_bytes)))
+                                .getResult();
+          mlir::Value ref_count = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, builder_.getI64Type(), builder_.getI64IntegerAttr(0)).getResult();
+          // No reference columns exist at this stage (semantic analysis refuses
+          // them), so the descriptor argument is empty and the runtime trusts the
+          // zero count.
+          mlir::Value offsets_pointer = builder_.create<mlir::LLVM::ZeroOp>(
+              loc, llvm_ptr_type(ctx_)).getResult();
+          mlir::Value result = builder_.create<mlir::LLVM::CallOp>(
+              loc, fn, mlir::ValueRange{root_slot, count, size, offsets_pointer,
+                                        ref_count}).getResult();
+          set(op.result, result);
+          return true;
+        }
         if ((op.callee == "memory.owned_array" ||
              op.callee == "memory.owned_array_aligned") && op.result.is_valid() &&
             op.result.type.is_owned_array()) {
@@ -2943,6 +2997,19 @@ class FunctionTranslator {
           return true;
         }
 
+        // The container owns one block: unregister its root, then free it. There is
+        // no descriptor aggregate to extract, unlike an owned array value.
+        if (op.callee == "soa.owned_release" && args.size() == 1) {
+          auto unregister = ensure_runtime_fn(
+              module_, builder_, "nrq_gc_root_unregister",
+              mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
+          builder_.create<mlir::LLVM::CallOp>(loc, unregister,
+                                              mlir::ValueRange{args[0]});
+          // The block belongs to the collector, so releasing ownership is exactly
+          // unregistering the root: freeing it here would be a double free the
+          // sweep would then undo a second time.
+          return true;
+        }
         if (op.callee == "array.owned_release" && args.size() == 1) {
           mlir::Value data = builder_.create<mlir::LLVM::ExtractValueOp>(
               loc, args[0], builder_.getDenseI64ArrayAttr({0})).getResult();
