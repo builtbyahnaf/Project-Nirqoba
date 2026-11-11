@@ -1,5 +1,17 @@
 # Nirqoba Version Log
 
+**Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
+
+I, Muhammad Tahmid Ahnaf (@builtbyahnaf), am the sole author and owner of Nirqoba and
+hold sole authority over its direction, architecture, language design, and every
+technical or project decision. No change to the language, compiler, runtime, toolchain,
+documentation, or process is authorized without my explicit approval, and every release
+recorded below is made under that authority.
+
+> Note: The changes before `0.102-beta` were massive, so they were intentionally left out here.
+
+---
+
 ## Version 0.401-beta (working build)
 
 ### Summary of Changes (since `0.397-beta`):
@@ -199,12 +211,6 @@ narrowing.*
 Not implemented: `@Nullable` on parameters, returns and fields; narrowing through
 `&&`, `||`, `while`, ternaries or helper predicates; nullability as part of the type
 itself (a nullable and a plain pointer share one TIR type); interpolation.
-
-**Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
-
-> Note: The changes before `0.102-beta` were massive, so they were intentionally left out here.
-
----
 
 ## Version 0.378-beta   
 
