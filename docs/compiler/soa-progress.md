@@ -529,7 +529,7 @@ Random access is parity: the cache misses dominate and the count load plus two-s
 address arithmetic is pure overhead. AoSoA with block width 4 gives no benefit at these
 sizes because a 48-byte block means scanning one field still pulls the whole block.
 Millisecond resolution makes the cache-resident ratios directional rather than precise.
-### Stage 4 follow-up: profiling counters (this commit)
+### Stage 4 follow-up: profiling counters (cfe42bc)
 
 Milliseconds were too coarse: cache-resident results sat 1-2 clock ticks apart. Added
 `time.cycles()` (`nrq_time_cycles` -> `__rdtsc`, declared in `runtime/.../system.h`,
