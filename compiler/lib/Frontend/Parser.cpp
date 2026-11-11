@@ -1230,7 +1230,7 @@ ExprPtr Parser::parse_primary() {
         return make_unique<CallExpr>(token.location, move(qualified_name),
                                      move(arguments));
       }
-      if (token.text == "nullptr") {
+      if ((token.text == "nullptr" || token.text == "NULL")) {
         // §8.7: `nullptr` is the null pointer literal. It is intentionally untyped
         // here; semantic analysis gives it the pointer type of its destination.
         return make_unique<IntegerLiteralExpr>(token.location, 0, "", true);

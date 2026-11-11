@@ -1,0 +1,16 @@
+// NULL and nullptr are the same null pointer literal, including in 'is' checks.
+int function main() {
+    @Nullable var g: ptr int = NULL;
+    if (g is NULL) {
+        print(1);
+    }
+    if (g is nullptr) {
+        print(2);
+    }
+    var s: int = 5;
+    @Nullable var p: ptr int = &s;
+    if (p is not NULL) {
+        print(*p);
+    }
+    return 0;
+}
