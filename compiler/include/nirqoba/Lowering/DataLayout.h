@@ -66,6 +66,40 @@ struct AggregateLayout {
   std::vector<FieldLayout> fields;
 };
 
+// One column of a `soa<T>` container.
+struct SoaColumn {
+  std::string name;
+  Type type;
+  // Position of this column among the container's columns, in physical field
+  // order. Byte offsets depend on the element count, so they are derived rather
+  // than stored: base_bytes(column, count) = index_in_bytes(column) * count.
+  uint64_t index_in_bytes = 0;
+  uint64_t element_bytes = 0;
+  uint64_t alignment = 1;
+};
+
+// Layout of a `soa<T>` container, which is the only place column arithmetic is
+// defined. The payload is one contiguous column per field, so:
+//
+//   column_base(count, c)  = payload + c.index_in_bytes * count
+//   column_element(c, i)   = column_base(count, c) + i * c.element_bytes
+//   payload_bytes(count)   = count * element_bytes
+//
+// `element_bytes` is the sum of the field sizes, i.e. the size of one logical
+// element spread across the columns, and `index_in_bytes` is the running sum of
+// the earlier columns' element sizes.
+struct SoaLayout {
+  std::string name;
+  uint64_t element_bytes = 0;
+  uint64_t alignment = 1;
+  std::vector<SoaColumn> columns;
+  // Bytes the payload needs for `count` elements.
+  uint64_t payload_bytes(uint64_t count) const { return count * element_bytes; }
+};
+
+// Column layout of a `soa<T>`. `soa_type` must satisfy `is_soa()`.
+SoaLayout describe_soa(const Type& soa_type);
+
 // Layout of a struct or tuple: field offsets and sizes in physical order plus
 // the bytes wasted on padding.
 AggregateLayout describe_aggregate(const Type& type);

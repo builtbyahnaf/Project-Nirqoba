@@ -18,7 +18,7 @@ constexpr const char* kPrintBuiltin = "print";
 
 static bool contains_owned_array(const Type& type,
                                  unordered_set<string>& active_structs) {
-  if (type.is_owned_array() || type.is_owned_pointer()) return true;
+  if (type.is_owned_array() || type.is_owned_pointer() || type.is_soa()) return true;
   if (type.is_array() || type.is_tuple()) {
     if (type.is_array()) return contains_owned_array(type.element_type(), active_structs);
     for (const Type& element : type.tuple_elements())
@@ -70,7 +70,8 @@ static bool contains_nested_owned_array(const Type& type) {
 static bool contains_array_view(const Type& type,
                                 unordered_set<string>& active_structs) {
   if (type.is_array_view()) return true;
-  if (type.is_owned_array()) return contains_array_view(type.element_type(), active_structs);
+  if (type.is_owned_array() || type.is_soa())
+    return contains_array_view(type.element_type(), active_structs);
   if (type.is_array()) return contains_array_view(type.element_type(), active_structs);
   if (type.is_tuple()) {
     for (const Type& element : type.tuple_elements())
@@ -94,7 +95,7 @@ static bool contains_array_view(const Type& type) {
 }
 
 static string cleanup_for_type(const Type& type) {
-  if (type.is_owned_array()) return "array.owned_release";
+  if (type.is_owned_array() || type.is_soa()) return "array.owned_release";
   if (type.is_owned_pointer()) return "memory.deallocate";
   return contains_owned_array(type) ? "aggregate.owned_drop" : string{};
 }
