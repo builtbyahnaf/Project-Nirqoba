@@ -1980,34 +1980,37 @@ bool sweep_chunk_locked(size_t budget_bytes) {
   auto sweep_object = [&](ObjectHeader* header) -> bool {
     const bool collectable = !active_collection_is_minor || header->young();
     if (!header->marked() && collectable) {
+      // The page and the payload size are both loop-invariant for this object and
+      // were re-read at every use: eight loads of `header->page` and three
+      // recomputations of the same payload size for one reclaimed object. Resolve
+      // each once, where the reclaim path starts.
+      GcPage* const page = header->page;
+      const size_t payload_bytes = object_payload_bytes(*header);
       const size_t object_offset = static_cast<size_t>(
-          static_cast<unsigned char*>(header->payload()) -
-          header->page->storage);
-      if (page_uses_index(header->page)) {
+          static_cast<unsigned char*>(header->payload()) - page->storage);
+      if (page_uses_index(page)) {
         object_index.erase(header->payload());
       } else {
-        clear_object_start(*header->page, object_offset);
+        clear_object_start(*page, object_offset);
       }
       // The object's storage becomes reusable space in its own page instead of
       // being lost to the bump cursor.
-      release_span_locked(*header->page,
+      release_span_locked(*page,
                           object_offset - sizeof(ObjectHeader),
-                          object_span_bytes(object_payload_bytes(*header)));
+                          object_span_bytes(payload_bytes));
       if (!header->young()) ++reclaimed_old;
       statistics.collected_bytes = saturated_add(
-          statistics.collected_bytes,
-          static_cast<uint64_t>(object_payload_bytes(*header)));
+          statistics.collected_bytes, static_cast<uint64_t>(payload_bytes));
       if (statistics.live_objects != 0) --statistics.live_objects;
-      const size_t payload_bytes = object_payload_bytes(*header);
       live_heap_bytes = live_heap_bytes > payload_bytes
                             ? live_heap_bytes - payload_bytes
                             : 0;
-      if (!header->page || header->page->live_objects == 0)
+      if (!page || page->live_objects == 0)
         nrq_runtime_fatal("GC page live-object count underflow");
-      --header->page->live_objects;
-      if (header->young()) --header->page->young_objects;
-      if (header->page->live_objects == 0) {
-        header->page->retired = true;
+      --page->live_objects;
+      if (header->young()) --page->young_objects;
+      if (page->live_objects == 0) {
+        page->retired = true;
         ++retired_page_count;
       }
       destroy_object_storage(header);
@@ -2022,6 +2025,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
       uint32_t survived = header->state_word() & ~ObjectHeader::kMarkedBit;
       const bool was_young =
           (survived & ObjectHeader::kYoungBit) != 0;
+      GcPage* const page = header->page;
       if (active_collection_is_minor) {
         if (was_young) {
           uint32_t age = (survived & ObjectHeader::kAgeMask) >>
@@ -2031,7 +2035,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
             survived &= ~(ObjectHeader::kYoungBit | ObjectHeader::kAgeMask |
                           ObjectHeader::kRememberedBit);
             header->set_state(survived);
-            --header->page->young_objects;
+            --page->young_objects;
             ++promoted_young;
             promotion_raised_barrier = true;
             remember_children_locked(header);
@@ -2045,7 +2049,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
         header->set_state(survived);
       } else {
         if (was_young) {
-          --header->page->young_objects;
+          --page->young_objects;
           ++promoted_young;
           promotion_raised_barrier = true;
         }
