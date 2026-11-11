@@ -1978,8 +1978,14 @@ bool sweep_chunk_locked(size_t budget_bytes) {
   // Reclaims one object, or leaves it for the next cycle. Returns true when the
   // object was freed, so the caller cannot go on to treat it as a survivor.
   auto sweep_object = [&](ObjectHeader* header) -> bool {
-    const bool collectable = !active_collection_is_minor || header->young();
-    if (!header->marked() && collectable) {
+    // One read of the state word answers every question this function asks:
+    // young, marked, and the value the survivor path rewrites. It used to be read
+    // three times per object, once per question.
+    const uint32_t state = header->state_word();
+    const bool young = (state & ObjectHeader::kYoungBit) != 0;
+    const bool marked = (state & ObjectHeader::kMarkedBit) != 0;
+    const bool collectable = !active_collection_is_minor || young;
+    if (!marked && collectable) {
       // The page and the payload size are both loop-invariant for this object and
       // were re-read at every use: eight loads of `header->page` and three
       // recomputations of the same payload size for one reclaimed object. Resolve
@@ -1998,7 +2004,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
       release_span_locked(*page,
                           object_offset - sizeof(ObjectHeader),
                           object_span_bytes(payload_bytes));
-      if (!header->young()) ++reclaimed_old;
+      if (!young) ++reclaimed_old;
       statistics.collected_bytes = saturated_add(
           statistics.collected_bytes, static_cast<uint64_t>(payload_bytes));
       if (statistics.live_objects != 0) --statistics.live_objects;
@@ -2008,7 +2014,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
       if (!page || page->live_objects == 0)
         nrq_runtime_fatal("GC page live-object count underflow");
       --page->live_objects;
-      if (header->young()) --page->young_objects;
+      if (young) --page->young_objects;
       if (page->live_objects == 0) {
         page->retired = true;
         ++retired_page_count;
@@ -2017,12 +2023,12 @@ bool sweep_chunk_locked(size_t budget_bytes) {
       return true;
     }
 
-    if (header->marked()) {
+    if (marked) {
       // Everything the survivor needs to become one word: the mark is always
       // cleared, and an aging or promoting object also rewrites its age. The
       // fields left untouched keep their bits, which a mask guarantees and a
       // sequence of separate flag stores cannot.
-      uint32_t survived = header->state_word() & ~ObjectHeader::kMarkedBit;
+      uint32_t survived = state & ~ObjectHeader::kMarkedBit;
       const bool was_young =
           (survived & ObjectHeader::kYoungBit) != 0;
       GcPage* const page = header->page;
