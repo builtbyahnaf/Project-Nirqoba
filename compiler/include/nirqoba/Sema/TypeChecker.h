@@ -88,6 +88,11 @@ class TypeChecker {
   SymbolTable loop_exit_state_after_defer() const;
   bool field_path(const Expr& expression, std::string& root,
                   std::string& path) const;
+  // Resolves the struct type at a dotted field path (leading dot allowed).
+  Type type_at_field_path(const Type& type, const std::string& path);
+  // Records a field assignment and propagates completion to enclosing aggregates
+  // once every child of an aggregate is initialized.
+  void mark_field_initialized(const std::string& root, const std::string& path);
   const Symbol* find_borrow_origin(const Expr& expression) const;
   void consume_field_move(Expr& expression, const Type& value_type);
 

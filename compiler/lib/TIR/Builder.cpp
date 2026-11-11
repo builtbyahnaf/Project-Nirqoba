@@ -369,10 +369,13 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
 
       // Copying an aggregate with shared fields acquires one reference per copied
       // field; a transferring initializer moves them instead and must not retain.
-      if (contains_shared_pointer(slot_type) &&
-          declaration.initializer().kind() == Expr::Kind::Name &&
-          !declaration.initializer().transfers_ownership() &&
-          declaration.initializer().ownership() == ValueOwnership::Shared) {
+      const Expr& copy_source = declaration.initializer();
+      const bool copies_shared_aggregate =
+          copy_source.kind() == Expr::Kind::MemberAccess ||
+          (copy_source.kind() == Expr::Kind::Name &&
+           copy_source.ownership() == ValueOwnership::Shared);
+      if (contains_shared_pointer(slot_type) && copies_shared_aggregate &&
+          !copy_source.transfers_ownership()) {
         tir::Op retain;
         retain.kind = tir::OpKind::Call;
         retain.location = declaration.location();
@@ -408,10 +411,13 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       store.lhs = slot;
       store.result = slot;
       function.add_operation(std::move(store));
-      if (contains_shared_pointer(slot.type) &&
-          assignment.value().kind() == Expr::Kind::Name &&
-          !assignment.value().transfers_ownership() &&
-          assignment.value().ownership() == ValueOwnership::Shared) {
+      const Expr& copy_source = assignment.value();
+      const bool copies_shared_aggregate =
+          copy_source.kind() == Expr::Kind::MemberAccess ||
+          (copy_source.kind() == Expr::Kind::Name &&
+           copy_source.ownership() == ValueOwnership::Shared);
+      if (contains_shared_pointer(slot.type) && copies_shared_aggregate &&
+          !copy_source.transfers_ownership()) {
         tir::Op retain;
         retain.kind = tir::OpKind::Call;
         retain.location = assignment.location();
