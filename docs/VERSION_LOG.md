@@ -6,12 +6,36 @@
 
 ---
 
-## Version 0.351-beta (working build)
+## Version 0.353-beta (working build)
+
+### Summary of Changes (since `0.351-beta`):
+
+*Current working build, opened after 0.351-beta. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.351-beta (released)
 
 ### Summary of Changes (since `0.346-beta`):
 
-*Current working build, opened after 0.346-beta. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Released after two upgrades. Section E2 investigated and closed with a negative
+result.*
+
+- **Nesting a struct in an array pays no extra stride.** An aggregate's size is
+  already rounded up to its own alignment, so `length * size` leaves no gap between
+  elements and there was nothing to tighten; recorded with the source citation
+  rather than a speculative change.
+- **Hot/cold field position was measured and does not pay.** Moving a hot field from
+  the first cache line of a 128-byte record to the second moved a sequential scan by
+  -7.5% and a random scan by -0.9% - the first contrary to the hypothesis and not
+  reproduced by the second, so it is variance. Record size (1.83x for two lines),
+  object order (2.6x random) and field separation (24x for SoA) were what moved the
+  scan, and none of them is field order.
+- **No reordering, indirection, header change or tracing change was made**, because
+  no measurement supported one. The committed probe
+  (`benchmarks/bottleneck_discovery/hot_cold/field_position.cpp`) is the harness that
+  would have to show an effect to reopen it.
 
 ---
 
