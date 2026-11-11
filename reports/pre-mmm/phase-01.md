@@ -1,7 +1,7 @@
 # Pre-MMM Phase 1 - Ownership inside aggregates
 
 **Status:** In progress
-**Version:** 0.397-beta
+**Version:** 0.398-beta
 **Date:** 2026-11-11
 
 ## Implemented
@@ -26,7 +26,10 @@
   as not live until assigned, and destroys only initialized fields because untouched
   fields are null (0.396-beta). Whole-value uses of a partially initialized aggregate
   are rejected, and overwriting a partially initialized nested aggregate is rejected
-  instead of leaking (0.397-beta).
+  instead of leaking (0.397-beta). A nested aggregate whose fields are all initialized
+  is recognized as complete, and completion propagates to its enclosing
+  aggregate, so whole-value reads, copies and moves become valid again
+  (0.398-beta).
 - Owned arrays as struct fields work (parser capability from 0.384).
 
 ## Open
@@ -70,5 +73,15 @@
 - `positive/uninit_full_then_copy_ok`: a fully initialized aggregate can be copied
   (shared count 2, value 6).
 - `positive/uninit_nested_fieldwise_ok`: nested fields initialized one by one (9).
+- `positive/uninit_nested_complete_copy`: completed nested aggregate copied as a whole
+  (shared count 2, value 8).
+- `positive/uninit_nested_complete_parent`: completed parent copied as a whole
+  (shared count 2, value 8).
+- `positive/uninit_nested_complete_move`: completed owned nested aggregate moved out
+  (11).
+- `negative/uninit_nested_incomplete_copy`: an incomplete nested aggregate cannot be
+  copied.
+- `negative/uninit_parent_incomplete_copy`: a parent with one field still
+  uninitialized cannot be copied.
 - `positive/shared_field_construction`: construction from `memory.shared_allocate`
   starts at count 1.

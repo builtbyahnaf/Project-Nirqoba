@@ -306,3 +306,18 @@ rejected at compile time.
 Neither guard adds runtime state: both are semantic checks over the existing
 per-symbol field sets, and destruction remains the zeroed-slot recursive drop.
 
+## Initialization completion (0.398-beta)
+
+Field-by-field initialization now completes a nested aggregate. After each field
+assignment the checker tests whether every child of the enclosing aggregate is
+initialized; when it is, the enclosing path leaves the uninitialized set and the test
+repeats for its own parent. A completed nested aggregate can therefore be read or
+copied as a whole, and a parent whose fields were all completed that way can be used
+as a whole as well.
+
+Completion feeds the existing ownership paths rather than adding new ones: copying a
+completed aggregate with shared fields retains them, and moving a completed aggregate
+with owned fields transfers them. Aggregates that are still incomplete keep every
+guard: whole-value use, reads of uninitialized fields and whole-field overwrites stay
+rejected.
+
