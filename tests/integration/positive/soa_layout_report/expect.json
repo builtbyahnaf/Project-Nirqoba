@@ -1,0 +1,10 @@
+{
+  "mode": "build",
+  "args": ["--emit=layout"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "soa Point element 9 align 8 columns 2",
+    "x : int index 0 (element 8 bytes, align 8)",
+    "flag : bool index 8 (element 1 bytes, align 1)"
+  ]
+}

@@ -2038,6 +2038,11 @@ Type TypeChecker::resolve_aggregate_type(const Type& type,
     }
     return Type::tuple_type(move(elements));
   }
+  // A container's element is a struct, and its fields are the container's shape:
+  // leaving them unresolved would make describe_soa see a fieldless type and report
+  // zero columns.
+  if (type.is_soa())
+    return Type::soa_type(resolve_aggregate_type(type.element_type(), active));
   if (type.is_owned_array())
     return Type::owned_array_type(resolve_aggregate_type(type.element_type(), active));
   if (type.is_owned_pointer())
