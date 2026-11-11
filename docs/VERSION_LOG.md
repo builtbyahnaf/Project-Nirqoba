@@ -19,7 +19,20 @@ version yet; entries are added as changes are committed.*
 
 ### Summary of Changes (since `0.353-beta`):
 
-*Released after two upgrades. Section E4 evaluated and scoped.*
+*Released after two runtime upgrades. The E4 benchmark and evaluation that landed
+under this window are measurement, not upgrades, and are listed after them.*
+
+- **The sweep resolves the page and the payload size once per object.** The reclaim
+  path read `header->page` at eight uses and recomputed the payload size three times
+  for one object; both are invariant within the object. Measured 3594 ms before and
+  3598 ms after, best of five - neutral, because the compiler was already hoisting
+  these loads. Committed for one resolution per object, not for a claimed speedup.
+- **The sweep reads the state word once instead of three times.** Young, marked and
+  the survivor's rewritten value come from one load, with the flags derived from it.
+  Best of five 3594 -> 3471 ms, but the run-to-run spread is wider than that, so no
+  speedup is claimed.
+- Measurement that is not an upgrade: the AoS/SoA/AoSoA programs and the E4 report
+  (`reports/performance/ohr-section-e4.md`).
 
 - **The three layouts were measured on the same compiler.** Two million three-field
   records, two hundred column scans: AoS 642 ms, SoA 260 ms (2.47x), AoSoA 308 ms
