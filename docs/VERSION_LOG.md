@@ -1,5 +1,27 @@
 # Nirqoba Version Log
 
+## 0.396-beta - `uninit` partial struct initialization
+
+`var h: T = uninit;` declares a zero-initialized aggregate whose fields are then
+assigned individually. Each field starts in the same moved/not-live state the compiler
+already tracks for moved fields, so a read before initialization is rejected with
+NRQ3033 and `uninit` requires a mutable `var` binding (otherwise no field could be
+initialized).
+
+Assignment to `h.field` (or a nested path such as `h.inner.data`) initializes that
+field and clears its subtree from the not-live set. The slot itself is zeroed, so
+destruction only releases the fields that were actually initialized: untouched owned
+and shared fields are null and their release is a no-op, while nested aggregates drop
+recursively. Moved and reinitialized fields keep their existing semantics, and fully
+initialized aggregates are unchanged with no added runtime state.
+
+Limitation: a partially initialized aggregate must not be used as a whole value
+(copied, moved, returned or passed), which is not yet rejected; initialize all fields
+before such a use. Native-resource fields remain unimplemented.
+
+
+
+
 ## 0.391-beta - Shared pointer fields
 
 `shared ptr T` struct fields now carry a distinct `TypeKind::SharedPointer`, so

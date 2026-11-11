@@ -1,0 +1,13 @@
+// A nested aggregate is assigned as a whole and destroyed recursively.
+struct Inner { owned ptr int data; }
+struct Outer { Inner inner; shared ptr int extra; int tag; }
+int function main() {
+    var o: Outer = uninit;
+    o.inner = Inner { data: memory.allocate<int>(1) };
+    *o.inner.data = 5;
+    o.extra = memory.shared_allocate<int>(1);
+    *o.extra = 2;
+    o.tag = 1;
+    print(*o.inner.data + *o.extra + o.tag);
+    return 0;
+}

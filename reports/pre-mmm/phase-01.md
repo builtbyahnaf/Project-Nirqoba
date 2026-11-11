@@ -1,7 +1,7 @@
 # Pre-MMM Phase 1 - Ownership inside aggregates
 
 **Status:** In progress
-**Version:** 0.391-beta
+**Version:** 0.396-beta
 **Date:** 2026-11-11
 
 ## Implemented
@@ -22,6 +22,9 @@
   reference, copies retain every shared field (`aggregate.shared_retain`), moves
   transfer without retaining, and destruction releases once per field at any nesting
   depth (0.391-beta).
+- `var h: T = uninit;` declares a zero-initialized aggregate, tracks each field
+  as not live until assigned, and destroys only initialized fields because untouched
+  fields are null (0.396-beta).
 - Owned arrays as struct fields work (parser capability from 0.384).
 
 ## Open
@@ -48,5 +51,13 @@
   across a scope exit (2, 14, 1).
 - `positive/shared_field_move_owned`: moving an owning aggregate transfers the shared
   reference without retaining (1).
+- `positive/uninit_partial_initialization`: fields initialized one at a time, then
+  released (9).
+- `positive/uninit_nested_cleanup`: nested aggregate assigned as a whole, recursive
+  release (8).
+- `positive/uninit_moved_field_reinit`: a field initialized, moved out and
+  reinitialized (12).
+- `negative/uninit_read_before_init`: reading an uninitialized field is NRQ3033.
+- `negative/uninit_requires_var`: `let`/`const` partial aggregates are rejected.
 - `positive/shared_field_construction`: construction from `memory.shared_allocate`
   starts at count 1.

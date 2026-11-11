@@ -1,0 +1,13 @@
+// An initialized field can be moved out and reinitialized.
+struct Holder { owned ptr int data; int tag; }
+int function main() {
+    var h: Holder = uninit;
+    h.tag = 1;
+    h.data = memory.allocate<int>(1);
+    *h.data = 7;
+    var moved = h.data;
+    h.data = memory.allocate<int>(1);
+    *h.data = 4;
+    print(*moved + *h.data + h.tag);
+    return 0;
+}

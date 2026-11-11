@@ -1,0 +1,12 @@
+// Fields are initialized individually after `uninit`.
+struct Holder { owned ptr int data; shared ptr int count; int tag; }
+int function main() {
+    var h: Holder = uninit;
+    h.tag = 3;
+    h.data = memory.allocate<int>(1);
+    *h.data = 4;
+    h.count = memory.shared_allocate<int>(1);
+    *h.count = 2;
+    print(*h.data + *h.count + h.tag);
+    return 0;
+}

@@ -1058,6 +1058,19 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
     symbol.shared_allocation = true;
     if (symbol.cleanup_callee.empty()) symbol.cleanup_callee = "aggregate.owned_drop";
   }
+  const bool uninitialized_declaration =
+      declaration.initializer().kind() == Expr::Kind::StructInit &&
+      static_cast<const StructInitExpr&>(declaration.initializer()).is_uninitialized();
+  if (uninitialized_declaration) {
+    if (declaration.binding() != BindingKind::Var)
+      diagnostics_.error(diag::kImmutableAssignment, declaration.location(),
+                         "'uninit' requires a mutable 'var' binding");
+    if (binding_type.is_struct() &&
+        (contains_owned_array(binding_type) || contains_shared_pointer(binding_type))) {
+      symbol.cleanup_callee = "aggregate.owned_drop";
+      symbol.owns_allocation = true;
+    }
+  }
   const uint64_t allocation_id = symbol.allocation_id;
   const string new_name = declaration.name();
   if (!symbols_.declare(move(symbol))) {
@@ -1066,6 +1079,17 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
   } else if (transferred_owner) {
     symbols_.mark_allocation_moved(allocation_id);
     symbols_.rebind_pointer(new_name, allocation_id);
+  }
+  // Every field starts uninitialized: it reads as a moved field until assigned,
+  // and the zeroed slot makes destruction of the untouched fields a no-op.
+  if (uninitialized_declaration && binding_type.is_struct()) {
+    if (const StructInfo* info = find_struct(binding_type.struct_name())) {
+      for (const Parameter& field : info->fields)
+        symbols_.mark_field_uninitialized(declaration.name(), "." + field.name);
+    } else {
+      for (const auto& field : binding_type.struct_fields())
+        symbols_.mark_field_uninitialized(declaration.name(), "." + field.first);
+    }
   }
   if (const Symbol* declared = symbols_.lookup(new_name))
     declaration.set_cleanup_callee(declared->borrowed ? string{}
@@ -1318,6 +1342,16 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     return;
   }
 
+  // Assigning a non-owned field initializes it, clearing that field's subtree so
+  // later reads are allowed. Owned fields clear this on their reinit path, after
+  // the moved/not-yet-initialized precondition has been checked.
+  if (assignment.target().kind() == Expr::Kind::MemberAccess &&
+      !contains_owned_array(target_type)) {
+    string field_root;
+    string field_target;
+    if (field_path(assignment.target(), field_root, field_target))
+      symbols_.clear_field_uninitialized(field_root, field_target);
+  }
   const Symbol* symbol = find_root_symbol(assignment.target(), symbols_);
   if (assignment.target().kind() == Expr::Kind::Index &&
       static_cast<const IndexExpr&>(assignment.target()).base().type().is_array_view()) {
@@ -1362,7 +1396,8 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                          "owned field reinitialization requires a live mutable aggregate owner");
       return;
     }
-    if (!symbols_.field_is_definitely_moved(field_owner, field_name)) {
+    if (!symbols_.field_is_definitely_moved(field_owner, field_name) &&
+        !symbols_.field_is_uninitialized(field_owner, field_name)) {
       diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
                          "owned field reinitialization requires the field to be moved on every control-flow path");
       return;
@@ -1412,6 +1447,7 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       symbols_.mark_allocation_moved(source->allocation_id);
     }
     symbols_.clear_field_moved(field_owner, field_name);
+    symbols_.clear_field_uninitialized(field_owner, field_name);
     return;
   }
   if (symbol != nullptr && symbol->borrowed && assignment.is_simple_name()) {
@@ -1425,7 +1461,11 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
   if (is_null_pointer_literal(assignment.value()) && target_type.is_pointer()) {
     // `p = nullptr;` retypes the literal to the destination pointer type.
     const_cast<Expr&>(assignment.value()).set_type(target_type);
-  } else if (target_type.is_valid() && value_type.is_valid() && target_type != value_type) {
+  } else if (target_type.is_valid() && value_type.is_valid() &&
+             target_type != value_type &&
+             !(target_type.is_shared_pointer() && value_type.is_pointer() &&
+               !value_type.is_shared_pointer() &&
+               value_type.element_type() == target_type.element_type())) {
     diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
                        "cannot assign a value of type '" + value_type.to_string() +
                            "' to target of type '" + target_type.to_string() + "'");
@@ -2634,6 +2674,15 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
           diagnostics_.error(diag::kUseAfterFree, expr.location(),
                              "use of an aggregate field after it was moved");
         }
+        string uninitialized_root;
+        string uninitialized_path;
+        if (!checking_lvalue_ &&
+            field_path(expr, uninitialized_root, uninitialized_path) &&
+            symbols_.field_is_uninitialized(uninitialized_root, uninitialized_path)) {
+          diagnostics_.error(diag::kUseAfterFree, expr.location(),
+                             "read of uninitialized aggregate field '" +
+                                 uninitialized_path + "'");
+        }
         if (contains_owned_array(field_type))
           expr.set_ownership(ValueOwnership::Owned);
         return field_type;
@@ -2663,6 +2712,14 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
 }
 
 Type TypeChecker::check_struct_init(StructInitExpr& expr) {
+  if (expr.is_uninitialized()) {
+    if (find_struct(expr.struct_name()) == nullptr) {
+      diagnostics_.error(diag::kTypeMismatch, expr.location(),
+                         "unknown struct type '" + expr.struct_name() + "'");
+      return Type::error();
+    }
+    return resolve_aggregate_type(Type::struct_type(expr.struct_name()));
+  }
   const StructInfo* info = find_struct(expr.struct_name());
   if (info == nullptr) {
     diagnostics_.error(diag::kUndefinedName, expr.location(),

@@ -177,8 +177,14 @@ class StructInitExpr : public Expr {
       : Expr(Kind::StructInit, std::move(location)), struct_name_(std::move(struct_name)),
         positional_inits_(std::move(positional_inits)), is_positional_(true) {}
 
+  // `uninit`: zero-initialized aggregate whose fields are assigned individually.
+  explicit StructInitExpr(SourceLocation location, std::string struct_name)
+      : Expr(Kind::StructInit, std::move(location)), struct_name_(std::move(struct_name)),
+        is_positional_(false), is_uninitialized_(true) {}
+
   const std::string& struct_name() const { return struct_name_; }
   bool is_positional() const { return is_positional_; }
+  bool is_uninitialized() const { return is_uninitialized_; }
   const std::vector<std::pair<std::string, ExprPtr>>& field_inits() const { return field_inits_; }
   const std::vector<ExprPtr>& positional_inits() const { return positional_inits_; }
 
@@ -187,6 +193,7 @@ class StructInitExpr : public Expr {
   std::vector<std::pair<std::string, ExprPtr>> field_inits_;
   std::vector<ExprPtr> positional_inits_;
   bool is_positional_;
+  bool is_uninitialized_ = false;
 };
 
 class NameExpr : public Expr {
