@@ -191,6 +191,31 @@ AggregateLayout describe_aggregate(const Type& type) {
   return layout;
 }
 
+SoaLayout describe_soa(const Type& soa_type) {
+  SoaLayout layout;
+  const Type element = soa_type.soa_element();
+  if (!element.is_struct()) return layout;
+  layout.name = element.struct_name();
+  // The column order is the struct's physical field order, so a container and an
+  // array of the same struct agree on which field comes first. Offsets accumulate
+  // in element bytes and nothing here depends on the element count.
+  uint64_t running_bytes = 0;
+  for (const std::size_t declaration : aggregate_physical_order(element)) {
+    const auto& field = element.struct_fields()[declaration];
+    SoaColumn column;
+    column.name = field.first;
+    column.type = field.second;
+    column.element_bytes = type_size(field.second);
+    column.alignment = type_alignment(field.second);
+    column.index_in_bytes = running_bytes;
+    running_bytes += column.element_bytes;
+    layout.alignment = std::max(layout.alignment, column.alignment);
+    layout.columns.push_back(std::move(column));
+  }
+  layout.element_bytes = running_bytes;
+  return layout;
+}
+
 std::string print_data_layout(const tir::Module& module) {
   std::vector<Type> structs;
   std::set<std::string> seen;
@@ -213,7 +238,18 @@ std::string print_data_layout(const tir::Module& module) {
 
   std::ostringstream out;
   out << "// data layout: widest-alignment-first fields, natural alignment\n";
-  if (structs.empty()) {
+  // A module can mention a `soa<T>` without any struct value reaching it, and that
+  // container still has a layout to report, so the empty-aggregate exit has to know
+  // about it.
+  bool any_soa = false;
+  for (const auto& function : module.functions()) {
+    if (!function) continue;
+    if (function->return_type().is_soa()) { any_soa = true; break; }
+    for (const auto& parameter : function->parameters())
+      if (parameter.type.is_soa()) { any_soa = true; break; }
+    if (any_soa) break;
+  }
+  if (structs.empty() && !any_soa) {
     out << "// no aggregate types\n";
     return out.str();
   }
@@ -232,6 +268,28 @@ std::string print_data_layout(const tir::Module& module) {
           << " (" << field.size << " bytes, align " << field.alignment << ")\n";
     }
     out << "}\n";
+  }
+  // SoA containers are reported in element units. A column's byte offset depends
+  // on the element count, which the type does not carry, so the report states the
+  // inputs of the formula rather than inventing a count.
+  std::set<std::string> printed_soa;
+  for (const auto& function : module.functions()) {
+    if (!function) continue;
+    std::vector<Type> soa_types;
+    if (function->return_type().is_soa()) soa_types.push_back(function->return_type());
+    for (const auto& parameter : function->parameters())
+      if (parameter.type.is_soa()) soa_types.push_back(parameter.type);
+    for (const Type& soa_type : soa_types) {
+      const SoaLayout layout = describe_soa(soa_type);
+      if (layout.columns.empty() || !printed_soa.insert(layout.name).second) continue;
+      out << "soa " << layout.name << " element " << layout.element_bytes
+          << " align " << layout.alignment << " columns " << layout.columns.size() << "\n";
+      for (const SoaColumn& column : layout.columns) {
+        out << "  " << column.name << " : " << column.type.to_string() << " index "
+            << column.index_in_bytes << " (element " << column.element_bytes
+            << " bytes, align " << column.alignment << ")" << "\n";
+      }
+    }
   }
   return out.str();
 }

@@ -1,0 +1,9 @@
+// The type exists and is inspectable, but nothing may create a container until
+// allocation and strided tracing land. There is no allocation entry point, so a
+// program that tries to make one has to fail rather than get a half-built object.
+struct Point { int x; int y; }
+
+int function main() {
+    var points = memory.owned_soa<Point>(4);
+    return 0;
+}

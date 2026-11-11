@@ -446,14 +446,11 @@ Type Parser::parse_type_annotation() {
     advance();
     Type element_type = parse_type_annotation();
     expect(TokenKind::Greater, "after the soa element type");
+    // The element must name a struct: the field set *is* the type's shape, so a
+    // scalar element is a mistake rather than something to lower.
     if (!element_type.is_struct()) {
       error_at(soa_token, kSoaNotReady,
                "soa<T> requires a struct type, found " + element_type.to_string());
-    } else {
-      error_at(soa_token, kSoaNotReady,
-               "soa<" + element_type.to_string() +
-                   "> is recognised but its allocation is not implemented yet; "
-                   "see docs/compiler/soa-type-design.md");
     }
     base_type = Type::soa_type(element_type);
   } else if (check(TokenKind::Identifier) && peek().text == "owned_ptr" &&
