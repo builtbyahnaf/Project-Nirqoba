@@ -1,0 +1,5 @@
+// A bare brace initializer needs a struct type; a pointer has no field list.
+int function main() {
+    ptr int p = {1};
+    return 0;
+}

@@ -211,7 +211,10 @@ pre-migration grammar work, not a description of what the current parser accepts
 - **Declarations.** C-style is the implemented convention: `Type name = value;` and
   brace initializers such as `Point p = {1, 2};` (positional or named). `var`/`let`
   remain alternatives and also accept the type-first spelling
-  `var ptr int g = nullptr;`. Call-style `Point(1, 2)` is still unsupported.
+  `var ptr int g = nullptr;`. A brace initializer is only valid for a struct type:
+  `ptr int g = {1};` is rejected with a diagnostic. A type-first declaration is
+  recognised only when the declared name is followed by `=`, so expressions are not
+  misread. Call-style `Point(1, 2)` is still unsupported.
 - **Null literals.** `nullptr` and `NULL` are the same null pointer literal in
   initializers, assignments and `is` / `is not` checks (implemented in 0.379-beta).
 - **Nullable placement.** The annotation qualifies the type:
