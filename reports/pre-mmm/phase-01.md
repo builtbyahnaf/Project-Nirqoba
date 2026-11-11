@@ -1,7 +1,7 @@
 # Pre-MMM Phase 1 - Ownership inside aggregates
 
-**Status:** In progress
-**Version:** 0.401-beta
+**Status:** Complete
+**Version:** 0.403-beta
 **Date:** 2026-11-11
 
 ## Implemented
@@ -30,15 +30,19 @@
   is recognized as complete, and completion propagates to its enclosing
   aggregate, so whole-value reads, copies and moves become valid again
   (0.401-beta).
+- Resource-domain owned fields (`owned file ptr byte`, `owned socket ptr byte`,
+  `owned mutex ptr byte`, `owned mapping ptr byte`, `owned secure ptr byte`) carry
+  their domain on the owned-pointer type. Construction requires a matching
+  producer, moves invalidate the source, reinitialization requires a prior move
+  and the same domain, and `aggregate.owned_drop` calls the domain destructor in
+  reverse declaration order, recursing through nested aggregates (0.403-beta).
 - Owned arrays as struct fields work (parser capability from 0.384).
 
 ## Open
 
-- `shared` pointer fields: need reference-count release at field destruction.
-- Resource-domain owned fields (`owned file ptr byte`): need per-domain cleanup
-  (file.close, socket.close, mutex.destroy, ...) carried into lowering.
-- `uninit` partial initialization and partial destruction.
-- Whole-aggregate moves already work; field-level moves and reinitialization verified.
+- None for Phase 1. Ownership contracts, field moves, reinitialization, partial
+  initialization, recursive destruction and resource-domain fields are implemented
+  and covered by the suites below.
 
 ## Tests
 
@@ -85,3 +89,20 @@
   uninitialized cannot be copied.
 - `positive/shared_field_construction`: construction from `memory.shared_allocate`
   starts at count 1.
+
+Resource-domain field coverage (0.403-beta):
+
+- `positive/resource_fields_all`: all five domains in one aggregate type, checked.
+- `positive/resource_fields_runtime`: file, mutex, mapping and secure fields
+  constructed, used and released by scope exit.
+- `positive/resource_fields_nested`: nested aggregate releases secret and mutex
+  before the enclosing file handle.
+- `positive/resource_field_reinit`: a moved-out file field is reinitialized from a
+  fresh handle.
+- `negative/resource_field_domain_mismatch`: a file field rejects a socket handle.
+- `negative/resource_field_plain_owned`: a plain owned pointer field rejects a
+  file handle.
+- `negative/resource_field_use_after_move`: reading a field after transferring it
+  to an owning parameter is rejected.
+- `negative/resource_field_direct_assign`: assigning a live resource field without
+  a prior move is rejected.
