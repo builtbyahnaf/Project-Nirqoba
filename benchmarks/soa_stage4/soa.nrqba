@@ -1,0 +1,32 @@
+// AoS baseline: array of structs, same operations as the other representations.
+struct Particle { int x; int y; int mass; }
+
+int function main() {
+    var n = 65536;
+    var rounds = 200;
+    var a = memory.owned_soa<Particle>(n);
+    for (var i = 0; i < n; i += 1) { a[i].x = i; a[i].y = i * 2; a[i].mass = 7; }
+
+    var t0 = time.now();
+    var s1 = 0;
+    for (var r = 0; r < rounds; r += 1) { for (var j = 0; j < n; j += 1) { s1 += a[j].x; } }
+    print(time.now() - t0); print(s1);
+
+    var t1 = time.now();
+    var s2 = 0;
+    for (var r = 0; r < rounds; r += 1) { for (var j = 0; j < n; j += 1) { s2 += a[j].x + a[j].y; } }
+    print(time.now() - t1); print(s2);
+
+    var t2 = time.now();
+    var s3 = 0;
+    var idx = 1;
+    for (var r = 0; r < rounds; r += 1) {
+        for (var j = 0; j < n; j += 1) { idx = (idx * 1103515245 + 12345) % n; s3 += a[idx].x; }
+    }
+    print(time.now() - t2); print(s3);
+
+    var t3 = time.now();
+    for (var r = 0; r < rounds; r += 1) { for (var j = 0; j < n; j += 1) { a[j].x = a[j].x + 1; } }
+    print(time.now() - t3); print(a[0].x + a[n - 1].x);
+    return 0;
+}
