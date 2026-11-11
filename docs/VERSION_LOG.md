@@ -1,177 +1,182 @@
 # Nirqoba Version Log
 
-## 0.397-beta - `uninit` soundness guards
+## Version 0.397-beta (working build)
 
-Two gaps in the 0.396 partial-initialization support are closed.
+### Summary of Changes (since `0.396-beta`):
 
-A partially initialized aggregate can no longer be used as a whole: copy, move,
-return, argument passing and any other whole-value context are rejected with a
-diagnostic naming the binding. Member access remains valid (it is what initializes
-fields), and assignment targets remain valid.
+*Opened after two soundness fixes to the `uninit` support.*
 
-Overwriting a nested aggregate that already has some fields initialized is rejected
-with a precise diagnostic instead of silently leaking the initialized contents.
-Per-symbol state now records the enclosing aggregate when a nested field is
-initialized (`o.inner.data` records `o.inner`); assigning the whole field checks that
-state first. Valid field-by-field initialization of nested aggregates, nested
-destruction, shared retain/release and moved-field reinitialization are unchanged.
+- **A partially initialized aggregate cannot be used as a whole.** Copying, moving,
+  returning, passing it as an argument or consuming it in any other whole-value
+  context reports a diagnostic naming the binding. Member access stays valid because
+  it is what initializes fields, and assignment targets stay valid.
+- **Overwriting a partially initialized nested aggregate is rejected.** Assigning
+  `o.inner` after `o.inner.data` was initialized would overwrite the initialized
+  contents without releasing them, so the assignment fails with a precise diagnostic.
+  Per-symbol state records the enclosing aggregate whenever a nested field is
+  initialized.
+- **Existing behavior is preserved.** Field-by-field initialization, nested
+  destruction, shared retain/release and moved-field reinitialization are unchanged,
+  and neither guard adds runtime state.
 
-Remaining Phase 1 gap: native-resource owned fields.
+Still unimplemented: native-resource owned fields.
 
+## Version 0.396-beta (working build)
 
+### Summary of Changes (since `0.391-beta`):
 
+*Opened after the `uninit` partial-initialization slice.*
 
-## 0.396-beta - `uninit` partial struct initialization
+- **`var h: T = uninit;` declares a partially initialized aggregate.** Both declaration
+  forms accept it, an explicit struct annotation is required, and the binding must be
+  `var` because otherwise no field could be initialized.
+- **Fields are initialized individually.** Each field starts in the moved/not-live
+  state the compiler already tracks, so reading it before assignment is rejected with
+  NRQ3033. Assigning `h.field` or a nested path clears that field and its subtree.
+- **Destruction releases only initialized fields.** The slot is zeroed, so untouched
+  owned and shared fields are null and their release is a no-op, while initialized
+  fields and nested aggregates drop recursively in reverse declaration order.
+- **Moved and reinitialized fields keep their semantics.** An owned field accepts its
+  first assignment because reinitialization now allows a field that is either moved or
+  not yet initialized.
+- **No cost for ordinary aggregates.** Fully initialized structs are unchanged and
+  carry no extra runtime state.
 
-`var h: T = uninit;` declares a zero-initialized aggregate whose fields are then
-assigned individually. Each field starts in the same moved/not-live state the compiler
-already tracks for moved fields, so a read before initialization is rejected with
-NRQ3033 and `uninit` requires a mutable `var` binding (otherwise no field could be
-initialized).
+Limitation: a partially initialized aggregate is not yet rejected when used as a whole
+value; copying, moving, returning or passing one must be avoided until all fields are
+assigned. Native-resource fields remain unimplemented.
 
-Assignment to `h.field` (or a nested path such as `h.inner.data`) initializes that
-field and clears its subtree from the not-live set. The slot itself is zeroed, so
-destruction only releases the fields that were actually initialized: untouched owned
-and shared fields are null and their release is a no-op, while nested aggregates drop
-recursively. Moved and reinitialized fields keep their existing semantics, and fully
-initialized aggregates are unchanged with no added runtime state.
+## Version 0.391-beta (working build)
 
-Limitation: a partially initialized aggregate must not be used as a whole value
-(copied, moved, returned or passed), which is not yet rejected; initialize all fields
-before such a use. Native-resource fields remain unimplemented.
+### Summary of Changes (since `0.390-beta`):
 
+*Opened after the shared pointer field slice.*
 
+- **Sharedness is part of the type.** `shared ptr T` fields resolve to
+  `TypeKind::SharedPointer` (`shared_ptr<T>`), so it survives type resolution and
+  `aggregate.owned_drop` can see it. The type is an ordinary pointer for dereference,
+  printing, equality, sizing, alignment and LLVM lowering.
+- **Copy retains.** Copying an aggregate with shared fields emits
+  `aggregate.shared_retain`, which calls `nrq_memory_shared_retain` once per shared
+  field at any nesting depth. Construction from `memory.shared_allocate` or
+  `memory.shared_retain` takes the initial reference without an extra retain.
+- **Destruction releases exactly once.** `nrq_memory_shared_release` runs once per
+  shared field in reverse declaration order, recursing into nested aggregates.
+- **Move transfers references.** A moved aggregate zeroes its source, so no retain is
+  emitted and only the destination releases.
+- **Ownership is validated.** Shared fields accept only shared values; owned, borrowed
+  and plain raw pointers are rejected. Shared-containing aggregates are copyable,
+  while aggregates with owned fields keep their move-only rules.
+- **Existing pointers and APIs are unchanged.** `memory.shared_*` and ordinary
+  pointers behave as before; `shared` locals keep their move-on-copy semantics.
 
+Still unimplemented: `uninit` partial initialization and native-resource owned fields.
 
-## 0.391-beta - Shared pointer fields
+## Version 0.390-beta (working build)
 
-`shared ptr T` struct fields now carry a distinct `TypeKind::SharedPointer`, so
-sharedness survives type resolution and is visible to aggregate destruction.
+### Summary of Changes (since `0.389-beta`):
 
-Semantics are retain-on-copy and release-on-destruction. Copying an aggregate that
-contains shared fields emits `nrq_memory_shared_retain` for every shared field at any
-nesting depth; destroying either binding emits `nrq_memory_shared_release` exactly
-once per field, reverse declaration order. An aggregate transferred by move (an
-aggregate that also owns resources) zeroes its source, so references move without a
-retain and are released only by the destination. Construction from
-`memory.shared_allocate`/`memory.shared_retain` acquires the initial reference and is
-not retained again.
+*Opened after the owned-pointer-field contract landed.*
 
-Shared fields must be initialized from a shared value; owned, borrowed, and plain raw
-pointers are rejected. Shared pointer types remain ordinary pointers for dereference,
-printing, sizing, and lowering, so ordinary pointers and the existing
-`memory.shared_*` APIs are unchanged. Shared-containing aggregates are copyable;
-aggregates with owned fields keep their move-only rules.
+- **A moved owned field can be reinitialized from a fresh owner.**
+  `h.data = memory.allocate<int>(2)` now uses the same raw-to-owned coercion as struct
+  construction instead of requiring an existing `owned_ptr<T>` value. The field must
+  still be moved on every path and the owner live and mutable.
+- **The nested-allocation restriction is narrower.** It now applies only to owned
+  arrays whose elements own resources, including through aggregates.
+- **Aggregates holding owned pointers can be nested.** A struct field whose type holds
+  `owned ptr` fields is accepted, and recursive destruction already drops it; this
+  also removes the earlier one-off field-level exemption.
 
-Remaining Phase 1 gaps: `uninit` partial initialization/destruction and
-native-resource owned fields.
+Still unimplemented: `shared` pointer fields, resource-domain owned fields
+(`owned file ptr byte` and friends), and `uninit` partial initialization.
 
+## Version 0.389-beta (working build)
 
+### Summary of Changes (since `0.384-beta`):
 
+*Opened after the first Pre-MMM Phase 1 ownership slice.*
 
-## 0.390-beta - Owned pointer field reinitialization and nesting
+- **`owned ptr T` fields are real owners.** The qualifier is carried in the field type
+  (`owned_ptr<T>`), so existing aggregate rules apply unchanged: a struct holding one
+  is move-only, copying invalidates the source, and the value is destroyed by
+  `aggregate.owned_drop` at scope exit.
+- **Destruction gained an owned-pointer case.** The field pointer is extracted, its GC
+  root registration released and `nrq_memory_deallocate_checked` called. Fields are
+  now dropped in reverse declaration order (LIFO), matching scope and parameter
+  destruction.
+- **Construction accepts an owner-producing expression** (`memory.allocate<T>(n)` and
+  the other resource producers) or transfers an owned local, which is marked moved so
+  it cannot be read or destroyed again. An owned field initialized from a borrow is
+  rejected.
+- **Rejections name the missing capability:** `shared` pointer fields (reference-count
+  release at field destruction), resource-domain owned fields such as
+  `owned file ptr byte` (per-domain field destruction), and unqualified raw pointer
+  fields.
 
-Completes the owned-pointer-field contract from 0.389. A moved owned field can be
-reinitialized directly from a fresh owner (`h.data = memory.allocate<int>(2)`), using
-the same raw-to-owned coercion struct construction already performed; previously this
-required the value to be exactly `owned_ptr<T>` and so was rejected.
+Still unimplemented: `uninit` partial initialization.
 
-The nested-allocation restriction now applies only to owned arrays whose elements own
-resources (including through aggregates). A struct field whose type is a struct holding
-owned pointer fields is accepted, and destruction recurses through it; this also
-removes the earlier one-off field-level exemption.
+## Version 0.384-beta (working build)
 
-Remaining Phase 1 gaps: `shared` pointer fields, resource-domain owned fields
-(`owned file ptr byte` and friends), and `uninit` partial initialization/destruction.
+### Summary of Changes (since `0.380-beta`):
 
+*Opened after the first Pre-MMM Phase 1 item.*
 
-
-
-## 0.389-beta - Owned pointer fields with generated destruction
-
-Pre-MMM Phase 1: `owned ptr T` fields are now real owners. The qualifier is carried in
-the field type (`owned_ptr<T>`), so the existing aggregate machinery applies unchanged:
-a struct holding one is move-only, copying it invalidates the source, and the value is
-destroyed by `aggregate.owned_drop` at scope exit.
-
-Lowering gained an owned-pointer case: the field's pointer is extracted, its GC root
-registration is released and `nrq_memory_deallocate_checked` is called. Fields are now
-dropped in reverse declaration order (LIFO), matching scope and parameter destruction.
-
-Construction accepts an owner-producing expression (`memory.allocate<T>(n)`, and the
-other resource producers) or transfers an owned local, which is marked moved so it
-cannot be read or destroyed again. An owned field initialised from a borrow is rejected.
-
-Still rejected, with specific diagnostics: `shared` pointer fields (reference-count
-release at field destruction), resource-domain owned fields such as `owned file ptr byte`
-(per-domain field destruction), and unqualified raw pointer fields. `uninit` partial
-initialization remains unimplemented.
-
-
-
-
-## 0.384-beta - Borrowed pointer fields
-
-First Pre-MMM Phase 1 item: explicit ownership contracts for struct fields. Fields use
-the same qualifier grammar as parameters (`borrow`, `borrow mut`, `shared`, `owned` with
-an optional resource domain).
-
-`borrow` and `borrow mut` pointer fields are implemented. The parser records the
-qualifier on the field, the checker requires a raw pointer type, and construction must
-supply a borrow rather than an owned value. Writes through an immutable borrowed field
-are rejected; `borrow mut` allows them. Borrowed fields are non-owning, so aggregate
-destruction is unchanged and no cleanup is generated for them.
-
-`owned` and `shared` pointer fields are still rejected, now with diagnostics that name
-the missing capability (generated field destruction and reference-count release)
-instead of the misleading nested-allocation message.
+- **Fields use the same ownership grammar as parameters.** `borrow`, `borrow mut`,
+  `shared` and `owned` with an optional resource domain are accepted on struct fields.
+- **`borrow` and `borrow mut` pointer fields are implemented.** The parser records the
+  qualifier on the field, the checker requires a raw pointer type, and construction
+  must supply a borrow rather than an owned value. Writes through an immutable
+  borrowed field are rejected; `borrow mut` allows them.
+- **Borrowed fields are non-owning.** Aggregate destruction is unchanged and no
+  cleanup is generated for them.
+- **`owned` and `shared` fields are rejected with named diagnostics** that state the
+  missing capability (generated field destruction and reference-count release)
+  instead of the misleading nested-allocation message.
 
 Not implemented: borrowed-field lifetime enforcement across scopes and returns,
 `uninit` partial initialization, and owned field destruction.
 
+## Version 0.380-beta (working build)
 
+### Summary of Changes (since `0.379-beta`):
 
+*Opened after two declaration upgrades.*
 
-## 0.380-beta - C-style declarations and brace initializers
-
-Two upgrades since 0.379: `NULL` as an alias of `nullptr`, and the declaration forms
-from sections 16-17.
-
-A statement may now declare with the type first: `Point p = {1, 2};`,
-`ptr int g = NULL;`, `@Nullable ptr int h = NULL;`. Braces are positional or named
-(`{ x: 1, y: 2 }`), and the declared type supplies the struct they initialize.
-`var`/`let` keep their existing form and gain the readable type-first alternative
-`var ptr int g = nullptr;`. Detection is by shape: a statement starting with a type
-keyword, `ptr`, a generic builtin, or two identifiers in a row is a declaration;
-anything else stays an expression statement, so no backtracking is needed.
+- **Type-first declarations and brace initializers.** `Point p = {1, 2};`,
+  `ptr int g = NULL;` and `@Nullable ptr int h = NULL;` are accepted. Braces are
+  positional or named (`{ x: 1, y: 2 }`) and the declared type supplies the struct;
+  `var`/`let` keep their form and gain `var ptr int g = nullptr;`.
+- **`NULL` is an alias of `nullptr`.**
+- **Declaration detection is by shape.** A statement starting with a type keyword,
+  `ptr`, a generic builtin or two identifiers in a row is a declaration; anything else
+  stays an expression statement, so no backtracking is needed.
+- **Hardening:** a type-first declaration is recognized only when the name is followed
+  by `=` (or `;` for the missing-initializer diagnostic), lookahead is bounded by the
+  token count, and a brace initializer on a non-struct type reports its own
+  diagnostic and recovers at the closing brace.
 
 Still unsupported: call-style construction `Point(1, 2)`, `Point p = {};` with no
 initializer list, and uninitialized declarations (`int x;` is an error).
 
-Hardening: a type-first declaration is recognised only when the name is followed by
-`=` (or `;` for the missing-initializer diagnostic), lookahead is bounded by the token
-count, and a brace initializer on a non-struct type reports its own diagnostic and
-recovers at the closing brace.
+## Version 0.379-beta (working build)
 
+### Summary of Changes (since `0.378-beta`):
 
+*Opened after two upgrades: qualified builtin generic annotations and `@Nullable`
+narrowing.*
 
-
-## 0.379-beta - @Nullable pointers and non-null narrowing
-
-Two upgrades since 0.378: qualified builtin generic type annotations (17.4), and
-`@Nullable` pointer bindings with flow-sensitive narrowing (8.7).
-
-Pointers are non-nullable by default: initializing one with `nullptr` now requires
-`@Nullable` on the declaration. Dereferencing a nullable pointer needs a proof in the
-current branch - `p is not nullptr` narrows the then-branch, `p is nullptr` narrows
-the else-branch and the code after an early exit. Proofs are branch-scoped and are
-cleared by any assignment.
+- **Qualified builtin generic type annotations (17.4).**
+- **`@Nullable` pointer bindings (8.7).** Pointers are non-nullable by default;
+  initializing one with `nullptr` requires `@Nullable`.
+- **Dereference of a nullable pointer needs a proof.** `p is not nullptr` narrows the
+  then-branch, `p is nullptr` narrows the else-branch and the code after an early
+  exit.
+- **Proofs are branch-scoped** and cleared by any assignment.
 
 Not implemented: `@Nullable` on parameters, returns and fields; narrowing through
 `&&`, `||`, `while`, ternaries or helper predicates; nullability as part of the type
 itself (a nullable and a plain pointer share one TIR type); interpolation.
-
-
 
 **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
 
