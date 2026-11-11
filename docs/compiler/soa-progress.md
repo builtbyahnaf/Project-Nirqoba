@@ -13,6 +13,7 @@ that loses context can resume from it plus `git log`.
 | 2b | struct-field resolution for `soa<T>` in signatures, layout report test | done (8425948) |
 | 2c | allocation entry point `memory.owned_soa<T>(n)` (scalar fields only) | done (4bf57aa) |
 | 2d | column addressing in TIR + lowering for `ps[i].f` | done (86fadcc) |
+| 2e | runtime bounds check on the row index | done (this commit) |
 | 3 | strided GC trace callback for reference columns | pending |
 | 4 | column views, benchmarks, docs, version milestone | pending |
 
@@ -284,6 +285,70 @@ Order of work, so each step is safe alone:
 4. Tests: write and read every field of every index including the last, then force a
    major collection with the container still reachable.
 
+## Stage 2e — runtime bounds checking (this commit)
+
+### Investigation
+
+Bounds checking already has one mechanism, and it was reused rather than paralleled:
+
+- `TirToMlir.cpp:1626 emit_bounds_guard(index, length, loc)` zero-extends the index to
+  i64, emits `icmp ult index, length`, and branches to a single cold failure block per
+  function.
+- That block (`bounds_fail_block`, `TirToMlir.cpp:1650`) calls
+  `nrq_memory_array_bounds_fail` marked noreturn, cold and nounwind, then `unreachable`.
+  One block for every check in the function keeps hot blocks contiguous, which the
+  comment records as the reason it is shared.
+- `runtime/src/allocator_windows.cpp:1281 nrq_memory_array_bounds_check` is the
+  non-branching sibling; the fatal path ends in `nrq_runtime_fatal`, which exits 70 and
+  writes the message to stderr.
+
+### Implementation
+
+One call site, in the `SoaColumnPtr` case of the lowering, immediately after the header
+count load and after the row is extended to i64, and before `column_base`, `row_offset`
+and the address GEP. Nothing is computed from the row until the check has passed.
+
+The ordering matters twice over. A row past `count` would otherwise land inside the
+next column, so a store there corrupts a different field rather than faulting; and
+because the row is sign-extended before the unsigned compare, a negative row reads as a
+huge index instead of wrapping into range. Emitted IR for a computed out-of-range row:
+
+    %3 = getelementptr i8, ptr %2, i64 -16      ; element_count at payload - 16
+    %4 = load i32, ptr %3
+    %5 = icmp ugt i32 %4, 5                     ; count > row, row folded to 5
+    br i1 %5, label %6, label %10
+  6: ... getelementptr i8, ptr %2, i64 40 ...   ; address only on the in-bounds path
+ 10: call void @nrq_memory_array_bounds_fail()
+
+The address GEP appears only in the in-bounds block, which is the property that makes
+the check meaningful rather than decorative.
+
+### Known wording gap
+
+The shared failure block prints "owned array index is outside the array bounds", which
+is imprecise for a container. A per-kind message would need a failure block per check,
+which is exactly what the shared block exists to avoid, so the wording is recorded here
+rather than changed in passing.
+
+### Tests
+
+- `positive/soa_column_bounds_edges`: rows 0 and 3 of 4 both pass.
+- `negative/soa_column_bounds_negative`: row `0 - 1` exits 70.
+- `negative/soa_column_bounds_count`: a write at row `count` exits 70 before the store.
+- `negative/soa_column_bounds_dynamic_read`: row `2 + 3` read exits 70.
+- `negative/soa_column_bounds_dynamic_write`: row `3 + 2` write exits 70.
+
+Harness detail worth remembering: `build_and_run` compares merged output, so a runtime
+failure message is asserted with `expect_stdout_contains`. `expect_stderr_contains` is
+for compile diagnostics; using it for the runtime message fails the test even though the
+program behaves correctly.
+
+Suite: 210/210 unit, 277/277 integration.
+
+### Remaining
+
+Stage 3 (reference columns and strided tracing), views over containers, benchmarks, then
+version 0.369 once two further upgrades have landed. No version bump here.
 ## Invariants that must not be broken
 
 - Ordinary structs, AoS layout, and their tests are untouched by every stage.

@@ -1,0 +1,12 @@
+// A computed out-of-range row on a write path must fail at the guard too.
+struct Point {
+    int x;
+    int y;
+}
+
+int function main() {
+    var points = memory.owned_soa<Point>(4);
+    var row = 3 + 2;
+    points[row].y = 7;
+    return 0;
+}

@@ -3995,6 +3995,11 @@ class FunctionTranslator {
         mlir::Value row64 = row.getType().isInteger(64)
             ? row
             : builder_.create<mlir::LLVM::SExtOp>(loc, i64, row).getResult();
+        // Check the row against the container's own element count before any address
+        // is formed. An out-of-range row would land inside another column, so this has
+        // to fail ahead of the offset arithmetic rather than after it. The same guard
+        // the owned-array path uses keeps one cold failure block per function.
+        emit_bounds_guard(row64, count, loc);
         mlir::Value column_base = builder_.create<mlir::LLVM::MulOp>(
             loc, i64, count,
             constant(static_cast<int64_t>(column.index_in_bytes))).getResult();

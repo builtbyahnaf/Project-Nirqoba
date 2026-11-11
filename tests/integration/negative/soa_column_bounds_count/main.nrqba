@@ -1,0 +1,13 @@
+// A write at exactly count is out of range; it must fail before the store, so no
+// neighbouring column can be corrupted.
+struct Point {
+    int x;
+    int y;
+}
+
+int function main() {
+    var points = memory.owned_soa<Point>(4);
+    var row = 4;
+    points[row].x = 99;
+    return 0;
+}

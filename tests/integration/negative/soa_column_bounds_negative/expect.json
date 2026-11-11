@@ -1,0 +1,5 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 70,
+  "expect_stdout_contains": ["outside the array bounds"]
+}
