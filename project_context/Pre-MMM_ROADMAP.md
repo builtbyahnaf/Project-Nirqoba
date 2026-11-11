@@ -53,22 +53,22 @@
 ### Implementation
 
 - [x] Implement explicit ownership contracts for pointer fields in structs. `owned`,
-  `borrow` and `borrow mut` fields are implemented; `shared` is rejected with a
-  specific diagnostic (`0.384-beta`, `0.389-beta`).
+  `borrow`, `borrow mut` and `shared` fields are implemented (`0.384-beta`,
+  `0.389-beta`, `0.391-beta`).
 - [x] Support owned and borrowed pointer fields. Borrowed fields in `0.384-beta`;
   `owned ptr T` fields in `0.389-beta` with transfer, move-only semantics and
   generated destruction; moved-field reinitialization and nested aggregate cleanup
   in `0.390-beta`; `shared ptr T` fields with retain-on-copy and
   release-on-destruction in `0.391-beta`; `uninit` partial initialization with
   destruction limited to initialized fields in `0.396-beta`, with whole-value and
-  partial-overwrite guards in `0.397-beta`, and
-  nested completion propagation in `0.401-beta`, and resource-domain owned fields
+  partial-overwrite guards in `0.397-beta`, nested
+  completion propagation in `0.401-beta`, and resource-domain owned fields
   with per-domain destruction in `0.403-beta`.
 - [x] Implement field-level move operations with source invalidation. (0.390-beta)
 - [x] Implement safe field reinitialization after a move. (0.390-beta)
 - [x] Extend recursive destruction to supported nested ownership-bearing aggregates.
-  `aggregate.owned_drop` covers owned array and owned pointer fields, in reverse
-  declaration order (`0.389-beta`).
+  `aggregate.owned_drop` covers owned array, owned pointer, shared and
+  resource-domain fields, in reverse declaration order (`0.389-beta`).
 - [x] Implement correct partial initialization and partial destruction. (0.396-beta through 0.401-beta)
 - [x] Support native-resource fields without allowing generic deallocation to destroy the wrong resource type. (0.403-beta)
 - [x] Preserve existing whole-aggregate move behavior. (Unchanged; covered by the move/copy suites through 0.403-beta)
