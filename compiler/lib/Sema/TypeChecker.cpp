@@ -149,7 +149,15 @@ static bool contains_array_view(const Type& type) {
 static string cleanup_for_type(const Type& type) {
   if (type.is_soa()) return "soa.owned_release";
   if (type.is_owned_array()) return "array.owned_release";
-  if (type.is_owned_pointer()) return "memory.deallocate";
+  if (type.is_owned_pointer()) {
+    const std::string& domain = type.resource_domain();
+    if (domain == "file") return "file.close";
+    if (domain == "socket") return "socket.close";
+    if (domain == "mutex") return "mutex.destroy";
+    if (domain == "mapping") return "memory.unmap_file";
+    if (domain == "secure") return "memory.secure_release";
+    return "memory.deallocate";
+  }
   return contains_owned_array(type) ? "aggregate.owned_drop" : string{};
 }
 
@@ -202,16 +210,20 @@ static void validate_struct_field_contracts(const std::vector<Parameter>& fields
                             "' needs an ownership qualifier: declare it 'owned', "
                             "'borrow' or 'borrow mut'");
     }
-    if (field.type.is_owned_pointer() && !field.resource_domain.empty()) {
-      diagnostics.error(diag::kTypeMismatch, field.location,
-                        "owned resource-domain fields need per-domain field "
-                        "destruction, which structs do not support yet");
-    }
     if (!field.resource_domain.empty() &&
-        (!field.type.is_pointer() || field.borrowed))
+        (!field.type.is_pointer() || field.borrowed ||
+         !field.type.is_owned_pointer())) {
       diagnostics.error(diag::kTypeMismatch, field.location,
                         "resource domain '" + field.resource_domain +
                             "' requires an owned pointer field");
+    } else if (field.type.is_resource_pointer() &&
+               field.type.resource_domain() != field.resource_domain) {
+      diagnostics.error(diag::kTypeMismatch, field.location,
+                        "field '" + field.name + "' carries a '" +
+                            field.type.resource_domain() +
+                            "' resource, but is declared with domain '" +
+                            field.resource_domain + "'");
+    }
   }
 }
 
@@ -281,6 +293,60 @@ static std::string cleanup_for_borrow_domain(const std::string& domain) {
 
 static std::string cleanup_for_return_domain(const std::string& domain) {
   return cleanup_for_borrow_domain(domain);
+}
+
+static bool is_resource_cleanup(const std::string& cleanup) {
+  return cleanup == "file.close" || cleanup == "socket.close" ||
+         cleanup == "mutex.destroy" || cleanup == "memory.unmap_file" ||
+         cleanup == "memory.secure_release";
+}
+
+static std::string resource_domain_of_cleanup(const std::string& cleanup) {
+  if (cleanup == "file.close") return "file";
+  if (cleanup == "socket.close") return "socket";
+  if (cleanup == "mutex.destroy") return "mutex";
+  if (cleanup == "memory.unmap_file") return "mapping";
+  if (cleanup == "memory.secure_release") return "secure";
+  return {};
+}
+
+// A resource-domain field accepts only a value that owns that exact domain,
+// while a plain owned pointer field must not swallow a domain resource (its
+// generated destructor would free a file/socket token with memory.deallocate).
+static bool resource_field_value_matches(const Type& field_type,
+                                         const Expr& value,
+                                         const SymbolTable& symbols) {
+  if (!field_type.is_owned_pointer()) return true;
+  if (value.type().is_owned_pointer())
+    return value.type().resource_domain() == field_type.resource_domain();
+  const std::string actual = cleanup_for_owned_expression(value, symbols);
+  if (field_type.resource_domain().empty()) return !is_resource_cleanup(actual);
+  return actual == cleanup_for_return_domain(field_type.resource_domain());
+}
+
+static void check_resource_field_value(const Parameter& field,
+                                       const Type& field_type,
+                                       const Expr& value,
+                                       const SymbolTable& symbols,
+                                       DiagnosticEngine& diagnostics) {
+  if (!field_type.is_owned_pointer()) return;
+  if (resource_field_value_matches(field_type, value, symbols)) return;
+  const std::string actual = cleanup_for_owned_expression(value, symbols);
+  const std::string actual_domain = resource_domain_of_cleanup(actual);
+  if (field_type.resource_domain().empty()) {
+    diagnostics.error(
+        diag::kTypeMismatch, value.location(),
+        "field '" + field.name + "' has no resource domain; it cannot own a " +
+            (actual_domain.empty() ? std::string("raw") : actual_domain) +
+            " resource");
+  } else {
+    diagnostics.error(
+        diag::kTypeMismatch, value.location(),
+        "field '" + field.name + "' requires an owned " +
+            field_type.resource_domain() + " resource, but the value owns " +
+            (actual_domain.empty() ? std::string("memory")
+                                   : "a " + actual_domain + " resource"));
+  }
 }
 
 static bool block_falls_through(const BlockStmt& block) {
@@ -1525,6 +1591,29 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                          "cannot move an owner while an array view is live");
       return;
     }
+    if (!resource_field_value_matches(target_type, assignment.value(), symbols_)) {
+      const std::string actual =
+          cleanup_for_owned_expression(assignment.value(), symbols_);
+      const std::string actual_domain = resource_domain_of_cleanup(actual);
+      if (target_type.resource_domain().empty()) {
+        diagnostics_.error(
+            diag::kTypeMismatch, assignment.value().location(),
+            "cannot reinitialize a field with no resource domain from " +
+                std::string(actual_domain.empty()
+                                ? "an unowned value"
+                                : "a " + actual_domain + " resource"));
+      } else {
+        diagnostics_.error(
+            diag::kTypeMismatch, assignment.value().location(),
+            "owned " + target_type.resource_domain() +
+                " resource field requires a value that owns a " +
+                target_type.resource_domain() + " resource" +
+                (actual_domain.empty()
+                     ? std::string()
+                     : "; the value owns a " + actual_domain + " resource"));
+      }
+      return;
+    }
     consume_field_move(const_cast<Expr&>(assignment.value()), target_type);
     if (assignment.value().kind() == Expr::Kind::Name && source &&
         source->owns_allocation && !source->moved) {
@@ -2468,7 +2557,9 @@ Type TypeChecker::resolve_aggregate_type(const Type& type,
   if (type.is_owned_array())
     return Type::owned_array_type(resolve_aggregate_type(type.element_type(), active));
   if (type.is_owned_pointer())
-    return Type::owned_pointer_type(resolve_aggregate_type(type.element_type(), active));
+    return Type::owned_pointer_type(
+        resolve_aggregate_type(type.element_type(), active),
+        type.resource_domain());
   if (type.is_array_view())
     return Type::array_view_type(resolve_aggregate_type(type.element_type(), active));
   // Pointer elements are deliberately left shallow: layout of a pointee is
@@ -2882,6 +2973,10 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
                            expr.positional_inits()[i]->location(),
                            "owned, shared, and borrowed pointers cannot be stored in aggregate fields");
       }
+      if (!fields[i].borrowed)
+        check_resource_field_value(fields[i], field_type,
+                                   *expr.positional_inits()[i], symbols_,
+                                   diagnostics_);
       if (contains_owned_array(field_type)) {
         Expr& value = const_cast<Expr&>(*expr.positional_inits()[i]);
         const Symbol* source = value.kind() == Expr::Kind::Name
@@ -2945,6 +3040,10 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
         diagnostics_.error(diag::kTypeMismatch, kv.second->location(),
                            "owned, shared, and borrowed pointers cannot be stored in aggregate fields");
       }
+      if (field_def && !field_def->borrowed)
+        check_resource_field_value(*field_def,
+                                   resolve_aggregate_type(field_def->type),
+                                   *kv.second, symbols_, diagnostics_);
       if (field_def && contains_owned_array(resolve_aggregate_type(field_def->type))) {
         Expr& value = const_cast<Expr&>(*kv.second);
         const Symbol* source = value.kind() == Expr::Kind::Name
