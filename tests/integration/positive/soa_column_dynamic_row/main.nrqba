@@ -1,0 +1,22 @@
+// A row index is an arbitrary integer, not just a literal: the column base term is
+// independent of it, so moving the row must not disturb which column is addressed.
+struct Point {
+    int x;
+    int y;
+}
+
+int function main() {
+    var points = memory.owned_soa<Point>(4);
+    var row = 2;
+
+    points[row].x = 30;
+    points[row].y = 31;
+    print(points[row].x);
+    print(points[row].y);
+
+    row = 3;
+    points[row].x = 40;
+    print(points[2].x);
+    print(points[3].x);
+    return 0;
+}
