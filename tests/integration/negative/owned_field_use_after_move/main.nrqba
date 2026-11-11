@@ -1,0 +1,11 @@
+// Moving an aggregate that owns a pointer field invalidates the source.
+struct Holder {
+    owned ptr int data;
+}
+
+int function main() {
+    var h = Holder { data: memory.allocate<int>(4) };
+    var copy = h;
+    print(h.data[0]);
+    return 0;
+}

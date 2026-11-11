@@ -52,14 +52,17 @@
 
 ### Implementation
 
-- [ ] Implement explicit ownership contracts for pointer fields in structs.
-- [ ] Support owned and borrowed pointer fields. **Borrowed half implemented in
-  `0.384-beta`**: `borrow`/`borrow mut` fields parse, validate as raw pointers,
-  require a borrow at construction and enforce read-only access for `borrow`. Owned
-  fields remain rejected pending generated field destruction.
+- [x] Implement explicit ownership contracts for pointer fields in structs. `owned`,
+  `borrow` and `borrow mut` fields are implemented; `shared` is rejected with a
+  specific diagnostic (`0.384-beta`, `0.389-beta`).
+- [x] Support owned and borrowed pointer fields. Borrowed fields in `0.384-beta`;
+  `owned ptr T` fields in `0.389-beta` with transfer, move-only semantics and
+  generated destruction. Resource-domain owned fields remain open.
 - [ ] Implement field-level move operations with source invalidation.
 - [ ] Implement safe field reinitialization after a move.
-- [ ] Extend recursive destruction to supported nested ownership-bearing aggregates.
+- [x] Extend recursive destruction to supported nested ownership-bearing aggregates.
+  `aggregate.owned_drop` covers owned array and owned pointer fields, in reverse
+  declaration order (`0.389-beta`).
 - [ ] Implement correct partial initialization and partial destruction.
 - [ ] Support native-resource fields without allowing generic deallocation to destroy the wrong resource type.
 - [ ] Preserve existing whole-aggregate move behavior.

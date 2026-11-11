@@ -287,6 +287,7 @@ unique_ptr<StructDecl> Parser::parse_struct(Visibility visibility) {
     bool borrowed = false;
     bool mutable_borrow = false;
     bool shared = false;
+    bool owned_field = false;
     std::string resource_domain;
     if (check(TokenKind::Identifier) && peek().text == "borrow") {
       advance();
@@ -305,6 +306,7 @@ unique_ptr<StructDecl> Parser::parse_struct(Visibility visibility) {
       shared = true;
     } else if (check(TokenKind::Identifier) && peek().text == "owned") {
       advance();
+      owned_field = true;
       if (check(TokenKind::Identifier) &&
           (peek().text == "file" || peek().text == "socket" ||
            peek().text == "mutex" || peek().text == "mapping" ||
@@ -312,6 +314,10 @@ unique_ptr<StructDecl> Parser::parse_struct(Visibility visibility) {
         resource_domain = advance().text;
     }
     Type field_type = parse_type_annotation();
+    // `owned ptr T` becomes the owning pointer type, so move-only copying and
+    // generated field destruction apply without a side table.
+    if (owned_field && field_type.is_pointer() && !field_type.is_owned_pointer())
+      field_type = Type::owned_pointer_type(field_type.element_type());
     if (!check(TokenKind::Identifier)) {
       error_at(peek(), diag::kExpectedToken, "expected field name in struct");
       synchronize();

@@ -236,3 +236,15 @@ through `borrow` is rejected, and `borrow mut` permits writes. Borrowed fields o
 nothing, so destruction generates no cleanup for them and no reference counting is
 involved. Field lifetimes are not yet checked against the containing value, and `owned`
 or `shared` pointer fields remain rejected until field destruction exists.
+
+## Owned struct fields (0.389-beta)
+
+`owned ptr T` is stored as `owned_ptr<T>`, so ownership lives in the type and the same
+rules that already governed owned arrays apply to the field: the aggregate is move-only,
+a copy transfers the value and invalidates the source, and field reinitialization is
+only legal on a moved path. `aggregate.owned_drop` walks fields in reverse declaration
+order and, for an owned pointer field, releases the GC root registration and calls
+`nrq_memory_deallocate_checked` on the stored pointer. No reference counts, no metadata
+and no per-operation checks are added; destruction is statically generated from the
+field types. `shared` fields and resource-domain owned fields remain rejected until
+their destruction paths exist, and `uninit` is still absent.

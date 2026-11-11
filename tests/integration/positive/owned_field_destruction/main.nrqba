@@ -1,0 +1,19 @@
+// Owned pointer fields take ownership at construction and are released when the
+// aggregate dies. They are also move-only: transferring into another aggregate
+// invalidates the source.
+struct Holder {
+    owned ptr int data;
+    int tag;
+}
+
+int function main() {
+    var h = Holder { data: memory.allocate<int>(4), tag: 7 };
+    *h.data = 5;
+    print(*h.data + h.tag);
+
+    var source = memory.allocate<int>(2);
+    source[0] = 3;
+    var moved = Holder { data: source, tag: 0 };
+    print(*moved.data);
+    return 0;
+}

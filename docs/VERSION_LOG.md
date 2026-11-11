@@ -1,5 +1,28 @@
 # Nirqoba Version Log
 
+## 0.389-beta - Owned pointer fields with generated destruction
+
+Pre-MMM Phase 1: `owned ptr T` fields are now real owners. The qualifier is carried in
+the field type (`owned_ptr<T>`), so the existing aggregate machinery applies unchanged:
+a struct holding one is move-only, copying it invalidates the source, and the value is
+destroyed by `aggregate.owned_drop` at scope exit.
+
+Lowering gained an owned-pointer case: the field's pointer is extracted, its GC root
+registration is released and `nrq_memory_deallocate_checked` is called. Fields are now
+dropped in reverse declaration order (LIFO), matching scope and parameter destruction.
+
+Construction accepts an owner-producing expression (`memory.allocate<T>(n)`, and the
+other resource producers) or transfers an owned local, which is marked moved so it
+cannot be read or destroyed again. An owned field initialised from a borrow is rejected.
+
+Still rejected, with specific diagnostics: `shared` pointer fields (reference-count
+release at field destruction), resource-domain owned fields such as `owned file ptr byte`
+(per-domain field destruction), and unqualified raw pointer fields. `uninit` partial
+initialization remains unimplemented.
+
+
+
+
 ## 0.384-beta - Borrowed pointer fields
 
 First Pre-MMM Phase 1 item: explicit ownership contracts for struct fields. Fields use

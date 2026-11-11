@@ -10,7 +10,7 @@ constexpr const char* kUnresolvedSymbol = "NRQ4001";
 constexpr const char* kUnsupportedExpression = "NRQ4002";
 
 bool contains_owned_array(const Type& type) {
-  if (type.is_owned_array()) return true;
+  if (type.is_owned_array() || type.is_owned_pointer()) return true;
   if (type.is_array()) return contains_owned_array(type.element_type());
   if (type.is_tuple()) {
     for (const Type& element : type.tuple_elements())
