@@ -496,7 +496,28 @@ Type Parser::parse_type_annotation() {
       }
       name += "." + advance().text;
     }
-    base_type = Type::struct_type(name);
+    // §17.4: a qualified builtin type keeps its generic argument, so a field can be
+    // written the same way the value is created (`memory.owned_array<int>`). The
+    // unqualified spelling already worked; only the dotted path needed this.
+    if (check(TokenKind::Less)) {
+      const Token open = advance();  // '<'
+      const Type argument = parse_type_annotation();
+      expect(TokenKind::Greater, "after the qualified generic type argument");
+      std::string bare = name;
+      if (bare.rfind("memory.", 0) == 0) bare = bare.substr(std::string("memory.").size());
+      if (bare == "owned_array") base_type = Type::owned_array_type(argument);
+      else if (bare == "soa") base_type = Type::soa_type(argument);
+      else if (bare == "owned_ptr") base_type = Type::owned_pointer_type(argument);
+      else if (bare == "array_view") base_type = Type::array_view_type(argument);
+      else if (bare == "managed") base_type = Type::managed_pointer_type(argument);
+      else {
+        error_at(open, kUnknownType,
+                 "unsupported qualified generic type '" + name + "'");
+        base_type = Type::error();
+      }
+    } else {
+      base_type = Type::struct_type(name);
+    }
   } else if (match(TokenKind::LParen)) {
     vector<Type> tuple_elements;
     if (!check(TokenKind::RParen)) {

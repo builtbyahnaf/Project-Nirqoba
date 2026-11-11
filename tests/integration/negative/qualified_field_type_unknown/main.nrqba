@@ -1,0 +1,8 @@
+// An unknown qualified generic is a type error, not silent acceptance.
+struct Broken {
+    memory.no_such_type<int> value;
+}
+
+int function main() {
+    return 0;
+}
