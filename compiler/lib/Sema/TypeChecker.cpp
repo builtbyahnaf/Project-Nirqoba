@@ -822,6 +822,7 @@ void TypeChecker::check_function(FunctionDecl& function) {
       symbol.allocation_id = next_allocation_id_++;
       symbol.borrowed = parameter.borrowed || parameter.type.is_array_view();
       symbol.mutable_borrow = parameter.mutable_borrow;
+      if (parameter.borrowed) symbol.borrow_owner = parameter.name;
     symbol.cleanup_callee = cleanup_for_borrow_domain(parameter.resource_domain);
       symbol.owns_allocation = !symbol.borrowed;
       symbol.shared_allocation = parameter.shared;
@@ -991,6 +992,24 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
   if (binding_type.is_pointer() || binding_type.is_owned_array() ||
       contains_owned_array(binding_type)) {
     symbol.owns_allocation = expression_creates_owned_pointer(declaration.initializer());
+    if (declaration.initializer().kind() == Expr::Kind::Unary &&
+        static_cast<const UnaryExpr&>(declaration.initializer()).op() ==
+            UnaryOp::AddressOf) {
+      if (const Symbol* origin = find_borrow_origin(declaration.initializer())) {
+        if (!origin->moved) {
+          const uint64_t origin_id = origin->allocation_id != 0
+              ? origin->allocation_id
+              : symbols_.ensure_allocation_id(origin->name,
+                                              next_allocation_id_++);
+          if (origin_id != 0) {
+            symbol.allocation_id = origin_id;
+            symbol.borrowed = true;
+            symbol.borrow_owner = borrow_owner_name(*origin);
+            symbol.cleanup_callee = origin->cleanup_callee;
+          }
+        }
+      }
+    }
     if (contains_owned_array(binding_type) &&
         declaration.initializer().ownership() == ValueOwnership::Owned) {
       symbol.owns_allocation = true;
@@ -1045,6 +1064,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
             symbol.mutable_borrow = signature->returns_mutable_borrow;
             symbol.owns_allocation = false;
             symbol.allocation_id = source->allocation_id;
+            symbol.borrow_owner = borrow_owner_name(*source);
             symbol.cleanup_callee = source->cleanup_callee;
             if (symbols_.has_conflicting_borrow(
                     source->allocation_id, signature->returns_mutable_borrow,
@@ -1068,6 +1088,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
         if (source->borrowed) {
           symbol.borrowed = true;
           symbol.mutable_borrow = source->mutable_borrow;
+          symbol.borrow_owner = borrow_owner_name(*source);
         }
         symbol.shared_allocation = source->shared_allocation;
         symbol.cleanup_callee = source->cleanup_callee;
@@ -1096,13 +1117,16 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
       if ((call.callee() == "memory.array_view" ||
            call.callee() == "memory.array_view_mut") &&
           !call.arguments().empty()) {
-        if (const Symbol* source = find_root_symbol(*call.arguments()[0], symbols_))
+        if (const Symbol* source = find_root_symbol(*call.arguments()[0], symbols_)) {
           symbol.allocation_id = source->allocation_id;
+          symbol.borrow_owner = borrow_owner_name(*source);
+        }
       } else if (const FunctionSignature* signature = find_function(call.callee());
                  signature && signature->returns_borrowed) {
         const Symbol* source = find_borrow_origin(declaration.initializer());
         if (source && source->allocation_id != 0 && !source->moved) {
           symbol.allocation_id = source->allocation_id;
+          symbol.borrow_owner = borrow_owner_name(*source);
           if (symbols_.has_conflicting_borrow(source->allocation_id,
                                               signature->returns_mutable_borrow,
                                               source->name))
@@ -1112,8 +1136,10 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
       }
     } else {
       const Symbol* source = find_root_symbol(declaration.initializer(), symbols_);
-      if (source && source->type.is_array_view() && source->borrowed && !source->moved)
+      if (source && source->type.is_array_view() && source->borrowed && !source->moved) {
         symbol.allocation_id = source->allocation_id;
+        symbol.borrow_owner = borrow_owner_name(*source);
+      }
     }
     if (symbol.allocation_id == 0) {
       diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
@@ -1344,7 +1370,24 @@ void TypeChecker::mark_field_initialized(const string& root, const string& path)
   }
 }
 
+bool TypeChecker::borrow_owner_is_live(const Symbol& borrow) const {
+  if (!borrow.borrowed || borrow.borrow_owner.empty()) return true;
+  if (borrow.borrow_owner == borrow.name) return !borrow.moved;
+  const Symbol* owner = symbols_.lookup(borrow.borrow_owner);
+  return owner && !owner->moved && owner->allocation_id == borrow.allocation_id;
+}
+
+std::string TypeChecker::borrow_owner_name(const Symbol& origin) const {
+  if (origin.borrowed && !origin.borrow_owner.empty()) return origin.borrow_owner;
+  return origin.name;
+}
+
 const Symbol* TypeChecker::find_borrow_origin(const Expr& expression) const {
+  if (expression.kind() == Expr::Kind::Unary) {
+    const auto& unary = static_cast<const UnaryExpr&>(expression);
+    if (unary.op() == UnaryOp::AddressOf || unary.op() == UnaryOp::Dereference)
+      return find_borrow_origin(unary.operand());
+  }
   if (expression.kind() != Expr::Kind::Call)
     return find_root_symbol(expression, symbols_);
   const auto& call = static_cast<const CallExpr&>(expression);
@@ -1624,7 +1667,47 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     mark_field_initialized(field_owner, field_name);
     return;
   }
-  if (symbol != nullptr && symbol->borrowed && assignment.is_simple_name()) {
+  if (symbol != nullptr && assignment.is_simple_name() &&
+      symbol->type.is_pointer()) {
+    const bool address_of_value =
+        assignment.value().kind() == Expr::Kind::Unary &&
+        static_cast<const UnaryExpr&>(assignment.value()).op() ==
+            UnaryOp::AddressOf;
+    bool borrowed_call_value = false;
+    if (assignment.value().kind() == Expr::Kind::Call) {
+      const FunctionSignature* signature = find_function(
+          static_cast<const CallExpr&>(assignment.value()).callee());
+      borrowed_call_value = signature && signature->returns_borrowed;
+    }
+    const Symbol* origin = find_borrow_origin(assignment.value());
+    const bool value_is_borrow =
+        origin && (address_of_value || borrowed_call_value ||
+                   (assignment.value().kind() == Expr::Kind::Name &&
+                    origin->borrowed));
+    if (value_is_borrow) {
+      if (!borrow_owner_is_live(*origin)) {
+        diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                           "borrow of '" + borrow_owner_name(*origin) +
+                               "' is used after its owner's lifetime");
+        return;
+      }
+      const Symbol* owner = origin->borrowed &&
+                                    !origin->borrow_owner.empty()
+                                ? symbols_.lookup(origin->borrow_owner)
+                                : origin;
+      if (owner && symbol->scope_depth < owner->scope_depth) {
+        diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                           "borrow of '" + owner->name +
+                               "' cannot outlive its owner");
+        return;
+      }
+    }
+  }
+  // Clearing a borrow with nullptr releases it; any other rebind would change
+  // which owner the binding aliases and is rejected until lifetime inference
+  // can prove the replacement outlives the binding.
+  if (symbol != nullptr && symbol->borrowed && assignment.is_simple_name() &&
+      !is_null_pointer_literal(assignment.value())) {
     diagnostics_.error(diag::kImmutableAssignment, assignment.target().location(),
                        "a borrowed binding cannot be rebound");
     return;
@@ -1650,6 +1733,19 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
        contains_owned_array(target_type))) {
     uint64_t allocation_id = 0;
     const Symbol* source = nullptr;
+    const Symbol* borrow_origin = nullptr;
+    const bool address_of_value =
+        assignment.value().kind() == Expr::Kind::Unary &&
+        static_cast<const UnaryExpr&>(assignment.value()).op() ==
+            UnaryOp::AddressOf;
+    if (address_of_value) {
+      borrow_origin = find_borrow_origin(assignment.value());
+    } else if (assignment.value().kind() == Expr::Kind::Call) {
+      const FunctionSignature* signature = find_function(
+          static_cast<const CallExpr&>(assignment.value()).callee());
+      if (signature && signature->returns_borrowed)
+        borrow_origin = find_borrow_origin(assignment.value());
+    }
     if (assignment.value().kind() == Expr::Kind::Name) {
       const auto& source_name = static_cast<const NameExpr&>(assignment.value());
       source = symbols_.lookup(source_name.name());
@@ -1664,19 +1760,23 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                          "cannot overwrite a live owned pointer; release it first");
       return;
     }
+    if (borrow_origin == nullptr && source && source->borrowed)
+      borrow_origin = source;
     if (allocation_id == 0) allocation_id = next_allocation_id_++;
-    const bool borrowed = source && source->borrowed;
-    const bool mutable_borrow = source && source->mutable_borrow;
+    bool borrowed = source && source->borrowed;
+    bool mutable_borrow = source && source->mutable_borrow;
     bool shared_allocation = source && source->shared_allocation;
     std::string cleanup_callee = source ? source->cleanup_callee : std::string{};
+    std::string borrow_owner;
     bool owns_allocation = source && source->owns_allocation && !source->moved;
     if (assignment.value().kind() == Expr::Kind::Call) {
       const auto& call = static_cast<const CallExpr&>(assignment.value());
       const FunctionSignature* signature = find_function(call.callee());
       owns_allocation = expression_creates_owned_pointer(assignment.value()) ||
-                        (signature && (signature->return_type.is_pointer() ||
-                                       signature->return_type.is_owned_array() ||
-                                       contains_owned_array(signature->return_type)));
+                        (signature && !signature->returns_borrowed &&
+                         (signature->return_type.is_pointer() ||
+                          signature->return_type.is_owned_array() ||
+                          contains_owned_array(signature->return_type)));
       shared_allocation = call.callee() == "memory.shared_allocate" ||
                           call.callee() == "memory.shared_retain" ||
                           (signature && signature->returns_shared);
@@ -1706,6 +1806,14 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
         const_cast<Expr&>(assignment.value()).set_transfers_ownership();
       }
     }
+    if (borrow_origin != nullptr) {
+      allocation_id = borrow_origin->allocation_id;
+      borrowed = true;
+      mutable_borrow = borrow_origin->mutable_borrow;
+      borrow_owner = borrow_owner_name(*borrow_origin);
+      cleanup_callee = borrow_origin->cleanup_callee;
+      owns_allocation = false;
+    }
     if (!symbol->cleanup_callee.empty() &&
         (cleanup_callee.empty() || cleanup_callee != symbol->cleanup_callee)) {
       diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
@@ -1715,7 +1823,8 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     if (owns_allocation) symbols_.mark_allocation_moved(allocation_id);
     symbols_.rebind_pointer(assignment.name(), allocation_id);
     symbols_.set_pointer_ownership(assignment.name(), owns_allocation, borrowed,
-                                   mutable_borrow, shared_allocation, cleanup_callee);
+                                   mutable_borrow, shared_allocation, cleanup_callee,
+                                   borrow_owner);
     assignment.set_cleanup_callee(cleanup_callee);
   }
 }
@@ -2209,6 +2318,11 @@ Type TypeChecker::check_expression(Expr& expr) {
           name.set_ownership(ValueOwnership::GcManaged);
         else if (symbol->type.is_pointer())
           name.set_ownership(ValueOwnership::Raw);
+        if (symbol->borrowed && !borrow_owner_is_live(*symbol)) {
+          diagnostics_.error(diag::kTypeMismatch, name.location(),
+                             "borrow of '" + borrow_owner_name(*symbol) +
+                                 "' is used after its owner's lifetime");
+        }
         if (symbol->moved) {
           diagnostics_.error(diag::kUseAfterFree, name.location(),
                              "use of '" + name.name() +
@@ -4415,8 +4529,21 @@ Type TypeChecker::check_call(CallExpr& call) {
       continue;
     }
     if (!sig.parameter_types[i].is_pointer()) continue;
+    const bool direct_address_of =
+        call.arguments()[i]->kind() == Expr::Kind::Unary &&
+        static_cast<const UnaryExpr&>(*call.arguments()[i]).op() ==
+            UnaryOp::AddressOf;
     const Symbol* source = find_borrow_origin(*call.arguments()[i]);
-    if (source && source->type != sig.parameter_types[i]) source = nullptr;
+    if (source && !direct_address_of &&
+        source->type != sig.parameter_types[i]) source = nullptr;
+    if (source && direct_address_of && source->allocation_id == 0)
+      symbols_.ensure_allocation_id(source->name, next_allocation_id_++);
+    if (source && source->borrowed && !borrow_owner_is_live(*source)) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                         "borrow of '" + borrow_owner_name(*source) +
+                             "' is used after its owner's lifetime");
+      continue;
+    }
     const bool expects_shared = i < sig.parameter_shared.size() && sig.parameter_shared[i];
     const bool argument_is_shared =
         (source && source->shared_allocation) ||
