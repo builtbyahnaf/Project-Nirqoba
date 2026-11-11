@@ -176,6 +176,8 @@ Token Lexer::scan_token() {
       }
       if (match('=')) return make_token(TokenKind::GreaterEqual, start);
       return make_token(TokenKind::Greater, start);
+    case '@':
+      return make_token(TokenKind::At, start);
     case '&':
       if (match('&')) return make_token(TokenKind::AmpAmp, start);
       if (match('=')) return make_token(TokenKind::AmpEqual, start);

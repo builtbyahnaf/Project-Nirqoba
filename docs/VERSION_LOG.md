@@ -1,5 +1,22 @@
 # Nirqoba Version Log
 
+## 0.379-beta - @Nullable pointers and non-null narrowing
+
+Two upgrades since 0.378: qualified builtin generic type annotations (17.4), and
+`@Nullable` pointer bindings with flow-sensitive narrowing (8.7).
+
+Pointers are non-nullable by default: initializing one with `nullptr` now requires
+`@Nullable` on the declaration. Dereferencing a nullable pointer needs a proof in the
+current branch - `p is not nullptr` narrows the then-branch, `p is nullptr` narrows
+the else-branch and the code after an early exit. Proofs are branch-scoped and are
+cleared by any assignment.
+
+Not implemented: `@Nullable` on parameters, returns and fields; narrowing through
+`&&`, `||`, `while`, ternaries or helper predicates; nullability as part of the type
+itself (a nullable and a plain pointer share one TIR type); interpolation.
+
+
+
 **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
 
 > Note: The changes before `0.102-beta` were massive, so they were intentionally left out here.

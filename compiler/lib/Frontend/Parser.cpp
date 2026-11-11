@@ -587,6 +587,22 @@ StmtPtr Parser::parse_statement() {
       (peek(1).kind == TokenKind::LParen || peek(1).kind == TokenKind::LBracket)) {
     return parse_destructuring();
   }
+  if (check(TokenKind::At)) {
+    advance();  // '@'
+    if (!(check(TokenKind::Identifier) && peek().text == "Nullable")) {
+      error_at(peek(), diag::kExpectedToken, "expected 'Nullable' after '@'");
+      synchronize();
+      return nullptr;
+    }
+    advance();
+    if (!(check(TokenKind::KwLet) || check(TokenKind::KwVar) || check(TokenKind::KwConst))) {
+      error_at(peek(), diag::kExpectedToken,
+               "expected a variable declaration after '@Nullable'");
+      synchronize();
+      return nullptr;
+    }
+    return parse_variable_declaration(true);
+  }
   if (check(TokenKind::KwLet) || check(TokenKind::KwVar) || check(TokenKind::KwConst)) {
     return parse_variable_declaration();
   }
@@ -659,7 +675,7 @@ StmtPtr Parser::parse_destructuring() {
   return make_unique<DestructuringStmt>(kw.location, binding, move(names), move(value));
 }
 
-StmtPtr Parser::parse_variable_declaration() {
+StmtPtr Parser::parse_variable_declaration(bool nullable) {
   const Token keyword = advance();
   const BindingKind binding = keyword.kind == TokenKind::KwLet     ? BindingKind::Let
                               : keyword.kind == TokenKind::KwVar   ? BindingKind::Var
@@ -691,7 +707,7 @@ StmtPtr Parser::parse_variable_declaration() {
   expect(TokenKind::Semicolon, "after the variable initializer");
   return make_unique<VariableDeclarationStmt>(keyword.location, binding, name.text,
                                               has_annotation, annotation,
-                                              move(initializer));
+                                              move(initializer), nullable);
 }
 
 StmtPtr Parser::parse_assignment_or_expression() {

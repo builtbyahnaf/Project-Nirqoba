@@ -14,6 +14,7 @@ enum class TokenKind {
   // Trivia and end of input.
   EndOfFile,
   Invalid,
+  At,
 
   // Literals.
   IntegerLiteral,

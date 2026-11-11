@@ -782,7 +782,12 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
     const Type annotation = resolve_aggregate_type(declaration.annotation());
     declaration.set_annotation(annotation);
     if (is_null_pointer_literal(declaration.initializer()) && annotation.is_pointer()) {
-      // `var p: ptr T = nullptr;` - the annotation is the literal's type.
+      // Pointers are non-nullable by default, so holding nullptr requires '@Nullable'.
+      if (!declaration.is_nullable()) {
+        diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
+                           "a non-nullable pointer cannot be initialized with nullptr; "
+                           "declare it '@Nullable'");
+      }
       const_cast<Expr&>(declaration.initializer()).set_type(annotation);
     } else if (annotation.is_valid() && initializer_type.is_valid() &&
         annotation != initializer_type) {
@@ -798,6 +803,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
 
   Symbol symbol{declaration.name(), binding_type, declaration.binding(),
                 declaration.location()};
+  symbol.nullable = declaration.is_nullable();
   if ((binding_type.is_owned_array() || contains_owned_array(binding_type)) &&
       declaration.initializer().kind() == Expr::Kind::Index) {
     diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
@@ -1266,6 +1272,9 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                        "a borrowed binding cannot be rebound");
     return;
   }
+  // Any assignment can change what a name refers to, so no earlier non-null proof
+  // survives it.
+  nonnull_proven_.clear();
   if (is_null_pointer_literal(assignment.value()) && target_type.is_pointer()) {
     // `p = nullptr;` retypes the literal to the destination pointer type.
     const_cast<Expr&>(assignment.value()).set_type(target_type);
@@ -1418,13 +1427,47 @@ void TypeChecker::check_if(IfStmt& statement) {
     diagnostics_.error(diag::kTypeMismatch, statement.condition().location(),
                        "'if' condition must be 'bool', not '" + cond_type.to_string() + "'");
   }
+  // Flow-sensitive narrowing: `p is not nullptr` proves non-null in the
+  // then-branch; `p is nullptr` proves it in the else-branch and, when the
+  // then-branch cannot fall through, after the statement.
+  std::string narrowed_name;
+  bool then_nonnull = false;
+  bool else_nonnull = false;
+  {
+    const Expr& condition = statement.condition();
+    if (condition.kind() == Expr::Kind::Binary) {
+      const auto& binary = static_cast<const BinaryExpr&>(condition);
+      if (binary.op() == BinaryOp::Equal || binary.op() == BinaryOp::NotEqual) {
+        const Expr* other = nullptr;
+        const Expr* named = nullptr;
+        if (binary.lhs().kind() == Expr::Kind::Name) {
+          named = &binary.lhs();
+          other = &binary.rhs();
+        } else if (binary.rhs().kind() == Expr::Kind::Name) {
+          named = &binary.rhs();
+          other = &binary.lhs();
+        }
+        if (named && other && is_null_pointer_literal(*other)) {
+          narrowed_name = static_cast<const NameExpr&>(*named).name();
+          if (binary.op() == BinaryOp::NotEqual) then_nonnull = true;
+          else else_nonnull = true;
+        }
+      }
+    }
+  }
+  const std::unordered_set<std::string> incoming_proven = nonnull_proven_;
   const SymbolTable incoming = symbols_;
+  if (then_nonnull) nonnull_proven_.insert(narrowed_name);
   check_block(const_cast<BlockStmt&>(statement.then_branch()));
+  const std::unordered_set<std::string> then_proven = nonnull_proven_;
   const SymbolTable then_state = symbols_;
   symbols_ = incoming;
+  nonnull_proven_ = incoming_proven;
+  if (else_nonnull) nonnull_proven_.insert(narrowed_name);
   if (statement.has_else()) {
     check_statement(const_cast<Stmt&>(*statement.else_branch()));
   }
+  const std::unordered_set<std::string> else_proven = nonnull_proven_;
   const SymbolTable else_state = symbols_;
   const bool then_falls_through = block_falls_through(statement.then_branch());
   const bool else_falls_through = statement.has_else()
@@ -1438,6 +1481,11 @@ void TypeChecker::check_if(IfStmt& statement) {
     symbols_ = else_state;
   } else {
     symbols_ = incoming;
+  }
+  nonnull_proven_ = incoming_proven;
+  if (!(then_falls_through && else_falls_through)) {
+    if (then_falls_through) nonnull_proven_ = then_proven;
+    else if (else_falls_through) nonnull_proven_ = else_proven;
   }
 }
 
@@ -1919,16 +1967,29 @@ Type TypeChecker::check_expression(Expr& expr) {
           }
           break;
         }
-        case UnaryOp::Dereference:
+        case UnaryOp::Dereference: {
           if (!operand_type.is_pointer() || operand_type.is_managed_pointer()) {
             diagnostics_.error(diag::kTypeMismatch, unary.location(),
                                "operator '*' requires a raw pointer operand, not '" +
                                    operand_type.to_string() + "'");
             type = Type::error();
+            break;
+          }
+          const Symbol* pointer_symbol = nullptr;
+          if (unary.operand().kind() == Expr::Kind::Name)
+            pointer_symbol = symbols_.lookup(
+                static_cast<const NameExpr&>(unary.operand()).name());
+          if (pointer_symbol && pointer_symbol->nullable &&
+              nonnull_proven_.count(pointer_symbol->name) == 0) {
+            diagnostics_.error(diag::kTypeMismatch, unary.location(),
+                               "'*' requires a non-null pointer; check '" +
+                                   pointer_symbol->name + "' with 'is nullptr' first");
+            type = Type::error();
           } else {
             type = operand_type.element_type();
           }
           break;
+        }
       }
       break;
     }

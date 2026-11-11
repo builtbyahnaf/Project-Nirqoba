@@ -346,10 +346,12 @@ std::string_view binding_kind_spelling(BindingKind kind);
 class VariableDeclarationStmt : public Stmt {
  public:
   VariableDeclarationStmt(SourceLocation location, BindingKind binding, std::string name,
-                          bool has_annotation, Type annotation, ExprPtr initializer)
+                          bool has_annotation, Type annotation, ExprPtr initializer,
+                          bool nullable = false)
       : Stmt(Kind::VariableDeclaration, std::move(location)), binding_(binding),
         name_(std::move(name)), has_annotation_(has_annotation), annotation_(annotation),
-        initializer_(std::move(initializer)) {}
+        initializer_(std::move(initializer)), nullable_(nullable) {}
+  bool is_nullable() const { return nullable_; }
   BindingKind binding() const { return binding_; }
   const std::string& name() const { return name_; }
   bool has_annotation() const { return has_annotation_; }
@@ -372,6 +374,7 @@ class VariableDeclarationStmt : public Stmt {
   Type annotation_;
   ExprPtr initializer_;
   std::string cleanup_callee_;
+  bool nullable_ = false;
 };
 
 class DestructuringStmt : public Stmt {
