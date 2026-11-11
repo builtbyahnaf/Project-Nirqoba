@@ -1175,6 +1175,11 @@ ExprPtr Parser::parse_primary() {
         return make_unique<CallExpr>(token.location, move(qualified_name),
                                      move(arguments));
       }
+      if (token.text == "nullptr") {
+        // §8.7: `nullptr` is the null pointer literal. It is intentionally untyped
+        // here; semantic analysis gives it the pointer type of its destination.
+        return make_unique<IntegerLiteralExpr>(token.location, 0, "", true);
+      }
       // `module.name` is a member access, except when it is immediately called:
       // then it is a call to a function in another module (Phase 5).
       if (check(TokenKind::Dot) && peek(1).kind == TokenKind::Identifier &&

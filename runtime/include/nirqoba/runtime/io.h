@@ -25,6 +25,8 @@ int32_t nrq_print_cstr(const char* utf8);
 // Scalar printing helpers (Phase 2): format value followed by '\n' to stdout.
 int32_t nrq_print_int(int64_t val);
 int32_t nrq_print_uint(uint64_t val);
+// Prints a pointer's address, or NULL for a null pointer; never dereferences.
+int32_t nrq_print_pointer(const void* value);
 int32_t nrq_print_f64(double val);
 int32_t nrq_print_f32(float val);
 int32_t nrq_print_bool(int32_t val);

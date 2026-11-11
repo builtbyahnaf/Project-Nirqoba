@@ -3943,6 +3943,12 @@ class FunctionTranslator {
               ? builder_.create<mlir::LLVM::FPExtOp>(loc, builder_.getF64Type(), val).getResult()
               : val;
           builder_.create<nrq::PrintF64Op>(loc, f64_val);
+        } else if (ty.is_pointer()) {
+          // §8.6: print the address and never dereference. The runtime prints NULL
+          // for a null pointer, so absence is visible instead of a bare 0.
+          auto print_fn = ensure_runtime_fn(module_, builder_, "nrq_print_pointer",
+                                            builder_.getI32Type(), {llvm_ptr_type(ctx_)});
+          builder_.create<mlir::LLVM::CallOp>(loc, print_fn, mlir::ValueRange{val});
         } else if (ty.is_integer()) {
           mlir::Value i64_val = val;
           if (ty.bit_width() < 64) {

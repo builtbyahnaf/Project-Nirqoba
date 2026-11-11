@@ -1,0 +1,13 @@
+// §8.6: printing a pointer shows its address and never dereferences it; a null
+// pointer prints NULL so absence is distinguishable from address zero. §8.7: the
+// null pointer literal is `nullptr` and takes its type from the declaration.
+int function main() {
+    var s: int = 41;
+    var p: ptr int = &s;
+    print(p);
+    var q: ptr int = nullptr;
+    print(q);
+    *p = 987654;
+    print(*p);
+    return 0;
+}

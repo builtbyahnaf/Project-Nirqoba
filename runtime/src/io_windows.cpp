@@ -84,6 +84,13 @@ int32_t nrq_print_int(int64_t val) {
     return write_all(h, buf, static_cast<DWORD>(len));
 }
 
+// §8.6: a pointer prints as its address and is never dereferenced. A null pointer
+// prints as NULL so absence is distinguishable from a legitimate address.
+int32_t nrq_print_pointer(const void* value) {
+    if (value == nullptr) return nrq_print_string("NULL", 4);
+    return nrq_print_uint(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(value)));
+}
+
 int32_t nrq_print_uint(uint64_t val) {
     HANDLE h = get_stdout_handle();
     if (h == INVALID_HANDLE_VALUE || h == nullptr) return 0;

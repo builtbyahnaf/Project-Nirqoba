@@ -101,6 +101,13 @@ static string cleanup_for_type(const Type& type) {
   return contains_owned_array(type) ? "aggregate.owned_drop" : string{};
 }
 
+// `nullptr` takes its pointer type from the declaration that consumes it, so it is
+// recognised by marker rather than by the integer value it is represented with.
+static bool is_null_pointer_literal(const Expr& expr) {
+  return expr.kind() == Expr::Kind::IntegerLiteral &&
+         static_cast<const IntegerLiteralExpr&>(expr).is_null_pointer();
+}
+
 static bool has_untracked_pointer_ownership(const Type& type,
                                             ValueOwnership ownership) {
   if (!type.is_pointer()) return false;
@@ -774,7 +781,10 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
   if (declaration.has_annotation()) {
     const Type annotation = resolve_aggregate_type(declaration.annotation());
     declaration.set_annotation(annotation);
-    if (annotation.is_valid() && initializer_type.is_valid() &&
+    if (is_null_pointer_literal(declaration.initializer()) && annotation.is_pointer()) {
+      // `var p: ptr T = nullptr;` - the annotation is the literal's type.
+      const_cast<Expr&>(declaration.initializer()).set_type(annotation);
+    } else if (annotation.is_valid() && initializer_type.is_valid() &&
         annotation != initializer_type) {
       diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
                          "cannot initialize '" + declaration.name() + "' of type '" +
@@ -2918,7 +2928,8 @@ Type TypeChecker::check_call(CallExpr& call) {
         check_expression(const_cast<Expr&>(*call.arguments().front()));
     if (argument_type.is_valid()) {
       if (!argument_type.is_numeric() && !argument_type.is_bool() &&
-          !argument_type.is_char() && !argument_type.is_string()) {
+          !argument_type.is_char() && !argument_type.is_string() &&
+          !argument_type.is_pointer()) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments().front()->location(),
                            "'print' requires a scalar or string argument, not '" +
                                argument_type.to_string() + "'");
