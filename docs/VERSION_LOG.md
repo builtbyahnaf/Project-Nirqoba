@@ -1,6 +1,28 @@
 # Nirqoba Version Log
 
-## Version 0.397-beta (working build)
+## Version 0.398-beta (working build)
+
+### Summary of Changes (since `0.397-beta`):
+
+*Opened after initialization completion propagates through nested aggregates.*
+
+- **A completed nested aggregate counts as initialized.** When every field of a nested
+  aggregate has been assigned individually, the enclosing path is cleared from the
+  uninitialized set, so whole-value reads and copies of the nested aggregate are
+  allowed again.
+- **Completion propagates to enclosing aggregates.** The same check then runs on the
+  parent path, so a fully initialized `Outer` becomes usable as a whole even though its
+  nested field was filled in field by field.
+- **Completed aggregates participate in the existing ownership rules.** Whole-value
+  copies of a completed nested aggregate retain its shared fields, and whole-value
+  moves of an owned nested aggregate transfer them without retaining.
+- **The guards are unchanged for incomplete aggregates.** Partially initialized
+  whole-value use, reads of uninitialized fields and whole-field overwrites of
+  aggregates initialized field by field remain rejected.
+
+Still unimplemented: native-resource owned fields.
+
+## Version 0.397-beta   
 
 ### Summary of Changes (since `0.396-beta`):
 
@@ -21,7 +43,7 @@
 
 Still unimplemented: native-resource owned fields.
 
-## Version 0.396-beta (working build)
+## Version 0.396-beta   
 
 ### Summary of Changes (since `0.391-beta`):
 
@@ -46,7 +68,7 @@ Limitation: a partially initialized aggregate is not yet rejected when used as a
 value; copying, moving, returning or passing one must be avoided until all fields are
 assigned. Native-resource fields remain unimplemented.
 
-## Version 0.391-beta (working build)
+## Version 0.391-beta   
 
 ### Summary of Changes (since `0.390-beta`):
 
@@ -72,7 +94,7 @@ assigned. Native-resource fields remain unimplemented.
 
 Still unimplemented: `uninit` partial initialization and native-resource owned fields.
 
-## Version 0.390-beta (working build)
+## Version 0.390-beta   
 
 ### Summary of Changes (since `0.389-beta`):
 
@@ -91,7 +113,7 @@ Still unimplemented: `uninit` partial initialization and native-resource owned f
 Still unimplemented: `shared` pointer fields, resource-domain owned fields
 (`owned file ptr byte` and friends), and `uninit` partial initialization.
 
-## Version 0.389-beta (working build)
+## Version 0.389-beta   
 
 ### Summary of Changes (since `0.384-beta`):
 
@@ -116,7 +138,7 @@ Still unimplemented: `shared` pointer fields, resource-domain owned fields
 
 Still unimplemented: `uninit` partial initialization.
 
-## Version 0.384-beta (working build)
+## Version 0.384-beta   
 
 ### Summary of Changes (since `0.380-beta`):
 
@@ -137,7 +159,7 @@ Still unimplemented: `uninit` partial initialization.
 Not implemented: borrowed-field lifetime enforcement across scopes and returns,
 `uninit` partial initialization, and owned field destruction.
 
-## Version 0.380-beta (working build)
+## Version 0.380-beta   
 
 ### Summary of Changes (since `0.379-beta`):
 
@@ -159,7 +181,7 @@ Not implemented: borrowed-field lifetime enforcement across scopes and returns,
 Still unsupported: call-style construction `Point(1, 2)`, `Point p = {};` with no
 initializer list, and uninitialized declarations (`int x;` is an error).
 
-## Version 0.379-beta (working build)
+## Version 0.379-beta   
 
 ### Summary of Changes (since `0.378-beta`):
 
@@ -184,7 +206,7 @@ itself (a nullable and a plain pointer share one TIR type); interpolation.
 
 ---
 
-## Version 0.378-beta (working build)
+## Version 0.378-beta   
 
 ### Summary of Changes (since `0.374-beta`):
 
@@ -202,7 +224,7 @@ Still unimplemented from §8: `@Nullable` annotations, flow-sensitive non-null
 narrowing, interpolation of pointers, cross-function lifetime analysis, and the
 interop rules §8.10 requires.
 
-## Version 0.374-beta (working build)
+## Version 0.374-beta   
 
 ### Summary of Changes (since `0.371-beta`):
 
@@ -233,7 +255,7 @@ Still unimplemented from §8: nullable pointer types and `is NULL` checks,
 interpolation of pointers, cross-function lifetime analysis, and the interop rules
 that §8.10 requires the compiler team to document.
 
-## Version 0.371-beta (working build)
+## Version 0.371-beta   
 
 ### Summary of Changes (since `0.369-beta`):
 
@@ -247,7 +269,7 @@ that §8.10 requires the compiler team to document.
   the descriptor field, or a column base that leaves no room for a pointer in one
   element.
 
-## Version 0.369-beta (working build)
+## Version 0.369-beta   
 
 ### Summary of Changes (since `0.363-beta`):
 
@@ -268,7 +290,7 @@ reference-column tracing (stage 3).*
   only non-null entries. The flat offset table could never describe a column, and the
   gate now refuses only owned arrays and array views.
 
-## Version 0.363-beta (working build)
+## Version 0.363-beta   
 
 ### Summary of Changes (since `0.361-beta`):
 
@@ -296,7 +318,7 @@ reference-column tracing (stage 3).*
   with the analysis of why the ordinary two-step GEP cannot express it recorded in
   `docs/compiler/soa-progress.md`. Stage 2d is the next upgrade.
 
-## Version 0.361-beta (working build)
+## Version 0.361-beta   
 
 ### Summary of Changes (since `0.357-beta`):
 
