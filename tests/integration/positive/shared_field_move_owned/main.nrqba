@@ -1,0 +1,8 @@
+// A move transfers references: no retain, and only the destination releases.
+struct Mixed { owned ptr int buffer; shared ptr int data; }
+int function main() {
+    var m = Mixed { buffer: memory.allocate<int>(1), data: memory.shared_allocate<int>(1) };
+    var n = m;
+    print(memory.shared_count(n.data));
+    return 0;
+}

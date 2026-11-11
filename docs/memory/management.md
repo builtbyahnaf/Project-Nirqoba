@@ -258,3 +258,23 @@ on a moved field. A field that was not moved on every path is still rejected, an
 owner must be live and mutable. Aggregates that hold owned pointers may be nested in
 other structs; `aggregate.owned_drop` recurses into them, while owned arrays whose
 elements own resources remain rejected.
+
+## Shared pointer fields (0.391-beta)
+
+A `shared ptr T` field has the type `shared_ptr<T>` (`TypeKind::SharedPointer`). It is
+a full pointer for dereference, printing, size and alignment (one word), and lowering,
+but it carries ownership in the type itself, so `aggregate.owned_drop` can see it.
+
+- **Construction** takes the initial reference from `memory.shared_allocate` or
+  `memory.shared_retain`; no extra retain is emitted.
+- **Copy** of an aggregate with shared fields (`var b = a;` or `b = a;`) emits
+  `aggregate.shared_retain`, which calls `nrq_memory_shared_retain` once per shared
+  field, including fields nested in structs, tuples and arrays.
+- **Move** of an aggregate that also owns resources transfers the references: the
+  source is zeroed, no retain is emitted, and only the destination releases.
+- **Destruction** calls `nrq_memory_shared_release` once per shared field, in reverse
+  declaration order, recursing into nested aggregates.
+- Only shared values may initialize a shared field; owned, borrowed and unqualified
+  raw pointers are rejected. `shared` locals and parameters keep their existing
+  move-on-copy behavior.
+

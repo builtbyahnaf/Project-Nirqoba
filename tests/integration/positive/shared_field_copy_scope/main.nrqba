@@ -1,0 +1,14 @@
+// Copy retains; scope exit releases; nested fields follow the same rule.
+struct Inner { shared ptr int data; }
+struct Outer { Inner inner; int tag; }
+int function main() {
+    var a = Outer { inner: Inner { data: memory.shared_allocate<int>(2) }, tag: 5 };
+    *a.inner.data = 9;
+    {
+        var b = a;
+        print(memory.shared_count(b.inner.data));
+        print(*b.inner.data + b.tag);
+    }
+    print(memory.shared_count(a.inner.data));
+    return 0;
+}

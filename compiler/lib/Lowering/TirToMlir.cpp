@@ -269,6 +269,20 @@ static bool store_moves_pointer_free_data(const tir::Op& op) {
   return type.is_numeric() || type.is_bool() || type.is_char();
 }
 
+static bool contains_shared_pointer(const Type& type) {
+  if (type.is_shared_pointer()) return true;
+  if (type.is_array()) return contains_shared_pointer(type.element_type());
+  if (type.is_tuple()) {
+    for (const Type& element : type.tuple_elements())
+      if (contains_shared_pointer(element)) return true;
+  }
+  if (type.is_struct()) {
+    for (const auto& field : type.struct_fields())
+      if (contains_shared_pointer(field.second)) return true;
+  }
+  return false;
+}
+
 static bool borrowed_pointer_parameter_does_not_escape(
     const tir::Function& function, std::size_t parameter_index,
     const BorrowedEscapeSummary& summary) {
@@ -3079,6 +3093,16 @@ class FunctionTranslator {
           std::function<void(const Type&, mlir::Value, std::vector<int64_t>&)> drop_fields;
           drop_fields = [&](const Type& type, mlir::Value aggregate,
                             std::vector<int64_t>& path) {
+            if (type.is_shared_pointer()) {
+              mlir::Value data = builder_.create<mlir::LLVM::ExtractValueOp>(
+                  loc, aggregate, builder_.getDenseI64ArrayAttr(path)).getResult();
+              auto release = ensure_runtime_fn(
+                  module_, builder_, "nrq_memory_shared_release",
+                  builder_.getI32Type(), {llvm_ptr_type(ctx_)});
+              builder_.create<mlir::LLVM::CallOp>(loc, release,
+                                                   mlir::ValueRange{data});
+              return;
+            }
             if (type.is_owned_pointer()) {
               mlir::Value data = builder_.create<mlir::LLVM::ExtractValueOp>(
                   loc, aggregate, builder_.getDenseI64ArrayAttr(path)).getResult();
@@ -3114,8 +3138,8 @@ class FunctionTranslator {
             auto visit = [&](const Type& field_type, int64_t index) {
               path.push_back(index);
               if (field_type.is_owned_array() || field_type.is_owned_pointer() ||
-                  field_type.is_array() || field_type.is_struct() ||
-                  field_type.is_tuple())
+                  field_type.is_shared_pointer() || field_type.is_array() ||
+                  field_type.is_struct() || field_type.is_tuple())
                 drop_fields(field_type, aggregate, path);
               path.pop_back();
             };
@@ -3134,6 +3158,44 @@ class FunctionTranslator {
           };
           std::vector<int64_t> path;
           drop_fields(op.arguments[0].type, args[0], path);
+          return true;
+        }
+
+        // Copying an aggregate retains every shared pointer field it carries.
+        if (op.callee == "aggregate.shared_retain" && args.size() == 1) {
+          std::function<void(const Type&, mlir::Value, std::vector<int64_t>&)> retain_fields;
+          retain_fields = [&](const Type& type, mlir::Value aggregate,
+                              std::vector<int64_t>& path) {
+            if (type.is_shared_pointer()) {
+              mlir::Value data = builder_.create<mlir::LLVM::ExtractValueOp>(
+                  loc, aggregate, builder_.getDenseI64ArrayAttr(path)).getResult();
+              auto retain = ensure_runtime_fn(
+                  module_, builder_, "nrq_memory_shared_retain",
+                  llvm_ptr_type(ctx_), {llvm_ptr_type(ctx_)});
+              builder_.create<mlir::LLVM::CallOp>(loc, retain,
+                                                   mlir::ValueRange{data});
+              return;
+            }
+            auto visit = [&](const Type& field_type, int64_t index) {
+              path.push_back(index);
+              if (field_type.is_shared_pointer() || field_type.is_array() ||
+                  field_type.is_struct() || field_type.is_tuple())
+                retain_fields(field_type, aggregate, path);
+              path.pop_back();
+            };
+            if (type.is_array()) {
+              for (std::size_t index = 0; index < type.array_length(); ++index)
+                visit(type.element_type(), static_cast<int64_t>(index));
+            } else if (type.is_struct()) {
+              for (std::size_t index = 0; index < type.struct_fields().size(); ++index)
+                visit(type.struct_fields()[index].second, static_cast<int64_t>(index));
+            } else if (type.is_tuple()) {
+              for (std::size_t index = 0; index < type.tuple_elements().size(); ++index)
+                visit(type.tuple_elements()[index], static_cast<int64_t>(index));
+            }
+          };
+          std::vector<int64_t> path;
+          retain_fields(op.arguments[0].type, args[0], path);
           return true;
         }
 

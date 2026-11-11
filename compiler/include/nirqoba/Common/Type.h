@@ -55,6 +55,7 @@ enum class TypeKind {
   DynamicArray,
   OwnedArray,
   OwnedPointer,
+  SharedPointer,
   ArrayView,
   Pointer,
   ManagedPointer,
@@ -100,6 +101,7 @@ class Type {
   static Type dynamic_array_type(Type element_type);
   static Type owned_array_type(Type element_type);
   static Type owned_pointer_type(Type element_type);
+  static Type shared_pointer_type(Type element_type);
   static Type array_view_type(Type element_type);
   static Type pointer_type(Type element_type);
   static Type managed_pointer_type(Type element_type);
@@ -121,9 +123,11 @@ class Type {
   bool is_dynamic_array() const { return kind_ == TypeKind::DynamicArray; }
   bool is_owned_array() const { return kind_ == TypeKind::OwnedArray; }
   bool is_owned_pointer() const { return kind_ == TypeKind::OwnedPointer; }
+  bool is_shared_pointer() const { return kind_ == TypeKind::SharedPointer; }
   bool is_array_view() const { return kind_ == TypeKind::ArrayView; }
   bool is_pointer() const {
-    return kind_ == TypeKind::Pointer || kind_ == TypeKind::OwnedPointer;
+    return kind_ == TypeKind::Pointer || kind_ == TypeKind::OwnedPointer ||
+           kind_ == TypeKind::SharedPointer;
   }
   bool is_managed_pointer() const { return kind_ == TypeKind::ManagedPointer; }
   bool is_tuple() const { return kind_ == TypeKind::Tuple; }

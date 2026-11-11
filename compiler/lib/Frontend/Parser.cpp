@@ -318,6 +318,10 @@ unique_ptr<StructDecl> Parser::parse_struct(Visibility visibility) {
     // generated field destruction apply without a side table.
     if (owned_field && field_type.is_pointer() && !field_type.is_owned_pointer())
       field_type = Type::owned_pointer_type(field_type.element_type());
+    // `shared ptr T` becomes the reference-counted pointer type, so copying and
+    // destruction can see the field's ownership from the type alone.
+    if (shared && field_type.is_pointer() && !field_type.is_shared_pointer())
+      field_type = Type::shared_pointer_type(field_type.element_type());
     if (!check(TokenKind::Identifier)) {
       error_at(peek(), diag::kExpectedToken, "expected field name in struct");
       synchronize();

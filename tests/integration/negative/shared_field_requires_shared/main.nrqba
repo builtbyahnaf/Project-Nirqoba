@@ -1,0 +1,9 @@
+// A shared field must receive a shared value: an owned allocation is rejected.
+struct Holder {
+    shared ptr int data;
+}
+
+int function main() {
+    var h = Holder { data: memory.allocate<int>(2) };
+    return 0;
+}
