@@ -2679,9 +2679,12 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
         if (!checking_lvalue_ &&
             field_path(expr, uninitialized_root, uninitialized_path) &&
             symbols_.field_is_uninitialized(uninitialized_root, uninitialized_path)) {
+          const std::string field_display =
+              !uninitialized_path.empty() && uninitialized_path.front() == '.'
+                  ? uninitialized_path.substr(1) : uninitialized_path;
           diagnostics_.error(diag::kUseAfterFree, expr.location(),
                              "read of uninitialized aggregate field '" +
-                                 uninitialized_path + "'");
+                                 field_display + "'");
         }
         if (contains_owned_array(field_type))
           expr.set_ownership(ValueOwnership::Owned);
