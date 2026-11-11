@@ -1,0 +1,17 @@
+// A `soa<T>` container's columns come from the struct's existing physical field
+// order, so this report is the reference for every column address the lowering
+// will compute. Only a signature mentions the type: nothing can allocate a
+// container yet, so the layout is inspectable before it is usable.
+struct Point {
+    bool flag;
+    int x;
+}
+
+int function width(soa<Point> points) {
+    return 0;
+}
+
+int function main() {
+    print(0);
+    return 0;
+}

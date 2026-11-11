@@ -10,8 +10,8 @@ that loses context can resume from it plus `git log`.
 | --- | --- | --- |
 | 1 | type kind, syntax, gate | done (`8f48c93`) |
 | 2a | authoritative column layout, sema owned rules, type allowed in signatures | done (bec12d3) |
-| 2b | struct-field resolution for `soa<T>` in signatures, layout report test | next |
-| 2c | allocation entry point `memory.owned_soa<T>(n)` (scalar fields only) | pending |
+| 2b | struct-field resolution for `soa<T>` in signatures, layout report test | done (this commit) |
+| 2c | allocation entry point `memory.owned_soa<T>(n)` (scalar fields only) | next |
 | 2d | column addressing in TIR + lowering for `ps[i].f` | pending |
 | 3 | strided GC trace callback for reference columns | pending |
 | 4 | column views, benchmarks, docs, version milestone | pending |
@@ -77,6 +77,60 @@ soa Point element 9 align 8 columns 2
   x : int index 0 (element 8 bytes, align 8)
   flag : bool index 8 (element 1 bytes, align 1)
 ```
+
+## Stage 2b (this commit)
+
+### Root cause of the stage 2a gap
+
+The parser builds a named type as `Type::struct_type(name)` with no fields; semantic
+analysis fills them in `resolve_aggregate_type` (`compiler/lib/Sema/TypeChecker.cpp:2035`),
+which is what `resolve_declaration_types` calls for return types and parameters. It had
+cases for arrays, owned arrays, owned pointers and views but not for a container, so a
+`soa<Point>` parameter stayed fieldless and `describe_soa` correctly reported no columns.
+
+### Change
+
+`resolve_aggregate_type` now resolves through `soa<T>` as well:
+
+```cpp
+if (type.is_soa())
+  return Type::soa_type(resolve_aggregate_type(type.element_type(), active));
+```
+
+It is placed with the other element-resolving cases, so recursion, cycle protection via
+`active`, and nested aggregates behave exactly as they do for `owned_array<T>`.
+
+### Verified
+
+`--emit=layout` on `struct Point { bool flag; int x; }` now reports:
+
+```
+soa Point element 9 align 8 columns 2
+  x : int index 0 (element 8 bytes, align 8)
+  flag : bool index 8 (element 1 bytes, align 1)
+```
+
+Column order is the struct physical order (`x` before `flag`), element bytes are the sum
+of the column element sizes, and the indices are the count-independent bases that
+`describe_soa` documents. Test: `tests/integration/positive/soa_layout_report`.
+
+Suite: 210/210 unit, 267/267 integration.
+
+## Stage 2c — next, exact plan
+
+1. Recognise `memory.owned_soa<T>(n)` as a builtin returning `soa<T>`, next to the
+   owned-array cases in `compiler/lib/Sema/TypeChecker.cpp:121`, `:136` and `:2538`
+   (arity: one element count, optional allocator). Reject it while the struct has a
+   managed reference field, with a dedicated message, until stage 3.
+2. Lower it in `compiler/lib/Lowering/TirToMlir.cpp` where `memory.owned_array` is
+   handled (`:2729` for the call, `:3053` for the rooted allocation), passing
+   `payload_bytes = count * describe_soa(...).element_bytes` and an element size of
+   `element_bytes`, so the header records `element_count = count`.
+3. No reference columns yet: the array descriptor is exact only for scalar fields,
+   which is why (1) rejects reference structs.
+4. Test: allocate, write and read one field per index, assert values; keep the
+   `soa_allocation_unavailable` negative test replaced by a reference-struct rejection
+   test.
 
 ## Invariants that must not be broken
 
