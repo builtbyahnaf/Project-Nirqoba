@@ -689,16 +689,25 @@ bool Parser::starts_type_first_declaration() const {
   if ((peek().text == "owned_array" || peek().text == "array_view" ||
        peek().text == "soa") && peek(1).kind == TokenKind::Less)
     return true;
-  // Two identifiers in a row cannot start an expression, so `Point p` is a
-  // declaration while `p = ...` and `p.f = ...` are not.
-  if (peek(1).kind == TokenKind::Identifier) return true;
-  // Qualified type: `module.Point p`, `memory.owned_array<int> a`.
+  // A user-defined type starts a declaration only when the name after it opens an
+  // initializer or is the malformed `Point p;` case; otherwise the statement stays an
+  // expression.
+  if (peek(1).kind == TokenKind::Identifier) {
+    const TokenKind after_name = peek(2).kind;
+    return after_name == TokenKind::Equal || after_name == TokenKind::Semicolon;
+  }
+  // Qualified type: `module.Point p`, `memory.owned_array<int> a`. Bounded by the
+  // token count so lookahead never scans past EOF.
   std::size_t lookahead = 1;
-  while (peek(lookahead).kind == TokenKind::Dot &&
+  while (position_ + lookahead + 1 < tokens_.size() &&
+         peek(lookahead).kind == TokenKind::Dot &&
          peek(lookahead + 1).kind == TokenKind::Identifier)
     lookahead += 2;
   if (lookahead > 1) {
-    if (peek(lookahead).kind == TokenKind::Identifier) return true;
+    if (peek(lookahead).kind == TokenKind::Identifier) {
+      const TokenKind after_name = peek(lookahead + 1).kind;
+      return after_name == TokenKind::Equal || after_name == TokenKind::Semicolon;
+    }
     // A qualified generic is a type only for the builtin containers; a call such as
     // `memory.allocate<byte>(1)` starts with the same shape but is an expression.
     if (peek(lookahead).kind == TokenKind::Less) {
@@ -729,9 +738,27 @@ StmtPtr Parser::parse_type_first_declaration(bool nullable, BindingKind binding)
   advance();  // '='
   // A bare brace initializer takes its type from the declaration, so it is parsed
   // as the struct literal the annotation names: `Point p = {1, 2};`.
-  ExprPtr initializer = check(TokenKind::LBrace)
-      ? parse_struct_init(annotation.to_string(), peek().location)
-      : parse_expression();
+  ExprPtr initializer;
+  if (check(TokenKind::LBrace)) {
+    if (!annotation.is_struct()) {
+      error_at(peek(), diag::kTypeMismatch,
+               "a brace initializer requires a struct type, not '" +
+                   annotation.to_string() + "'");
+      // Consume the balanced braces so the following statement still parses.
+      int brace_depth = 0;
+      do {
+        if (check(TokenKind::EndOfFile)) break;
+        if (check(TokenKind::LBrace)) ++brace_depth;
+        else if (check(TokenKind::RBrace)) --brace_depth;
+        advance();
+      } while (brace_depth > 0);
+      expect(TokenKind::Semicolon, "after the variable initializer");
+      return nullptr;
+    }
+    initializer = parse_struct_init(annotation.to_string(), peek().location);
+  } else {
+    initializer = parse_expression();
+  }
   expect(TokenKind::Semicolon, "after the variable initializer");
   return make_unique<VariableDeclarationStmt>(start.location, binding, name.text, true,
                                               annotation, move(initializer), nullable);

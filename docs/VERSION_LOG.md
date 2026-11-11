@@ -16,6 +16,11 @@ anything else stays an expression statement, so no backtracking is needed.
 Still unsupported: call-style construction `Point(1, 2)`, `Point p = {};` with no
 initializer list, and uninitialized declarations (`int x;` is an error).
 
+Hardening: a type-first declaration is recognised only when the name is followed by
+`=` (or `;` for the missing-initializer diagnostic), lookahead is bounded by the token
+count, and a brace initializer on a non-struct type reports its own diagnostic and
+recovers at the closing brace.
+
 
 
 
