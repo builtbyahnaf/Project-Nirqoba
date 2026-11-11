@@ -510,6 +510,25 @@ invented to make the SoA test pass would break that area rather than extend it.
 Benchmarks are not started. Comparing SoA against AoS before views and nullability exist
 would measure a feature set that cannot yet express the AoS baseline's common patterns,
 so the numbers would invite the wrong conclusion.
+## Stage 4 — performance evaluation (this commit)
+
+Sources and report: `benchmarks/soa_stage4/` (`aos.nrqba`, `soa.nrqba`, `aosoa.nrqba`,
+`run.py`, `RAW.md`, `REPORT.md`). Timing is internal `time.now()` in milliseconds, so
+allocation, initialisation and startup sit outside the measured regions. Five runs per
+configuration with best and median; checksums are identical across representations, which
+is the evidence the work is equivalent. 65,536 rows at 200 rounds and 2,000,000 rows at
+20 rounds.
+
+Median results (ms): single-column scan 6 to 2 (cache) and 48 to 15 (bandwidth); two
+columns 9 to 4 and 57 to 32; random rows 20 to 22 and 167 to 169; write-heavy 18 to 12
+and 71 to 45, AoS to SoA. AoSoA tracks AoS within a millisecond or two throughout.
+
+Reading: SoA wins where a scan touches fewer bytes per row, and the win grows with the
+working set because the bandwidth-bound case realises the byte ratio almost exactly.
+Random access is parity: the cache misses dominate and the count load plus two-scale
+address arithmetic is pure overhead. AoSoA with block width 4 gives no benefit at these
+sizes because a 48-byte block means scanning one field still pulls the whole block.
+Millisecond resolution makes the cache-resident ratios directional rather than precise.
 ## Invariants that must not be broken
 
 - Ordinary structs, AoS layout, and their tests are untouched by every stage.

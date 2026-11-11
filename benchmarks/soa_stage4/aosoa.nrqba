@@ -1,0 +1,48 @@
+// AoSoA with block width 4: rows are grouped, and each field keeps one lane per row
+// inside a block. Scans walk blocks, so the same rows are visited with the same
+// additions. Random row access is not compared here: selecting a lane dynamically
+// needs a branch per access, which would measure the branch rather than the layout.
+struct Block4 {
+    int x0; int x1; int x2; int x3;
+    int y0; int y1; int y2; int y3;
+    int m0; int m1; int m2; int m3;
+}
+
+int function main() {
+    var n = 65536;
+    var rounds = 200;
+    var blocks = n / 4;
+    var a = memory.owned_array<Block4>(blocks);
+    for (var i = 0; i < blocks; i += 1) {
+        // The same per-row values as the other two representations, so the
+        // checksums are comparable rather than merely similar.
+        a[i].x0 = i * 4; a[i].x1 = i * 4 + 1; a[i].x2 = i * 4 + 2; a[i].x3 = i * 4 + 3;
+        a[i].y0 = i * 8; a[i].y1 = i * 8 + 2; a[i].y2 = i * 8 + 4; a[i].y3 = i * 8 + 6;
+        a[i].m0 = 7; a[i].m1 = 7; a[i].m2 = 7; a[i].m3 = 7;
+    }
+
+    var t0 = time.now();
+    var s1 = 0;
+    for (var r = 0; r < rounds; r += 1) {
+        for (var j = 0; j < blocks; j += 1) { s1 += a[j].x0 + a[j].x1 + a[j].x2 + a[j].x3; }
+    }
+    print(time.now() - t0); print(s1);
+
+    var t1 = time.now();
+    var s2 = 0;
+    for (var r = 0; r < rounds; r += 1) {
+        for (var j = 0; j < blocks; j += 1) {
+            s2 += (a[j].x0 + a[j].x1 + a[j].x2 + a[j].x3) + (a[j].y0 + a[j].y1 + a[j].y2 + a[j].y3);
+        }
+    }
+    print(time.now() - t1); print(s2);
+
+    var t3 = time.now();
+    for (var r = 0; r < rounds; r += 1) {
+        for (var j = 0; j < blocks; j += 1) {
+            a[j].x0 = a[j].x0 + 1; a[j].x1 = a[j].x1 + 1; a[j].x2 = a[j].x2 + 1; a[j].x3 = a[j].x3 + 1;
+        }
+    }
+    print(time.now() - t3); print(a[0].x0 + a[blocks - 1].x3);
+    return 0;
+}
