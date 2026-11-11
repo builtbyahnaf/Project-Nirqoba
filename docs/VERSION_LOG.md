@@ -1,5 +1,26 @@
 # Nirqoba Version Log
 
+## 0.397-beta - `uninit` soundness guards
+
+Two gaps in the 0.396 partial-initialization support are closed.
+
+A partially initialized aggregate can no longer be used as a whole: copy, move,
+return, argument passing and any other whole-value context are rejected with a
+diagnostic naming the binding. Member access remains valid (it is what initializes
+fields), and assignment targets remain valid.
+
+Overwriting a nested aggregate that already has some fields initialized is rejected
+with a precise diagnostic instead of silently leaking the initialized contents.
+Per-symbol state now records the enclosing aggregate when a nested field is
+initialized (`o.inner.data` records `o.inner`); assigning the whole field checks that
+state first. Valid field-by-field initialization of nested aggregates, nested
+destruction, shared retain/release and moved-field reinitialization are unchanged.
+
+Remaining Phase 1 gap: native-resource owned fields.
+
+
+
+
 ## 0.396-beta - `uninit` partial struct initialization
 
 `var h: T = uninit;` declares a zero-initialized aggregate whose fields are then
