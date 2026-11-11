@@ -6,12 +6,31 @@
 
 ---
 
-## Version 0.353-beta (working build)
+## Version 0.357-beta (working build)
+
+### Summary of Changes (since `0.353-beta`):
+
+*Current working build, opened after 0.353-beta. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.353-beta (released)
 
 ### Summary of Changes (since `0.351-beta`):
 
-*Current working build, opened after 0.351-beta. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Released after two upgrades. Section E3 measured and acted on.*
+
+- **Alignment buys nothing measurable on this core.** Cache resident, aligned and
+  unaligned 16-byte loads both measured 0.157 ns/element, and an 8-byte-misaligned
+  base measured 0.158. The 16 MiB run is bandwidth bound and cannot show an
+  instruction effect, so it decides nothing.
+- **The 16-byte floor on promoted stack arrays was removed**, since it bought no
+  measured benefit and cost `bytes + alignment - 1` of frame per promoted array. An
+  explicit `memory.owned_array_aligned` request still raises the slot.
+- **Heap payload alignment was deliberately left at its natural 8**, where every
+  object is aligned to its own elements; raising it would mean carving pages at 16
+  bytes for a gain this machine does not show.
 
 ---
 
