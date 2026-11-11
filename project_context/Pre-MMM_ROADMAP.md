@@ -59,7 +59,9 @@
   `owned ptr T` fields in `0.389-beta` with transfer, move-only semantics and
   generated destruction; moved-field reinitialization and nested aggregate cleanup
   in `0.390-beta`; `shared ptr T` fields with retain-on-copy and
-  release-on-destruction in `0.391-beta`. Resource-domain owned fields remain open.
+  release-on-destruction in `0.391-beta`; `uninit` partial initialization with
+  destruction limited to initialized fields in `0.396-beta`. Resource-domain owned
+  fields remain open.
 - [ ] Implement field-level move operations with source invalidation.
 - [ ] Implement safe field reinitialization after a move.
 - [x] Extend recursive destruction to supported nested ownership-bearing aggregates.

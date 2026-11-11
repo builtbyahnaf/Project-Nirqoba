@@ -1,0 +1,7 @@
+// Reading a field before it is initialized is rejected.
+struct Holder { owned ptr int data; int tag; }
+int function main() {
+    var h: Holder = uninit;
+    print(h.tag);
+    return 0;
+}

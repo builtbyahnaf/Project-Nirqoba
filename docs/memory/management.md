@@ -278,3 +278,14 @@ but it carries ownership in the type itself, so `aggregate.owned_drop` can see i
   raw pointers are rejected. `shared` locals and parameters keep their existing
   move-on-copy behavior.
 
+## Partial initialization with `uninit` (0.396-beta)
+
+`var aggregate: T = uninit;` creates a zero-initialized aggregate and marks every
+field as not live, reusing the moved-field state rather than introducing a runtime
+mask. Field assignment initializes the field and clears that path (and its
+descendants); reading a field before it is initialized is NRQ3033. Destruction runs
+the normal recursive `aggregate.owned_drop`, which releases only fields holding a
+non-null owner: uninitialized fields are null because the slot was zeroed, so they are
+skipped by the runtime without extra checks. Ordinary fully initialized aggregates are
+unaffected and carry no additional state.
+

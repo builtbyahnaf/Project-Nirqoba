@@ -1,0 +1,6 @@
+// A partial aggregate must be mutable so its fields can be initialized.
+struct Holder { owned ptr int data; }
+int function main() {
+    let h: Holder = uninit;
+    return 0;
+}

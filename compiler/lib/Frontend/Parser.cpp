@@ -779,7 +779,14 @@ StmtPtr Parser::parse_type_first_declaration(bool nullable, BindingKind binding)
   // A bare brace initializer takes its type from the declaration, so it is parsed
   // as the struct literal the annotation names: `Point p = {1, 2};`.
   ExprPtr initializer;
-  if (check(TokenKind::LBrace)) {
+  if (check(TokenKind::Identifier) && peek().text == "uninit") {
+    const Token uninit_token = advance();
+    if (!annotation.is_struct())
+      error_at(uninit_token, diag::kTypeMismatch,
+               "'uninit' requires a struct type, not '" + annotation.to_string() + "'");
+    initializer = make_unique<StructInitExpr>(uninit_token.location,
+                                              annotation.to_string());
+  } else if (check(TokenKind::LBrace)) {
     if (!annotation.is_struct()) {
       error_at(peek(), diag::kTypeMismatch,
                "a brace initializer requires a struct type, not '" +
@@ -836,7 +843,17 @@ StmtPtr Parser::parse_variable_declaration(bool nullable) {
     return nullptr;
   }
   advance();  // '='
-  ExprPtr initializer = parse_expression();
+  ExprPtr initializer;
+  if (check(TokenKind::Identifier) && peek().text == "uninit") {
+    const Token uninit_token = advance();
+    if (!has_annotation || !annotation.is_struct())
+      error_at(uninit_token, diag::kTypeMismatch,
+               "'uninit' requires an explicit struct type annotation");
+    initializer = make_unique<StructInitExpr>(uninit_token.location,
+                                              annotation.to_string());
+  } else {
+    initializer = parse_expression();
+  }
   expect(TokenKind::Semicolon, "after the variable initializer");
   return make_unique<VariableDeclarationStmt>(keyword.location, binding, name.text,
                                               has_annotation, annotation,

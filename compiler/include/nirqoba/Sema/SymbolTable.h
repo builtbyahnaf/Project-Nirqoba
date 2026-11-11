@@ -40,6 +40,9 @@ struct Symbol {
   // path in semantic state so later reads and branch merges cannot resurrect it.
   std::unordered_set<std::string> moved_fields;
   std::unordered_set<std::string> definitely_moved_fields;
+  // Fields of an aggregate declared with `uninit` that have not been assigned
+  // yet. Reads are rejected; destruction is safe because the slot is zeroed.
+  std::unordered_set<std::string> uninitialized_fields;
 
   bool is_mutable() const { return binding == BindingKind::Var; }
 };
@@ -76,6 +79,9 @@ class SymbolTable {
                                   const std::string& path) const;
   void mark_field_moved(const std::string& name, const std::string& path);
   void clear_field_moved(const std::string& name, const std::string& path);
+  void mark_field_uninitialized(const std::string& name, const std::string& path);
+  bool field_is_uninitialized(const std::string& name, const std::string& path) const;
+  void clear_field_uninitialized(const std::string& name, const std::string& path);
   void merge_conditional_ownership(const SymbolTable& then_state,
                                    const SymbolTable& else_state);
   std::vector<std::string> owners_moved_since(const SymbolTable& previous) const;

@@ -1325,6 +1325,17 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       const Type struct_type = expr.type().is_valid() ? expr.type()
                                 : Type::struct_type(si.struct_name());
 
+      if (si.is_uninitialized()) {
+        // Zero the slot so untouched fields are null and destruction is a no-op.
+        tir::Value result = function.allocate_value(struct_type);
+        tir::Op zero;
+        zero.kind = tir::OpKind::ConstantNull;
+        zero.location = si.location();
+        zero.result = result;
+        function.add_operation(std::move(zero));
+        return result;
+      }
+
       std::vector<tir::Value> field_vals;
       if (si.is_positional()) {
         field_vals.reserve(si.positional_inits().size());

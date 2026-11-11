@@ -150,10 +150,60 @@ void SymbolTable::clear_field_moved(const string& name, const string& path) {
   for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
     auto found = scope->find(name);
     if (found != scope->end()) {
-      found->second.moved_fields.erase(path);
-      found->second.definitely_moved_fields.erase(path);
+      auto erase_subtree = [&](std::unordered_set<std::string>& fields) {
+        for (auto it = fields.begin(); it != fields.end();) {
+          if (it->size() > path.size() &&
+              it->compare(0, path.size(), path) == 0 &&
+              (*it)[path.size()] == '.')
+            it = fields.erase(it);
+          else
+            ++it;
+        }
+        fields.erase(path);
+      };
+      erase_subtree(found->second.moved_fields);
+      erase_subtree(found->second.definitely_moved_fields);
       return;
     }
+  }
+}
+
+void SymbolTable::mark_field_uninitialized(const string& name, const string& path) {
+  for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+    auto found = scope->find(name);
+    if (found != scope->end()) {
+      found->second.uninitialized_fields.insert(path);
+      return;
+    }
+  }
+}
+
+bool SymbolTable::field_is_uninitialized(const string& name, const string& path) const {
+  const Symbol* symbol = lookup(name);
+  if (!symbol) return false;
+  if (symbol->uninitialized_fields.find(path) != symbol->uninitialized_fields.end())
+    return true;
+  for (const string& pending : symbol->uninitialized_fields)
+    if (path.size() > pending.size() &&
+        path.compare(0, pending.size(), pending) == 0 &&
+        path[pending.size()] == '.') return true;
+  return false;
+}
+
+void SymbolTable::clear_field_uninitialized(const string& name, const string& path) {
+  for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+    auto found = scope->find(name);
+    if (found == scope->end()) continue;
+    auto& fields = found->second.uninitialized_fields;
+    for (auto it = fields.begin(); it != fields.end();) {
+      if (it->size() > path.size() && it->compare(0, path.size(), path) == 0 &&
+          (*it)[path.size()] == '.')
+        it = fields.erase(it);
+      else
+        ++it;
+    }
+    fields.erase(path);
+    return;
   }
 }
 
