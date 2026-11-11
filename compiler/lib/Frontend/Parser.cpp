@@ -426,6 +426,17 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
 
 Type Parser::parse_type_annotation() {
   Type base_type = Type::error();
+  // `ptr T` is the documented pointer spelling (§8.1) and introduces exactly one
+  // level of indirection, so `ptr ptr int` is `int**`. Both spellings produce the
+  // same Type, which keeps existing `T*` sources working while new code can use
+  // the specification's form. The recursion consumes the complete inner type,
+  // including its array suffixes, so `ptr int[4]` is a pointer to an array.
+  if (check(TokenKind::Identifier) && peek().text == "ptr" &&
+      (is_type_keyword(peek(1).kind) || peek(1).kind == TokenKind::Identifier ||
+       peek(1).kind == TokenKind::LParen)) {
+    advance();  // 'ptr'
+    base_type = Type::pointer_type(parse_type_annotation());
+  } else
   if (check(TokenKind::Identifier) && peek().text == "managed" &&
       peek(1).kind == TokenKind::Less) {
     advance();
@@ -960,6 +971,25 @@ ExprPtr Parser::parse_cast() {
 }
 
 ExprPtr Parser::parse_unary() {
+  // `&` and `*` are unary only in prefix position; `a & b` and `a * b` are handled
+  // by the binary levels, which never reach this function for their operators.
+  if (check(TokenKind::Amp)) {
+    const Token op_tok = advance();
+    return make_unique<UnaryExpr>(op_tok.location, UnaryOp::AddressOf, parse_unary());
+  }
+  if (check(TokenKind::StarStar)) {
+    // `**pp` lexes as the exponentiation token before the parser can see two
+    // stars, so nested dereference is recognised here. In prefix position there is
+    // no left operand for exponentiation, which makes the reading unambiguous.
+    const Token op_tok = advance();
+    ExprPtr inner = parse_unary();
+    ExprPtr first = make_unique<UnaryExpr>(op_tok.location, UnaryOp::Dereference, move(inner));
+    return make_unique<UnaryExpr>(op_tok.location, UnaryOp::Dereference, move(first));
+  }
+  if (check(TokenKind::Star)) {
+    const Token op_tok = advance();
+    return make_unique<UnaryExpr>(op_tok.location, UnaryOp::Dereference, parse_unary());
+  }
   if (check(TokenKind::Minus)) {
     const Token op_tok = advance();
     return make_unique<UnaryExpr>(op_tok.location, UnaryOp::Negate, parse_unary());
@@ -1213,6 +1243,8 @@ string_view unary_op_spelling(UnaryOp op) {
     case UnaryOp::Plus: return "+";
     case UnaryOp::LogicalNot: return "!";
     case UnaryOp::BitwiseNot: return "~";
+    case UnaryOp::AddressOf: return "&";
+    case UnaryOp::Dereference: return "*";
   }
   return "?";
 }

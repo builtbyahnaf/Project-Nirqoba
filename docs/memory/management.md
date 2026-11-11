@@ -165,3 +165,22 @@ When an owned array element type contains GC-managed references, the runtime reg
 `memory.array_view<T>(source, start, length)` creates a read-only, non-owning view into an owned array or another view. `memory.array_view_mut<T>(owner, start, length)` creates an exclusive mutable view from a mutable owned array. Mutable views must be bound with `var`, can be passed to `borrow mut array_view<T>` parameters, and allow checked indexed writes. Immutable views cannot be upgraded to mutable views. While a mutable view is live, the compiler rejects indexed reads or writes through the owner; while any view is live, it rejects moving, releasing, or mutating the owner. A mutable borrowed parameter cannot be returned under an immutable lifetime because that would leave a mutable alias active beside the returned reference. End the view's lexical scope before performing owner operations. View lifetime tracking is conservative and lexical; views cannot be stored in aggregates or returned as mutable views.
 
 General native-resource field ownership, shared references inside aggregates, closure capture, exception-unwind cleanup, GPU buffers, and non-Windows runtime support remain future work. Supported owned field paths already permit partial moves and reinitialization.
+
+## Raw pointers (`ptr T`, `&`, `*`)
+
+The pointer spelling from the language specification is implemented for scalar
+variables. `var p: ptr int = &s;` declares one pointer level, `ptr ptr int` adds a
+second, `&name` takes the address of an existing variable, and `*p` reads, assigns
+or updates the object at that address (`*p = 100;`, `*p += 5;`). Taking an address
+neither copies nor transfers ownership: the pointer is a raw alias, it does not
+keep the owner alive, and the compiler does not check that the storage is still in
+scope when the pointer is dereferenced.
+
+Two limits are deliberate in this increment. Only numeric, boolean and pointer
+operands are addressable; taking the address of a struct, an owned array or a
+managed reference is rejected, because a raw alias into those could bypass
+deterministic destruction or the collector's write barrier. Dereferencing a
+`managed<T>` reference is rejected for the same reason, so managed field access
+must use the ordinary member path. Nullable pointers (`@Nullable ptr T`, `NULL`,
+`is NULL`), pointer printing and interpolation, and cross-function lifetime
+analysis are specified but not implemented yet.

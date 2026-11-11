@@ -791,6 +791,58 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
     }
     case Expr::Kind::Unary: {
       const auto& unary = static_cast<const UnaryExpr&>(expr);
+      if (unary.op() == UnaryOp::AddressOf) {
+        // `&x` yields the address of the existing stack slot. Sema has already
+        // restricted the operand to an addressable lvalue, so the slot lookup can
+        // only fail if the two stages disagree; that is reported as internal.
+        const tir::Value slot = resolve_lvalue_ptr(unary.operand(), function);
+        if (!slot.is_valid()) {
+          diagnostics_.error(kUnresolvedSymbol, unary.location(),
+                             "internal: address-of target has no TIR slot");
+          return tir::Value{};
+        }
+        tir::Value address = function.allocate_value(
+            unary.type().is_valid() ? unary.type() : Type::pointer_type(slot.type));
+        tir::Op op;
+        op.kind = tir::OpKind::AddressOf;
+        op.location = unary.location();
+        op.result = address;
+        op.operand = slot;
+        function.add_operation(std::move(op));
+        return address;
+      }
+      if (unary.op() == UnaryOp::Dereference) {
+        // `*p` is `p[0]`: one GEP at offset zero and a load, reusing the pointer
+        // element addressing the index path already uses.
+        const tir::Value pointer = lower_expression(unary.operand(), function);
+        if (!pointer.is_valid()) return tir::Value{};
+        const Type elem_type =
+            unary.type().is_valid() ? unary.type() : pointer.type.element_type();
+        tir::Value zero = function.allocate_value(Type::u64_type());
+        tir::Op zero_op;
+        zero_op.kind = tir::OpKind::ConstantInt;
+        zero_op.location = unary.location();
+        zero_op.integer_value = 0;
+        zero_op.result = zero;
+        function.add_operation(std::move(zero_op));
+        tir::Value elem_ptr = function.allocate_value(elem_type);
+        tir::Op gep;
+        gep.kind = tir::OpKind::GetElementPtr;
+        gep.location = unary.location();
+        gep.lhs = pointer;
+        gep.operand = zero;
+        gep.field_index = -1;
+        gep.result = elem_ptr;
+        function.add_operation(std::move(gep));
+        tir::Value loaded = function.allocate_value(elem_type);
+        tir::Op load;
+        load.kind = tir::OpKind::Load;
+        load.location = unary.location();
+        load.lhs = elem_ptr;
+        load.result = loaded;
+        function.add_operation(std::move(load));
+        return loaded;
+      }
       const tir::Value operand = lower_expression(unary.operand(), function);
       if (unary.op() == UnaryOp::Plus) {
         return operand;
@@ -1322,6 +1374,34 @@ tir::Value TirBuilder::resolve_lvalue_ptr(const Expr& target, tir::Function& fun
     gep.result = elem_ptr;
     function.add_operation(std::move(gep));
     return elem_ptr;
+  }
+  if (target.kind() == Expr::Kind::Unary) {
+    // `*p = v` names the object at p, so the lvalue is p's element pointer.
+    const auto& unary = static_cast<const UnaryExpr&>(target);
+    if (unary.op() == UnaryOp::Dereference) {
+      const tir::Value pointer = lower_expression(unary.operand(), function);
+      if (!pointer.is_valid()) return tir::Value{};
+      const Type elem_type =
+          unary.type().is_valid() ? unary.type() : pointer.type.element_type();
+      tir::Value zero = function.allocate_value(Type::u64_type());
+      tir::Op zero_op;
+      zero_op.kind = tir::OpKind::ConstantInt;
+      zero_op.location = unary.location();
+      zero_op.integer_value = 0;
+      zero_op.result = zero;
+      function.add_operation(std::move(zero_op));
+      tir::Value elem_ptr = function.allocate_value(elem_type);
+      tir::Op gep;
+      gep.kind = tir::OpKind::GetElementPtr;
+      gep.location = unary.location();
+      gep.lhs = pointer;
+      gep.operand = zero;
+      gep.field_index = -1;
+      gep.result = elem_ptr;
+      function.add_operation(std::move(gep));
+      return elem_ptr;
+    }
+    return tir::Value{};
   }
   if (target.kind() == Expr::Kind::MemberAccess) {
     const auto& mem_expr = static_cast<const MemberAccessExpr&>(target);

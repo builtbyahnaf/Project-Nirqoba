@@ -1,0 +1,21 @@
+// §8.1/§8.2/§8.3 of the pointer specification: `ptr T` declarations introduce one
+// pointer level, `&` takes the address of a variable and `*` reads, writes or
+// updates the object at an address. Each step prints immediately, so a wrong alias
+// shows up as a wrong line rather than only a wrong total.
+int function main() {
+    var s: int = 41;
+    var p: ptr int = &s;
+    print(*p);
+    *p = 100;
+    print(s);
+    var pp: ptr ptr int = &p;
+    print(**pp);
+    **pp = 7;
+    print(s);
+    *p += 5;
+    print(s);
+    var other: int = 3;
+    var q: ptr int = &other;
+    print(*q + *p);
+    return 0;
+}

@@ -1,0 +1,12 @@
+// Aggregates are not addressable yet: a raw alias into a struct could bypass the
+// deterministic destruction and write-barrier rules, so the pointer increment
+// rejects it rather than handing out an unchecked alias.
+struct S {
+    int a;
+}
+
+int function main() {
+    var s = S { a: 1 };
+    var p: ptr S = &s;
+    return 0;
+}

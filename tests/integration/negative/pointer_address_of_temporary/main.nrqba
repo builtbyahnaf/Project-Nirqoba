@@ -1,0 +1,6 @@
+// §8.2: address-of must reject temporaries, because a literal has no storage
+// location whose lifetime the pointer could respect.
+int function main() {
+    var p: ptr int = &5;
+    return 0;
+}

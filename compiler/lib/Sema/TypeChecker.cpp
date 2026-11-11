@@ -1356,6 +1356,12 @@ void TypeChecker::check_compound_assignment(CompoundAssignmentStmt& assignment) 
   }
   if (!target_type.is_valid() || !value_type.is_valid()) return;
 
+  // A target such as `*p` has no single named owner, so find_root_symbol can
+  // legitimately return null; the operator rules then apply to the target's own
+  // type. Reading symbol->type unconditionally here crashed the compiler on
+  // compound assignment through a dereference.
+  const Type operator_type = symbol ? symbol->type : target_type;
+
   if (target_type != value_type) {
     diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
                        "cannot apply compound operator to target of type '" +
@@ -1371,10 +1377,10 @@ void TypeChecker::check_compound_assignment(CompoundAssignmentStmt& assignment) 
     case BinaryOp::BitwiseXor:
     case BinaryOp::ShiftLeft:
     case BinaryOp::ShiftRight:
-      if (!symbol->type.is_integer()) {
+      if (!operator_type.is_integer()) {
         diagnostics_.error(diag::kTypeMismatch, assignment.location(),
                            "operator '" + string(binary_op_spelling(assignment.op())) +
-                               "=' requires integer operands, found '" + symbol->type.to_string() + "'");
+                               "=' requires integer operands, found '" + operator_type.to_string() + "'");
       }
       break;
     case BinaryOp::Add:
@@ -1382,10 +1388,10 @@ void TypeChecker::check_compound_assignment(CompoundAssignmentStmt& assignment) 
     case BinaryOp::Multiply:
     case BinaryOp::Divide:
     case BinaryOp::Exponentiate:
-      if (!symbol->type.is_numeric()) {
+      if (!operator_type.is_numeric()) {
         diagnostics_.error(diag::kTypeMismatch, assignment.location(),
                            "operator '" + string(binary_op_spelling(assignment.op())) +
-                               "=' requires numeric operands, found '" + symbol->type.to_string() + "'");
+                               "=' requires numeric operands, found '" + operator_type.to_string() + "'");
       }
       break;
     default:
@@ -1868,6 +1874,46 @@ Type TypeChecker::check_expression(Expr& expr) {
             type = Type::error();
           } else {
             type = operand_type;
+          }
+          break;
+        case UnaryOp::AddressOf: {
+          // §8.2: only expressions with a stable storage location have an address.
+          const Expr::Kind operand_kind = unary.operand().kind();
+          const bool addressable =
+              operand_kind == Expr::Kind::Name ||
+              operand_kind == Expr::Kind::MemberAccess ||
+              operand_kind == Expr::Kind::Index ||
+              (operand_kind == Expr::Kind::Unary &&
+               static_cast<const UnaryExpr&>(unary.operand()).op() ==
+                   UnaryOp::Dereference);
+          if (!addressable) {
+            diagnostics_.error(diag::kTypeMismatch, unary.location(),
+                               "operator '&' requires a variable, field, element or "
+                               "dereference with a stable address");
+            type = Type::error();
+          } else if (!operand_type.is_numeric() && !operand_type.is_bool() &&
+                     !operand_type.is_pointer()) {
+            // Aggregates, owned containers and managed references are not
+            // addressable yet: a raw alias into them could bypass deterministic
+            // destruction or the collector's write barrier. Rejecting them keeps
+            // the safety claim honest instead of exposing an unchecked pointer.
+            diagnostics_.error(diag::kTypeMismatch, unary.location(),
+                               "taking the address of '" + operand_type.to_string() +
+                                   "' is not supported yet");
+            type = Type::error();
+          } else {
+            type = Type::pointer_type(operand_type);
+          }
+          break;
+        }
+        case UnaryOp::Dereference:
+          if (!operand_type.is_pointer() || operand_type.is_managed_pointer()) {
+            diagnostics_.error(diag::kTypeMismatch, unary.location(),
+                               "operator '*' requires a raw pointer operand, not '" +
+                                   operand_type.to_string() + "'");
+            type = Type::error();
+          } else {
+            type = operand_type.element_type();
           }
           break;
       }

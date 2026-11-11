@@ -1,0 +1,7 @@
+// §8.3: dereference requires a pointer, so applying it to an integer must be a
+// type error rather than an attempt to read an address.
+int function main() {
+    var x = 1;
+    print(*x);
+    return 0;
+}
