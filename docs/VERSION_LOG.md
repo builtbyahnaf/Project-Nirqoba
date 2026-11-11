@@ -6,12 +6,33 @@
 
 ---
 
-## Version 0.357-beta (working build)
+## Version 0.361-beta (working build)
+
+### Summary of Changes (since `0.357-beta`):
+
+*Current working build, opened after 0.357-beta. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.357-beta (released)
 
 ### Summary of Changes (since `0.353-beta`):
 
-*Current working build, opened after 0.353-beta. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Released after two upgrades. Section E4 evaluated and scoped.*
+
+- **The three layouts were measured on the same compiler.** Two million three-field
+  records, two hundred column scans: AoS 642 ms, SoA 260 ms (2.47x), AoSoA 308 ms
+  (2.08x), best of five. The effect is bandwidth - 16 MB of column against 48 MB of
+  records - and it scales with the number of fields.
+- **The explicit SoA form is defined rather than assumed:** a scope owning one array
+  per column. Identity, references, aliasing, mutation, iteration, views and
+  deterministic destruction are the ordinary owned-array rules, and a reference
+  column is traced by the existing array reference-offset walk. The cost is named:
+  element-address identity is not expressible.
+- **No container type was built.** `soa<T>` needs type parameters the language does
+  not have, so the report records that as the remaining work instead of shipping a
+  per-record duplicate container. Ordinary structs and collections are unchanged.
 
 ---
 
