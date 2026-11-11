@@ -14,7 +14,7 @@ that loses context can resume from it plus `git log`.
 | 2c | allocation entry point `memory.owned_soa<T>(n)` (scalar fields only) | done (4bf57aa) |
 | 2d | column addressing in TIR + lowering for `ps[i].f` | done (86fadcc) |
 | 2e | runtime bounds check on the row index | done (61509a0) |
-| 3 | reference-column tracing | done (this commit) |
+| 3 | reference-column tracing | done (3c63c47) |
 | 3 | strided GC trace callback for reference columns | pending |
 | 4 | column views, benchmarks, docs, version milestone | pending |
 
@@ -350,7 +350,7 @@ Suite: 210/210 unit, 277/277 integration.
 
 Stage 3 (reference columns and strided tracing), views over containers, benchmarks, then
 version 0.369 once two further upgrades have landed. No version bump here.
-## Stage 3 — reference-column tracing (this commit)
+## Stage 3 — reference-column tracing (3c63c47)
 
 ### Investigation
 
@@ -416,7 +416,7 @@ Suite: 210/210 unit, 281/281 integration.
 ### Remaining
 
 Views over containers, a source-level way to write a null managed reference, and the
-stage 4 benchmarks. 0.369 is opened for 2d, 2e and 3.
+stage 4 benchmarks. 0.369 is opened for 2d, 2e and 3 (f4a6bb6).
 ## Invariants that must not be broken
 
 - Ordinary structs, AoS layout, and their tests are untouched by every stage.
