@@ -1,0 +1,24 @@
+// Allocation-heavy loop: an owned array of 256 ints is created, filled, and
+// released every iteration. Destruction must happen on the loop-body exit path,
+// so this also measures whether per-iteration cleanup stays flat over 20000 rounds.
+int function main() {
+    var n = 20000;
+    var width = 256;
+    var checksum = 0;
+    var start = time.cycles();
+    var i = 0;
+    while (i < n) {
+        var block = memory.owned_array<int>(width);
+        var j = 0;
+        while (j < width) {
+            block[j] = i + j;
+            checksum += block[j];
+            j += 1;
+        }
+        i += 1;
+    }
+    var stop = time.cycles();
+    print(checksum);
+    print(stop - start);
+    return 0;
+}

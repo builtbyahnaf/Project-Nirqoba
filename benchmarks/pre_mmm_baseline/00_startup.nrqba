@@ -1,0 +1,9 @@
+// Startup baseline: no workload, so the measured region is only the timer calls.
+// Printing two integers keeps the parsing identical to the other programs.
+int function main() {
+    var start = time.cycles();
+    var stop = time.cycles();
+    print(0);
+    print(stop - start);
+    return 0;
+}

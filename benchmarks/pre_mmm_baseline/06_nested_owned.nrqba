@@ -1,0 +1,37 @@
+// Nested owned resources: three levels of owned arrays are alive at once in
+// nested blocks. The inner ones are released as their blocks exit, then the outer
+// one, so this measures LIFO destruction through nested scopes. Owned arrays
+// cannot be declared as struct fields today, and an owned array whose element type
+// owns allocations is rejected, so nesting through scopes is the supported shape;
+// both limitations are recorded in the Phase 0 report.
+int function main() {
+    var n = 10000;
+    var width = 32;
+    var checksum = 0;
+    var start = time.cycles();
+    var outer = memory.owned_array<int>(width);
+    var i = 0;
+    while (i < n) {
+        var middle = memory.owned_array<int>(width);
+        var inner = memory.owned_array<int>(width);
+        var j = 0;
+        while (j < width) {
+            inner[j] = i + j;
+            middle[j] = inner[j] * 2;
+            outer[j] = outer[j] + middle[j];
+            checksum += inner[j] + middle[j];
+            j += 1;
+        }
+        i += 1;
+    }
+    var sum = 0;
+    var k = 0;
+    while (k < width) {
+        sum += outer[k];
+        k += 1;
+    }
+    var stop = time.cycles();
+    print(checksum + sum);
+    print(stop - start);
+    return 0;
+}
