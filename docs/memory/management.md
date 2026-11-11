@@ -306,7 +306,7 @@ rejected at compile time.
 Neither guard adds runtime state: both are semantic checks over the existing
 per-symbol field sets, and destruction remains the zeroed-slot recursive drop.
 
-## Initialization completion (0.398-beta)
+## Initialization completion (0.401-beta)
 
 Field-by-field initialization now completes a nested aggregate. After each field
 assignment the checker tests whether every child of the enclosing aggregate is

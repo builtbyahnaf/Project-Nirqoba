@@ -62,7 +62,7 @@
   release-on-destruction in `0.391-beta`; `uninit` partial initialization with
   destruction limited to initialized fields in `0.396-beta`, with whole-value and
   partial-overwrite guards in `0.397-beta`, and
-  nested completion propagation in `0.398-beta`. Resource-domain owned fields remain open.
+  nested completion propagation in `0.401-beta`. Resource-domain owned fields remain open.
 - [ ] Implement field-level move operations with source invalidation.
 - [ ] Implement safe field reinitialization after a move.
 - [x] Extend recursive destruction to supported nested ownership-bearing aggregates.
