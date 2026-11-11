@@ -101,6 +101,7 @@ class Type {
   static Type dynamic_array_type(Type element_type);
   static Type owned_array_type(Type element_type);
   static Type owned_pointer_type(Type element_type);
+  static Type owned_pointer_type(Type element_type, std::string resource_domain);
   static Type shared_pointer_type(Type element_type);
   static Type array_view_type(Type element_type);
   static Type pointer_type(Type element_type);
@@ -130,6 +131,11 @@ class Type {
            kind_ == TypeKind::SharedPointer;
   }
   bool is_managed_pointer() const { return kind_ == TypeKind::ManagedPointer; }
+  // An owned pointer that names the runtime resource domain responsible for
+  // releasing it (file, socket, mutex, mapping or secure). The domain travels
+  // with the type so construction, moves and destruction all see it.
+  bool is_resource_pointer() const;
+  const std::string& resource_domain() const;
   bool is_tuple() const { return kind_ == TypeKind::Tuple; }
   bool is_struct() const { return kind_ == TypeKind::Struct; }
   bool is_soa() const { return kind_ == TypeKind::Soa; }
@@ -205,6 +211,7 @@ struct TypeData {
   std::vector<Type> tuple_elements;
   std::string struct_name;
   std::vector<std::pair<std::string, Type>> struct_fields;
+  std::string resource_domain;
 };
 
 Type parse_type_name(std::string_view spelling);

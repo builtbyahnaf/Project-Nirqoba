@@ -45,6 +45,21 @@ Type Type::owned_pointer_type(Type element_type) {
   return t;
 }
 
+Type Type::owned_pointer_type(Type element_type, std::string resource_domain) {
+  Type t = owned_pointer_type(element_type);
+  t.data_->resource_domain = std::move(resource_domain);
+  return t;
+}
+
+bool Type::is_resource_pointer() const {
+  return kind_ == TypeKind::OwnedPointer && data_ && !data_->resource_domain.empty();
+}
+
+const std::string& Type::resource_domain() const {
+  static const std::string empty;
+  return data_ ? data_->resource_domain : empty;
+}
+
 Type Type::shared_pointer_type(Type element_type) {
   Type t(TypeKind::SharedPointer);
   t.data_ = make_shared<TypeData>();
@@ -134,6 +149,9 @@ string Type::to_string() const {
     case TypeKind::Soa:
       return "soa<" + element_type().to_string() + ">";
     case TypeKind::OwnedPointer:
+      if (!resource_domain().empty())
+        return "owned " + resource_domain() + " ptr " +
+               element_type().to_string();
       return "owned_ptr<" + element_type().to_string() + ">";
     case TypeKind::SharedPointer:
       return "shared_ptr<" + element_type().to_string() + ">";
@@ -190,6 +208,8 @@ string Type::mangle() const {
     case TypeKind::Pointer:
       return "P_" + element_type().mangle();
     case TypeKind::OwnedPointer:
+      if (!resource_domain().empty())
+        return "OPD" + resource_domain() + "_" + element_type().mangle();
       return "OP_" + element_type().mangle();
     case TypeKind::SharedPointer:
       return "SP_" + element_type().mangle();
@@ -224,10 +244,12 @@ bool operator==(const Type& lhs, const Type& rhs) {
              lhs.element_type() == rhs.element_type();
     case TypeKind::DynamicArray:
     case TypeKind::OwnedArray:
-    case TypeKind::OwnedPointer:
     case TypeKind::SharedPointer:
     case TypeKind::ArrayView:
       return lhs.element_type() == rhs.element_type();
+    case TypeKind::OwnedPointer:
+      return lhs.element_type() == rhs.element_type() &&
+             lhs.resource_domain() == rhs.resource_domain();
     case TypeKind::Pointer:
       return lhs.element_type() == rhs.element_type();
     case TypeKind::ManagedPointer:
