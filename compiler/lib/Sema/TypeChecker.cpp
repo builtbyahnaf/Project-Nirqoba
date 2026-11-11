@@ -1056,7 +1056,8 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
               source_parameter - signature->parameter_names.begin());
           const Symbol* source = source_index < call.arguments().size()
               ? find_borrow_origin(*call.arguments()[source_index]) : nullptr;
-          if (!source || source->moved || !source->allocation_id) {
+          if (!source || source->moved || !source->allocation_id ||
+              (source->borrowed && !borrow_owner_is_live(*source))) {
             diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
                                "borrow return requires a named live source argument");
           } else {
@@ -1807,6 +1808,8 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       }
     }
     if (borrow_origin != nullptr) {
+      if (borrow_origin->allocation_id == 0)
+        symbols_.ensure_allocation_id(borrow_origin->name, next_allocation_id_++);
       allocation_id = borrow_origin->allocation_id;
       borrowed = true;
       mutable_borrow = borrow_origin->mutable_borrow;
@@ -4672,8 +4675,13 @@ Type TypeChecker::check_call(CallExpr& call) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "owning parameter requires an owned pointer; use a borrow parameter for non-owning access");
     } else if (source && source->owns_allocation && !source->moved) {
-      const_cast<Expr&>(*call.arguments()[i]).set_transfers_ownership();
-      ownership_transfers.push_back(source->allocation_id);
+      if (symbols_.has_live_borrow(source->allocation_id)) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                           "cannot transfer an owner while a borrow is live");
+      } else {
+        const_cast<Expr&>(*call.arguments()[i]).set_transfers_ownership();
+        ownership_transfers.push_back(source->allocation_id);
+      }
     }
   }
 
