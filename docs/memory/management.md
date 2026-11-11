@@ -179,8 +179,14 @@ scope when the pointer is dereferenced.
 Two limits are deliberate in this increment. Only numeric, boolean and pointer
 operands are addressable; taking the address of a struct, an owned array or a
 managed reference is rejected, because a raw alias into those could bypass
-deterministic destruction or the collector's write barrier. Dereferencing a
-`managed<T>` reference is rejected for the same reason, so managed field access
-must use the ordinary member path. Nullable pointers (`@Nullable ptr T`, `NULL`,
-`is NULL`), pointer printing and interpolation, and cross-function lifetime
-analysis are specified but not implemented yet.
+deterministic destruction or the collector's write barrier, and dereferencing a
+`managed<T>` reference is rejected for the same reason, so managed field access must
+use the ordinary member path.
+
+A pointer can be printed: `print(p)` writes the address without dereferencing it, and
+a null pointer prints `NULL` so absence is distinguishable from address zero. The
+null pointer literal is `nullptr`; it has no intrinsic type, so a declaration must
+supply one (`var q: ptr int = nullptr;`). `NULL` is the nullable-value literal from
+§7.3, not the pointer literal. Nullable pointer types (`@Nullable ptr T`, `is NULL`
+checks), pointer interpolation, assignment of `nullptr` to an existing binding, and
+cross-function lifetime analysis remain unimplemented.
