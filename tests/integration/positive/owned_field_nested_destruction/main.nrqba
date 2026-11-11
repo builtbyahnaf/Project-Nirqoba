@@ -1,0 +1,9 @@
+// Destruction recurses through nested aggregates that own pointer fields.
+struct Inner { owned ptr int data; }
+struct Outer { Inner inner; int tag; }
+int function main() {
+    var o = Outer { inner: Inner { data: memory.allocate<int>(2) }, tag: 3 };
+    *o.inner.data = 7;
+    print(*o.inner.data + o.tag);
+    return 0;
+}

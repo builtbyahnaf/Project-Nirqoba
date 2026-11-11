@@ -57,7 +57,8 @@
   specific diagnostic (`0.384-beta`, `0.389-beta`).
 - [x] Support owned and borrowed pointer fields. Borrowed fields in `0.384-beta`;
   `owned ptr T` fields in `0.389-beta` with transfer, move-only semantics and
-  generated destruction. Resource-domain owned fields remain open.
+  generated destruction; moved-field reinitialization and nested aggregate cleanup
+  in `0.390-beta`. Resource-domain owned fields remain open.
 - [ ] Implement field-level move operations with source invalidation.
 - [ ] Implement safe field reinitialization after a move.
 - [x] Extend recursive destruction to supported nested ownership-bearing aggregates.

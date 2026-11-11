@@ -1,7 +1,7 @@
 # Pre-MMM Phase 1 - Ownership inside aggregates
 
 **Status:** In progress
-**Version:** 0.389-beta
+**Version:** 0.390-beta
 **Date:** 2026-11-11
 
 ## Implemented
@@ -14,6 +14,10 @@
   `aggregate.owned_drop` releases the pointer at scope exit. Construction accepts a
   producing expression or transfers an owned local, marking it moved.
 - Field destruction now runs in reverse declaration order.
+- Reinitializing a moved owned field from a fresh owner (`h.data = memory.allocate<int>(n)`)
+  works, with the same raw-to-owned coercion as construction (0.390-beta).
+- Aggregates that own pointer fields may be nested; recursive destruction drops them,
+  and owned arrays whose elements own resources remain rejected (0.390-beta).
 - Owned arrays as struct fields work (parser capability from 0.384).
 
 ## Open
@@ -32,3 +36,7 @@
   is rejected with NRQ3033.
 - `negative/owned_field_requires_owner`: an owned field initialised from a borrow is
   rejected.
+- `positive/owned_field_reinitialization`: move a field out, reinitialize it, and read
+  both values (11).
+- `positive/owned_field_nested_destruction`: nested struct field owning a pointer,
+  read through the aggregate (10).
