@@ -43,6 +43,12 @@ struct Symbol {
   // Fields of an aggregate declared with `uninit` that have not been assigned
   // yet. Reads are rejected; destruction is safe because the slot is zeroed.
   std::unordered_set<std::string> uninitialized_fields;
+  // Fields explicitly assigned since `uninit`; a nested projection stays readable
+  // even though its enclosing aggregate is not complete yet.
+  std::unordered_set<std::string> initialized_fields;
+  // Nested aggregates with some, but not all, fields initialized. Assigning the
+  // whole field would overwrite the initialized parts without destroying them.
+  std::unordered_set<std::string> partially_initialized_fields;
 
   bool is_mutable() const { return binding == BindingKind::Var; }
 };
@@ -82,6 +88,9 @@ class SymbolTable {
   void mark_field_uninitialized(const std::string& name, const std::string& path);
   bool field_is_uninitialized(const std::string& name, const std::string& path) const;
   void clear_field_uninitialized(const std::string& name, const std::string& path);
+  void mark_partially_initialized(const std::string& name, const std::string& path);
+  bool is_partially_initialized(const std::string& name, const std::string& path) const;
+  void clear_partially_initialized(const std::string& name, const std::string& path);
   void merge_conditional_ownership(const SymbolTable& then_state,
                                    const SymbolTable& else_state);
   std::vector<std::string> owners_moved_since(const SymbolTable& previous) const;

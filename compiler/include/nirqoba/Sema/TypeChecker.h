@@ -132,6 +132,9 @@ class TypeChecker {
   // value of its own, so `ps[i]` is only a legal expression when it is claimed
   // as the base of `ps[i].field`.
   bool checking_soa_column_base_ = false;
+  // True while checking the base of a member access, which is not a whole-value
+  // use of a partially initialized aggregate.
+  bool checking_aggregate_base_ = false;
   // Names proven non-null in the current branch; branch-scoped, cleared on assignment.
   std::unordered_set<std::string> nonnull_proven_;
   std::vector<std::vector<DeferredCleanup>> deferred_calls_;

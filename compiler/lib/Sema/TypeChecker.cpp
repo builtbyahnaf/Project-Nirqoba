@@ -1190,6 +1190,14 @@ static const Symbol* find_root_symbol(const Expr& expr, const SymbolTable& symbo
   return nullptr;
 }
 
+// ".inner.data" -> ".inner": the aggregate whose whole-field assignment would
+// overwrite the initialized descendant.
+static string enclosing_aggregate_path(const string& path) {
+  if (path.empty() || path[0] != '.') return {};
+  const size_t next = path.find('.', 1);
+  return next == string::npos ? string{} : path.substr(0, next);
+}
+
 bool TypeChecker::field_path(const Expr& expression, string& root,
                              string& path) const {
   if (expression.kind() == Expr::Kind::Name) {
@@ -1313,6 +1321,18 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     }
   }
 
+  if (assignment.target().kind() == Expr::Kind::MemberAccess) {
+    string target_root;
+    string target_path;
+    if (field_path(assignment.target(), target_root, target_path) &&
+        symbols_.is_partially_initialized(target_root, target_path)) {
+      diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
+                         "cannot overwrite partially initialized aggregate field '" +
+                             target_path.substr(1) +
+                             "'; initialize its remaining fields instead");
+      return;
+    }
+  }
   string field_owner;
   string field_name;
   const bool assigning_owned_field =
@@ -1349,8 +1369,14 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       !contains_owned_array(target_type)) {
     string field_root;
     string field_target;
-    if (field_path(assignment.target(), field_root, field_target))
+    if (field_path(assignment.target(), field_root, field_target)) {
       symbols_.clear_field_uninitialized(field_root, field_target);
+      const string enclosing = enclosing_aggregate_path(field_target);
+      if (!enclosing.empty())
+        symbols_.mark_partially_initialized(field_root, enclosing);
+      else
+        symbols_.clear_partially_initialized(field_root, field_target);
+    }
   }
   const Symbol* symbol = find_root_symbol(assignment.target(), symbols_);
   if (assignment.target().kind() == Expr::Kind::Index &&
@@ -1448,6 +1474,11 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     }
     symbols_.clear_field_moved(field_owner, field_name);
     symbols_.clear_field_uninitialized(field_owner, field_name);
+    const string enclosing = enclosing_aggregate_path(field_name);
+    if (!enclosing.empty())
+      symbols_.mark_partially_initialized(field_owner, enclosing);
+    else
+      symbols_.clear_partially_initialized(field_owner, field_name);
     return;
   }
   if (symbol != nullptr && symbol->borrowed && assignment.is_simple_name()) {
@@ -2040,6 +2071,15 @@ Type TypeChecker::check_expression(Expr& expr) {
                              "use of '" + name.name() +
                                  "' after its allocation was deallocated");
         }
+        // A partially initialized aggregate may only be used field by field; copy,
+        // move, return, argument passing and other whole-value uses are rejected.
+        if (!checking_lvalue_ && !checking_aggregate_base_ &&
+            symbol->type.is_struct() && !symbol->uninitialized_fields.empty()) {
+          diagnostics_.error(diag::kTypeMismatch, name.location(),
+                             "aggregate '" + name.name() +
+                                 "' is partially initialized; initialize all of its "
+                                 "fields before using it as a whole");
+        }
       }
       break;
     }
@@ -2611,8 +2651,11 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
   // address and no value of its own, so the index expression is claimed here rather
   // than being checked as an expression in its own right.
   const bool enclosing_soa_column = checking_soa_column_base_;
+  const bool enclosing_aggregate_base = checking_aggregate_base_;
   checking_soa_column_base_ = expr.base().kind() == Expr::Kind::Index;
+  checking_aggregate_base_ = true;
   const Type base_type = check_expression(const_cast<Expr&>(expr.base()));
+  checking_aggregate_base_ = enclosing_aggregate_base;
   checking_soa_column_base_ = enclosing_soa_column;
   if (!base_type.is_valid()) return Type::error();
 
@@ -2676,7 +2719,9 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
         }
         string uninitialized_root;
         string uninitialized_path;
-        if (!checking_lvalue_ &&
+        // An intermediate projection (o.inner inside o.inner.data) is not a read
+        // of the nested aggregate; only the leaf field decides.
+        if (!checking_lvalue_ && !checking_aggregate_base_ &&
             field_path(expr, uninitialized_root, uninitialized_path) &&
             symbols_.field_is_uninitialized(uninitialized_root, uninitialized_path)) {
           const std::string field_display =
