@@ -1,0 +1,15 @@
+borrow source int* function alias(borrow int* source) {
+    return source;
+}
+
+int function main() {
+    var outer = 1;
+    var escaped = &outer;
+    {
+        var inner = 2;
+        var borrowed = &inner;
+        escaped = alias(borrowed);
+    }
+    print(*escaped);
+    return 0;
+}
