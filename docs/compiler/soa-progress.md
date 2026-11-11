@@ -11,7 +11,7 @@ that loses context can resume from it plus `git log`.
 | 1 | type kind, syntax, gate | done (`8f48c93`) |
 | 2a | authoritative column layout, sema owned rules, type allowed in signatures | done (bec12d3) |
 | 2b | struct-field resolution for `soa<T>` in signatures, layout report test | done (8425948) |
-| 2c | allocation entry point `memory.owned_soa<T>(n)` (scalar fields only) | done (this commit) |
+| 2c | allocation entry point `memory.owned_soa<T>(n)` (scalar fields only) | done (4bf57aa) |
 | 2d | column addressing in TIR + lowering for `ps[i].f` | next |
 | 3 | strided GC trace callback for reference columns | pending |
 | 4 | column views, benchmarks, docs, version milestone | pending |
@@ -132,7 +132,7 @@ Suite: 210/210 unit, 267/267 integration.
    `soa_allocation_unavailable` negative test replaced by a reference-struct rejection
    test.
 
-## Stage 2c (this commit)
+## Stage 2c (4bf57aa)
 
 ### What was implemented
 
