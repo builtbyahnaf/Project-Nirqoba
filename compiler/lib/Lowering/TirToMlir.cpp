@@ -3106,6 +3106,35 @@ class FunctionTranslator {
             if (type.is_owned_pointer()) {
               mlir::Value data = builder_.create<mlir::LLVM::ExtractValueOp>(
                   loc, aggregate, builder_.getDenseI64ArrayAttr(path)).getResult();
+              if (type.is_resource_pointer()) {
+                // A domain handle is not collector storage: release it with its
+                // runtime destructor. Every one of these accepts null, which is
+                // what an uninitialized or moved-out field holds.
+                const std::string& domain = type.resource_domain();
+                std::string symbol;
+                mlir::Type result = mlir::LLVM::LLVMVoidType::get(ctx_);
+                if (domain == "file") {
+                  symbol = "nrq_file_close_handle";
+                  result = builder_.getI32Type();
+                } else if (domain == "socket") {
+                  symbol = "nrq_socket_close_handle";
+                  result = builder_.getI32Type();
+                } else if (domain == "mutex") {
+                  symbol = "nrq_mutex_destroy";
+                } else if (domain == "mapping") {
+                  symbol = "nrq_memory_unmap_file";
+                  result = builder_.getI32Type();
+                } else if (domain == "secure") {
+                  symbol = "nrq_memory_secure_release";
+                }
+                if (!symbol.empty()) {
+                  auto release = ensure_runtime_fn(
+                      module_, builder_, symbol, result, {llvm_ptr_type(ctx_)});
+                  builder_.create<mlir::LLVM::CallOp>(
+                      loc, release, mlir::ValueRange{data});
+                  return;
+                }
+              }
               auto unregister = ensure_runtime_fn(
                   module_, builder_, "nrq_gc_root_unregister",
                   mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
