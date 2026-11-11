@@ -282,6 +282,35 @@ unique_ptr<StructDecl> Parser::parse_struct(Visibility visibility) {
 
   vector<Parameter> fields;
   while (!check(TokenKind::RBrace) && !check(TokenKind::EndOfFile)) {
+    // 17.1: fields use the same ownership qualifier grammar as parameters. `owned`
+    // takes an optional resource domain; a borrowed field may also name one.
+    bool borrowed = false;
+    bool mutable_borrow = false;
+    bool shared = false;
+    std::string resource_domain;
+    if (check(TokenKind::Identifier) && peek().text == "borrow") {
+      advance();
+      borrowed = true;
+      if (check(TokenKind::Identifier) && peek().text == "mut") {
+        advance();
+        mutable_borrow = true;
+      }
+      if (check(TokenKind::Identifier) &&
+          (peek().text == "file" || peek().text == "socket" ||
+           peek().text == "mutex" || peek().text == "mapping" ||
+           peek().text == "secure"))
+        resource_domain = advance().text;
+    } else if (check(TokenKind::Identifier) && peek().text == "shared") {
+      advance();
+      shared = true;
+    } else if (check(TokenKind::Identifier) && peek().text == "owned") {
+      advance();
+      if (check(TokenKind::Identifier) &&
+          (peek().text == "file" || peek().text == "socket" ||
+           peek().text == "mutex" || peek().text == "mapping" ||
+           peek().text == "secure"))
+        resource_domain = advance().text;
+    }
     Type field_type = parse_type_annotation();
     if (!check(TokenKind::Identifier)) {
       error_at(peek(), diag::kExpectedToken, "expected field name in struct");
@@ -290,7 +319,8 @@ unique_ptr<StructDecl> Parser::parse_struct(Visibility visibility) {
     }
     Token field_name = advance();
     expect(TokenKind::Semicolon, "after struct field declaration");
-    fields.push_back(Parameter{field_name.text, field_type, field_name.location});
+    fields.push_back(Parameter{field_name.text, field_type, field_name.location,
+                               borrowed, mutable_borrow, shared, resource_domain});
   }
   expect(TokenKind::RBrace, "to close struct body");
   return make_unique<StructDecl>(name_tok.text, move(fields), struct_tok.location, visibility);

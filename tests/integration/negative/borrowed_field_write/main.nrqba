@@ -1,0 +1,11 @@
+// An immutable borrowed field is read-only through the borrow.
+struct Doc {
+    borrow ptr int value;
+}
+
+int function main() {
+    var x: int = 5;
+    var d = Doc { value: &x };
+    d.value[0] = 9;
+    return 0;
+}
