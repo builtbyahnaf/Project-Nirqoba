@@ -1,0 +1,13 @@
+// Assigning a whole element would need a struct store into storage that does not
+// hold structs, so the element is not an assignable place either.
+struct Point {
+    int x;
+    int y;
+}
+
+int function main() {
+    var points = memory.owned_soa<Point>(4);
+    var point = Point { x: 1, y: 2 };
+    points[0] = point;
+    return 0;
+}

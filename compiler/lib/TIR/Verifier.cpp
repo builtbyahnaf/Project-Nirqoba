@@ -70,6 +70,7 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
         case tir::OpKind::Call:
         case tir::OpKind::ArrayAlloca:
         case tir::OpKind::GetElementPtr:
+        case tir::OpKind::SoaColumnPtr:
         case tir::OpKind::AggregatePack:
         case tir::OpKind::AggregateExtract:
         case tir::OpKind::Length:

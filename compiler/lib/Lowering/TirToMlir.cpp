@@ -3958,6 +3958,63 @@ class FunctionTranslator {
         return true;
       }
 
+      case tir::OpKind::SoaColumnPtr: {
+        // One element of one column: payload + column_base * count + row * stride.
+        // The container has no array-of-structs address, so the offset comes from the
+        // described column layout and the object's own element count.
+        mlir::Value payload = get(op.lhs);
+        mlir::Value row = get(op.operand);
+        if (!payload || !row) return true;
+        const SoaLayout layout = describe_soa(op.lhs.type);
+        const auto order = aggregate_physical_order(op.lhs.type.soa_element());
+        std::size_t position = order.size();
+        for (std::size_t k = 0; k < order.size(); ++k)
+          if (static_cast<int>(order[k]) == op.field_index) { position = k; break; }
+        if (position >= layout.columns.size()) {
+          diag_.error("NRQ4005", op.location,
+                      "internal: container column missing from its layout");
+          return true;
+        }
+        const SoaColumn& column = layout.columns[position];
+        mlir::Type i64 = builder_.getI64Type();
+        auto constant = [&](int64_t v) {
+          return builder_.create<mlir::LLVM::ConstantOp>(
+              loc, i64, builder_.getI64IntegerAttr(v)).getResult();
+        };
+        // `element_count` sits at offset 32 of the object header and the payload
+        // starts at 48, so the count is the word at payload - 16. It is the same
+        // word the collector sizes the payload with, so it cannot disagree with the
+        // block that was actually allocated.
+        mlir::Value count_slot = builder_.create<mlir::LLVM::GEPOp>(
+            loc, llvm_ptr_type(ctx_), builder_.getI8Type(), payload,
+            mlir::ValueRange{constant(-16)}).getResult();
+        mlir::Value count_words = builder_.create<mlir::LLVM::LoadOp>(
+            loc, builder_.getI32Type(), count_slot).getResult();
+        mlir::Value count = builder_.create<mlir::LLVM::ZExtOp>(
+            loc, i64, count_words).getResult();
+        mlir::Value row64 = row.getType().isInteger(64)
+            ? row
+            : builder_.create<mlir::LLVM::SExtOp>(loc, i64, row).getResult();
+        mlir::Value column_base = builder_.create<mlir::LLVM::MulOp>(
+            loc, i64, count,
+            constant(static_cast<int64_t>(column.index_in_bytes))).getResult();
+        mlir::Value row_offset = builder_.create<mlir::LLVM::MulOp>(
+            loc, i64, row64,
+            constant(static_cast<int64_t>(column.element_bytes))).getResult();
+        mlir::Value offset = builder_.create<mlir::LLVM::AddOp>(
+            loc, i64, column_base, row_offset).getResult();
+        mlir::Value address = builder_.create<mlir::LLVM::GEPOp>(
+            loc, llvm_ptr_type(ctx_), builder_.getI8Type(), payload,
+            mlir::ValueRange{offset}).getResult();
+        set(op.result, address);
+        // Every column starts at a multiple of its own alignment and the payload is
+        // at least max-aligned, so the address keeps the smaller of the two.
+        const uint64_t base_alignment = known_pointer_alignment(op.lhs);
+        record_pointer_alignment(op.result,
+            base_alignment > 1 ? std::min(base_alignment, column.alignment)
+                               : column.alignment);
+        return true;
+      }
       case tir::OpKind::GetElementPtr: {
         // Pointer into an array or struct field.
         mlir::Value base_ptr = get(op.lhs);

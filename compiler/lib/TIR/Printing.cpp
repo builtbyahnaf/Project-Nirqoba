@@ -116,6 +116,10 @@ string print_tir(const tir::Module& module) {
           out << " " << value_name(op.lhs) << "[" << value_name(op.operand)
               << "] field=" << op.field_index;
           break;
+        case tir::OpKind::SoaColumnPtr:
+          out << " " << value_name(op.lhs) << "[" << value_name(op.operand)
+              << "] field=" << op.field_index;
+          break;
         case tir::OpKind::AggregatePack:
           out << " (";
           for (size_t i = 0; i < op.aggregate_elements.size(); ++i) {

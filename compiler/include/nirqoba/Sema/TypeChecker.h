@@ -128,6 +128,10 @@ class TypeChecker {
   uint64_t next_allocation_id_ = 1;
   bool checking_deferred_cleanup_ = false;
   bool checking_lvalue_ = false;
+  // Set while checking the base of a member access. A container element has no
+  // value of its own, so `ps[i]` is only a legal expression when it is claimed
+  // as the base of `ps[i].field`.
+  bool checking_soa_column_base_ = false;
   std::vector<std::vector<DeferredCleanup>> deferred_calls_;
   std::unordered_map<std::string, FunctionSignature> functions_;
   std::unordered_map<std::string, StructInfo> structs_;

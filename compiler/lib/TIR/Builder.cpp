@@ -1129,6 +1129,40 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
     }
     case Expr::Kind::MemberAccess: {
       const auto& mem = static_cast<const MemberAccessExpr&>(expr);
+      // `ps[i].field` addresses one column element: the column base is scaled by the
+      // element count, which only the lowering can read, so the pair is one op.
+      if (mem.base().kind() == Expr::Kind::Index) {
+        const auto& row = static_cast<const IndexExpr&>(mem.base());
+        if (row.base().type().is_soa()) {
+          const Type column_type = expr.type().is_valid() ? expr.type() : Type::error();
+          int column = -1;
+          const auto& fields = row.base().type().soa_element().struct_fields();
+          for (std::size_t field = 0; field < fields.size(); ++field)
+            if (fields[field].first == mem.member()) { column = static_cast<int>(field); break; }
+          if (column < 0) return tir::Value{};
+          tir::Value container = lower_expression(row.base(), function);
+          tir::Value row_index = lower_expression(row.index(), function);
+          if (!container.is_valid() || !row_index.is_valid()) return tir::Value{};
+          tir::Value column_ptr = function.allocate_value(column_type);
+          tir::Op address;
+          address.kind = tir::OpKind::SoaColumnPtr;
+          address.location = mem.location();
+          address.lhs = container;
+          address.operand = row_index;
+          address.field_index = column;
+          address.string_value = mem.member();
+          address.result = column_ptr;
+          function.add_operation(std::move(address));
+          tir::Value loaded = function.allocate_value(column_type);
+          tir::Op load;
+          load.kind = tir::OpKind::Load;
+          load.location = mem.location();
+          load.lhs = column_ptr;
+          load.result = loaded;
+          function.add_operation(std::move(load));
+          return loaded;
+        }
+      }
       const tir::Value base_val = lower_expression(mem.base(), function);
       const Type result_type = expr.type().is_valid() ? expr.type() : Type::error();
       const int field_idx = mem.is_tuple_access() ? mem.tuple_index() : -1;
@@ -1291,6 +1325,33 @@ tir::Value TirBuilder::resolve_lvalue_ptr(const Expr& target, tir::Function& fun
   }
   if (target.kind() == Expr::Kind::MemberAccess) {
     const auto& mem_expr = static_cast<const MemberAccessExpr&>(target);
+    // A writable column element: the same address the read path computes, returned as
+    // an lvalue instead of being loaded.
+    if (mem_expr.base().kind() == Expr::Kind::Index) {
+      const auto& row = static_cast<const IndexExpr&>(mem_expr.base());
+      if (row.base().type().is_soa()) {
+        const Type column_type = mem_expr.type().is_valid() ? mem_expr.type() : Type::error();
+        int column = -1;
+        const auto& fields = row.base().type().soa_element().struct_fields();
+        for (std::size_t field = 0; field < fields.size(); ++field)
+          if (fields[field].first == mem_expr.member()) { column = static_cast<int>(field); break; }
+        if (column < 0) return tir::Value{};
+        tir::Value container = lower_expression(row.base(), function);
+        tir::Value row_index = lower_expression(row.index(), function);
+        if (!container.is_valid() || !row_index.is_valid()) return tir::Value{};
+        tir::Value column_ptr = function.allocate_value(column_type);
+        tir::Op address;
+        address.kind = tir::OpKind::SoaColumnPtr;
+        address.location = mem_expr.location();
+        address.lhs = container;
+        address.operand = row_index;
+        address.field_index = column;
+        address.string_value = mem_expr.member();
+        address.result = column_ptr;
+        function.add_operation(std::move(address));
+        return column_ptr;
+      }
+    }
     tir::Value base_ptr = resolve_lvalue_ptr(mem_expr.base(), function);
     if (!base_ptr.is_valid()) return tir::Value{};
     Type field_type = mem_expr.type().is_valid() ? mem_expr.type() : Type::error();
