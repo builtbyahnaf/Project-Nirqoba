@@ -202,3 +202,23 @@ Proofs come from `p is not nullptr` in a then-branch and from `p is nullptr` in 
 else-branch or after a then-branch that cannot fall through; they are branch-scoped
 and dropped by any assignment. Nullability is a property of the binding, so it does
 not follow a copy into another binding or a function signature yet.
+
+## Confirmed syntax conventions
+
+Decisions confirmed against SYNTAX.md sections 16-17. They are the target for the
+pre-migration grammar work, not a description of what the current parser accepts.
+
+- **Declarations.** C-style is the convention: `Type name = value;` and brace
+  initializers such as `Point p = {1.0, 2.0, 3.0};`. `var`/`let` stay as alternative
+  forms and bind from an expression: `var point = Point { ... };`. The current parser
+  still requires `var name: Type = value`; it does not yet accept a statement-level
+  type-first declaration, a bare brace initializer, or call-style `Point(...)`.
+- **Null literals.** `nullptr` and `NULL` are the same null pointer literal in
+  initializers, assignments and `is` / `is not` checks (implemented in 0.379-beta).
+- **Nullable placement.** For C-style declarations the annotation qualifies the type:
+  `@Nullable ptr int p = NULL;`. The implemented form is `@Nullable var p: ptr int`.
+- **Unknown qualified generics.** A qualified generic type with no known meaning is
+  rejected, never reinterpreted as a bare type name.
+- **Collection names.** `owned_array<T>` and `array_view<T>` remain the builtins;
+  `Vector<T>` and `Span<T>` are reserved for later library aliases.
+- **Packing.** Explicit packed layout is planned and out of scope for now.
