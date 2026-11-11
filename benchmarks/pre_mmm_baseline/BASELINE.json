@@ -1,0 +1,282 @@
+{
+  "environment": {
+    "date": "2026-11-11T22:23:28",
+    "compiler": "nirqoba compiler version 0.371-beta (Phase 6)",
+    "build_mode": "RelWithDebInfo",
+    "flags": "default (-O2), RelWithDebInfo build",
+    "cpu": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+    "machine": "AMD64",
+    "os": "Windows-11-10.0.26300-SP0",
+    "python": "3.12.7",
+    "warmups": 1,
+    "reps": 7,
+    "timer": "time.cycles() (__rdtsc) around the workload only"
+  },
+  "results": [
+    {
+      "workload": "startup",
+      "source": "00_startup.nrqba",
+      "unit": "program",
+      "operations": 1,
+      "checksum": 0,
+      "cycles": {
+        "median": 28,
+        "best": 25,
+        "samples": [
+          30,
+          28,
+          25,
+          26,
+          30,
+          25,
+          45
+        ]
+      },
+      "wall_ms": {
+        "median": 24.09269999998287,
+        "best": 21.651399999882415,
+        "samples": [
+          57.34649999976682,
+          23.799999999937427,
+          24.392899999838846,
+          24.09269999998287,
+          21.651399999882415,
+          22.716999999829568,
+          26.540700000168727
+        ]
+      },
+      "cycles_per_unit": {
+        "median": 28.0,
+        "best": 25.0
+      }
+    },
+    {
+      "workload": "small_alloc",
+      "source": "01_small_alloc.nrqba",
+      "unit": "64 B alloc+free",
+      "operations": 200000,
+      "checksum": 59999700000,
+      "cycles": {
+        "median": 71975073,
+        "best": 70688765,
+        "samples": [
+          71553019,
+          71975073,
+          72690249,
+          75188137,
+          71219468,
+          70688765,
+          73194999
+        ]
+      },
+      "wall_ms": {
+        "median": 53.41039999984787,
+        "best": 50.07639999985258,
+        "samples": [
+          96.00850000015271,
+          60.60200000001714,
+          53.41039999984787,
+          53.635100000064995,
+          51.49310000024343,
+          50.07639999985258,
+          51.047099999777856
+        ]
+      },
+      "cycles_per_unit": {
+        "median": 359.875365,
+        "best": 353.443825
+      }
+    },
+    {
+      "workload": "large_alloc",
+      "source": "02_large_alloc.nrqba",
+      "unit": "1 MiB alloc+free",
+      "operations": 500,
+      "checksum": 374250,
+      "cycles": {
+        "median": 12980752,
+        "best": 12128839,
+        "samples": [
+          13114000,
+          12284943,
+          12256516,
+          15078182,
+          12128839,
+          16562142,
+          12980752
+        ]
+      },
+      "wall_ms": {
+        "median": 28.742500000134896,
+        "best": 26.88669999997728,
+        "samples": [
+          70.3441999999086,
+          26.88669999997728,
+          28.742500000134896,
+          29.176000000006752,
+          27.251100000285078,
+          38.13450000006924,
+          28.483500000220374
+        ]
+      },
+      "cycles_per_unit": {
+        "median": 25961.504,
+        "best": 24257.678
+      }
+    },
+    {
+      "workload": "alloc_loop",
+      "source": "03_alloc_loop.nrqba",
+      "unit": "owned array",
+      "operations": 20000,
+      "checksum": 51850240000,
+      "cycles": {
+        "median": 17594724,
+        "best": 16765903,
+        "samples": [
+          16765903,
+          17036181,
+          17022525,
+          17594724,
+          17779340,
+          17691536,
+          17864062
+        ]
+      },
+      "wall_ms": {
+        "median": 31.465200000184268,
+        "best": 28.08709999999337,
+        "samples": [
+          73.44289999991815,
+          41.17889999997715,
+          28.08709999999337,
+          31.224399999700836,
+          36.415800000213494,
+          31.465200000184268,
+          29.785700000047655
+        ]
+      },
+      "cycles_per_unit": {
+        "median": 879.7362,
+        "best": 838.29515
+      }
+    },
+    {
+      "workload": "array_traversal",
+      "source": "04_array_traversal.nrqba",
+      "unit": "element visit",
+      "operations": 7000000,
+      "checksum": 112127563435580512,
+      "cycles": {
+        "median": 11260434,
+        "best": 11116582,
+        "samples": [
+          11260434,
+          11193630,
+          11512844,
+          11116582,
+          15639638,
+          14122536,
+          11141686
+        ]
+      },
+      "wall_ms": {
+        "median": 30.19170000015947,
+        "best": 27.5101000001996,
+        "samples": [
+          75.0943000002735,
+          37.58829999969748,
+          28.367700000217155,
+          32.37879999960569,
+          30.19170000015947,
+          29.704099999889877,
+          27.5101000001996
+        ]
+      },
+      "cycles_per_unit": {
+        "median": 1.6086334285714285,
+        "best": 1.588083142857143
+      }
+    },
+    {
+      "workload": "aggregate_construct",
+      "source": "05_aggregate_construct.nrqba",
+      "unit": "aggregate",
+      "operations": 500000,
+      "checksum": 40005900000,
+      "cycles": {
+        "median": 568904,
+        "best": 519132,
+        "samples": [
+          519132,
+          544401,
+          571700,
+          554413,
+          568904,
+          577877,
+          595293
+        ]
+      },
+      "wall_ms": {
+        "median": 30.422100000123464,
+        "best": 28.85420000029626,
+        "samples": [
+          77.36290000002555,
+          28.85420000029626,
+          31.733999999687512,
+          30.422100000123464,
+          29.10890000021027,
+          30.504699999710283,
+          29.203299999608134
+        ]
+      },
+      "cycles_per_unit": {
+        "median": 1.137808,
+        "best": 1.038264
+      }
+    },
+    {
+      "workload": "nested_owned",
+      "source": "06_nested_owned.nrqba",
+      "unit": "iteration",
+      "operations": 10000,
+      "checksum": 8024000000,
+      "cycles": {
+        "median": 9902724,
+        "best": 8655086,
+        "samples": [
+          8655086,
+          9314610,
+          9902724,
+          9646267,
+          12434288,
+          11169463,
+          10090350
+        ]
+      },
+      "wall_ms": {
+        "median": 34.116199999971286,
+        "best": 33.01150000015696,
+        "samples": [
+          73.80239999974947,
+          33.01150000015696,
+          33.469699999841396,
+          34.116199999971286,
+          35.870900000190886,
+          33.13530000013998,
+          43.76699999966149
+        ]
+      },
+      "cycles_per_unit": {
+        "median": 990.2724,
+        "best": 865.5086
+      }
+    }
+  ],
+  "unavailable": [
+    [
+      "multi_threaded_allocation",
+      "no thread creation API in the compiler or runtime"
+    ]
+  ]
+}

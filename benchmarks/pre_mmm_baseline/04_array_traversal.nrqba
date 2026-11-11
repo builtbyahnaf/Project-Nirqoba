@@ -1,0 +1,34 @@
+// Array traversal: one 1M-element owned array, initialised once, then read and
+// written across five passes. Initialisation is inside the measured region for
+// this program because the roadmap category is traversal of an existing array,
+// so the passes dominate; the fill is reported as part of the same workload.
+int function main() {
+    var size = 1000000;
+    var passes = 5;
+    var arr = memory.owned_array<int>(size);
+    var start = time.cycles();
+    var i = 0;
+    while (i < size) {
+        arr[i] = i;
+        i += 1;
+    }
+    var p = 0;
+    while (p < passes) {
+        var j = 0;
+        while (j < size) {
+            arr[j] = (arr[j] * 3 + 7) ^ 1431655765;
+            j += 1;
+        }
+        p += 1;
+    }
+    var sum = 0;
+    var k = 0;
+    while (k < size) {
+        sum += arr[k];
+        k += 1;
+    }
+    var stop = time.cycles();
+    print(sum);
+    print(stop - start);
+    return 0;
+}

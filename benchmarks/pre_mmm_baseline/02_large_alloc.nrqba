@@ -1,0 +1,22 @@
+// Large allocation and release: a 1 MiB owned array (131072 ints) is allocated and
+// released once per iteration, with only the first and last elements touched, so
+// the cost is the allocator's large-block path rather than a memory sweep. The same
+// elision problem as in the small case rules out `memory.allocate` here.
+int function main() {
+    var n = 500;
+    var size = 131072;
+    var checksum = 0;
+    var start = time.cycles();
+    var i = 0;
+    while (i < n) {
+        var block = memory.owned_array<int>(size);
+        block[0] = i;
+        block[size - 1] = i * 2;
+        checksum += block[0] + block[size - 1];
+        i += 1;
+    }
+    var stop = time.cycles();
+    print(checksum);
+    print(stop - start);
+    return 0;
+}

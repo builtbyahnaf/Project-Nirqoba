@@ -1,0 +1,25 @@
+// Small allocation and release: a 64-byte owned array is allocated, written,
+// read, and released once per iteration. The `memory.allocate` form cannot be
+// used here: LLVM forwards the store into the load and then elides the allocation
+// pair entirely (verified in --emit=llvm and by a profiler capture reporting zero
+// allocations), so that version timed an empty loop. The owned-array path keeps
+// the allocator calls because the element count is loaded from the runtime-created
+// header, which the compiler cannot constant-fold.
+int function main() {
+    var n = 200000;
+    var width = 8;
+    var checksum = 0;
+    var start = time.cycles();
+    var i = 0;
+    while (i < n) {
+        var block = memory.owned_array<int>(width);
+        block[0] = i;
+        block[width - 1] = i * 2;
+        checksum += block[0] + block[width - 1];
+        i += 1;
+    }
+    var stop = time.cycles();
+    print(checksum);
+    print(stop - start);
+    return 0;
+}

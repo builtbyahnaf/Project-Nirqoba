@@ -1,0 +1,51 @@
+// Aggregate construction and destruction: a struct with mixed scalar, nested
+// struct and fixed-array fields is built, mutated, and destroyed once per
+// iteration. The fields are the shapes the parser accepts today; an owned-array
+// field is rejected ("expected field name in struct"), which is the Phase 1 gap
+// recorded in the report.
+//
+// The values come from an owned array rather than from the loop counter: with
+// counter-only values LLVM folded the whole loop into a constant, and the measured
+// region collapsed to a few dozen cycles. Loading through the runtime-created array
+// keeps the construction in the generated code.
+struct Inner {
+    int high;
+    int low;
+}
+
+struct Bucket {
+    bool flag;
+    Inner inner;
+    int[4] counts;
+    int tag;
+}
+
+int function main() {
+    var n = 200000;
+    var width = 8;
+    var source = memory.owned_array<int>(width);
+    var i = 0;
+    while (i < width) {
+        source[i] = i * 7 + 1;
+        i += 1;
+    }
+    var checksum = 0;
+    var start = time.cycles();
+    var k = 0;
+    while (k < n) {
+        var slot = k % width;
+        var b = Bucket {
+            flag: source[slot] > 0,
+            inner: Inner { high: source[slot], low: k },
+            counts: [1, 2, 3, 4],
+            tag: k
+        };
+        b.inner.high = b.inner.high + 1;
+        checksum += b.inner.high + b.inner.low + b.counts[3] + b.tag;
+        k += 1;
+    }
+    var stop = time.cycles();
+    print(checksum);
+    print(stop - start);
+    return 0;
+}
