@@ -231,11 +231,14 @@ of 8 (`element_bytes` for two ints), and the `y` column base at 16, which is
 - `positive/soa_column_read_write`: writes and reads both columns at several indices,
   including the last row.
 - `negative/soa_standalone_element`: `var e = points[0]` is `NRQ3015`.
+- `positive/soa_column_dynamic_row`: a variable row index keeps the column base fixed
+  while the row term moves, so changing `row` cannot silently change which column is
+  written.
 - `negative/soa_element_assign`: `points[0] = p` is `NRQ3015`.
 - `negative/soa_reference_column_rejected` still holds: element structs with a managed
   field remain refused until stage 3 traces strided columns.
 
-Suite: 210/210 unit, 271/271 integration.
+Suite: 210/210 unit, 272/272 integration.
 
 ### Still open after this stage
 
