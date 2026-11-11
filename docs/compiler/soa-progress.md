@@ -417,7 +417,7 @@ Suite: 210/210 unit, 281/281 integration.
 
 Views over containers, a source-level way to write a null managed reference, and the
 stage 4 benchmarks. 0.369 is opened for 2d, 2e and 3 (f4a6bb6).
-## Stage 3 post-implementation audit (this commit)
+## Stage 3 post-implementation audit (8be1466)
 
 Six areas were checked against the code at 3c63c47. Two defects were real; the rest
 held up.
