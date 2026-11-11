@@ -12,7 +12,7 @@ that loses context can resume from it plus `git log`.
 | 2a | authoritative column layout, sema owned rules, type allowed in signatures | done (bec12d3) |
 | 2b | struct-field resolution for `soa<T>` in signatures, layout report test | done (8425948) |
 | 2c | allocation entry point `memory.owned_soa<T>(n)` (scalar fields only) | done (4bf57aa) |
-| 2d | column addressing in TIR + lowering for `ps[i].f` | done (this commit) |
+| 2d | column addressing in TIR + lowering for `ps[i].f` | done (86fadcc) |
 | 3 | strided GC trace callback for reference columns | pending |
 | 4 | column views, benchmarks, docs, version milestone | pending |
 
@@ -172,7 +172,7 @@ Suite: 210/210 unit, 267/267 integration.
 
 Suite: 210/210 unit, 268/268 integration.
 
-## Stage 2d — implemented
+## Stage 2d — implemented (86fadcc)
 
 Column addressing for `ps[i].f`. The address is `payload + column_base(f) + i *
 column_element_bytes(f)`, where the two column quantities come from `describe_soa`
@@ -191,7 +191,7 @@ and nothing else. Sites:
 4. Test: write and read every field of every index, including the last index, then
    force `gc.collect()` with the container reachable.
 
-### What shipped (this commit)
+### What shipped (stage 2d)
 
 - **TIR**: a dedicated `OpKind::SoaColumnPtr`. `lhs` is the container value,
   `operand` the row index, `field_index` the field's declaration index, and
