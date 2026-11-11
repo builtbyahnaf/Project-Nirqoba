@@ -469,6 +469,47 @@ descriptor that cannot be honoured.
   hide an owned array, an array view or a nested container behind a field type.
 
 Suite: 210/210 unit, 284/284 integration.
+## Stage 3.5 — dependency analysis, not implemented
+
+### Views over a column
+
+Investigated: views are created by `memory.array_view` / `memory.array_view_mut` and
+are tied to their owner through `borrowed` symbols, `cleanup_for_borrow_domain`,
+`symbols_.has_live_borrow` / `has_conflicting_borrow`, and the `array_view` type carried
+through signatures. A view descriptor in this compiler is pointer plus length: it
+assumes the elements are contiguous and adjacent.
+
+A column is contiguous but its rows are strided by `column.element_bytes`, and its base
+is `payload + index_in_bytes * count`. So a column view is not a view of a contiguous
+array, and the existing descriptor cannot describe it. Copying the column into a
+contiguous buffer would satisfy the descriptor only by violating the request's ban on
+unnecessary copies and by making writes stop affecting the container.
+
+Decision: not implemented. The smallest safe subset is a read-only strided view, but
+even that adds a stride field to a descriptor every existing view uses, so it belongs in
+its own stage with the borrow checker updated in the same commit. Recorded as a
+dependency, not worked around.
+
+### Null managed references
+
+Investigated: the string `null` does not occur anywhere in the compiler sources, yet
+`byte* raw = null;` is accepted by existing tests. Null is therefore not a keyword or a
+literal node in the front end; it resolves through the environment the language ships
+rather than through type checking. Introducing nullability for `managed<T>` means
+finding that mechanism first, then deciding whether `managed<T>` becomes nullable by
+default or only under a qualifier.
+
+Decision: not implemented. Making managed references nullable changes the managed
+pointer type, its root rules and its tracing contract - the three things the Stage 3
+audit just stabilised - so it must land as a deliberate type-system change with its own
+tests for initialisation, assignment, comparison and collection. A syntax shortcut
+invented to make the SoA test pass would break that area rather than extend it.
+
+### Consequence for Stage 4
+
+Benchmarks are not started. Comparing SoA against AoS before views and nullability exist
+would measure a feature set that cannot yet express the AoS baseline's common patterns,
+so the numbers would invite the wrong conclusion.
 ## Invariants that must not be broken
 
 - Ordinary structs, AoS layout, and their tests are untouched by every stage.
