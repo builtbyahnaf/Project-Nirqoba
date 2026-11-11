@@ -34,8 +34,15 @@ recorded below is made under that authority.
   median 106.676 ns/allocation before, 57.640 after (about 1.85x). The harness
   is a microbenchmark with collection disabled; see
   `reports/performance/0.407-layout-memo.md` for method and caveats.
+- **The one-word pointer root has its own descriptor.** A root of
+  `sizeof(void*)` with one reference at offset zero and no trace callback
+  resolves to an immutable process-lifetime descriptor before the memo. Other
+  root shapes keep the existing memo and interning path, and descriptor identity
+  in `add_slot_state` and `is_pointer_root` is unchanged. The descriptor is not
+  pool-owned, so it is not counted by `nrq_gc_layout_count` or
+  `nrq_gc_layout_bytes`.
 
-## Version 0.403-beta (working build)
+## Version 0.403-beta
 
 ### Summary of Changes (since `0.401-beta`):
 
@@ -62,7 +69,7 @@ recorded below is made under that authority.
 The socket runtime remains unlinked in this phase, so socket fields are covered by
 the semantic-check suite while the other four domains also build, link and run.
 
-## Version 0.401-beta (working build)
+## Version 0.401-beta
 
 ### Summary of Changes (since `0.397-beta`):
 
@@ -378,7 +385,7 @@ reference-column tracing (stage 3).*
 
 ### Summary of Changes (since `0.357-beta`):
 
-*Current working build, opened after 0.357-beta.*
+*Opened after 0.357-beta.*
 
 - **`soa<T>` exists as a type and is gated.** `TypeKind::Soa`, `soa<Point>` in type
   position, `soa<Point>`/`SOA_` spelling and mangling, and a hard `NRQ5010` rejection
