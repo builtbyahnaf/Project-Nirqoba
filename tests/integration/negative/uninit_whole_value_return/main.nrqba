@@ -1,0 +1,8 @@
+// Returning a partially initialized aggregate is rejected.
+struct Holder { int tag; int other; }
+Holder function make() {
+    var h: Holder = uninit;
+    h.tag = 1;
+    return h;
+}
+int function main() { return 0; }

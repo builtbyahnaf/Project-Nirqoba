@@ -1,0 +1,8 @@
+// Moving a partially initialized owned aggregate is rejected.
+struct Holder { owned ptr int data; int tag; }
+int function main() {
+    var h: Holder = uninit;
+    h.data = memory.allocate<int>(1);
+    var b = h;
+    return 0;
+}

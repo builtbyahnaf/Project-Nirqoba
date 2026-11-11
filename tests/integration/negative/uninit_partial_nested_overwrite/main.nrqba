@@ -1,0 +1,9 @@
+// Overwriting a partially initialized nested aggregate would leak its fields.
+struct Inner { owned ptr int data; int tag; }
+struct Outer { Inner inner; int extra; }
+int function main() {
+    var o: Outer = uninit;
+    o.inner.data = memory.allocate<int>(1);
+    o.inner = Inner { data: memory.allocate<int>(1), tag: 0 };
+    return 0;
+}

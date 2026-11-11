@@ -1,0 +1,9 @@
+// Passing a partially initialized aggregate is rejected.
+struct Holder { shared ptr int data; int tag; }
+void function sink(Holder value) { }
+int function main() {
+    var h: Holder = uninit;
+    h.tag = 1;
+    sink(h);
+    return 0;
+}

@@ -1,0 +1,12 @@
+// Nested fields may be initialized one by one.
+struct Inner { owned ptr int data; int tag; }
+struct Outer { Inner inner; int extra; }
+int function main() {
+    var o: Outer = uninit;
+    o.inner.data = memory.allocate<int>(1);
+    *o.inner.data = 5;
+    o.inner.tag = 3;
+    o.extra = 1;
+    print(*o.inner.data + o.inner.tag + o.extra);
+    return 0;
+}

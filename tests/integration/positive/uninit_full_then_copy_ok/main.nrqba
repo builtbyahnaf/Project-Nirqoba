@@ -1,0 +1,12 @@
+// Once every field is initialized, whole-value copy is valid again.
+struct Holder { shared ptr int data; int tag; }
+int function main() {
+    var h: Holder = uninit;
+    h.data = memory.shared_allocate<int>(1);
+    *h.data = 4;
+    h.tag = 2;
+    var b = h;
+    print(memory.shared_count(b.data));
+    print(*b.data + b.tag);
+    return 0;
+}
