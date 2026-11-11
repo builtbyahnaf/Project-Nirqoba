@@ -595,16 +595,20 @@ StmtPtr Parser::parse_statement() {
       return nullptr;
     }
     advance();
-    if (!(check(TokenKind::KwLet) || check(TokenKind::KwVar) || check(TokenKind::KwConst))) {
-      error_at(peek(), diag::kExpectedToken,
-               "expected a variable declaration after '@Nullable'");
-      synchronize();
-      return nullptr;
-    }
-    return parse_variable_declaration(true);
+    if (check(TokenKind::KwLet) || check(TokenKind::KwVar) || check(TokenKind::KwConst))
+      return parse_variable_declaration(true);
+    if (starts_type_first_declaration())
+      return parse_type_first_declaration(true, BindingKind::Var);
+    error_at(peek(), diag::kExpectedToken,
+             "expected a variable declaration after '@Nullable'");
+    synchronize();
+    return nullptr;
   }
   if (check(TokenKind::KwLet) || check(TokenKind::KwVar) || check(TokenKind::KwConst)) {
     return parse_variable_declaration();
+  }
+  if (starts_type_first_declaration()) {
+    return parse_type_first_declaration(false, BindingKind::Var);
   }
   if (check(TokenKind::KwIf)) {
     return parse_if();
@@ -675,11 +679,73 @@ StmtPtr Parser::parse_destructuring() {
   return make_unique<DestructuringStmt>(kw.location, binding, move(names), move(value));
 }
 
+bool Parser::starts_type_first_declaration() const {
+  if (is_type_keyword(peek().kind)) return true;
+  if (!check(TokenKind::Identifier)) return false;
+  if (peek().text == "ptr" &&
+      (is_type_keyword(peek(1).kind) || peek(1).kind == TokenKind::Identifier))
+    return true;
+  if (peek().text == "managed" && peek(1).kind == TokenKind::Less) return true;
+  if ((peek().text == "owned_array" || peek().text == "array_view" ||
+       peek().text == "soa") && peek(1).kind == TokenKind::Less)
+    return true;
+  // Two identifiers in a row cannot start an expression, so `Point p` is a
+  // declaration while `p = ...` and `p.f = ...` are not.
+  if (peek(1).kind == TokenKind::Identifier) return true;
+  // Qualified type: `module.Point p`, `memory.owned_array<int> a`.
+  std::size_t lookahead = 1;
+  while (peek(lookahead).kind == TokenKind::Dot &&
+         peek(lookahead + 1).kind == TokenKind::Identifier)
+    lookahead += 2;
+  if (lookahead > 1) {
+    if (peek(lookahead).kind == TokenKind::Identifier) return true;
+    // A qualified generic is a type only for the builtin containers; a call such as
+    // `memory.allocate<byte>(1)` starts with the same shape but is an expression.
+    if (peek(lookahead).kind == TokenKind::Less) {
+      const std::string& bare = peek(lookahead - 1).text;
+      return bare == "owned_array" || bare == "array_view" || bare == "soa" ||
+             bare == "managed" || bare == "owned_ptr";
+    }
+  }
+  return false;
+}
+
+StmtPtr Parser::parse_type_first_declaration(bool nullable, BindingKind binding) {
+  const Token start = peek();
+  const Type annotation = parse_type_annotation();
+  if (!check(TokenKind::Identifier)) {
+    error_at(peek(), diag::kExpectedToken,
+             "expected a variable name after the type, found " + describe_token(peek()));
+    synchronize();
+    return nullptr;
+  }
+  const Token name = advance();
+  if (!check(TokenKind::Equal)) {
+    error_at(peek(), kUnknownType,
+             "'" + name.text + "' must be initialized: variables require an initializer");
+    synchronize();
+    return nullptr;
+  }
+  advance();  // '='
+  // A bare brace initializer takes its type from the declaration, so it is parsed
+  // as the struct literal the annotation names: `Point p = {1, 2};`.
+  ExprPtr initializer = check(TokenKind::LBrace)
+      ? parse_struct_init(annotation.to_string(), peek().location)
+      : parse_expression();
+  expect(TokenKind::Semicolon, "after the variable initializer");
+  return make_unique<VariableDeclarationStmt>(start.location, binding, name.text, true,
+                                              annotation, move(initializer), nullable);
+}
+
 StmtPtr Parser::parse_variable_declaration(bool nullable) {
   const Token keyword = advance();
   const BindingKind binding = keyword.kind == TokenKind::KwLet     ? BindingKind::Let
                               : keyword.kind == TokenKind::KwVar   ? BindingKind::Var
                                                                    : BindingKind::Const;
+  // `var ptr int g = NULL;` is the readable type-first alternative to
+  // `var g: ptr int = NULL;`; both remain valid.
+  if (starts_type_first_declaration())
+    return parse_type_first_declaration(nullable, binding);
   if (!check(TokenKind::Identifier)) {
     error_at(peek(), diag::kExpectedToken,
              "expected a variable name after '" + keyword.text + "', found " +

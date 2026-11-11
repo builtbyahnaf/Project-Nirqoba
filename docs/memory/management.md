@@ -208,15 +208,15 @@ not follow a copy into another binding or a function signature yet.
 Decisions confirmed against SYNTAX.md sections 16-17. They are the target for the
 pre-migration grammar work, not a description of what the current parser accepts.
 
-- **Declarations.** C-style is the convention: `Type name = value;` and brace
-  initializers such as `Point p = {1.0, 2.0, 3.0};`. `var`/`let` stay as alternative
-  forms and bind from an expression: `var point = Point { ... };`. The current parser
-  still requires `var name: Type = value`; it does not yet accept a statement-level
-  type-first declaration, a bare brace initializer, or call-style `Point(...)`.
+- **Declarations.** C-style is the implemented convention: `Type name = value;` and
+  brace initializers such as `Point p = {1, 2};` (positional or named). `var`/`let`
+  remain alternatives and also accept the type-first spelling
+  `var ptr int g = nullptr;`. Call-style `Point(1, 2)` is still unsupported.
 - **Null literals.** `nullptr` and `NULL` are the same null pointer literal in
   initializers, assignments and `is` / `is not` checks (implemented in 0.379-beta).
-- **Nullable placement.** For C-style declarations the annotation qualifies the type:
-  `@Nullable ptr int p = NULL;`. The implemented form is `@Nullable var p: ptr int`.
+- **Nullable placement.** The annotation qualifies the type:
+  `@Nullable ptr int p = NULL;` or `@Nullable var ptr int p = NULL;`. The older
+  `@Nullable var p: ptr int = NULL;` still parses for compatibility.
 - **Unknown qualified generics.** A qualified generic type with no known meaning is
   rejected, never reinterpreted as a bare type name.
 - **Collection names.** `owned_array<T>` and `array_view<T>` remain the builtins;

@@ -1,6 +1,6 @@
 // Dereferencing a nullable pointer without a non-null check is rejected.
 int function main() {
-    @Nullable var p: ptr int = nullptr;
+    @Nullable var ptr int p = nullptr;
     print(*p);
     return 0;
 }
