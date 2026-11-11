@@ -58,8 +58,21 @@ cd /d "$RepoRoot" || exit /b 1
 ctest --preset $preset --output-on-failure || exit /b 1
 "@
 Set-Content -Path $batPath -Value $batContent -Encoding ascii
-& $batPath 2>&1 | Tee-Object -FilePath $unitLog
-$unitCode = $LASTEXITCODE
+
+# ctest writes its failure summary ("Errors while running CTest") to stderr.
+# With $ErrorActionPreference = 'Stop', merging native stderr into the pipeline
+# raises a terminating NativeCommandError before $LASTEXITCODE can be read, so
+# the real failing suite and its code are lost. Keep stderr flowing into the log
+# while the command runs, then restore the strict policy and handle the code.
+$unitCode = 1
+$previousErrorAction = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    & $batPath 2>&1 | Tee-Object -FilePath $unitLog
+    $unitCode = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $previousErrorAction
+}
 if ($unitCode -ne 0) { Write-Host "unit tests failed (exit $unitCode)" -ForegroundColor Red }
 
 if ($UnitOnly) {
@@ -75,8 +88,17 @@ if ($null -eq $pythonCommand) {
     exit 4
 }
 $pythonExe = $pythonCommand.Source
-& $pythonExe (Join-Path $RepoRoot 'tests/run_tests.py') --compiler $compiler --configuration $Configuration 2>&1 | Tee-Object -FilePath $integrationLog
-$integrationCode = $LASTEXITCODE
+# A failing test prints to stderr as well; handle it as data, not as a
+# terminating PowerShell error, exactly like the ctest invocation above.
+$integrationCode = 1
+$previousErrorAction = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    & $pythonExe (Join-Path $RepoRoot 'tests/run_tests.py') --compiler $compiler --configuration $Configuration 2>&1 | Tee-Object -FilePath $integrationLog
+    $integrationCode = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $previousErrorAction
+}
 if ($integrationCode -ne 0) { Write-Host "integration tests failed (exit $integrationCode)" -ForegroundColor Red }
 
 if ($unitCode -ne 0 -or $integrationCode -ne 0) { exit 1 }
