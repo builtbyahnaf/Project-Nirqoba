@@ -6,6 +6,34 @@
 
 ---
 
+## Version 0.363-beta (working build)
+
+### Summary of Changes (since `0.361-beta`):
+
+*Opened after three implementation upgrades: SoA stages 2a, 2b and 2c.*
+
+- **`soa<T>` has one authoritative column layout.** `describe_soa` in
+  `Lowering/DataLayout` derives every column base and element size from the struct's
+  existing physical order, the same function that prints `--emit=layout`, so the
+  report cannot drift from what the compiler actually does. Columns are described by
+  count-independent quantities (`index_in_bytes` and `element_bytes`), so one
+  description serves any element count.
+- **The container resolves its element struct.** `soa<Point>` over a named aggregate
+  resolves to the real field set at the point of use instead of carrying an opaque
+  name through sema.
+- **A container can be allocated: `memory.owned_soa<T>(n)`.** One GC object holds every
+  column packed in physical order; the header records the element count and the
+  payload is `count * element_bytes`. The value is a pointer to that block, and its
+  release unregisters the root without freeing, because the block belongs to the
+  collector.
+- **Reference columns are refused with a named diagnostic.** A struct with a managed
+  field cannot be a container element until stage 3 adds a trace callback that walks a
+  column with stride; allocating one now would hide a live target from the sweep.
+  `NRQ3015` names the offending column.
+- **Column addressing is not open yet.** Indexing a container is still rejected, now
+  with the analysis of why the ordinary two-step GEP cannot express it recorded in
+  `docs/compiler/soa-progress.md`. Stage 2d is the next upgrade.
+
 ## Version 0.361-beta (working build)
 
 ### Summary of Changes (since `0.357-beta`):
