@@ -6,13 +6,20 @@
 
 ---
 
-## Version 0.346-beta (working build)
+## Version 0.351-beta (working build)
+
+### Summary of Changes (since `0.346-beta`):
+
+*Current working build, opened after 0.346-beta. Nothing has landed under this
+version yet; entries are added as changes are committed.*
+
+---
+
+## Version 0.346-beta (released)
 
 ### Summary of Changes (since `0.341-beta`):
 
-*Current working build, opened after 0.341-beta for Section E. Two of the four
-upgrades planned for this window have landed; the version moves to 0.351 when the
-fourth does.*
+*Released after two upgrades. Opens Section E - object payload optimization.*
 
 - **The layout report separates interior from trailing padding.** Only the first is
   waste; the second is what makes the stride a multiple of the alignment. The report
