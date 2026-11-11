@@ -1266,7 +1266,10 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                        "a borrowed binding cannot be rebound");
     return;
   }
-  if (target_type.is_valid() && value_type.is_valid() && target_type != value_type) {
+  if (is_null_pointer_literal(assignment.value()) && target_type.is_pointer()) {
+    // `p = nullptr;` retypes the literal to the destination pointer type.
+    const_cast<Expr&>(assignment.value()).set_type(target_type);
+  } else if (target_type.is_valid() && value_type.is_valid() && target_type != value_type) {
     diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
                        "cannot assign a value of type '" + value_type.to_string() +
                            "' to target of type '" + target_type.to_string() + "'");
@@ -1989,6 +1992,25 @@ Type TypeChecker::check_expression(Expr& expr) {
           break;
         case BinaryOp::Equal:
         case BinaryOp::NotEqual:
+          if (is_null_pointer_literal(binary.lhs()) ||
+              is_null_pointer_literal(binary.rhs())) {
+            // `nullptr` adopts the other operand's pointer type, so `p is nullptr`
+            // compares two pointers rather than a pointer and an integer zero.
+            const Type& other = is_null_pointer_literal(binary.lhs()) ? rhs_type : lhs_type;
+            if (!other.is_pointer()) {
+              diagnostics_.error(diag::kTypeMismatch, binary.location(),
+                                 "nullptr can only be compared with a pointer, not '" +
+                                     other.to_string() + "'");
+              type = Type::error();
+              break;
+            }
+            if (is_null_pointer_literal(binary.lhs()))
+              const_cast<Expr&>(binary.lhs()).set_type(other);
+            else
+              const_cast<Expr&>(binary.rhs()).set_type(other);
+            type = Type::bool_type();
+            break;
+          }
           if (lhs_type != rhs_type) {
             diagnostics_.error(diag::kTypeMismatch, binary.location(),
                                "cannot compare values of different types for equality: '" +

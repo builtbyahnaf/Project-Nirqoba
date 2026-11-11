@@ -6,6 +6,24 @@
 
 ---
 
+## Version 0.378-beta (working build)
+
+### Summary of Changes (since `0.374-beta`):
+
+*Opened after two null-semantics upgrades.*
+
+- **`nullptr` can be assigned to an existing pointer binding.** `p = nullptr;` retypes
+  the literal to the destination pointer, so the generated constant is a null pointer
+  rather than integer zero and printing still reports `NULL`.
+- **`is` and `is not` compare a pointer with `nullptr`.** They lower to ordinary
+  equality, so pointer operand rules are shared with `==` and `!=`. `nullptr` adopts
+  the pointer type of the other operand; comparing `nullptr` with a non-pointer is a
+  compile error instead of a silent integer-zero comparison.
+
+Still unimplemented from §8: `@Nullable` annotations, flow-sensitive non-null
+narrowing, interpolation of pointers, cross-function lifetime analysis, and the
+interop rules §8.10 requires.
+
 ## Version 0.374-beta (working build)
 
 ### Summary of Changes (since `0.371-beta`):
