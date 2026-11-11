@@ -216,6 +216,73 @@ TEST(GcTest, LayoutMemoHitsMultipleLayoutsAndEvictsRoundRobin) {
 
 }
 
+TEST(GcTest, PointerRootsBypassTheMemoAcrossMoreShapesThanItHolds) {
+  // Six distinct record roots thrash the four-entry memo, yet the pointer roots
+  // interleaved with them must not add a single memo lookup. The static
+  // descriptor answers that shape before the scan.
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const size_t sizes[] = {16, 24, 32, 40, 48, 56};
+  std::array<void*, 6> typed_slots{};
+  std::array<void*, 6> pointer_slots{};
+  const uint64_t lookups_before =
+      nrq_gc_layout_memo_hits() + nrq_gc_layout_memo_misses();
+  for (size_t index = 0; index < typed_slots.size(); ++index) {
+    const size_t offset = 0;
+    nrq_gc_root_register_typed(&typed_slots[index], sizes[index], &offset, 1);
+    nrq_gc_root_register(&pointer_slots[index]);
+  }
+  ASSERT_EQ(nrq_gc_layout_memo_hits() + nrq_gc_layout_memo_misses() -
+                lookups_before, uint64_t{6});
+
+  // The pointer roots still work: one keeps a managed object alive.
+  const uint64_t baseline = nrq_gc_get_live_objects();
+  auto* node = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(node, nullptr);
+  pointer_slots[0] = node;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 1);
+  pointer_slots[0] = nullptr;
+
+  for (size_t index = 0; index < typed_slots.size(); ++index) {
+    nrq_gc_root_unregister(reinterpret_cast<void**>(&pointer_slots[index]));
+    nrq_gc_root_unregister(reinterpret_cast<void**>(&typed_slots[index]));
+  }
+  nrq_gc_collect();
+}
+
+TEST(GcTest, EightByteTwoReferenceRootDoesNotUseThePointerRootShortcut) {
+  // Same size as a pointer root, but two references: it must take the memo and
+  // interning path rather than inherit the one-reference static descriptor.
+  nrq_gc_disable();
+  nrq_gc_collect();
+  void* slot = nullptr;
+  const size_t offsets[] = {0, 0};
+  const uint64_t lookups_before =
+      nrq_gc_layout_memo_hits() + nrq_gc_layout_memo_misses();
+  nrq_gc_root_register_typed(&slot, sizeof(void*), offsets, 2);
+  ASSERT_EQ(nrq_gc_layout_memo_hits() + nrq_gc_layout_memo_misses() -
+                lookups_before, uint64_t{1});
+  nrq_gc_root_unregister(reinterpret_cast<void**>(&slot));
+}
+
+TEST(GcTest, PointerRootDescriptorIsNotPoolOwned) {
+  // Registering the static shape must not grow the descriptor pool or its byte
+  // count, and a repeated registration must agree by descriptor identity.
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const nrq_gc_allocation_facts before = nrq_gc_get_allocation_facts();
+  std::array<void*, 8> slots{};
+  for (void*& slot : slots) nrq_gc_root_register(&slot);
+  nrq_gc_root_register(&slots[0]);
+  const nrq_gc_allocation_facts after = nrq_gc_get_allocation_facts();
+  ASSERT_EQ(after.layout_descriptors, before.layout_descriptors);
+  ASSERT_EQ(after.layout_bytes, before.layout_bytes);
+  nrq_gc_root_unregister(reinterpret_cast<void**>(&slots[0]));
+  for (void*& slot : slots)
+    nrq_gc_root_unregister(reinterpret_cast<void**>(&slot));
+}
+
 TEST(GcTest, InstancesOfOneRecordShareOneDescriptor) {
   // 64 instances of one record must describe themselves once. The descriptor is
   // attached at allocation and read back through the object, which is how the
