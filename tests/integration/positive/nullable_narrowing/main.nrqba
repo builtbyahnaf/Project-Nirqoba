@@ -1,13 +1,13 @@
 // A nullable pointer is dereferenced only inside a branch that proves it non-null.
 int function main() {
     var s: int = 11;
-    @Nullable var p: ptr int = &s;
+    @Nullable var ptr int p = &s;
     if (p is not nullptr) {
         print(*p);
     } else {
         print(-1);
     }
-    @Nullable var q: ptr int = nullptr;
+    @Nullable var ptr int q = nullptr;
     if (q is nullptr) {
         print(0);
     } else {

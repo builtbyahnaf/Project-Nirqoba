@@ -1,0 +1,5 @@
+// A declaration still requires an initializer.
+int function main() {
+    int x;
+    return 0;
+}

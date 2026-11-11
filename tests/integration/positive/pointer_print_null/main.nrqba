@@ -5,7 +5,7 @@ int function main() {
     var s: int = 41;
     var p: ptr int = &s;
     print(p);
-    @Nullable var q: ptr int = nullptr;
+    @Nullable var ptr int q = nullptr;
     print(q);
     *p = 987654;
     print(*p);

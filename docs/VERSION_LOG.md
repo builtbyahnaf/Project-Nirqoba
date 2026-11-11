@@ -1,5 +1,24 @@
 # Nirqoba Version Log
 
+## 0.380-beta - C-style declarations and brace initializers
+
+Two upgrades since 0.379: `NULL` as an alias of `nullptr`, and the declaration forms
+from sections 16-17.
+
+A statement may now declare with the type first: `Point p = {1, 2};`,
+`ptr int g = NULL;`, `@Nullable ptr int h = NULL;`. Braces are positional or named
+(`{ x: 1, y: 2 }`), and the declared type supplies the struct they initialize.
+`var`/`let` keep their existing form and gain the readable type-first alternative
+`var ptr int g = nullptr;`. Detection is by shape: a statement starting with a type
+keyword, `ptr`, a generic builtin, or two identifiers in a row is a declaration;
+anything else stays an expression statement, so no backtracking is needed.
+
+Still unsupported: call-style construction `Point(1, 2)`, `Point p = {};` with no
+initializer list, and uninitialized declarations (`int x;` is an error).
+
+
+
+
 ## 0.379-beta - @Nullable pointers and non-null narrowing
 
 Two upgrades since 0.378: qualified builtin generic type annotations (17.4), and

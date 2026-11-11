@@ -1,5 +1,5 @@
 // Pointers are non-nullable by default, so nullptr requires '@Nullable'.
 int function main() {
-    var p: ptr int = nullptr;
+    ptr int p = nullptr;
     return 0;
 }

@@ -43,6 +43,10 @@ class Parser {
   std::unique_ptr<BlockStmt> parse_block();
   StmtPtr parse_statement();
   StmtPtr parse_variable_declaration(bool nullable = false);
+  // C-style declarations: `Point p = {1, 2};`, `ptr int g = NULL;`, and the
+  // `var <type> <name> = value;` alternative.
+  StmtPtr parse_type_first_declaration(bool nullable, BindingKind binding);
+  bool starts_type_first_declaration() const;
   StmtPtr parse_destructuring();
   StmtPtr parse_assignment_or_expression();
   StmtPtr parse_if();

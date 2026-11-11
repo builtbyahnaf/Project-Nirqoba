@@ -1,0 +1,20 @@
+// C-style declarations and brace initializers, with var/<type>/name as the
+// alternative form. Braces may be positional or named.
+struct Point {
+    int x;
+    int y;
+}
+
+int function main() {
+    Point p = {1, 2};
+    Point q = { x: 3, y: 4 };
+    Point r = Point { x: 5, y: 6 };
+    @Nullable ptr int g = NULL;
+    var ptr int s = &p.y;
+    print(p.x + p.y + q.x + q.y + r.x + r.y);
+    if (g is NULL) {
+        print(9);
+    }
+    print(*s);
+    return 0;
+}

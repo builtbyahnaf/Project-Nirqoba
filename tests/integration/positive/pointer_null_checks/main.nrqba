@@ -3,7 +3,7 @@
 // destination, otherwise it would compare as integer zero.
 int function main() {
     var s: int = 5;
-    @Nullable var p: ptr int = &s;
+    @Nullable var ptr int p = &s;
     print(p is nullptr);
     p = nullptr;
     print(p is nullptr);
