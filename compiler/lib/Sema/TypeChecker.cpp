@@ -2191,6 +2191,19 @@ Type TypeChecker::check_index_expr(IndexExpr& expr) {
 
   if (!base_type.is_valid() || !index_type.is_valid()) return Type::error();
 
+  // A container element has no array-of-structs address: its fields live in separate
+  // columns. The type is still the element struct so a member access can name a
+  // column, but a bare `ps[i]` stays an error because there is nothing to load and
+  // nothing to assign.
+  if (base_type.is_soa()) {
+    if (!checking_soa_column_base_) {
+      diagnostics_.error(diag::kTypeMismatch, expr.location(),
+                         "an element of a container has no value; address a column as ps[i].field");
+      return Type::error();
+    }
+    return base_type.soa_element();
+  }
+
   if (!checking_lvalue_ && base_type.is_owned_array()) {
     const Symbol* owner = find_root_symbol(expr.base(), symbols_);
     if (owner && symbols_.has_conflicting_borrow(owner->allocation_id, false)) {
@@ -2268,7 +2281,13 @@ Type TypeChecker::check_index_expr(IndexExpr& expr) {
 }
 
 Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
+  // `ps[i].field` is the only way to reach a container element: the element has no
+  // address and no value of its own, so the index expression is claimed here rather
+  // than being checked as an expression in its own right.
+  const bool enclosing_soa_column = checking_soa_column_base_;
+  checking_soa_column_base_ = expr.base().kind() == Expr::Kind::Index;
   const Type base_type = check_expression(const_cast<Expr&>(expr.base()));
+  checking_soa_column_base_ = enclosing_soa_column;
   if (!base_type.is_valid()) return Type::error();
 
   // Tuple element access: tup.0

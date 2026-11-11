@@ -1,0 +1,26 @@
+// Stage 2d: every column is addressed independently, so the same index in two
+// fields is two different addresses, and two indices in one field differ by the
+// column's element size, not by the size of the struct.
+struct Point {
+    int x;
+    int y;
+}
+
+int function main() {
+    var points = memory.owned_soa<Point>(4);
+
+    points[0].x = 10;
+    points[1].x = 11;
+    points[2].x = 12;
+    points[3].x = 13;
+    points[0].y = 7;
+    points[3].y = 43;
+
+    print(points[0].x);
+    print(points[1].x);
+    print(points[2].x);
+    print(points[3].x);
+    print(points[0].y);
+    print(points[3].y);
+    return 0;
+}

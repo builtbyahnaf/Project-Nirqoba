@@ -43,6 +43,7 @@ enum class OpKind {
   // Phase 4 aggregate operations:
   ArrayAlloca,       // alloca for a fixed-size array: result = ptr to array[length] of elem_type
   GetElementPtr,     // result = ptr to element: base_ptr + index (array) or field_index (struct/tuple)
+  SoaColumnPtr,      // result = ptr to one column element: lhs = container, operand = row index, field_index = field
   AggregatePack,     // pack multiple operands into an aggregate (tuple/struct) slot
   AggregateExtract,  // result = extract field_index from aggregate operand
   // Phase 5 sequence operations:

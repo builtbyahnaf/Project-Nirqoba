@@ -12,7 +12,7 @@ that loses context can resume from it plus `git log`.
 | 2a | authoritative column layout, sema owned rules, type allowed in signatures | done (bec12d3) |
 | 2b | struct-field resolution for `soa<T>` in signatures, layout report test | done (8425948) |
 | 2c | allocation entry point `memory.owned_soa<T>(n)` (scalar fields only) | done (4bf57aa) |
-| 2d | column addressing in TIR + lowering for `ps[i].f` | next |
+| 2d | column addressing in TIR + lowering for `ps[i].f` | done (this commit) |
 | 3 | strided GC trace callback for reference columns | pending |
 | 4 | column views, benchmarks, docs, version milestone | pending |
 
@@ -172,7 +172,7 @@ Suite: 210/210 unit, 267/267 integration.
 
 Suite: 210/210 unit, 268/268 integration.
 
-## Stage 2d — next, exact plan
+## Stage 2d — implemented
 
 Column addressing for `ps[i].f`. The address is `payload + column_base(f) + i *
 column_element_bytes(f)`, where the two column quantities come from `describe_soa`
@@ -191,6 +191,58 @@ and nothing else. Sites:
 4. Test: write and read every field of every index, including the last index, then
    force `gc.collect()` with the container reachable.
 
+### What shipped (this commit)
+
+- **TIR**: a dedicated `OpKind::SoaColumnPtr`. `lhs` is the container value,
+  `operand` the row index, `field_index` the field's declaration index, and
+  `string_value` carries the field name for diagnostics. It is deliberately not a
+  `GetElementPtr`: a GEP multiplies one pointee type by its indices, while a column
+  address multiplies two different scales, so reusing it would have encoded the
+  array-of-structs arithmetic that this stage exists to avoid.
+- **Sema** (`check_index_expr`): a container base yields its element struct only while
+  `checking_soa_column_base_` is set; otherwise `NRQ3015` reports "an element of a
+  container has no value; address a column as ps[i].field". `check_member_access` sets
+  the flag around the base check and restores the enclosing value, so nested member
+  accesses cannot leak the claim.
+- **Builder**: both access paths recognise `Index`-over-container and emit one
+  `SoaColumnPtr`: `lower_expression` for reads (then loads the address) and
+  `resolve_lvalue_ptr` for writes. The field is looked up in the resolved element
+  struct's declaration order; the lowering maps that index to the physical column.
+- **Lowering**: `payload + column.index_in_bytes * count + row * column.element_bytes`
+  in i64, then an `i8` GEP. `count` is loaded from `payload - 16`: that is
+  `ObjectHeader::element_count` at header offset 32 with the payload at 48, both
+  asserted in `runtime/src/gc.cpp`, and it is the same word the collector sizes the
+  payload with, so it cannot disagree with the block that was allocated. No offset is
+  hardcoded on faith.
+- **Alignment**: the address records `min(container alignment, column alignment)`, so
+  vectorised reads of a column are not blocked by the struct's larger alignment.
+- **Printer/verifier**: cases derived from the GEP case; the printer shows
+  `container[row] field=N`.
+
+### Evidence that the addresses are the described ones
+
+`tests/integration/positive/soa_column_read_write` prints 10, 11, 12, 13, 7, 43 across
+two columns and four rows. Its IR shows the header load at `payload - 16`, row strides
+of 8 (`element_bytes` for two ints), and the `y` column base at 16, which is
+`index_in_bytes(4) * count(4)`: the numbers `describe_soa` reports, not assumed ones.
+
+### Tests
+
+- `positive/soa_column_read_write`: writes and reads both columns at several indices,
+  including the last row.
+- `negative/soa_standalone_element`: `var e = points[0]` is `NRQ3015`.
+- `negative/soa_element_assign`: `points[0] = p` is `NRQ3015`.
+- `negative/soa_reference_column_rejected` still holds: element structs with a managed
+  field remain refused until stage 3 traces strided columns.
+
+Suite: 210/210 unit, 271/271 integration.
+
+### Still open after this stage
+
+- No runtime bounds check on the row index yet. Owned arrays behave the same, so this
+  is consistent rather than a regression, but a container write past `count` corrupts
+  another column; a check against the header count is the next safety item.
+- Reference columns (stage 3), views over containers, and benchmarks (stage 4).
 ### Findings from the first implementation pass (0.363, opened in b556bd4)
 
 The obvious route - let indexing produce an element pointer, then let ordinary field

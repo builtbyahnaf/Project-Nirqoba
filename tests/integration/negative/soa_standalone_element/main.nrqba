@@ -1,0 +1,12 @@
+// A container element is not a value: its fields live in separate columns, so
+// there is no struct to load and no array-of-structs address to take.
+struct Point {
+    int x;
+    int y;
+}
+
+int function main() {
+    var points = memory.owned_soa<Point>(4);
+    var element = points[0];
+    return element.x;
+}
