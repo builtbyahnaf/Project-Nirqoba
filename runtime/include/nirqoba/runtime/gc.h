@@ -77,6 +77,10 @@ void* nrq_gc_allocate_array_layout_rooted(void** root_slot,
 // Number of distinct layouts described so far. Instances sharing a layout do
 // not increase this, which is the direct measure of descriptor sharing.
 size_t nrq_gc_layout_count(void);
+// Per-thread hit and miss counts for the typed-allocation layout memo. They are
+// diagnostics for tests and benchmarks; the memo itself stores no extra state.
+uint64_t nrq_gc_layout_memo_hits(void);
+uint64_t nrq_gc_layout_memo_misses(void);
 // Bytes those descriptors and their offset tables occupy. They are never freed.
 size_t nrq_gc_layout_bytes(void);
 
