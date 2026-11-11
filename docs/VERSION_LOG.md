@@ -1,5 +1,27 @@
 # Nirqoba Version Log
 
+## 0.384-beta - Borrowed pointer fields
+
+First Pre-MMM Phase 1 item: explicit ownership contracts for struct fields. Fields use
+the same qualifier grammar as parameters (`borrow`, `borrow mut`, `shared`, `owned` with
+an optional resource domain).
+
+`borrow` and `borrow mut` pointer fields are implemented. The parser records the
+qualifier on the field, the checker requires a raw pointer type, and construction must
+supply a borrow rather than an owned value. Writes through an immutable borrowed field
+are rejected; `borrow mut` allows them. Borrowed fields are non-owning, so aggregate
+destruction is unchanged and no cleanup is generated for them.
+
+`owned` and `shared` pointer fields are still rejected, now with diagnostics that name
+the missing capability (generated field destruction and reference-count release)
+instead of the misleading nested-allocation message.
+
+Not implemented: borrowed-field lifetime enforcement across scopes and returns,
+`uninit` partial initialization, and owned field destruction.
+
+
+
+
 ## 0.380-beta - C-style declarations and brace initializers
 
 Two upgrades since 0.379: `NULL` as an alias of `nullptr`, and the declaration forms

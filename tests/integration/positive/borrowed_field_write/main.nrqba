@@ -1,0 +1,13 @@
+// A `borrow mut` field holds a non-owning reference that may be written through.
+struct Doc {
+    int tag;
+    borrow mut ptr int value;
+}
+
+int function main() {
+    var x: int = 5;
+    var d = Doc { tag: 1, value: &x };
+    d.value[0] = 9;
+    print(x + d.tag);
+    return 0;
+}

@@ -1,0 +1,8 @@
+// A borrowed field must reference something; it cannot be a plain value.
+struct Doc {
+    borrow int value;
+}
+
+int function main() {
+    return 0;
+}

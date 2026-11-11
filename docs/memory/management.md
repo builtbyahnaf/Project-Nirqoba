@@ -225,3 +225,14 @@ pre-migration grammar work, not a description of what the current parser accepts
 - **Collection names.** `owned_array<T>` and `array_view<T>` remain the builtins;
   `Vector<T>` and `Span<T>` are reserved for later library aliases.
 - **Packing.** Explicit packed layout is planned and out of scope for now.
+
+## Borrowed struct fields (0.384-beta)
+
+A struct field may be `borrow ptr T` or `borrow mut ptr T`. The qualifier lives on the
+field description (the same `Parameter` record used for function parameters), so no
+separate field-ownership representation exists. Construction requires a borrow for the
+field; an owned value is rejected. Reading through both forms is allowed, writing
+through `borrow` is rejected, and `borrow mut` permits writes. Borrowed fields own
+nothing, so destruction generates no cleanup for them and no reference counting is
+involved. Field lifetimes are not yet checked against the containing value, and `owned`
+or `shared` pointer fields remain rejected until field destruction exists.

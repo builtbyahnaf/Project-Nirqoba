@@ -120,6 +120,54 @@ static bool has_untracked_pointer_ownership(const Type& type,
 
 static bool statement_can_fall_through(const Stmt& stmt);
 
+// 17.1/17.5: validate each field against its declared ownership contract. Owned and
+// shared pointer fields still lack generated field destruction, so they are rejected
+// with a diagnostic that names the actual missing capability instead of the old
+// nested-allocation message.
+static void validate_struct_field_contracts(const std::vector<Parameter>& fields,
+                                            DiagnosticEngine& diagnostics) {
+  for (const Parameter& field : fields) {
+    if (field.borrowed && (!field.type.is_pointer() ||
+                           field.type.is_owned_pointer() ||
+                           field.type.is_managed_pointer())) {
+      diagnostics.error(diag::kTypeMismatch, field.location,
+                        "borrowed field '" + field.name +
+                            "' must be a raw pointer type");
+    }
+    if (field.shared) {
+      diagnostics.error(diag::kTypeMismatch, field.location,
+                        "shared pointer fields need reference-count release at field "
+                        "destruction, which structs do not support yet");
+    }
+    if (!field.borrowed && !field.shared && field.type.is_pointer()) {
+      diagnostics.error(diag::kTypeMismatch, field.location,
+                        "owned pointer fields need generated field destruction, which "
+                        "structs do not support yet; declare the field 'borrow' or "
+                        "'borrow mut'");
+    }
+    if (!field.resource_domain.empty() &&
+        (!field.type.is_pointer() || field.borrowed))
+      diagnostics.error(diag::kTypeMismatch, field.location,
+                        "resource domain '" + field.resource_domain +
+                            "' requires an owned pointer field");
+  }
+}
+
+// A borrowed field holds a non-owning reference, so it may only be initialized from a
+// borrow. A mutable borrow may receive a mutable borrow; an immutable one may not.
+static bool borrowed_field_value_violation(const Parameter& field, const Expr& value) {
+  if (!field.borrowed) return false;
+  // `&x` is the act of borrowing, whatever ownership the checker assigns to the
+  // enclosing expression.
+  if (value.kind() == Expr::Kind::Unary &&
+      static_cast<const UnaryExpr&>(value).op() == UnaryOp::AddressOf)
+    return false;
+  const ValueOwnership ownership = value.ownership();
+  if (ownership == ValueOwnership::Borrowed) return false;
+  if (field.mutable_borrow && ownership == ValueOwnership::MutableBorrowed) return false;
+  return true;
+}
+
 static bool expression_creates_owned_pointer(const Expr& expr) {
   if (expr.kind() != Expr::Kind::Call) return false;
   const std::string& callee = static_cast<const CallExpr&>(expr).callee();
@@ -234,6 +282,7 @@ bool TypeChecker::check(Program& program) {
   }
 
   for (const auto& decl : program.structs()) {
+    validate_struct_field_contracts(decl->fields(), diagnostics_);
     for (const Parameter& field : decl->fields()) {
       const Type field_type = resolve_aggregate_type(field.type);
       if (contains_nested_owned_array(field_type))
@@ -388,6 +437,7 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
     if (!unit || !unit->ast) continue;
     current_module_ = unit->name;
     for (const auto& decl : unit->ast->structs()) {
+      validate_struct_field_contracts(decl->fields(), diagnostics_);
       for (const Parameter& field : decl->fields()) {
         const Type field_type = resolve_aggregate_type(field.type);
         if (contains_nested_owned_array(field_type))
@@ -1147,6 +1197,31 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
              ? symbols_.lookup(assignment.name())->type : Type::error())
       : check_expression(const_cast<Expr&>(assignment.target()));
   checking_lvalue_ = was_checking_lvalue;
+
+  // 17.1: a write through an immutable borrowed field is a mutation of the borrowed
+  // owner, so only `borrow mut` fields allow it.
+  if (assignment.target().kind() == Expr::Kind::Index) {
+    const Expr& index_base =
+        static_cast<const IndexExpr&>(assignment.target()).base();
+    if (index_base.kind() == Expr::Kind::MemberAccess) {
+      const auto& member = static_cast<const MemberAccessExpr&>(index_base);
+      if (member.base().type().is_struct()) {
+        const StructInfo* info =
+            find_struct(member.base().type().struct_name());
+        if (info != nullptr) {
+          for (const Parameter& candidate : info->fields) {
+            if (candidate.name != member.member()) continue;
+            if (candidate.borrowed && !candidate.mutable_borrow) {
+              diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
+                                 "cannot write through borrowed field '" +
+                                     candidate.name + "'; declare it 'borrow mut'");
+              return;
+            }
+          }
+        }
+      }
+    }
+  }
 
   string field_owner;
   string field_name;
@@ -2556,11 +2631,19 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
                                 field_type.to_string() + "', but was given '" +
                                init_type.to_string() + "'");
       }
-      if (has_untracked_pointer_ownership(fields[i].type,
-                                          expr.positional_inits()[i]->ownership()))
+      const ValueOwnership positional_ownership =
+          expr.positional_inits()[i]->ownership();
+      if (borrowed_field_value_violation(fields[i], *expr.positional_inits()[i])) {
+        diagnostics_.error(diag::kTypeMismatch,
+                           expr.positional_inits()[i]->location(),
+                           "borrowed field '" + fields[i].name +
+                               "' must be initialized with a borrow");
+      } else if (!fields[i].borrowed &&
+                 has_untracked_pointer_ownership(fields[i].type, positional_ownership)) {
         diagnostics_.error(diag::kTypeMismatch,
                            expr.positional_inits()[i]->location(),
                            "owned, shared, and borrowed pointers cannot be stored in aggregate fields");
+      }
       if (contains_owned_array(field_type)) {
         Expr& value = const_cast<Expr&>(*expr.positional_inits()[i]);
         const Symbol* source = value.kind() == Expr::Kind::Name
@@ -2609,10 +2692,17 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
       if (field_def)
         consume_field_move(const_cast<Expr&>(*kv.second),
                            resolve_aggregate_type(field_def->type));
-      if (field_def && has_untracked_pointer_ownership(field_def->type,
-                                                       kv.second->ownership()))
+      if (field_def && borrowed_field_value_violation(*field_def, *kv.second)) {
+        diagnostics_.error(diag::kTypeMismatch, kv.second->location(),
+                           "borrowed field '" + field_def->name +
+                               "' must be initialized with a borrow");
+      } else if (field_def &&
+                 !field_def->borrowed &&
+                 has_untracked_pointer_ownership(field_def->type,
+                                                 kv.second->ownership())) {
         diagnostics_.error(diag::kTypeMismatch, kv.second->location(),
                            "owned, shared, and borrowed pointers cannot be stored in aggregate fields");
+      }
       if (field_def && contains_owned_array(resolve_aggregate_type(field_def->type))) {
         Expr& value = const_cast<Expr&>(*kv.second);
         const Symbol* source = value.kind() == Expr::Kind::Name
