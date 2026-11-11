@@ -13,7 +13,7 @@ that loses context can resume from it plus `git log`.
 | 2b | struct-field resolution for `soa<T>` in signatures, layout report test | done (8425948) |
 | 2c | allocation entry point `memory.owned_soa<T>(n)` (scalar fields only) | done (4bf57aa) |
 | 2d | column addressing in TIR + lowering for `ps[i].f` | done (86fadcc) |
-| 2e | runtime bounds check on the row index | done (this commit) |
+| 2e | runtime bounds check on the row index | done (61509a0) |
 | 3 | strided GC trace callback for reference columns | pending |
 | 4 | column views, benchmarks, docs, version milestone | pending |
 
@@ -285,7 +285,7 @@ Order of work, so each step is safe alone:
 4. Tests: write and read every field of every index including the last, then force a
    major collection with the container still reachable.
 
-## Stage 2e — runtime bounds checking (this commit)
+## Stage 2e — runtime bounds checking (61509a0)
 
 ### Investigation
 
