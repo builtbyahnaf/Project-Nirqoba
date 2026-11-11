@@ -12,7 +12,7 @@ recorded below is made under that authority.
 
 ---
 
-## Version 0.407-beta (working build)
+## Version 0.407-beta
 
 ### Summary of Changes (since `0.403-beta`):
 
@@ -34,6 +34,12 @@ recorded below is made under that authority.
   median 106.676 ns/allocation before, 57.640 after (about 1.85x). The harness
   is a microbenchmark with collection disabled; see
   `reports/performance/0.407-layout-memo.md` for method and caveats.
+## Version 0.411-beta (working build)
+
+### Summary of Changes (since `0.407-beta`):
+
+*Opened to record the pointer-root descriptor work completed after 0.407.*
+
 - **The one-word pointer root has its own descriptor.** A root of
   `sizeof(void*)` with one reference at offset zero and no trace callback
   resolves to an immutable process-lifetime descriptor before the memo. Other
