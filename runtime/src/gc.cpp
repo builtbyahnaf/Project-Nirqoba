@@ -502,14 +502,19 @@ size_t layout_bytes_total = 0;
 // would read expired storage on the next allocation, and comparing two calls by
 // it would accept a table that has since been rebuilt with different contents.
 struct LayoutMemo {
-  const nrq_object_layout* layout = nullptr;
+  // Four entries cover the interleaved shapes a typed workload uses without
+  // letting a rarely seen layout evict the hot one after a single pass.
+  static constexpr size_t kCapacity = 4;
+  const nrq_object_layout* layouts[kCapacity] = {};
+  size_t next = 0;
 };
 thread_local LayoutMemo layout_memo;
+thread_local uint64_t layout_memo_hits = 0;
+thread_local uint64_t layout_memo_misses = 0;
 
-bool layout_memo_matches(const LayoutMemo& memo, size_t bytes,
+bool layout_memo_matches(const nrq_object_layout* layout, size_t bytes,
                          size_t element_size, nrq_gc_trace_fn trace,
                          const size_t* offsets, size_t count) {
-  const nrq_object_layout* layout = memo.layout;
   if (!layout) return false;
   // The descriptor describes exactly this shape, or it does not: same element
   // size, same tracing, same reference count, same array/record kind.
@@ -542,12 +547,21 @@ const nrq_object_layout* layout_for_allocation(size_t bytes,
                                                size_t count) {
   const size_t payload_bytes = element_size;
   const size_t element_bytes = element_size == bytes ? 0 : element_size;
-  if (layout_memo_matches(layout_memo, bytes, element_size, trace, offsets,
-                          count))
-    return layout_memo.layout;
+  for (size_t index = 0; index < LayoutMemo::kCapacity; ++index) {
+    const nrq_object_layout* cached = layout_memo.layouts[index];
+    if (cached && layout_memo_matches(cached, bytes, element_size, trace,
+                                      offsets, count)) {
+      ++layout_memo_hits;
+      return cached;
+    }
+  }
+  ++layout_memo_misses;
   const nrq_object_layout* layout = nrq_gc_layout_intern(
       payload_bytes, element_bytes, trace, offsets, count);
-  if (layout) layout_memo.layout = layout;
+  if (layout) {
+    layout_memo.layouts[layout_memo.next] = layout;
+    layout_memo.next = (layout_memo.next + 1) % LayoutMemo::kCapacity;
+  }
   return layout;
 }
 
@@ -4682,6 +4696,10 @@ const nrq_object_layout* nrq_gc_layout_intern(
   }
   return descriptor;
 }
+
+uint64_t nrq_gc_layout_memo_hits(void) { return layout_memo_hits; }
+
+uint64_t nrq_gc_layout_memo_misses(void) { return layout_memo_misses; }
 
 size_t nrq_gc_layout_count(void) {
   std::lock_guard<std::mutex> lock(layout_mutex);
