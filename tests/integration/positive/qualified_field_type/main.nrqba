@@ -1,0 +1,15 @@
+// §17.4: a struct field may spell a builtin generic type with its qualified path,
+// matching how the value is created. Before this, only the unqualified spelling
+// parsed and the qualified one failed with "expected field name in struct".
+struct Bucket {
+    memory.owned_array<int> data;
+    int tag;
+}
+
+int function main() {
+    var b = Bucket { data: memory.owned_array<int>(4), tag: 7 };
+    b.data[0] = 3;
+    b.data[3] = 9;
+    print(b.data[0] + b.data[3] + b.tag);
+    return 0;
+}
