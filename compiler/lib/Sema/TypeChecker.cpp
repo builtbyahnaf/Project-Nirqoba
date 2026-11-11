@@ -42,6 +42,41 @@ static bool contains_owned_array(const Type& type) {
 }
 
 static bool contains_nested_owned_array(const Type& type,
+                                        unordered_set<string>& active_structs);
+
+// The nested-allocation restriction applies to owned arrays (and aggregates holding
+// them), not to aggregates that merely own pointers: recursive destruction already
+// drops those.
+static bool contains_owned_array_with_owning_elements(const Type& type,
+                                                      unordered_set<string>& active) {
+  if (type.is_owned_array())
+    return contains_nested_owned_array(type.element_type(), active);
+  if (type.is_array())
+    return contains_owned_array_with_owning_elements(type.element_type(), active);
+  if (type.is_tuple()) {
+    for (const Type& element : type.tuple_elements())
+      if (contains_owned_array_with_owning_elements(element, active)) return true;
+  }
+  if (type.is_struct() && !type.struct_fields().empty() &&
+      active.insert(type.struct_name()).second) {
+    bool found = false;
+    for (const auto& field : type.struct_fields())
+      if (contains_owned_array_with_owning_elements(field.second, active)) {
+        found = true;
+        break;
+      }
+    active.erase(type.struct_name());
+    return found;
+  }
+  return false;
+}
+
+static bool contains_owned_array_with_owning_elements(const Type& type) {
+  unordered_set<string> active;
+  return contains_owned_array_with_owning_elements(type, active);
+}
+
+static bool contains_nested_owned_array(const Type& type,
                                         unordered_set<string>& active_structs) {
   if (type.is_owned_pointer()) return true;
   if (type.is_owned_array()) return contains_owned_array(type.element_type());
@@ -293,7 +328,7 @@ bool TypeChecker::check(Program& program) {
     validate_struct_field_contracts(decl->fields(), diagnostics_);
     for (const Parameter& field : decl->fields()) {
       const Type field_type = resolve_aggregate_type(field.type);
-      if (contains_nested_owned_array(field_type))
+      if (contains_owned_array_with_owning_elements(field_type))
         diagnostics_.error(diag::kTypeMismatch, field.location,
                            "owned arrays cannot contain elements that own nested allocations yet");
       if (contains_array_view(field_type))
@@ -448,9 +483,7 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
       validate_struct_field_contracts(decl->fields(), diagnostics_);
       for (const Parameter& field : decl->fields()) {
         const Type field_type = resolve_aggregate_type(field.type);
-        // An owned pointer field is a direct owner, not an owned array holding
-        // owning elements, so the nested-allocation restriction does not apply.
-        if (contains_nested_owned_array(field_type) && !field.type.is_owned_pointer())
+        if (contains_owned_array_with_owning_elements(field_type))
           diagnostics_.error(diag::kTypeMismatch, field.location,
                              "owned arrays cannot contain elements that own nested allocations yet");
         if (contains_array_view(field_type))
@@ -1321,7 +1354,13 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                          "cannot reinitialize an owned field while an array view is live");
       return;
     }
-    if (value_type != target_type ||
+    // Reinitializing an owned pointer field accepts a fresh owner, the same coercion
+    // struct construction performs, not only an already-owned pointer value.
+    const bool owned_pointer_coercion =
+        target_type.is_owned_pointer() && value_type.is_pointer() &&
+        !value_type.is_owned_pointer() &&
+        value_type.element_type() == target_type.element_type();
+    if ((value_type != target_type && !owned_pointer_coercion) ||
         (assignment.value().ownership() != ValueOwnership::Owned &&
          assignment.value().kind() != Expr::Kind::MemberAccess &&
          assignment.value().kind() != Expr::Kind::Name)) {

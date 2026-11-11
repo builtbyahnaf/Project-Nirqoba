@@ -1,0 +1,11 @@
+// A moved owned field can be reinitialized from a fresh allocation.
+struct Holder { owned ptr int data; int tag; }
+int function main() {
+    var h = Holder { data: memory.allocate<int>(4), tag: 1 };
+    *h.data = 4;
+    var moved = h.data;
+    h.data = memory.allocate<int>(2);
+    *h.data = 6;
+    print(*moved + *h.data + h.tag);
+    return 0;
+}

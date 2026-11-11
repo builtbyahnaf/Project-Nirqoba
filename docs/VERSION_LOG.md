@@ -1,5 +1,23 @@
 # Nirqoba Version Log
 
+## 0.390-beta - Owned pointer field reinitialization and nesting
+
+Completes the owned-pointer-field contract from 0.389. A moved owned field can be
+reinitialized directly from a fresh owner (`h.data = memory.allocate<int>(2)`), using
+the same raw-to-owned coercion struct construction already performed; previously this
+required the value to be exactly `owned_ptr<T>` and so was rejected.
+
+The nested-allocation restriction now applies only to owned arrays whose elements own
+resources (including through aggregates). A struct field whose type is a struct holding
+owned pointer fields is accepted, and destruction recurses through it; this also
+removes the earlier one-off field-level exemption.
+
+Remaining Phase 1 gaps: `shared` pointer fields, resource-domain owned fields
+(`owned file ptr byte` and friends), and `uninit` partial initialization/destruction.
+
+
+
+
 ## 0.389-beta - Owned pointer fields with generated destruction
 
 Pre-MMM Phase 1: `owned ptr T` fields are now real owners. The qualifier is carried in

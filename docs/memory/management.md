@@ -248,3 +248,13 @@ order and, for an owned pointer field, releases the GC root registration and cal
 and no per-operation checks are added; destruction is statically generated from the
 field types. `shared` fields and resource-domain owned fields remain rejected until
 their destruction paths exist, and `uninit` is still absent.
+
+## Owned field reinitialization (0.390-beta)
+
+After an owned field is moved out, assigning a fresh owner reinitializes it: the
+assignment accepts a raw pointer of the field's element type and performs the same
+raw-to-owned coercion as construction, so `h.data = memory.allocate<int>(n)` is valid
+on a moved field. A field that was not moved on every path is still rejected, and the
+owner must be live and mutable. Aggregates that hold owned pointers may be nested in
+other structs; `aggregate.owned_drop` recurses into them, while owned arrays whose
+elements own resources remain rejected.
