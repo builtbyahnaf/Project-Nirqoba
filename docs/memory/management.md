@@ -125,7 +125,7 @@ change device memory.
 
 Owned values from supported allocation and resource producers transfer when bound to another name, passed to an owning parameter, or returned through a matching owner return type. Resource-bearing structs, tuples, and fixed arrays move as whole values; their nested owned arrays are released recursively. Individual owned fields can be moved and reinitialized when the semantic checker can track the field path and all control-flow paths agree. This covers supported aggregate ownership, including nested owned arrays and resource-domain pointer fields. Dynamic owned arrays currently reject elements that themselves own allocations, because recursive element destruction is not implemented. Tracked owners are cleaned in LIFO order at lexical exit, including return, break, and continue. Owner moves clear the source slot so generated cleanup remains safe across conditional control flow. Reassigning a live owner is rejected; release it before reusing the binding.
 
-Use `borrow T* name` for an immutable pointer borrow and `borrow mut T* name` for an exclusive mutable pointer borrow. Opaque resource parameters declare their domain, for example `borrow file byte* handle`, `borrow socket byte* handle`, `borrow mutex byte* handle`, or `borrow mapping byte* handle`. Calls must pass a matching resource, and resource APIs inside the helper check that contract. Borrows cannot be freed, closed, returned, or passed to owning parameters. The checker rejects conflicting aliases at a call site. Borrowed array views are described below. Borrow analysis is conservative and lexical; general returned references, closure capture, arbitrary interprocedural lifetimes, and path-sensitive aggregate aliases are not implemented.
+Use `borrow T* name` for an immutable pointer borrow and `borrow mut T* name` for an exclusive mutable pointer borrow. Opaque resource parameters declare their domain, for example `borrow file byte* handle`, `borrow socket byte* handle`, `borrow mutex byte* handle`, or `borrow mapping byte* handle`. Calls must pass a matching resource, and resource APIs inside the helper check that contract. Borrows cannot be freed, closed, returned, or passed to owning parameters. The checker rejects conflicting aliases at a call site. Borrowed array views are described below. Borrow analysis is conservative and lexical; general returned references, closure capture, arbitrary interprocedural lifetimes, and path-sensitive aggregate aliases are not implemented. Tracked pointer borrows carry their originating owner through nested calls, and `&owner` is tied to `owner`; using or forwarding the borrow after the owner's scope ends is rejected (0.415-beta).
 
 `defer call(...)` captures call arguments when registered and runs calls in LIFO order on lexical block exit, including return, break, and continue. It can release explicit allocations, unpin GC objects, unlock mutexes, close files, and restore allocator selection. An explicit deferred cleanup overrides the inferred cleanup for that owner. Cleanup during exception unwinding is unavailable because the language has no exception model.
 
@@ -172,9 +172,10 @@ The pointer spelling from the language specification is implemented for scalar
 variables. `var p: ptr int = &s;` declares one pointer level, `ptr ptr int` adds a
 second, `&name` takes the address of an existing variable, and `*p` reads, assigns
 or updates the object at that address (`*p = 100;`, `*p += 5;`). Taking an address
-neither copies nor transfers ownership: the pointer is a raw alias, it does not
-keep the owner alive, and the compiler does not check that the storage is still in
-scope when the pointer is dereferenced.
+neither copies nor transfers ownership and it does not keep the owner alive. When
+the result is bound to a pointer, the checker records the originating owner and
+rejects a use or forwarded call after that owner's scope ends; a plain raw pointer
+produced outside that path is still unchecked.
 
 Two limits are deliberate in this increment. Only numeric, boolean and pointer
 operands are addressable; taking the address of a struct, an owned array or a
@@ -188,10 +189,10 @@ a null pointer prints `NULL` so absence is distinguishable from address zero. Th
 null pointer literal is `nullptr`; it has no intrinsic type, so a declaration must
 supply one (`var q: ptr int = nullptr;`). `NULL` is the nullable-value literal from
 §7.3, not the pointer literal. Nullable pointer types (`@Nullable ptr T`, `is NULL`
-checks), pointer interpolation, assignment of `nullptr` to an existing binding, and
-cross-function lifetime analysis remain unimplemented. `nullptr` may be assigned to an
-existing pointer binding, and `is` / `is not` compare a pointer with `nullptr`, adopting
-the pointer's type; comparing `nullptr` with a non-pointer is rejected.
+checks), pointer interpolation, and general cross-function lifetime analysis remain
+unimplemented. `nullptr` may be assigned to an existing pointer binding, and `is` /
+`is not` compare a pointer with `nullptr`, adopting the pointer's type; comparing
+`nullptr` with a non-pointer is rejected.
 
 ## Nullable pointer bindings (0.379-beta)
 
@@ -341,3 +342,25 @@ domain field, calls the matching runtime destructor instead of unregistering a
 GC root and deallocating. Every destructor accepts null, so untouched `uninit`
 slots and moved-out fields are safe. Nested aggregates recurse before the
 enclosing field is released; each handle is released once.
+
+## Borrow lifetime propagation (0.415-beta)
+
+A pointer borrow now records the binding it came from. `var p = &owner;` shares the
+owner's allocation identity and is marked borrowed rather than becoming an
+unrelated raw pointer. Passing `&owner` directly to a `borrow` parameter resolves
+the argument through the address-of expression to the same owner.
+
+Each symbol carries its lexical scope depth and, for a borrow, the owner's name. A
+Name use, an assignment, or a call argument that forwards a borrow rechecks that
+the owner still exists, has not moved, and still has the same allocation identity.
+Assigning a borrow to a binding in an outer scope is rejected because the target
+would outlive the owner. Borrowed parameters are their own origin inside the
+callee, so forwarding a borrowed parameter through nested calls is valid; the
+caller-side chain still resolves to the caller's real owner.
+
+`p = nullptr` releases a borrow and remains legal. Rebinding a borrowed pointer to
+a different live owner is still rejected conservatively. The rule is lexical and
+modular: it does not add caller allocation ids to the callee, does not check
+borrowed struct fields, does not implement branch-sensitive owner selection, and
+does not change mutable-borrow exclusivity across nested calls. It adds no runtime
+state or generated checks.

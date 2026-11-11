@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.117-beta` |
+| Current Working Version | `0.415-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-05 11:34:13` |
-| Report Entries | `6` |
+| Last Report Update | `2026-11-12 03:14:58` |
+| Report Entries | `7` |
 
 ---
 
@@ -721,6 +721,128 @@ This entry implements task P0 3.6 (Loop Optimization and SIMD Vectorization) and
 ---
 
 **End of Entry #006**
+
+## Entry #007 — Pre-MMM Phase 2: Borrow lifetime propagation across function calls
+
+**Version:** `0.415-beta`  
+**Date:** `2026-11-12 03:14:58`  
+**Scope:** `Pre-MMM Phase 2 / Borrow checking / Lifetime propagation`  
+**Status:** `Completed`
+
+### 1. Overview
+
+This entry implements the first foundational milestone of Pre-MMM Phase 2:
+propagating pointer-borrow lifetimes across function calls. Before this change,
+`&owner` produced a raw pointer that was not tied to `owner`, and a borrowed-return
+call could carry an inner block's borrow into an outer pointer. The checker now
+records each tracked borrow's originating owner and lexical depth, and revalidates
+that origin at every use, assignment, and call argument.
+
+### 2. Implementation Details
+
+- **What:** Added `scope_depth` and `borrow_owner` to `Symbol`. `&owner` now links
+the alias to the owner's allocation identity and marks it borrowed. Borrowed
+parameters are their own origin inside the callee. Existing borrowed-return
+declarations, array views, and Name aliases propagate the originating owner.
+- **How:** `find_borrow_origin` resolves address-of, dereference, borrowed-return
+calls, view constructors, and Name expressions to one root symbol. The checker
+rejects a Name use, assignment, or call argument when the origin has left scope,
+moved, or no longer has the same allocation identity. Assignment also compares the
+target binding's lexical depth with the owner's depth so a borrow cannot be stored
+in an outer binding. `ensure_allocation_id` gives an address-taken scalar a shared
+tracked lifetime without adding runtime metadata.
+- **Why:** The prior checker tracked borrow parameters and aliases lexically but
+had no owner provenance for `&`, so nested calls could not distinguish a live
+borrow from one whose owner's block had ended. Owner names and lexical depth close
+that gap without interprocedural dataflow or runtime state.
+- **Where:** `compiler/include/nirqoba/Sema/SymbolTable.h`,
+  `compiler/include/nirqoba/Sema/TypeChecker.h`,
+  `compiler/lib/Sema/SymbolTable.cpp`, `compiler/lib/Sema/TypeChecker.cpp`.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `SymbolTable.h` / `.cpp` | Added `scope_depth`, `borrow_owner`, `ensure_allocation_id`, and borrow-owner plumbing in `set_pointer_ownership` | Record and preserve lifetime provenance |
+| `TypeChecker.h` / `.cpp` | Added `borrow_owner_is_live` / `borrow_owner_name`; extended `find_borrow_origin`; validated names, assignments, and call arguments | Reject stale or escaping borrows across calls |
+| `TypeChecker.cpp` | Tracked `&owner` declarations and borrowed-return assignments | Tie address-of and returned borrows to their source owner |
+| `TypeChecker.cpp` | Allowed `p = nullptr` to release a borrowed binding | Preserve existing nullable-pointer behavior |
+| `tests/integration/positive/borrow_lifetime_nested_calls` | Nested forwarding with a named alias and a direct `&owner` argument | Prove valid lifetime propagation |
+| `tests/integration/negative/borrow_lifetime_escape_call` | Inner borrow carried into an outer pointer through a borrowed-return call | Prove stale lifetime rejection |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Clean RelWithDebInfo build | PASS | `scripts/build.ps1 -Configuration RelWithDebInfo -Clean` |
+| Unit suite | PASS | 214/214 |
+| Integration suite | PASS | 339/339 |
+| `positive/borrow_lifetime_nested_calls` | PASS | Exit 0, stdout `21\n21\n` |
+| `negative/borrow_lifetime_escape_call` | PASS | Exit 1, `borrow of 'inner' cannot outlive its owner` |
+| `positive/pointer_null_checks` | PASS | Null release of a borrowed pointer remains legal |
+
+- **Build Status:** Successful.
+- **Regression Status:** None detected.
+- **Test Environment:** Windows 11 x64, MSVC 14.51.36231, LLVM/MLIR 23.1.4,
+  RelWithDebInfo.
+
+### 5. Performance & Resource Impact
+
+No runtime code path changed. Borrow provenance is semantic state only; there are
+no runtime counters, locks, heap descriptors, or generated checks. No benchmark
+is claimed for this milestone.
+
+### 6. Issues & Limitations
+
+- Borrowed parameters are checked modularly: the callee treats its parameter as
+  the origin and the caller validates the real owner.
+- Borrowed struct fields still lack checked lifetimes; borrowing from aggregate
+  fields remains a separate Phase 2 item.
+- Mutable-borrow exclusivity across nested calls is unchanged.
+- Safe rebinding of a borrowed pointer to a different live owner is still
+  conservatively rejected.
+- Branch-sensitive owner selection, closure capture, borrowed returns as a new
+  feature, and general escape analysis are not implemented.
+
+### 7. Outstanding Work
+
+- [ ] Implement safe borrowed returns for supported source relationships.
+- [ ] Support borrowing from aggregate fields.
+- [ ] Implement mutable-borrow exclusivity across nested calls.
+- [ ] Add closure-capture ownership rules when closures require them.
+- [ ] Add the minimum escape analysis needed for remaining lifetime transfers.
+
+### 8. Dependencies & Compatibility
+
+- **New Dependencies:** None.
+- **Removed Dependencies:** None.
+- **Platform Compatibility:** No platform-specific change.
+- **Breaking Changes:** None in accepted programs. Invalid borrows that previously
+  compiled past the checker are now rejected; `p = nullptr` remains accepted.
+
+### 9. Agent Assessment
+
+- **Implementation Completeness:** First Phase 2 milestone complete; the remaining
+  Phase 2 checklist items are intentionally untouched.
+- **Verification Confidence:** High — clean build, full unit suite, and full
+  integration suite passed.
+- **Known Risks:** The rule is lexical rather than path-sensitive, so conservative
+  rejections remain for safe rebinding and aggregate-field borrows.
+- **Recommended Next Step:** Borrowed returns or mutable-borrow exclusivity across
+  nested calls, depending on the next approved Phase 2 slice.
+
+### 10. Evidence & References
+
+- **Commits:** `429f01d`, `994e8bd`
+- **Relevant Files:** `compiler/lib/Sema/TypeChecker.cpp`, `SymbolTable.cpp`,
+  `tests/integration/positive/borrow_lifetime_nested_calls`,
+  `tests/integration/negative/borrow_lifetime_escape_call`.
+- **Documentation:** `reports/pre-mmm/phase-02.md`,
+  `project_context/Pre-MMM_ROADMAP.md`, `docs/memory/management.md`.
+
+---
+
+**End of Entry #007**
 
 <!-- REPORT ENTRIES END -->
 
