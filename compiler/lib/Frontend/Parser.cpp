@@ -896,11 +896,29 @@ ExprPtr Parser::parse_bitwise_and() {
 
 ExprPtr Parser::parse_equality() {
   ExprPtr lhs = parse_relational();
-  while (check(TokenKind::EqualEqual) || check(TokenKind::BangEqual)) {
-    const Token op_tok = advance();
-    const BinaryOp op = op_tok.kind == TokenKind::EqualEqual ? BinaryOp::Equal : BinaryOp::NotEqual;
+  while (true) {
+    BinaryOp op = BinaryOp::Equal;
+    SourceLocation location;
+    if (check(TokenKind::EqualEqual) || check(TokenKind::BangEqual)) {
+      const Token op_tok = advance();
+      op = op_tok.kind == TokenKind::EqualEqual ? BinaryOp::Equal : BinaryOp::NotEqual;
+      location = op_tok.location;
+    } else if (check(TokenKind::Identifier) && peek().text == "is") {
+      // §8.7: `is NULL` and `is not NULL` are readable null comparisons. They lower
+      // to ordinary equality, so pointer operand rules are shared with `==`.
+      const Token is_tok = advance();
+      bool negated = false;
+      if (check(TokenKind::Identifier) && peek().text == "not") {
+        advance();
+        negated = true;
+      }
+      op = negated ? BinaryOp::NotEqual : BinaryOp::Equal;
+      location = is_tok.location;
+    } else {
+      break;
+    }
     ExprPtr rhs = parse_relational();
-    lhs = make_unique<BinaryExpr>(op_tok.location, op, move(lhs), move(rhs));
+    lhs = make_unique<BinaryExpr>(location, op, move(lhs), move(rhs));
   }
   return lhs;
 }

@@ -1,0 +1,5 @@
+{
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": "nullptr can only be compared with a pointer, not 'int'"
+}

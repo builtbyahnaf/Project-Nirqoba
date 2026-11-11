@@ -189,4 +189,6 @@ null pointer literal is `nullptr`; it has no intrinsic type, so a declaration mu
 supply one (`var q: ptr int = nullptr;`). `NULL` is the nullable-value literal from
 §7.3, not the pointer literal. Nullable pointer types (`@Nullable ptr T`, `is NULL`
 checks), pointer interpolation, assignment of `nullptr` to an existing binding, and
-cross-function lifetime analysis remain unimplemented.
+cross-function lifetime analysis remain unimplemented. `nullptr` may be assigned to an
+existing pointer binding, and `is` / `is not` compare a pointer with `nullptr`, adopting
+the pointer's type; comparing `nullptr` with a non-pointer is rejected.

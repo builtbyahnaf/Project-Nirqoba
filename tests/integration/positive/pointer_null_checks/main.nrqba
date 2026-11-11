@@ -1,0 +1,13 @@
+// §8.7 null checks: `is` / `is not` compare a pointer with `nullptr`, and `nullptr`
+// can be assigned to an existing pointer binding. The literal must be retyped at the
+// destination, otherwise it would compare as integer zero.
+int function main() {
+    var s: int = 5;
+    var p: ptr int = &s;
+    print(p is nullptr);
+    p = nullptr;
+    print(p is nullptr);
+    print(p is not nullptr);
+    print(p);
+    return 0;
+}

@@ -1,0 +1,6 @@
+// `nullptr` has no integer meaning: comparing it with a number must be rejected
+// rather than silently becoming a comparison against zero.
+int function main() {
+    print(1 is nullptr);
+    return 0;
+}
