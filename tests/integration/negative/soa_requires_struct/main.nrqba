@@ -1,0 +1,10 @@
+// A field set is what SoA is over, so a scalar element type is a type error and
+// not something to lower.
+int function width(soa<int> values) {
+    return 0;
+}
+
+int function main() {
+    print(0);
+    return 0;
+}

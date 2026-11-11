@@ -24,6 +24,13 @@ Type Type::dynamic_array_type(Type element_type) {
   return t;
 }
 
+Type Type::soa_type(Type element_type) {
+  Type t(TypeKind::Soa);
+  t.data_ = make_shared<TypeData>();
+  t.data_->element_type = element_type;
+  return t;
+}
+
 Type Type::owned_array_type(Type element_type) {
   Type t(TypeKind::OwnedArray);
   t.data_ = make_shared<TypeData>();
@@ -117,6 +124,8 @@ string Type::to_string() const {
       return element_type().to_string() + "[]";
     case TypeKind::OwnedArray:
       return "owned_array<" + element_type().to_string() + ">";
+    case TypeKind::Soa:
+      return "soa<" + element_type().to_string() + ">";
     case TypeKind::OwnedPointer:
       return "owned_ptr<" + element_type().to_string() + ">";
     case TypeKind::ArrayView:
@@ -165,6 +174,8 @@ string Type::mangle() const {
       return "DA_" + element_type().mangle();
     case TypeKind::OwnedArray:
       return "OA_" + element_type().mangle();
+    case TypeKind::Soa:
+      return "SOA_" + element_type().mangle();
     case TypeKind::ArrayView:
       return "AV_" + element_type().mangle();
     case TypeKind::Pointer:

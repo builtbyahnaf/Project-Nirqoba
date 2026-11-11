@@ -10,8 +10,12 @@
 
 ### Summary of Changes (since `0.357-beta`):
 
-*Current working build, opened after 0.357-beta. Nothing has landed under this
-version yet; entries are added as changes are committed.*
+*Current working build, opened after 0.357-beta.*
+
+- **`soa<T>` exists as a type and is gated.** `TypeKind::Soa`, `soa<Point>` in type
+  position, `soa<Point>`/`SOA_` spelling and mangling, and a hard `NRQ5010` rejection
+  of every use until allocation and strided tracing land. Stage 1 of four; the gate is
+  the safety barrier and no program can allocate a column yet.
 
 ---
 

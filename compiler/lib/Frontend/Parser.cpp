@@ -8,6 +8,11 @@ using namespace std;
 namespace {
 
 constexpr const char* kUnknownType = "NRQ2003";
+// `soa<T>` is parsed and typed, but nothing may use it until the allocation and
+// tracing stages land: a container that allocates without a strided trace
+// callback would let a reference column be collected while still reachable, which
+// is a use-after-free rather than a missing feature. Gated until stage 3.
+constexpr const char* kSoaNotReady = "NRQ5010";
 
 bool is_type_keyword(TokenKind kind) {
   switch (kind) {
@@ -435,6 +440,22 @@ Type Parser::parse_type_annotation() {
     Type element_type = parse_type_annotation();
     expect(TokenKind::Greater, "after the owned array element type");
     base_type = Type::owned_array_type(element_type);
+  } else if (check(TokenKind::Identifier) && peek().text == "soa" &&
+             peek(1).kind == TokenKind::Less) {
+    const Token soa_token = advance();
+    advance();
+    Type element_type = parse_type_annotation();
+    expect(TokenKind::Greater, "after the soa element type");
+    if (!element_type.is_struct()) {
+      error_at(soa_token, kSoaNotReady,
+               "soa<T> requires a struct type, found " + element_type.to_string());
+    } else {
+      error_at(soa_token, kSoaNotReady,
+               "soa<" + element_type.to_string() +
+                   "> is recognised but its allocation is not implemented yet; "
+                   "see docs/compiler/soa-type-design.md");
+    }
+    base_type = Type::soa_type(element_type);
   } else if (check(TokenKind::Identifier) && peek().text == "owned_ptr" &&
              peek(1).kind == TokenKind::Less) {
     advance();

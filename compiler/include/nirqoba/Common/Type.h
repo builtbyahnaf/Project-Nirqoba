@@ -60,6 +60,10 @@ enum class TypeKind {
   ManagedPointer,
   Tuple,
   Struct,
+  // Structure of arrays over a struct type: the field set is the struct's, and
+  // the payload is one contiguous column per field. Distinct from OwnedArray so
+  // no existing path can mistake one for the other.
+  Soa,
 };
 
 class Type;
@@ -101,6 +105,7 @@ class Type {
   static Type managed_pointer_type(Type element_type);
   static Type tuple_type(std::vector<Type> elements);
   static Type struct_type(std::string name, std::vector<std::pair<std::string, Type>> fields = {});
+  static Type soa_type(Type element_type);
 
   TypeKind kind() const { return kind_; }
 
@@ -123,6 +128,9 @@ class Type {
   bool is_managed_pointer() const { return kind_ == TypeKind::ManagedPointer; }
   bool is_tuple() const { return kind_ == TypeKind::Tuple; }
   bool is_struct() const { return kind_ == TypeKind::Struct; }
+  bool is_soa() const { return kind_ == TypeKind::Soa; }
+  // The struct whose field set this SoA presents.
+  Type soa_element() const { return is_soa() ? element_type() : Type::error(); }
 
   bool is_signed_integer() const {
     return kind_ == TypeKind::Int || kind_ == TypeKind::I8 ||
