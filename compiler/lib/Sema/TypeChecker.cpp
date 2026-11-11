@@ -1213,6 +1213,71 @@ bool TypeChecker::field_path(const Expr& expression, string& root,
   return true;
 }
 
+Type TypeChecker::type_at_field_path(const Type& type, const string& path) {
+  Type current = resolve_aggregate_type(type);
+  size_t pos = 0;
+  while (pos < path.size()) {
+    while (pos < path.size() && path[pos] == '.') ++pos;
+    if (pos >= path.size()) break;
+    const size_t dot = path.find('.', pos);
+    const string segment =
+        path.substr(pos, dot == string::npos ? string::npos : dot - pos);
+    pos = dot == string::npos ? path.size() : dot;
+    if (!current.is_struct()) return Type::error();
+    const Type* field_type = nullptr;
+    if (const StructInfo* info = find_struct(current.struct_name())) {
+      for (const Parameter& field : info->fields)
+        if (field.name == segment) field_type = &field.type;
+    } else {
+      for (const auto& field : current.struct_fields())
+        if (field.first == segment) field_type = &field.second;
+    }
+    if (field_type == nullptr) return Type::error();
+    current = resolve_aggregate_type(*field_type);
+  }
+  return current;
+}
+
+void TypeChecker::mark_field_initialized(const string& root, const string& path) {
+  symbols_.clear_field_uninitialized(root, path);
+  const string enclosing = enclosing_aggregate_path(path);
+  if (!enclosing.empty()) symbols_.mark_partially_initialized(root, enclosing);
+  else symbols_.clear_partially_initialized(root, path);
+
+  // A nested aggregate is complete once every one of its fields is initialized;
+  // completion then propagates outward to its own enclosing aggregate.
+  string current = path;
+  while (true) {
+    const string parent = enclosing_aggregate_path(current);
+    if (parent.empty()) break;
+    const Symbol* symbol = symbols_.lookup(root);
+    if (symbol == nullptr) break;
+    const Type parent_type = type_at_field_path(symbol->type, parent);
+    if (!parent_type.is_struct()) break;
+    vector<string> child_names;
+    if (const StructInfo* info = find_struct(parent_type.struct_name())) {
+      for (const Parameter& field : info->fields) child_names.push_back(field.name);
+    } else {
+      for (const auto& field : parent_type.struct_fields())
+        child_names.push_back(field.first);
+    }
+    if (child_names.empty()) break;
+    bool complete = true;
+    for (const string& child : child_names) {
+      if (symbols_.field_is_uninitialized(root, parent + "." + child)) {
+        complete = false;
+        break;
+      }
+    }
+    if (!complete) break;
+    symbols_.clear_field_uninitialized(root, parent);
+    const string grandparent = enclosing_aggregate_path(parent);
+    if (!grandparent.empty())
+      symbols_.mark_partially_initialized(root, grandparent);
+    current = parent;
+  }
+}
+
 const Symbol* TypeChecker::find_borrow_origin(const Expr& expression) const {
   if (expression.kind() != Expr::Kind::Call)
     return find_root_symbol(expression, symbols_);
@@ -1369,14 +1434,8 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       !contains_owned_array(target_type)) {
     string field_root;
     string field_target;
-    if (field_path(assignment.target(), field_root, field_target)) {
-      symbols_.clear_field_uninitialized(field_root, field_target);
-      const string enclosing = enclosing_aggregate_path(field_target);
-      if (!enclosing.empty())
-        symbols_.mark_partially_initialized(field_root, enclosing);
-      else
-        symbols_.clear_partially_initialized(field_root, field_target);
-    }
+    if (field_path(assignment.target(), field_root, field_target))
+      mark_field_initialized(field_root, field_target);
   }
   const Symbol* symbol = find_root_symbol(assignment.target(), symbols_);
   if (assignment.target().kind() == Expr::Kind::Index &&
@@ -1473,12 +1532,7 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       symbols_.mark_allocation_moved(source->allocation_id);
     }
     symbols_.clear_field_moved(field_owner, field_name);
-    symbols_.clear_field_uninitialized(field_owner, field_name);
-    const string enclosing = enclosing_aggregate_path(field_name);
-    if (!enclosing.empty())
-      symbols_.mark_partially_initialized(field_owner, enclosing);
-    else
-      symbols_.clear_partially_initialized(field_owner, field_name);
+    mark_field_initialized(field_owner, field_name);
     return;
   }
   if (symbol != nullptr && symbol->borrowed && assignment.is_simple_name()) {
@@ -2685,6 +2739,8 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
                          "use of an aggregate field after it was moved");
     if (contains_owned_array(field_type))
       expr.set_ownership(ValueOwnership::Owned);
+    else if (contains_shared_pointer(field_type))
+      expr.set_ownership(ValueOwnership::Shared);
     return field_type;
   }
 
@@ -2733,6 +2789,8 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
         }
         if (contains_owned_array(field_type))
           expr.set_ownership(ValueOwnership::Owned);
+        else if (contains_shared_pointer(field_type))
+          expr.set_ownership(ValueOwnership::Shared);
         return field_type;
       }
     }
