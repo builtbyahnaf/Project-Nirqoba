@@ -1,0 +1,7 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "resource runtime fields"
+  ]
+}

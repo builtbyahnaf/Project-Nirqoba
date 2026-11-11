@@ -1,0 +1,8 @@
+struct RawSlot { owned ptr byte handle; }
+
+int function main() {
+    var slot = RawSlot {
+        handle: file.open("tests/integration/positive/hello/expect.json", false)
+    };
+    return 0;
+}

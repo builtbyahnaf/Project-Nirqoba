@@ -1,0 +1,11 @@
+// A moved-out resource field accepts a fresh owner of the same domain.
+struct Holder { owned file ptr byte handle; }
+
+int function main() {
+    let path = "tests/integration/positive/hello/expect.json";
+    var holder = Holder { handle: file.open(path, false) };
+    var moved = holder.handle;
+    holder.handle = file.open(path, false);
+    print("resource reinit");
+    return 0;
+}

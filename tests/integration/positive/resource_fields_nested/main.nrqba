@@ -1,0 +1,24 @@
+// Destruction recurses into nested aggregates and releases resource fields last-first.
+struct Inner {
+    owned mutex ptr byte lock_handle;
+    owned secure ptr byte secret;
+}
+
+struct Outer {
+    Inner inner;
+    owned file ptr byte file_handle;
+}
+
+int function main() {
+    let path = "tests/integration/positive/hello/expect.json";
+    var outer = Outer {
+        inner: Inner {
+            lock_handle: mutex.create(),
+            secret: memory.secure_allocate<byte>(8)
+        },
+        file_handle: file.open(path, false)
+    };
+    memory.secure_zero(outer.inner.secret, 8);
+    print("nested resource fields");
+    return 0;
+}

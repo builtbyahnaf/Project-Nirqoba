@@ -1,0 +1,6 @@
+struct FileSlot { owned file ptr byte handle; }
+
+int function main() {
+    var slot = FileSlot { handle: socket.connect("127.0.0.1", 7) };
+    return 0;
+}
