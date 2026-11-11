@@ -6,6 +6,27 @@
 
 ---
 
+## Version 0.369-beta (working build)
+
+### Summary of Changes (since `0.363-beta`):
+
+*Opened after three upgrades: column addressing (2d), row bounds checks (2e), and
+reference-column tracing (stage 3).*
+
+- **A column element can be read and written.** `ps[i].field` lowers to a dedicated
+  `SoaColumnPtr` op, because a column address multiplies two scales and an ordinary GEP
+  would encode the array-of-structs offset. The element count comes from the object
+  header, the same word the collector sizes the payload with.
+- **A container element has no value.** Bare `ps[i]` is refused; only `ps[i].field`
+  names a column, and the member access claims the index expression so nesting cannot
+  leak the claim.
+- **Every row is bounds-checked** against the header count before any address exists,
+  through the same guard and shared cold failure block the owned-array path uses.
+- **Managed references in columns are traced.** The layout descriptor gained (offset,
+  stride) column pairs; tracing walks each column for the recorded row count, visiting
+  only non-null entries. The flat offset table could never describe a column, and the
+  gate now refuses only owned arrays and array views.
+
 ## Version 0.363-beta (working build)
 
 ### Summary of Changes (since `0.361-beta`):
