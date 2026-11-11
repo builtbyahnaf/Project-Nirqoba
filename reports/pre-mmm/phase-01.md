@@ -1,7 +1,7 @@
 # Pre-MMM Phase 1 - Ownership inside aggregates
 
 **Status:** In progress
-**Version:** 0.398-beta
+**Version:** 0.401-beta
 **Date:** 2026-11-11
 
 ## Implemented
@@ -29,7 +29,7 @@
   instead of leaking (0.397-beta). A nested aggregate whose fields are all initialized
   is recognized as complete, and completion propagates to its enclosing
   aggregate, so whole-value reads, copies and moves become valid again
-  (0.398-beta).
+  (0.401-beta).
 - Owned arrays as struct fields work (parser capability from 0.384).
 
 ## Open
