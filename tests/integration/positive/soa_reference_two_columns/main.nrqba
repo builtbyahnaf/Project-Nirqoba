@@ -1,0 +1,29 @@
+// Two reference columns in one row: each has its own base and stride, so both must
+// be traced and both targets must survive.
+struct Node {
+    int value;
+}
+
+struct Pair {
+    managed<Node> left;
+    managed<Node> right;
+}
+
+int function main() {
+    var pairs = memory.owned_soa<Pair>(3);
+
+    var left = array.allocate<Node>(1);
+    left[0].value = 61;
+    var right = array.allocate<Node>(1);
+    right[0].value = 62;
+
+    pairs[0].left = left;
+    pairs[2].right = right;
+
+    gc.collect();
+    gc.collect();
+
+    print(pairs[0].left[0].value);
+    print(pairs[2].right[0].value);
+    return 0;
+}
