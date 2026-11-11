@@ -92,7 +92,10 @@
 
 ### Implementation
 
-- [ ] Extend lifetime propagation across function calls.
+- [x] Extend lifetime propagation across function calls. Borrows record their
+  originating owner and lexical depth; `&owner` aliases are tracked; borrowed
+  arguments are revalidated through nested calls; outer-scope rebinding is
+  rejected (`0.415-beta`, `reports/pre-mmm/phase-02.md`).
 - [ ] Implement safe borrowed returns for supported source relationships.
 - [ ] Support borrowing from aggregate fields.
 - [ ] Implement correct mutable-borrow exclusivity across nested calls.
