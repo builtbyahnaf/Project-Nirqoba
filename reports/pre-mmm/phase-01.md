@@ -1,7 +1,7 @@
 # Pre-MMM Phase 1 - Ownership inside aggregates
 
 **Status:** In progress
-**Version:** 0.396-beta
+**Version:** 0.397-beta
 **Date:** 2026-11-11
 
 ## Implemented
@@ -24,7 +24,9 @@
   depth (0.391-beta).
 - `var h: T = uninit;` declares a zero-initialized aggregate, tracks each field
   as not live until assigned, and destroys only initialized fields because untouched
-  fields are null (0.396-beta).
+  fields are null (0.396-beta). Whole-value uses of a partially initialized aggregate
+  are rejected, and overwriting a partially initialized nested aggregate is rejected
+  instead of leaking (0.397-beta).
 - Owned arrays as struct fields work (parser capability from 0.384).
 
 ## Open
@@ -59,5 +61,14 @@
   reinitialized (12).
 - `negative/uninit_read_before_init`: reading an uninitialized field is NRQ3033.
 - `negative/uninit_requires_var`: `let`/`const` partial aggregates are rejected.
+- `negative/uninit_whole_value_copy`: copying a partial aggregate is rejected.
+- `negative/uninit_whole_value_move`: moving a partial owned aggregate is rejected.
+- `negative/uninit_whole_value_return`: returning a partial aggregate is rejected.
+- `negative/uninit_whole_value_argument`: passing a partial aggregate is rejected.
+- `negative/uninit_partial_nested_overwrite`: overwriting a partially initialized
+  nested aggregate is rejected.
+- `positive/uninit_full_then_copy_ok`: a fully initialized aggregate can be copied
+  (shared count 2, value 6).
+- `positive/uninit_nested_fieldwise_ok`: nested fields initialized one by one (9).
 - `positive/shared_field_construction`: construction from `memory.shared_allocate`
   starts at count 1.

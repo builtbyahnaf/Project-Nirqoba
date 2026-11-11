@@ -289,3 +289,20 @@ non-null owner: uninitialized fields are null because the slot was zeroed, so th
 skipped by the runtime without extra checks. Ordinary fully initialized aggregates are
 unaffected and carry no additional state.
 
+## Partial-initialization guards (0.397-beta)
+
+`uninit` keeps its zeroed-slot, field-by-field model, but two unsafe uses are now
+rejected at compile time.
+
+- **Whole-value use:** a Name expression naming an aggregate with any uninitialized
+  field is rejected unless it is an assignment target or the base of a member access.
+  This covers copies, moves, returns, argument passing and other consuming contexts.
+- **Partial overwrite:** when a nested field is initialized (`o.inner.data = ...`), the
+  enclosing path (`o.inner`) is recorded as partially initialized. Assigning the whole
+  field afterwards is rejected, because replacing it would overwrite the initialized
+  contents without releasing them. Assigning the remaining fields individually stays
+  valid.
+
+Neither guard adds runtime state: both are semantic checks over the existing
+per-symbol field sets, and destruction remains the zeroed-slot recursive drop.
+
