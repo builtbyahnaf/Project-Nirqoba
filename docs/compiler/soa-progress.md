@@ -10,7 +10,7 @@ that loses context can resume from it plus `git log`.
 | --- | --- | --- |
 | 1 | type kind, syntax, gate | done (`8f48c93`) |
 | 2a | authoritative column layout, sema owned rules, type allowed in signatures | done (bec12d3) |
-| 2b | struct-field resolution for `soa<T>` in signatures, layout report test | done (this commit) |
+| 2b | struct-field resolution for `soa<T>` in signatures, layout report test | done (8425948) |
 | 2c | allocation entry point `memory.owned_soa<T>(n)` (scalar fields only) | next |
 | 2d | column addressing in TIR + lowering for `ps[i].f` | pending |
 | 3 | strided GC trace callback for reference columns | pending |
@@ -78,7 +78,7 @@ soa Point element 9 align 8 columns 2
   flag : bool index 8 (element 1 bytes, align 1)
 ```
 
-## Stage 2b (this commit)
+## Stage 2b (8425948)
 
 ### Root cause of the stage 2a gap
 
