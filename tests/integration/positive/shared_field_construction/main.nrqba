@@ -1,0 +1,8 @@
+// Construction acquires the initial reference; no extra retain.
+struct Holder { shared ptr int data; int tag; }
+int function main() {
+    var h = Holder { data: memory.shared_allocate<int>(2), tag: 4 };
+    print(memory.shared_count(h.data));
+    print(*h.data + h.tag);
+    return 0;
+}

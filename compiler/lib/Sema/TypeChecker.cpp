@@ -44,6 +44,23 @@ static bool contains_owned_array(const Type& type) {
 static bool contains_nested_owned_array(const Type& type,
                                         unordered_set<string>& active_structs);
 
+// True when an aggregate owns reference-counted pointer fields at any depth.
+// Shared fields retain on copy and release on destruction, so aggregates holding
+// them are copyable rather than move-only.
+static bool contains_shared_pointer(const Type& type) {
+  if (type.is_shared_pointer()) return true;
+  if (type.is_array()) return contains_shared_pointer(type.element_type());
+  if (type.is_tuple()) {
+    for (const Type& element : type.tuple_elements())
+      if (contains_shared_pointer(element)) return true;
+  }
+  if (type.is_struct()) {
+    for (const auto& field : type.struct_fields())
+      if (contains_shared_pointer(field.second)) return true;
+  }
+  return false;
+}
+
 // The nested-allocation restriction applies to owned arrays (and aggregates holding
 // them), not to aggregates that merely own pointers: recursive destruction already
 // drops those.
@@ -145,6 +162,8 @@ static bool is_null_pointer_literal(const Expr& expr) {
 
 static bool has_untracked_pointer_ownership(const Type& type,
                                             ValueOwnership ownership) {
+  if (type.is_shared_pointer())
+    return ownership != ValueOwnership::Shared;
   if (!type.is_pointer()) return false;
   if (type.is_owned_pointer()) return ownership != ValueOwnership::Owned;
   return ownership == ValueOwnership::Owned ||
@@ -169,13 +188,13 @@ static void validate_struct_field_contracts(const std::vector<Parameter>& fields
                         "borrowed field '" + field.name +
                             "' must be a raw pointer type");
     }
-    if (field.shared) {
+    if (field.shared && !field.type.is_shared_pointer()) {
       diagnostics.error(diag::kTypeMismatch, field.location,
-                        "shared pointer fields need reference-count release at field "
-                        "destruction, which structs do not support yet");
+                        "shared field '" + field.name +
+                            "' must be a shared pointer type");
     }
     if (!field.borrowed && !field.shared && field.type.is_pointer() &&
-        !field.type.is_owned_pointer()) {
+        !field.type.is_owned_pointer() && !field.type.is_shared_pointer()) {
       // An unqualified raw pointer field has no tracked ownership, so it still cannot
       // be stored in an aggregate; the contract must be stated explicitly.
       diagnostics.error(diag::kTypeMismatch, field.location,
@@ -1034,6 +1053,10 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
       diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
                          "array views require a tracked owner or borrowed source");
     }
+  }
+  if (contains_shared_pointer(binding_type)) {
+    symbol.shared_allocation = true;
+    if (symbol.cleanup_callee.empty()) symbol.cleanup_callee = "aggregate.owned_drop";
   }
   const uint64_t allocation_id = symbol.allocation_id;
   const string new_name = declaration.name();
@@ -2673,6 +2696,9 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
       if (init_type.is_valid() && init_type != field_type &&
           !(field_type.is_owned_pointer() && init_type.is_pointer() &&
             !init_type.is_owned_pointer() &&
+            init_type.element_type() == field_type.element_type()) &&
+          !(field_type.is_shared_pointer() && init_type.is_pointer() &&
+            !init_type.is_shared_pointer() &&
             init_type.element_type() == field_type.element_type())) {
         diagnostics_.error(diag::kTypeMismatch, expr.positional_inits()[i]->location(),
                            "field '" + fields[i].name + "' of struct '" +
@@ -2731,6 +2757,10 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
                  init_type != resolve_aggregate_type(field_def->type) &&
                  !(resolve_aggregate_type(field_def->type).is_owned_pointer() &&
                    init_type.is_pointer() && !init_type.is_owned_pointer() &&
+                   init_type.element_type() ==
+                       resolve_aggregate_type(field_def->type).element_type()) &&
+                 !(resolve_aggregate_type(field_def->type).is_shared_pointer() &&
+                   init_type.is_pointer() && !init_type.is_shared_pointer() &&
                    init_type.element_type() ==
                        resolve_aggregate_type(field_def->type).element_type())) {
         diagnostics_.error(diag::kTypeMismatch, kv.second->location(),

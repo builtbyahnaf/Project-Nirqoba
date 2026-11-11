@@ -1,5 +1,31 @@
 # Nirqoba Version Log
 
+## 0.391-beta - Shared pointer fields
+
+`shared ptr T` struct fields now carry a distinct `TypeKind::SharedPointer`, so
+sharedness survives type resolution and is visible to aggregate destruction.
+
+Semantics are retain-on-copy and release-on-destruction. Copying an aggregate that
+contains shared fields emits `nrq_memory_shared_retain` for every shared field at any
+nesting depth; destroying either binding emits `nrq_memory_shared_release` exactly
+once per field, reverse declaration order. An aggregate transferred by move (an
+aggregate that also owns resources) zeroes its source, so references move without a
+retain and are released only by the destination. Construction from
+`memory.shared_allocate`/`memory.shared_retain` acquires the initial reference and is
+not retained again.
+
+Shared fields must be initialized from a shared value; owned, borrowed, and plain raw
+pointers are rejected. Shared pointer types remain ordinary pointers for dereference,
+printing, sizing, and lowering, so ordinary pointers and the existing
+`memory.shared_*` APIs are unchanged. Shared-containing aggregates are copyable;
+aggregates with owned fields keep their move-only rules.
+
+Remaining Phase 1 gaps: `uninit` partial initialization/destruction and
+native-resource owned fields.
+
+
+
+
 ## 0.390-beta - Owned pointer field reinitialization and nesting
 
 Completes the owned-pointer-field contract from 0.389. A moved owned field can be

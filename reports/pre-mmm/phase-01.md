@@ -1,7 +1,7 @@
 # Pre-MMM Phase 1 - Ownership inside aggregates
 
 **Status:** In progress
-**Version:** 0.390-beta
+**Version:** 0.391-beta
 **Date:** 2026-11-11
 
 ## Implemented
@@ -18,6 +18,10 @@
   works, with the same raw-to-owned coercion as construction (0.390-beta).
 - Aggregates that own pointer fields may be nested; recursive destruction drops them,
   and owned arrays whose elements own resources remain rejected (0.390-beta).
+- `shared ptr T` fields use `TypeKind::SharedPointer`: construction takes the initial
+  reference, copies retain every shared field (`aggregate.shared_retain`), moves
+  transfer without retaining, and destruction releases once per field at any nesting
+  depth (0.391-beta).
 - Owned arrays as struct fields work (parser capability from 0.384).
 
 ## Open
@@ -40,3 +44,9 @@
   both values (11).
 - `positive/owned_field_nested_destruction`: nested struct field owning a pointer,
   read through the aggregate (10).
+- `positive/shared_field_copy_scope`: copy, nested field access and reference counts
+  across a scope exit (2, 14, 1).
+- `positive/shared_field_move_owned`: moving an owning aggregate transfers the shared
+  reference without retaining (1).
+- `positive/shared_field_construction`: construction from `memory.shared_allocate`
+  starts at count 1.

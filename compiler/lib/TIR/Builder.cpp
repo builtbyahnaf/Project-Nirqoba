@@ -206,6 +206,20 @@ bool TirBuilder::block_terminated(const tir::Function& function) {
   }
 }
 
+static bool contains_shared_pointer(const Type& type) {
+  if (type.is_shared_pointer()) return true;
+  if (type.is_array()) return contains_shared_pointer(type.element_type());
+  if (type.is_tuple()) {
+    for (const Type& element : type.tuple_elements())
+      if (contains_shared_pointer(element)) return true;
+  }
+  if (type.is_struct()) {
+    for (const auto& field : type.struct_fields())
+      if (contains_shared_pointer(field.second)) return true;
+  }
+  return false;
+}
+
 void TirBuilder::lower_block(const BlockStmt& block, tir::Function& function) {
   push_scope();
   deferred_expressions_.emplace_back();
@@ -353,6 +367,20 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       store.result = slot;
       function.add_operation(std::move(store));
 
+      // Copying an aggregate with shared fields acquires one reference per copied
+      // field; a transferring initializer moves them instead and must not retain.
+      if (contains_shared_pointer(slot_type) &&
+          declaration.initializer().kind() == Expr::Kind::Name &&
+          !declaration.initializer().transfers_ownership() &&
+          declaration.initializer().ownership() == ValueOwnership::Shared) {
+        tir::Op retain;
+        retain.kind = tir::OpKind::Call;
+        retain.location = declaration.location();
+        retain.callee = "aggregate.shared_retain";
+        retain.arguments.push_back(initial);
+        function.add_operation(std::move(retain));
+      }
+
       scopes_.back().emplace(declaration.name(), slot);
       if (!declaration.cleanup_callee().empty()) {
         DeferredCall cleanup;
@@ -380,6 +408,17 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       store.lhs = slot;
       store.result = slot;
       function.add_operation(std::move(store));
+      if (contains_shared_pointer(slot.type) &&
+          assignment.value().kind() == Expr::Kind::Name &&
+          !assignment.value().transfers_ownership() &&
+          assignment.value().ownership() == ValueOwnership::Shared) {
+        tir::Op retain;
+        retain.kind = tir::OpKind::Call;
+        retain.location = assignment.location();
+        retain.callee = "aggregate.shared_retain";
+        retain.arguments.push_back(value);
+        function.add_operation(std::move(retain));
+      }
       if (!assignment.cleanup_callee().empty()) {
         std::size_t owner_scope = scopes_.empty() ? 0 : scopes_.size() - 1;
         for (std::size_t depth = scopes_.size(); depth > 0; --depth) {
