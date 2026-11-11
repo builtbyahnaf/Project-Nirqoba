@@ -9,7 +9,7 @@ that loses context can resume from it plus `git log`.
 | stage | scope | state |
 | --- | --- | --- |
 | 1 | type kind, syntax, gate | done (`8f48c93`) |
-| 2a | authoritative column layout, sema owned rules, type allowed in signatures | done (this commit) |
+| 2a | authoritative column layout, sema owned rules, type allowed in signatures | done (bec12d3) |
 | 2b | struct-field resolution for `soa<T>` in signatures, layout report test | next |
 | 2c | allocation entry point `memory.owned_soa<T>(n)` (scalar fields only) | pending |
 | 2d | column addressing in TIR + lowering for `ps[i].f` | pending |
@@ -24,7 +24,7 @@ that loses context can resume from it plus `git log`.
 Tests: `tests/integration/negative/soa_requires_struct`.
 Result: 210/210 unit, 266/266 integration.
 
-## Stage 2a (this commit)
+## Stage 2a (bec12d3)
 
 ### Decisions
 
