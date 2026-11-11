@@ -123,13 +123,13 @@ change device memory.
 
 ## Ownership, borrows, and cleanup
 
-Owned values from supported allocation and resource producers transfer when bound to another name, passed to an owning parameter, or returned through a matching owner return type. Resource-bearing structs, tuples, and fixed arrays move as whole values; their nested owned arrays are released recursively. Individual owned fields can be moved and reinitialized when the semantic checker can track the field path and all control-flow paths agree. This currently covers supported aggregate ownership (including nested owned arrays), not arbitrary native resource pointer fields. Dynamic owned arrays currently reject elements that themselves own allocations, because recursive element destruction is not implemented. Tracked owners are cleaned in LIFO order at lexical exit, including return, break, and continue. Owner moves clear the source slot so generated cleanup remains safe across conditional control flow. Reassigning a live owner is rejected; release it before reusing the binding.
+Owned values from supported allocation and resource producers transfer when bound to another name, passed to an owning parameter, or returned through a matching owner return type. Resource-bearing structs, tuples, and fixed arrays move as whole values; their nested owned arrays are released recursively. Individual owned fields can be moved and reinitialized when the semantic checker can track the field path and all control-flow paths agree. This covers supported aggregate ownership, including nested owned arrays and resource-domain pointer fields. Dynamic owned arrays currently reject elements that themselves own allocations, because recursive element destruction is not implemented. Tracked owners are cleaned in LIFO order at lexical exit, including return, break, and continue. Owner moves clear the source slot so generated cleanup remains safe across conditional control flow. Reassigning a live owner is rejected; release it before reusing the binding.
 
 Use `borrow T* name` for an immutable pointer borrow and `borrow mut T* name` for an exclusive mutable pointer borrow. Opaque resource parameters declare their domain, for example `borrow file byte* handle`, `borrow socket byte* handle`, `borrow mutex byte* handle`, or `borrow mapping byte* handle`. Calls must pass a matching resource, and resource APIs inside the helper check that contract. Borrows cannot be freed, closed, returned, or passed to owning parameters. The checker rejects conflicting aliases at a call site. Borrowed array views are described below. Borrow analysis is conservative and lexical; general returned references, closure capture, arbitrary interprocedural lifetimes, and path-sensitive aggregate aliases are not implemented.
 
 `defer call(...)` captures call arguments when registered and runs calls in LIFO order on lexical block exit, including return, break, and continue. It can release explicit allocations, unpin GC objects, unlock mutexes, close files, and restore allocator selection. An explicit deferred cleanup overrides the inferred cleanup for that owner. Cleanup during exception unwinding is unavailable because the language has no exception model.
 
-Owned, shared, and borrowed raw pointers cannot be embedded in aggregate fields because fields do not yet declare an ownership contract. GC-managed and raw pointer fields remain non-owning.
+Struct fields declare their ownership contract: `owned`, `owned <resource>`, `shared`, `borrow` and `borrow mut`. GC-managed and unqualified raw pointer fields remain non-owning.
 
 ## Shared references
 
@@ -321,3 +321,23 @@ with owned fields transfers them. Aggregates that are still incomplete keep ever
 guard: whole-value use, reads of uninitialized fields and whole-field overwrites stay
 rejected.
 
+## Resource-domain owned fields (0.403-beta)
+
+`owned file ptr byte`, `owned socket ptr byte`, `owned mutex ptr byte`,
+`owned mapping ptr byte` and `owned secure ptr byte` declare fields whose release
+belongs to a runtime domain. The parser records the domain on the owned-pointer
+type itself, so construction, equality, mangling and lowering all see it; no
+side table can drift from the field type.
+
+Construction accepts only a value whose cleanup is the field's domain: a fresh
+domain producer, a matching owned local, or a matching resource field. A plain
+`owned ptr T` field rejects resource domains because its destructor is
+`memory.deallocate`, and a domain field rejects raw memory. Reinitialization
+follows the existing owned-field rule: the field must be moved on every path,
+and the replacement must own the same domain.
+
+`aggregate.owned_drop` walks fields in reverse declaration order and, for a
+domain field, calls the matching runtime destructor instead of unregistering a
+GC root and deallocating. Every destructor accepts null, so untouched `uninit`
+slots and moved-out fields are safe. Nested aggregates recurse before the
+enclosing field is released; each handle is released once.

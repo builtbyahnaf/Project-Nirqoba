@@ -12,6 +12,33 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.403-beta (working build)
+
+### Summary of Changes (since `0.401-beta`):
+
+*Opened when the owned-pointer type learned which runtime domain releases it.*
+
+- **Resource domains live in the type.** `owned file ptr byte` now builds an
+  `OwnedPointer` type that carries its `resource_domain`, so equality, mangling and
+  lowering distinguish a file handle from a socket handle without a side table.
+- **Construction checks the producer's cleanup domain.** A resource field accepts
+  only a value that owns the same domain, a plain `owned ptr T` field rejects
+  resource handles, and mismatches are diagnosed at the field initializer.
+- **Destruction is domain-specific and null-safe.** `aggregate.owned_drop` calls
+  `file.close`, `socket.close`, `mutex.destroy`, `memory.unmap_file` or
+  `memory.secure_release` for each field, exactly once, in reverse declaration
+  order, recursing through nested aggregates. Zeroed `uninit` slots hold null,
+  which every destructor ignores.
+- **Moves and reinitialization keep their existing rules.** Resource fields are
+  move-only, a transfer invalidates the source, and a field can be reinitialized
+  only after a move and only from the same domain.
+- **Phase 1 closes.** All five domains are covered, and the deliberate
+  conservative restriction on overwriting a partially initialized nested
+  aggregate is unchanged.
+
+The socket runtime remains unlinked in this phase, so socket fields are covered by
+the semantic-check suite while the other four domains also build, link and run.
+
 ## Version 0.401-beta (working build)
 
 ### Summary of Changes (since `0.397-beta`):

@@ -62,15 +62,16 @@
   release-on-destruction in `0.391-beta`; `uninit` partial initialization with
   destruction limited to initialized fields in `0.396-beta`, with whole-value and
   partial-overwrite guards in `0.397-beta`, and
-  nested completion propagation in `0.401-beta`. Resource-domain owned fields remain open.
-- [ ] Implement field-level move operations with source invalidation.
-- [ ] Implement safe field reinitialization after a move.
+  nested completion propagation in `0.401-beta`, and resource-domain owned fields
+  with per-domain destruction in `0.403-beta`.
+- [x] Implement field-level move operations with source invalidation. (0.390-beta)
+- [x] Implement safe field reinitialization after a move. (0.390-beta)
 - [x] Extend recursive destruction to supported nested ownership-bearing aggregates.
   `aggregate.owned_drop` covers owned array and owned pointer fields, in reverse
   declaration order (`0.389-beta`).
-- [ ] Implement correct partial initialization and partial destruction.
-- [ ] Support native-resource fields without allowing generic deallocation to destroy the wrong resource type.
-- [ ] Preserve existing whole-aggregate move behavior.
+- [x] Implement correct partial initialization and partial destruction. (0.396-beta through 0.401-beta)
+- [x] Support native-resource fields without allowing generic deallocation to destroy the wrong resource type. (0.403-beta)
+- [x] Preserve existing whole-aggregate move behavior. (Unchanged; covered by the move/copy suites through 0.403-beta)
 
 ### Performance requirements
 
@@ -79,7 +80,7 @@
 - Destruction should be statically generated wherever possible.
 - Avoid redundant null checks when the compiler already knows the field's ownership state.
 
-**Completion:** Aggregate ownership and destruction are deterministic, including partial moves and reinitialization.
+**Completion:** Phase 1 is complete at `0.403-beta`. Aggregate ownership and destruction are deterministic, including field-level moves, reinitialization, partial initialization, nested destruction and all five resource domains.
 
 ---
 
