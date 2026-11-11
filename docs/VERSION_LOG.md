@@ -12,6 +12,29 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.407-beta (working build)
+
+### Summary of Changes (since `0.403-beta`):
+
+*Opened after the allocation layout memo grew from one entry to four.*
+
+- **Four descriptors, round-robin replacement.** The single-entry memo became a
+  fixed four-slot array with a rotating insertion index. Interleaved typed
+  workloads no longer evict every shape on the next allocation.
+- **Each entry is proved against its own table.** `layout_memo_matches` compares
+  the request field by field with the descriptor's `reference_offsets`, so a
+  slot is never trusted by address and the caller's `offsets` pointer is never
+  cached or retained.
+- **Miss behavior is unchanged.** A miss still calls `nrq_gc_layout_intern`, and
+  a null result is not cached. The change adds no heap allocation, lock,
+  dynamic growth or other GC behavior.
+- **Per-thread hit/miss counters** (`nrq_gc_layout_memo_hits/misses`) expose the
+  memo to tests; they are plain thread-local words.
+- **Measured on one machine.** 800,000 typed allocations cycling four layouts:
+  median 106.676 ns/allocation before, 57.640 after (about 1.85x). The harness
+  is a microbenchmark with collection disabled; see
+  `reports/performance/0.407-layout-memo.md` for method and caveats.
+
 ## Version 0.403-beta (working build)
 
 ### Summary of Changes (since `0.401-beta`):
