@@ -3079,6 +3079,21 @@ class FunctionTranslator {
           std::function<void(const Type&, mlir::Value, std::vector<int64_t>&)> drop_fields;
           drop_fields = [&](const Type& type, mlir::Value aggregate,
                             std::vector<int64_t>& path) {
+            if (type.is_owned_pointer()) {
+              mlir::Value data = builder_.create<mlir::LLVM::ExtractValueOp>(
+                  loc, aggregate, builder_.getDenseI64ArrayAttr(path)).getResult();
+              auto unregister = ensure_runtime_fn(
+                  module_, builder_, "nrq_gc_root_unregister",
+                  mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
+              builder_.create<mlir::LLVM::CallOp>(loc, unregister,
+                                                   mlir::ValueRange{data});
+              auto release = ensure_runtime_fn(
+                  module_, builder_, "nrq_memory_deallocate_checked",
+                  mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
+              builder_.create<mlir::LLVM::CallOp>(loc, release,
+                                                   mlir::ValueRange{data});
+              return;
+            }
             if (type.is_owned_array()) {
               mlir::Value descriptor = builder_.create<mlir::LLVM::ExtractValueOp>(
                   loc, aggregate, builder_.getDenseI64ArrayAttr(path)).getResult();
@@ -3098,19 +3113,22 @@ class FunctionTranslator {
             }
             auto visit = [&](const Type& field_type, int64_t index) {
               path.push_back(index);
-              if (field_type.is_owned_array() || field_type.is_array() ||
-                  field_type.is_struct() || field_type.is_tuple())
+              if (field_type.is_owned_array() || field_type.is_owned_pointer() ||
+                  field_type.is_array() || field_type.is_struct() ||
+                  field_type.is_tuple())
                 drop_fields(field_type, aggregate, path);
               path.pop_back();
             };
+            // Fields are destroyed in reverse declaration order, matching the LIFO
+            // discipline used for scopes and parameters.
             if (type.is_array()) {
-              for (std::size_t index = 0; index < type.array_length(); ++index)
+              for (std::size_t index = type.array_length(); index-- > 0;)
                 visit(type.element_type(), static_cast<int64_t>(index));
             } else if (type.is_struct()) {
-              for (std::size_t index = 0; index < type.struct_fields().size(); ++index)
+              for (std::size_t index = type.struct_fields().size(); index-- > 0;)
                 visit(type.struct_fields()[index].second, static_cast<int64_t>(index));
             } else if (type.is_tuple()) {
-              for (std::size_t index = 0; index < type.tuple_elements().size(); ++index)
+              for (std::size_t index = type.tuple_elements().size(); index-- > 0;)
                 visit(type.tuple_elements()[index], static_cast<int64_t>(index));
             }
           };

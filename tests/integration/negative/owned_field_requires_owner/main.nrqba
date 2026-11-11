@@ -1,0 +1,10 @@
+// An owned field cannot be initialized from a borrow: it must own its resource.
+struct Holder {
+    owned ptr int data;
+}
+
+int function main() {
+    var x: int = 5;
+    var h = Holder { data: &x };
+    return 0;
+}

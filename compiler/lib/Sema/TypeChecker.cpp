@@ -139,11 +139,19 @@ static void validate_struct_field_contracts(const std::vector<Parameter>& fields
                         "shared pointer fields need reference-count release at field "
                         "destruction, which structs do not support yet");
     }
-    if (!field.borrowed && !field.shared && field.type.is_pointer()) {
+    if (!field.borrowed && !field.shared && field.type.is_pointer() &&
+        !field.type.is_owned_pointer()) {
+      // An unqualified raw pointer field has no tracked ownership, so it still cannot
+      // be stored in an aggregate; the contract must be stated explicitly.
       diagnostics.error(diag::kTypeMismatch, field.location,
-                        "owned pointer fields need generated field destruction, which "
-                        "structs do not support yet; declare the field 'borrow' or "
-                        "'borrow mut'");
+                        "pointer field '" + field.name +
+                            "' needs an ownership qualifier: declare it 'owned', "
+                            "'borrow' or 'borrow mut'");
+    }
+    if (field.type.is_owned_pointer() && !field.resource_domain.empty()) {
+      diagnostics.error(diag::kTypeMismatch, field.location,
+                        "owned resource-domain fields need per-domain field "
+                        "destruction, which structs do not support yet");
     }
     if (!field.resource_domain.empty() &&
         (!field.type.is_pointer() || field.borrowed))
@@ -440,7 +448,9 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
       validate_struct_field_contracts(decl->fields(), diagnostics_);
       for (const Parameter& field : decl->fields()) {
         const Type field_type = resolve_aggregate_type(field.type);
-        if (contains_nested_owned_array(field_type))
+        // An owned pointer field is a direct owner, not an owned array holding
+        // owning elements, so the nested-allocation restriction does not apply.
+        if (contains_nested_owned_array(field_type) && !field.type.is_owned_pointer())
           diagnostics_.error(diag::kTypeMismatch, field.location,
                              "owned arrays cannot contain elements that own nested allocations yet");
         if (contains_array_view(field_type))
