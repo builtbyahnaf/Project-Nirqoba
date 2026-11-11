@@ -100,22 +100,20 @@ struct StackAllocationLayout {
   std::size_t alignment = 0;
 };
 
-// Alignment floor for promoted stack buffers.
+// Alignment of a promoted stack buffer's slot.
 //
-// A promoted array lives in an entry-block alloca, so its alignment is free
-// information the backend can use: with the element's natural alignment only
-// (8 bytes for `int`/`f64`), LLVM emits every vector load and store as
-// unaligned. Aligning the slot to the x86-64 baseline vector width lets it
-// issue aligned 16-byte accesses for the same loop. A stricter alignment from
-// `memory.owned_array_aligned` still wins, and a slot that is smaller than one
-// vector register is left at its natural alignment because no vector access
-// can span it.
-constexpr std::size_t kStackSlotAlignmentBytes = 16;
-
+// E3 measured what a 16-byte floor buys a vectorized scan, cache resident and
+// hot (benchmarks/bottleneck_discovery/alignment/vector_alignment.cpp): aligned
+// and unaligned 16-byte loads both measured 0.157 ns/element, and an
+// 8-byte-misaligned base measured 0.158. The floor bought nothing, so the slot
+// now takes the element's natural alignment, which is all a correct load needs.
+// An explicit `memory.owned_array_aligned` request still raises it, because that
+// is the programmer asking for a guarantee rather than the compiler guessing at
+// one.
 static std::size_t stack_slot_alignment(std::size_t natural_alignment,
                                         std::size_t bytes) {
-  if (bytes < kStackSlotAlignmentBytes) return natural_alignment;
-  return std::max(natural_alignment, kStackSlotAlignmentBytes);
+  (void)bytes;
+  return natural_alignment;
 }
 
 using BorrowedEscapeSummary =
