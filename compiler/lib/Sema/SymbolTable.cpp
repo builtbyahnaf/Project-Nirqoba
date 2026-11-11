@@ -181,6 +181,8 @@ void SymbolTable::mark_field_uninitialized(const string& name, const string& pat
 bool SymbolTable::field_is_uninitialized(const string& name, const string& path) const {
   const Symbol* symbol = lookup(name);
   if (!symbol) return false;
+  if (symbol->initialized_fields.find(path) != symbol->initialized_fields.end())
+    return false;
   if (symbol->uninitialized_fields.find(path) != symbol->uninitialized_fields.end())
     return true;
   for (const string& pending : symbol->uninitialized_fields)
@@ -203,6 +205,39 @@ void SymbolTable::clear_field_uninitialized(const string& name, const string& pa
         ++it;
     }
     fields.erase(path);
+    found->second.initialized_fields.insert(path);
+    return;
+  }
+}
+
+void SymbolTable::mark_partially_initialized(const string& name, const string& path) {
+  for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+    auto found = scope->find(name);
+    if (found != scope->end()) {
+      found->second.partially_initialized_fields.insert(path);
+      return;
+    }
+  }
+}
+
+bool SymbolTable::is_partially_initialized(const string& name, const string& path) const {
+  const Symbol* symbol = lookup(name);
+  return symbol &&
+         symbol->partially_initialized_fields.find(path) !=
+             symbol->partially_initialized_fields.end();
+}
+
+void SymbolTable::clear_partially_initialized(const string& name, const string& path) {
+  for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+    auto found = scope->find(name);
+    if (found == scope->end()) continue;
+    auto& fields = found->second.partially_initialized_fields;
+    for (auto it = fields.begin(); it != fields.end();) {
+      if (it->size() >= path.size() && it->compare(0, path.size(), path) == 0)
+        it = fields.erase(it);
+      else
+        ++it;
+    }
     return;
   }
 }
