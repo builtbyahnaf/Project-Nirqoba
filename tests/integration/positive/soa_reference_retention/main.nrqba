@@ -1,0 +1,34 @@
+// A managed column is traced per column, so the referenced objects survive a
+// collection that runs while the container is only reachable through its root slot.
+struct Node {
+    int value;
+}
+
+struct Row {
+    int tag;
+    managed<Node> node;
+}
+
+int function main() {
+    var rows = memory.owned_soa<Row>(3);
+
+    var first = array.allocate<Node>(1);
+    first[0].value = 11;
+    var second = array.allocate<Node>(1);
+    second[0].value = 22;
+
+    rows[0].tag = 100;
+    rows[1].tag = 200;
+    rows[2].tag = 300;
+    rows[0].node = first;
+    rows[1].node = second;
+
+    // Repeated collections: a column that is only traced once would be reclaimed
+    // by the second cycle.
+    gc.collect();
+    gc.collect();
+
+    print(rows[0].node[0].value);
+    print(rows[1].node[0].value);
+    return 0;
+}

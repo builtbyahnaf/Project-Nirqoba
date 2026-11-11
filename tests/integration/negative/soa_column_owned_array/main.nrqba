@@ -1,0 +1,10 @@
+// An owned array column would need per-row destruction and its own root, which
+// column tracing does not model, so it stays refused.
+struct Bad {
+    owned_array<int> data;
+}
+
+int function main() {
+    var rows = memory.owned_soa<Bad>(2);
+    return 0;
+}

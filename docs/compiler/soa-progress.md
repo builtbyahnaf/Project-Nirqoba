@@ -14,6 +14,7 @@ that loses context can resume from it plus `git log`.
 | 2c | allocation entry point `memory.owned_soa<T>(n)` (scalar fields only) | done (4bf57aa) |
 | 2d | column addressing in TIR + lowering for `ps[i].f` | done (86fadcc) |
 | 2e | runtime bounds check on the row index | done (61509a0) |
+| 3 | reference-column tracing | done (this commit) |
 | 3 | strided GC trace callback for reference columns | pending |
 | 4 | column views, benchmarks, docs, version milestone | pending |
 
@@ -349,6 +350,73 @@ Suite: 210/210 unit, 277/277 integration.
 
 Stage 3 (reference columns and strided tracing), views over containers, benchmarks, then
 version 0.369 once two further upgrades have landed. No version bump here.
+## Stage 3 — reference-column tracing (this commit)
+
+### Investigation
+
+The layout descriptor already had both halves of a tracing contract: a flat
+`reference_offsets` table that the runtime walks once per element stride, and a
+`trace` callback invoked as `trace(payload, payload_bytes, visit, context)`. The table
+cannot describe a column, because its offsets are relative to one element while a
+column base is `index_in_bytes * count`. The callback could, but it receives no
+geometry, so a shared runtime callback has nothing to walk with.
+
+### Design
+
+- `nrq_object_layout` gained two trailing fields: `soa_columns` (offset, stride byte
+  pairs) and `soa_column_pairs`. The compiler emits no `nrq_object_layout` literals, so
+  no existing descriptor changes shape, and descriptors built by the existing pool are
+  value-initialized, leaving the new fields null and zero.
+- `nrq_gc_allocate_soa_rooted(root, count, element_bytes, pairs, pair_count)` interns
+  descriptors in their own pool keyed by pair contents, then allocates through the
+  existing `allocate_array_rooted_impl`. A separate pool keeps one key from meaning two
+  different layouts.
+- `trace_children` walks the pairs before the flat table: `rows = payload_bytes /
+  payload_size`, then for each pair visit every non-null pointer at `base + row *
+  stride`, with a bound test per row. Ordinary layouts are untouched.
+- Lowering builds the pairs from `describe_soa`: for each column,
+  `collect_managed_reference_offsets(column.type)` yields the intra-element offsets, so
+  a column of structs that themselves contain references also works. Each pair is
+  `(column.index_in_bytes + offset, column.element_bytes)`.
+- Sema's gate narrowed from "any managed field" to owned arrays and array views, which
+  need per-row destruction the column model does not have.
+
+### Blockers found, with the evidence that located them
+
+1. `collect_managed_reference_offsets` had no `soa` case, so the container's root slot
+   was never published and allocation aborted with "rooted GC allocation requires a
+   registered pointer root slot". A container value is one pointer to a traced object,
+   so it now reports offset 0.
+2. `type_size`/`type_alignment` returned 0 for `soa<T>`, which made the root descriptor
+   invalid: "GC root registration received an undescribable layout". Both now report
+   pointer size and alignment.
+3. `null` is not an expression in this language (only raw pointer declarations accept
+   it), so a null-reference test cannot be written in source. The runtime skips null
+   column entries, but that path has no source-level test and is recorded as a
+   limitation rather than claimed as verified.
+
+### Tests
+
+- `positive/soa_reference_retention`: two nodes in a column survive two collections,
+  printing 11 and 22.
+- `positive/soa_reference_column_order`: the reference column is the second column and
+  each row's scalar sits exactly where a row-interleaved walk would look for a pointer.
+  Retaining both nodes and reading 9/10/71/72 is the evidence the walk is column-strided
+  rather than array-of-structs.
+- `positive/soa_reference_zero_elements`: count 0, two collections, prints 42.
+- `positive/soa_reference_reclaimed`: live-object count sampled while the container is
+  alive, then after it goes out of scope and two collections run; prints 1, so retention
+  did not become a leak.
+- `negative/soa_column_owned_array`: an `owned_array` column is still refused.
+- Removed `negative/soa_reference_column_rejected`, which asserted the gate this stage
+  lifted.
+
+Suite: 210/210 unit, 281/281 integration.
+
+### Remaining
+
+Views over containers, a source-level way to write a null managed reference, and the
+stage 4 benchmarks. 0.369 is opened for 2d, 2e and 3.
 ## Invariants that must not be broken
 
 - Ordinary structs, AoS layout, and their tests are untouched by every stage.

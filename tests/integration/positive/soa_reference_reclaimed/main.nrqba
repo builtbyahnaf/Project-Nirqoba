@@ -1,0 +1,37 @@
+// Retention must not become a leak: once the container goes out of scope, both it
+// and the object its column referenced must be reclaimed. The live count is sampled
+// while both are alive, because a count taken before anything exists cannot show a
+// drop.
+struct Node {
+    int value;
+}
+
+struct Row {
+    int tag;
+    managed<Node> node;
+}
+
+u64 function build_and_drop() {
+    var rows = memory.owned_soa<Row>(4);
+    var node = array.allocate<Node>(1);
+    node[0].value = 5;
+    rows[0].tag = 1;
+    rows[0].node = node;
+    var stats = gc.get_statistics();
+    return stats.live_objects;
+}
+
+int function main() {
+    var peak = build_and_drop();
+    gc.collect();
+    gc.collect();
+
+    var after_stats = gc.get_statistics();
+    var after = after_stats.live_objects;
+    if (after < peak) {
+        print(1);
+    } else {
+        print(0);
+    }
+    return 0;
+}

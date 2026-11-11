@@ -2578,11 +2578,11 @@ Type TypeChecker::check_call(CallExpr& call) {
       return Type::error();
     }
     for (const auto& field : element.struct_fields()) {
-      if (field.second.is_managed_pointer()) {
+      if (contains_owned_array(field.second) || contains_array_view(field.second)) {
         diagnostics_.error(
             diag::kTypeMismatch, call.location(),
             "soa<" + element.struct_name() + "> cannot own column '" + field.first +
-                "': reference columns need strided tracing, which is not implemented yet");
+                "': columns cannot hold owned arrays or array views yet");
         return Type::error();
       }
     }
