@@ -507,10 +507,10 @@ invented to make the SoA test pass would break that area rather than extend it.
 
 ### Consequence for Stage 4
 
-Benchmarks are not started. Comparing SoA against AoS before views and nullability exist
+Benchmarks were deferred until stage 4.
 would measure a feature set that cannot yet express the AoS baseline's common patterns,
 so the numbers would invite the wrong conclusion.
-## Stage 4 — performance evaluation (this commit)
+## Stage 4 — performance evaluation (37d45d1)
 
 Sources and report: `benchmarks/soa_stage4/` (`aos.nrqba`, `soa.nrqba`, `aosoa.nrqba`,
 `run.py`, `RAW.md`, `REPORT.md`). Timing is internal `time.now()` in milliseconds, so
