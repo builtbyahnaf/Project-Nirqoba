@@ -1,0 +1,14 @@
+// Completion of the nested field completes the parent as well.
+struct Inner { shared ptr int data; int tag; }
+struct Outer { Inner inner; int extra; }
+int function main() {
+    var o: Outer = uninit;
+    o.inner.data = memory.shared_allocate<int>(1);
+    *o.inner.data = 5;
+    o.inner.tag = 2;
+    o.extra = 1;
+    var p = o;
+    print(memory.shared_count(p.inner.data));
+    print(*p.inner.data + p.inner.tag + p.extra);
+    return 0;
+}
