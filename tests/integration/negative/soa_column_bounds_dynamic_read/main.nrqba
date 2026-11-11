@@ -1,0 +1,13 @@
+// The row is computed, not literal: the guard is emitted on the value, so no constant
+// folding can hide the check.
+struct Point {
+    int x;
+    int y;
+}
+
+int function main() {
+    var points = memory.owned_soa<Point>(4);
+    var row = 2 + 3;
+    print(points[row].x);
+    return 0;
+}

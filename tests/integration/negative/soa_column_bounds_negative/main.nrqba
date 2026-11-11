@@ -1,0 +1,13 @@
+// A negative row must die at the guard: sign-extended to i64 and compared unsigned,
+// it reads as a huge index rather than wrapping to a valid one.
+struct Point {
+    int x;
+    int y;
+}
+
+int function main() {
+    var points = memory.owned_soa<Point>(4);
+    var row = 0 - 1;
+    print(points[row].x);
+    return 0;
+}

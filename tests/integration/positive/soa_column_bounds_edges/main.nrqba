@@ -1,0 +1,15 @@
+// The first and the last row are both inside a container of four elements, so the
+// guard must not reject either edge.
+struct Point {
+    int x;
+    int y;
+}
+
+int function main() {
+    var points = memory.owned_soa<Point>(4);
+    points[0].x = 5;
+    points[3].x = 35;
+    print(points[0].x);
+    print(points[3].x);
+    return 0;
+}
