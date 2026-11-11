@@ -487,6 +487,17 @@ std::unordered_map<LayoutKey, const nrq_object_layout*, LayoutKeyHash> layout_po
 // freed, so this is the whole structural cost of sharing.
 size_t layout_bytes_total = 0;
 
+// The ordinary `void*` root is the one shape used by every slot that holds a
+// single managed pointer. Its descriptor is immutable and lives for the process,
+// so it needs no intern lookup and its address is a stable identity. It is
+// deliberately not in layout_pool: nrq_gc_layout_bytes and layout_bytes_total
+// describe pool-owned descriptors and this process-lifetime constant is neither
+// charged to them nor counted by nrq_gc_layout_count.
+constexpr uint32_t kPointerRootOffset = 0;
+const nrq_object_layout kPointerRootLayout{
+    static_cast<uint32_t>(sizeof(void*)), 1, 0, &kPointerRootOffset,
+    nullptr, nullptr, 0};
+
 // Allocation must not take the pool lock. A thread remembers the last layout it
 // asked for and proves the match by comparing the offset table itself, so a
 // compiler-emitted constant table and a caller that rebuilds the same table on
@@ -3647,10 +3658,49 @@ bool is_pointer_root(const RootInfo& root) {
 // The descriptor for a root registration: the same interning path objects use.
 // A repeated array root is described by one element, so the stride and the
 // offset bounds are the element's; a single record is described by its size.
+// A descriptor the compiler emits is read-only data, so the production
+// configuration trusts it: no validation runs on an allocation path. The
+// development configuration proves every field, because a table that disagrees
+// with its payload would corrupt tracing rather than fail an allocation.
+//
+// It proves a caller-supplied descriptor on every call. That descriptor's
+// address is not a stable identity to cache: the contract asks for storage
+// that outlives the objects, but an address can be reused by a different
+// descriptor once the first one is gone, and a pointer key would then skip the
+// check that exists to catch exactly that. Only the interned pool has
+// addresses whose identity the runtime owns.
+bool layout_is_consistent(const nrq_object_layout& layout) {
+  if (layout.payload_size == 0) return false;
+  if ((layout.flags & ~static_cast<uint32_t>(NRQ_OBJECT_LAYOUT_ARRAY)) != 0)
+    return false;
+  if (layout.reference_count == 0) return true;
+  if (!layout.reference_offsets) return false;
+  for (uint32_t index = 0; index < layout.reference_count; ++index) {
+    const size_t offset = layout.reference_offsets[index];
+    if (offset > layout.payload_size ||
+        sizeof(void*) > layout.payload_size - offset)
+      return false;
+  }
+  return true;
+}
+
 const nrq_object_layout* root_layout(size_t object_size, size_t element_size,
                                      size_t repeated_count,
                                      const size_t* reference_offsets,
                                      size_t reference_count) {
+  // Exactly one pointer word, one reference at offset zero, no repeated
+  // elements and no trace callback: this is the shape the static descriptor
+  // describes, so answer before touching the memo. Everything else keeps the
+  // existing memo and interning path.
+  if (repeated_count == 0 && object_size == sizeof(void*) &&
+      reference_count == 1 && reference_offsets &&
+      reference_offsets[0] == 0) {
+    if constexpr (nirq::runtime_debug_enabled) {
+      if (!layout_is_consistent(kPointerRootLayout))
+        nrq_runtime_fatal("static pointer-root layout is inconsistent");
+    }
+    return &kPointerRootLayout;
+  }
   // Registration runs once per root per frame entry, so it uses the same
   // thread-local memo as allocation: a slot with the layout this thread saw last
   // resolves without the interning lock, and only a genuinely new shape pays for
@@ -3808,31 +3858,6 @@ void* allocate_array_rooted_impl(void** root_slot, size_t count,
                                  size_t reference_count,
                                  const nrq_object_layout* resolved);
 
-// A descriptor the compiler emits is read-only data, so the production
-// configuration trusts it: no validation runs on an allocation path. The
-// development configuration proves every field, because a table that disagrees
-// with its payload would corrupt tracing rather than fail an allocation.
-//
-// It proves a caller-supplied descriptor on every call. That descriptor's
-// address is not a stable identity to cache: the contract asks for storage
-// that outlives the objects, but an address can be reused by a different
-// descriptor once the first one is gone, and a pointer key would then skip the
-// check that exists to catch exactly that. Only the interned pool has
-// addresses whose identity the runtime owns.
-bool layout_is_consistent(const nrq_object_layout& layout) {
-  if (layout.payload_size == 0) return false;
-  if ((layout.flags & ~static_cast<uint32_t>(NRQ_OBJECT_LAYOUT_ARRAY)) != 0)
-    return false;
-  if (layout.reference_count == 0) return true;
-  if (!layout.reference_offsets) return false;
-  for (uint32_t index = 0; index < layout.reference_count; ++index) {
-    const size_t offset = layout.reference_offsets[index];
-    if (offset > layout.payload_size ||
-        sizeof(void*) > layout.payload_size - offset)
-      return false;
-  }
-  return true;
-}
 
 void* nrq_gc_allocate_layout(const nrq_object_layout* layout) {
   if (!layout || (layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) != 0) return nullptr;
@@ -4705,6 +4730,9 @@ size_t nrq_gc_layout_count(void) {
   std::lock_guard<std::mutex> lock(layout_mutex);
   return layout_pool.size();
 }
+// Pool-owned descriptor bytes only. The static pointer-root descriptor is not
+// pool-owned and is not included: it is one process-lifetime constant no matter
+// how many root registrations use it.
 size_t nrq_gc_layout_bytes(void) {
   std::lock_guard<std::mutex> lock(layout_mutex);
   return layout_bytes_total;
