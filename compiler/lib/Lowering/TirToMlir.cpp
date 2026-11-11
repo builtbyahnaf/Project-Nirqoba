@@ -2377,6 +2377,14 @@ class FunctionTranslator {
         return true;
       }
 
+      case tir::OpKind::AddressOf: {
+        // The slot handle already denotes the alloca, so the address is that
+        // pointer itself: no load and no copy of the value in the slot.
+        mlir::Value slot = get(op.operand);
+        if (!slot) return true;
+        set(op.result, slot);
+        return true;
+      }
       case tir::OpKind::Alloca: {
         // A promoted parameter slot has no storage: the slot name is bound to the
         // incoming argument, so the loads below read it directly.

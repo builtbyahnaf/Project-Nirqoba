@@ -222,7 +222,11 @@ class CallExpr : public Expr {
   std::string resolved_symbol_;
 };
 
-enum class UnaryOp { Negate, Plus, LogicalNot, BitwiseNot };
+// AddressOf and Dereference implement §8.2/§8.3 of the pointer specification:
+// `&x` yields the address of an existing storage location and `*p` names the
+// object stored at an address. They are unary expressions rather than new
+// statement kinds so `*p = v` reuses the ordinary assignment path.
+enum class UnaryOp { Negate, Plus, LogicalNot, BitwiseNot, AddressOf, Dereference };
 enum class BinaryOp {
   Add,
   Subtract,
