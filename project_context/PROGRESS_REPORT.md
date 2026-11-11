@@ -775,7 +775,7 @@ that gap without interprocedural dataflow or runtime state.
 | Test / Verification | Result | Evidence |
 |---|---|---|
 | Clean RelWithDebInfo build | PASS | `scripts/build.ps1 -Configuration RelWithDebInfo -Clean` |
-| Unit suite | PASS | 214/214 |
+| Unit suite | PASS | 214/214 on rerun; the first post-clean run segfaulted in the known flaky `GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage` |
 | Integration suite | PASS | 339/339 |
 | `positive/borrow_lifetime_nested_calls` | PASS | Exit 0, stdout `21\n21\n` |
 | `negative/borrow_lifetime_escape_call` | PASS | Exit 1, `borrow of 'inner' cannot outlive its owner` |

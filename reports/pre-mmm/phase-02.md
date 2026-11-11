@@ -56,7 +56,9 @@
 ## Verification
 
 - Clean `RelWithDebInfo` build.
-- Unit suite: 214/214 passed.
+- Unit suite: 214/214 passed on the full rerun. The first post-clean run
+  segfaulted in the known flaky
+  `GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage`.
 - Integration suite: 339/339 passed.
 
 ## Limitations
