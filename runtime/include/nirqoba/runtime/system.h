@@ -12,6 +12,10 @@ extern "C" {
 
 // Returns milliseconds since Unix epoch (January 1, 1970).
 int64_t nrq_time_now_ms(void);
+// Monotonic cycle counter (`__rdtsc`), for measurements where milliseconds are too
+// coarse. Not a wall clock: compare deltas on one machine, do not convert to time
+// without calibrating the counter.
+int64_t nrq_time_cycles(void);
 int32_t nrq_system_cpu_count(void);
 // Snapshot estimate of threads currently owned by this process.
 uint32_t nrq_system_thread_count(void);

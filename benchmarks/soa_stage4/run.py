@@ -32,8 +32,7 @@ rows = []
 for case, n, rounds in CASES:
     for rep in REPS:
         exe = build(rep, n, rounds)
-        samples = []
-        checks = None
+        samples, checks = [], None
         for _ in range(RUNS):
             v = run(exe)
             pairs = list(zip(v[0::2], v[1::2]))
@@ -43,20 +42,24 @@ for case, n, rounds in CASES:
                 checks = c
             elif checks != c:
                 sys.exit("checksum mismatch for %s/%d" % (rep, n))
+        visited = n * rounds
         for i, name in enumerate(WORKLOADS[rep]):
             col = [s[i] for s in samples]
             rows.append((case, n, rep, name, min(col), statistics.median(col),
-                         sum(col) / len(col), checks[i], col))
-lines = ["# Stage 4 raw measurements", "",
-         "Internal `time.now()` milliseconds, %d runs per configuration." % RUNS,
-         "Median is the middle run; best is the fastest. Checksums are equal across",
-         "representations for the same workload, which shows identical work.", "",
-         "| case | rows | rep | workload | best ms | median ms | mean ms | checksum | runs |",
-         "|---|---|---|---|---|---|---|---|---|"]
-for case, n, rep, name, best, med, mean, chk, runs in rows:
-    lines.append("| %s | %d | %s | %s | %d | %.1f | %.1f | %d | %s |" %
-                 (case, n, rep, name, best, med, mean, chk, ",".join(map(str, runs))))
+                         min(col) / visited, statistics.median(col) / visited,
+                         checks[i], col))
+hdr = ["# Stage 4 raw measurements", "",
+       "`time.cycles()` deltas (`__rdtsc`) inside the measured region only: allocation,",
+       "initialisation and process startup are outside it. %d runs per configuration;" % RUNS,
+       "median is the middle run, best is the fastest. Cycles per row divides by the rows",
+       "actually visited (rows x rounds). Checksums are equal across representations.", "",
+       "| case | rows | rep | workload | best cycles | median cycles | best cyc/row | median cyc/row | checksum | runs |",
+       "|---|---|---|---|---|---|---|---|---|---|"]
+for case, n, rep, name, best, med, bpr, mpr, chk, runs in rows:
+    hdr.append("| %s | %d | %s | %s | %d | %d | %.2f | %.2f | %d | %s |" %
+               (case, n, rep, name, best, med, bpr, mpr, chk, ",".join(map(str, runs))))
 open(os.path.join(ROOT, "benchmarks", "soa_stage4", "RAW.md"), "w",
-     encoding="utf-8").write("\n".join(lines) + "\n")
-for case, n, rep, name, best, med, mean, chk, runs in rows:
-    print("%-9s %8d %-6s %-7s best=%3d med=%6.1f chk=%d" % (case, n, rep, name, best, med, chk))
+     encoding="utf-8").write("\n".join(hdr) + "\n")
+for case, n, rep, name, best, med, bpr, mpr, chk, runs in rows:
+    print("%-9s %8d %-6s %-7s best=%12d med=%12d cyc/row med=%6.2f chk=%d" %
+          (case, n, rep, name, best, med, mpr, chk))

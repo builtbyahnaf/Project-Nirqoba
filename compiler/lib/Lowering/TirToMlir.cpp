@@ -894,7 +894,7 @@ static bool callee_is_collection_free(llvm::StringRef callee) {
       "nrq_print_cstr", "nrq_strlen", "nrq_args_length", "nrq_args_get",
       "math.sqrt", "sqrt", "math.sin", "sin", "math.cos", "cos",
       "math.abs", "abs", "math.floor", "floor", "math.ceil", "ceil",
-      "time.now", "memory.used_bytes", "memory.total_bytes",
+      "time.now", "time.cycles", "memory.used_bytes", "memory.total_bytes",
       "memory.device_memory_total_bytes", "memory.device_memory_used_bytes",
       "memory.available_bytes", "memory.cpu_count", "memory.cpu_features",
       "memory.thread_count", "memory.allocator_kind", "memory.runtime_version",
@@ -3793,6 +3793,10 @@ class FunctionTranslator {
           runtime_ret_ty = builder_.getI64Type();
           runtime_arg_tys = {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_),
                              builder_.getI64Type()};
+        } else if (callee == "time.cycles") {
+          runtime_sym = "nrq_time_cycles";
+          runtime_ret_ty = builder_.getI64Type();
+          runtime_arg_tys = {};
         } else if (callee == "time.now") {
           runtime_sym = "nrq_time_now_ms";
           runtime_ret_ty = builder_.getI64Type();

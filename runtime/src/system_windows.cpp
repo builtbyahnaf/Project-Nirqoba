@@ -14,9 +14,17 @@
 // K32GetProcessMemoryInfo is exported by kernel32 on supported Windows
 // versions, so process working-set reporting needs no extra import library.
 #include <psapi.h>
+#include <intrin.h>
 
 
 extern "C" {
+
+// A cycle counter for measurement: milliseconds are too coarse to compare
+// cache-resident scans, and cycles remove both the clock resolution and the
+// per-call overhead from the ratio.
+int64_t nrq_time_cycles(void) {
+  return static_cast<int64_t>(__rdtsc());
+}
 
 int64_t nrq_time_now_ms(void) {
     FILETIME ft;

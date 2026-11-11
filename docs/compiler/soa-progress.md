@@ -529,6 +529,25 @@ Random access is parity: the cache misses dominate and the count load plus two-s
 address arithmetic is pure overhead. AoSoA with block width 4 gives no benefit at these
 sizes because a 48-byte block means scanning one field still pulls the whole block.
 Millisecond resolution makes the cache-resident ratios directional rather than precise.
+### Stage 4 follow-up: profiling counters (this commit)
+
+Milliseconds were too coarse: cache-resident results sat 1-2 clock ticks apart. Added
+`time.cycles()` (`nrq_time_cycles` -> `__rdtsc`, declared in `runtime/.../system.h`,
+semad in `TypeChecker.cpp` next to `time.now`, lowered in `TirToMlir.cpp`), and switched
+the three benchmarks to it. Added `vectorization.py`, which counts vector operations in
+`--emit=llvm` output rather than inferring them from timings.
+
+Findings:  - The coarse clock had **reported the wrong winner** for cache-resident writes
+(18 vs 12 ms favouring SoA; 2.01 vs 2.33 cycles/row favouring AoS). The cycle data is
+recorded as the correct reading and the millisecond reading is retained in the report as
+an example of tick-granularity error.  - SoA's scans vectorise (3 vector reduces, 6 vector
+loads); AoS and AoSoA show none in emitted IR.  - Random access costs SoA ~10-15% at both
+sizes, now resolved as repeatable rather than noise.  - Writes split by working set: AoS
+wins cache-resident, SoA wins bandwidth-bound.
+
+Hardware cache-miss counters are **not** available without PMU access (ETW/PDH or an
+external tool), so none are reported. The report states this explicitly instead of
+presenting byte-ratio reasoning as measured misses.
 ## Invariants that must not be broken
 
 - Ordinary structs, AoS layout, and their tests are untouched by every stage.

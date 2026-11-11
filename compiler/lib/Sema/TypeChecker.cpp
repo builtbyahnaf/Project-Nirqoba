@@ -3697,6 +3697,12 @@ Type TypeChecker::check_call(CallExpr& call) {
   }
 
   // Time & System builtins: time.now, system.exit
+  if (call.callee() == "time.cycles") {
+    if (!call.arguments().empty())
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'time.cycles' takes no arguments");
+    return Type::u64_type();
+  }
   if (call.callee() == "time.now") {
     if (!call.arguments().empty()) {
       diagnostics_.error(diag::kPrintArity, call.location(),
