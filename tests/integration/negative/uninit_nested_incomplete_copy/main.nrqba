@@ -1,0 +1,9 @@
+// An incomplete nested aggregate cannot be copied as a whole.
+struct Inner { shared ptr int data; int tag; }
+struct Outer { Inner inner; int extra; }
+int function main() {
+    var o: Outer = uninit;
+    o.inner.data = memory.shared_allocate<int>(1);
+    var copy: Inner = o.inner;
+    return 0;
+}
