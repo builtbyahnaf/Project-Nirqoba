@@ -6,6 +6,37 @@
 
 ---
 
+## Version 0.374-beta (working build)
+
+### Summary of Changes (since `0.371-beta`):
+
+*Opened after the first implemented slice of the pointer surface in `SYNTAX.md` §8.*
+
+- **`ptr T` declares a pointer, `&` takes an address and `*` reads or writes through
+  one.** `ptr ptr int` adds a second level, so `**pp` works. Dereference lowers as
+  `p[0]`, reusing the pointer-element addressing the index expression already uses.
+  `&name` yields the existing stack slot's address: the value is neither loaded nor
+  copied.
+- **Only storage with a stable address and a safe type is addressable.** Variables,
+  fields, elements and dereferences qualify; temporaries do not. Aggregates, owned
+  arrays and managed references are rejected, because a raw alias into them could
+  bypass deterministic destruction or the collector's write barrier. Dereferencing
+  `managed<T>` is rejected for the same reason.
+- **A pointer prints.** `print(p)` writes the address and never dereferences; a null
+  pointer prints `NULL` through `nrq_print_pointer`, so absence is distinguishable
+  from address zero.
+- **`nullptr` is the null pointer literal.** It carries no intrinsic type; the
+  declaration supplies one (`var p: ptr int = nullptr;`). `NULL` remains the
+  nullable-value literal from §7.3 and is not implemented yet, and assigning
+  `nullptr` to an existing pointer binding is not implemented yet either.
+- **Fixed a compiler crash** found by the new tests: `check_compound_assignment` read
+  `symbol->type` after allowing targets such as `*p`, for which no single named owner
+  exists.
+
+Still unimplemented from §8: nullable pointer types and `is NULL` checks,
+interpolation of pointers, cross-function lifetime analysis, and the interop rules
+that §8.10 requires the compiler team to document.
+
 ## Version 0.371-beta (working build)
 
 ### Summary of Changes (since `0.369-beta`):

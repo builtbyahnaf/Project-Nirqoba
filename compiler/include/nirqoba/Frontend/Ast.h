@@ -59,14 +59,20 @@ using ExprPtr = std::unique_ptr<Expr>;
 
 class IntegerLiteralExpr : public Expr {
  public:
-  IntegerLiteralExpr(SourceLocation location, long long value, std::string suffix = "")
-      : Expr(Kind::IntegerLiteral, std::move(location)), value_(value), suffix_(std::move(suffix)) {}
+  IntegerLiteralExpr(SourceLocation location, long long value, std::string suffix = "",
+                     bool null_pointer = false)
+      : Expr(Kind::IntegerLiteral, std::move(location)), value_(value),
+        suffix_(std::move(suffix)), null_pointer_(null_pointer) {}
   long long value() const { return value_; }
   const std::string& suffix() const { return suffix_; }
+  // `nullptr` has no intrinsic type: the declaration or assignment that consumes
+  // it supplies the pointer type, so the literal only carries the marker.
+  bool is_null_pointer() const { return null_pointer_; }
 
  private:
   long long value_;
   std::string suffix_;
+  bool null_pointer_ = false;
 };
 
 class FloatLiteralExpr : public Expr {

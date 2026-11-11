@@ -691,7 +691,10 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       Type lit_type = literal.type().is_valid() ? literal.type() : Type::int_type();
       tir::Value result = function.allocate_value(lit_type);
       tir::Op op;
-      op.kind = tir::OpKind::ConstantInt;
+      // A null pointer literal is a null pointer value, not the integer zero: the op
+      // keeps the pointer type so printing and comparisons see a pointer.
+      op.kind = literal.is_null_pointer() ? tir::OpKind::ConstantNull
+                                         : tir::OpKind::ConstantInt;
       op.location = literal.location();
       op.result = result;
       op.integer_value = literal.value();
