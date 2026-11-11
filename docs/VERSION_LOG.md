@@ -12,6 +12,41 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.415-beta (working build)
+
+### Summary of Changes (since `0.411-beta`):
+
+*Opened after borrow provenance crossed function calls.*
+
+- **Borrows remember their owner.** A pointer binding now records its lexical
+  scope depth and, when borrowed, the binding whose storage it aliases. `&owner`
+  shares the owner's allocation identity instead of creating an unrelated raw
+  pointer.
+- **Calls preserve the origin.** Borrow arguments resolve through address-of and
+  borrowed-return expressions to the originating owner. Nested calls revalidate
+  that owner, while a borrowed parameter is its own origin inside the callee.
+- **Stale borrows are rejected.** Using or forwarding a borrow after its owner
+  leaves scope, moves, or is replaced reports a lifetime diagnostic. A borrow
+  assigned to a binding in an outer scope is rejected as outliving its owner.
+- **Null release remains legal.** `p = nullptr` still clears a borrowed pointer;
+  other rebinding remains conservatively rejected.
+- **No runtime cost.** The rule is compile-time only: no counters, locks, heap
+  descriptors, or generated checks were added.
+
+## Version 0.411-beta
+
+### Summary of Changes (since `0.407-beta`):
+
+*Opened to record the pointer-root descriptor work completed after 0.407.*
+
+- **The one-word pointer root has its own descriptor.** A root of
+  `sizeof(void*)` with one reference at offset zero and no trace callback
+  resolves to an immutable process-lifetime descriptor before the memo. Other
+  root shapes keep the existing memo and interning path, and descriptor identity
+  in `add_slot_state` and `is_pointer_root` is unchanged. The descriptor is not
+  pool-owned, so it is not counted by `nrq_gc_layout_count` or
+  `nrq_gc_layout_bytes`.
+
 ## Version 0.407-beta
 
 ### Summary of Changes (since `0.403-beta`):
@@ -34,19 +69,6 @@ recorded below is made under that authority.
   median 106.676 ns/allocation before, 57.640 after (about 1.85x). The harness
   is a microbenchmark with collection disabled; see
   `reports/performance/0.407-layout-memo.md` for method and caveats.
-## Version 0.411-beta (working build)
-
-### Summary of Changes (since `0.407-beta`):
-
-*Opened to record the pointer-root descriptor work completed after 0.407.*
-
-- **The one-word pointer root has its own descriptor.** A root of
-  `sizeof(void*)` with one reference at offset zero and no trace callback
-  resolves to an immutable process-lifetime descriptor before the memo. Other
-  root shapes keep the existing memo and interning path, and descriptor identity
-  in `add_slot_state` and `is_pointer_root` is unchanged. The descriptor is not
-  pool-owned, so it is not counted by `nrq_gc_layout_count` or
-  `nrq_gc_layout_bytes`.
 
 ## Version 0.403-beta
 
