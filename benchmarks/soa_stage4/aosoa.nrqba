@@ -21,28 +21,28 @@ int function main() {
         a[i].m0 = 7; a[i].m1 = 7; a[i].m2 = 7; a[i].m3 = 7;
     }
 
-    var t0 = time.now();
+    var t0 = time.cycles();
     var s1 = 0;
     for (var r = 0; r < rounds; r += 1) {
         for (var j = 0; j < blocks; j += 1) { s1 += a[j].x0 + a[j].x1 + a[j].x2 + a[j].x3; }
     }
-    print(time.now() - t0); print(s1);
+    print(time.cycles() - t0); print(s1);
 
-    var t1 = time.now();
+    var t1 = time.cycles();
     var s2 = 0;
     for (var r = 0; r < rounds; r += 1) {
         for (var j = 0; j < blocks; j += 1) {
             s2 += (a[j].x0 + a[j].x1 + a[j].x2 + a[j].x3) + (a[j].y0 + a[j].y1 + a[j].y2 + a[j].y3);
         }
     }
-    print(time.now() - t1); print(s2);
+    print(time.cycles() - t1); print(s2);
 
-    var t3 = time.now();
+    var t3 = time.cycles();
     for (var r = 0; r < rounds; r += 1) {
         for (var j = 0; j < blocks; j += 1) {
             a[j].x0 = a[j].x0 + 1; a[j].x1 = a[j].x1 + 1; a[j].x2 = a[j].x2 + 1; a[j].x3 = a[j].x3 + 1;
         }
     }
-    print(time.now() - t3); print(a[0].x0 + a[blocks - 1].x3);
+    print(time.cycles() - t3); print(a[0].x0 + a[blocks - 1].x3);
     return 0;
 }

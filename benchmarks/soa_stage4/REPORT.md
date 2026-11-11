@@ -1,83 +1,104 @@
-# Stage 4 — SoA vs AoS vs AoSoA
+# Stage 4 — SoA vs AoS vs AoSoA, with cycles and codegen
 
 ## Method
 
 - Compiler `0.371-beta`, existing `build/msvc-dev` configuration, unchanged flags.
-- Timing is internal `time.now()` (milliseconds), so allocation, initialisation and
-  process startup are outside every measured region.
-- Three representations, same data, same operation counts, same checksums:
-  - `aos.nrqba` — `memory.owned_array<Particle>`, field access `a[i].x`.
-  - `soa.nrqba` — `memory.owned_soa<Particle>`, column access `a[i].x`.
+- **Timing is `time.cycles()`** (`__rdtsc` deltas), added for this evaluation because the
+  millisecond clock was too coarse to separate cache-resident scans: at 2–20 ms several
+  results were one or two ticks. Allocation, initialisation and startup remain outside
+  the measured region.
+- Three representations, same values, same additions:
+  - `aos.nrqba` — `memory.owned_array<Particle>`, `a[i].x`.
+  - `soa.nrqba` — `memory.owned_soa<Particle>`, `a[i].x`.
   - `aosoa.nrqba` — `memory.owned_array<Block4>`, block width 4, lanes scanned per block.
-- Workloads: sequential single column, sequential two columns, random rows (LCG walk),
-  write-heavy (increment one column over every row).
-- Sizes: 65,536 rows (200 rounds, cache-resident) and 2,000,000 rows (20 rounds,
-  bandwidth-bound). Rounds differ by design; times are not comparable across sizes.
-- 5 runs per configuration, fresh process each. `run.py` rebuilds each variant from the
-  same source, verifies the checksum is identical across all runs, and reports best and
-  median. Raw per-run values are in `RAW.md`.
+- Workloads: sequential single column, sequential two columns, LCG random-row walk,
+  column-local write. Sizes: 65,536 rows x 200 rounds and 2,000,000 rows x 20 rounds.
+- 5 fresh-process runs per configuration; best and median recorded in `RAW.md`, including
+  cycles per visited row.
+- Checksums are identical across representations per workload (`429490176000`,
+  `1288470528000`, `65935`, `39999980000000`, `119999940000000`, `39782300757120`,
+  `2000039`), which is the evidence that the same values moved and the same arithmetic ran.
 
-Checksums equal across representations (e.g. `429490176000`, `1288470528000`, `65935`),
-which is the evidence that the same values were read and the same additions performed.
-
-## Results (median ms, best in parentheses)
+## Results (median cycles per visited row; best in parentheses)
 
 | rows | workload | AoS | SoA | AoSoA |
 |---|---|---|---|---|
-| 65,536 | single column | 6 (5) | **2 (2)** | 6 (5) |
-| 65,536 | two columns | 9 (8) | **4 (3)** | 9 (9) |
-| 65,536 | random rows | **20 (19)** | 22 (21) | n/a |
-| 65,536 | write heavy | 18 (13) | **12 (11)** | 13 (11) |
-| 2,000,000 | single column | 48 (46) | **15 (14)** | 48 (46) |
-| 2,000,000 | two columns | 57 (49) | **32 (28)** | 56 (55) |
-| 2,000,000 | random rows | **167 (166)** | 169 (167) | n/a |
-| 2,000,000 | write heavy | 71 (70) | **45 (39)** | 70 (68) |
+| 65,536 | single column | 1.23 (1.10) | **0.47 (0.44)** | 1.10 (0.93) |
+| 65,536 | two columns | 1.83 (1.74) | **0.79 (0.75)** | 1.75 (1.59) |
+| 65,536 | random rows | **3.98 (3.75)** | 4.64 (4.35) | n/a |
+| 65,536 | write heavy | **2.01 (1.75)** | 2.33 (2.14) | 1.86 (1.66) |
+| 2,000,000 | single column | 3.87 (3.27) | **1.17 (1.10)** | 3.44 (3.32) |
+| 2,000,000 | two columns | 4.01 (3.90) | **2.13 (2.09)** | 4.44 (3.94) |
+| 2,000,000 | random rows | **11.35 (10.78)** | 12.07 (11.00) | n/a |
+| 2,000,000 | write heavy | 6.02 (5.46) | **2.77 (2.65)** | 5.73 (5.54) |
+
+Absolute totals (median) are in `RAW.md`; cycles per row divides by rows x rounds.
+
+## What changed versus the millisecond pass
+
+The coarse clock pointed the wrong way on one result. It reported SoA writes as faster at
+65,536 rows (18 ms vs 12 ms); at cycle resolution **AoS is faster there** (2.01 vs 2.33
+cycles/row). The millisecond numbers were 11–18 ticks apart and dominated by tick
+granularity and run-to-run spread. This is the practical reason the counter was added: the
+first pass could not distinguish a real 15% effect from clock noise.
+
+## Vectorisation, measured from emitted IR
+
+`vectorization.py` compiles each representation and counts vector operations in
+`--emit=llvm` output (`VECTORIZATION.md`):
+
+| representation | vector types | vector loads | vector reduces |
+|---|---|---|---|
+| AoS | 0 | 0 | 0 |
+| SoA | 23 | 6 | 3 |
+| AoSoA | 0 | 0 | 0 |
+
+SoA's three reduction loops vectorised; AoS's and AoSoA's did not. That is a measured
+codegen difference, not an inference from timings — though the counts are file-level, so
+they include the initialisation loops, and the honest claim is "the SoA scans vectorised
+and the others did not", not a per-loop attribution.
 
 ## Interpretation
 
-- **Sequential scans are where SoA wins, and the win grows with the working set.** At
-  65,536 rows a single-column scan is about 3x faster (6 → 2 ms); at 2,000,000 rows it is
-  about 3.2x (48 → 15 ms). The reason is bytes touched per row: `Particle` is three
-  64-bit fields, so a scan of `x` reads one third of the memory an AoS scan does. In the
-  bandwidth-bound case that ratio shows up almost exactly; in the cache-resident case the
-  absolute times are small and the millisecond clock is coarse, so those ratios are
-  indicative rather than precise.
-- **Two-column scans narrow the gap** (9 → 4 ms, 57 → 32 ms) because two thirds of the
-  bytes are now needed, which is what the byte-count model predicts.
-- **Random access is a wash, and slightly worse for SoA** (20 → 22 ms, 167 → 169 ms).
-  A random read defeats the cache either way, so the column layout saves nothing, and
-  each SoA access pays for the header element-count load plus the two-scale address
-  arithmetic. The difference is small at 2,000,000 rows and within run-to-run spread at
-  65,536, so this should be read as parity, not as a SoA loss.
-- **Writes favour SoA** (18 → 12 ms, 71 → 45 ms): incrementing one column touches one
-  third of the bytes, and the bounds check and address arithmetic are already known to
-  cost less than the saved traffic at these sizes.
-- **AoSoA is not a compromise here.** It tracks AoS almost exactly (6, 9, 13 and 48, 56,
-  70 ms). With block width 4 and a 48-byte block, scanning one field of every row still
-  pulls the whole block into cache, so blocking adds indirection without reducing the
-  bytes that cross the cache line. It would need wider blocks or a streaming pass that
-  consumes all fields together to show a gain.
+- **Sequential scans: SoA wins, and the margin tracks bytes touched plus vectorisation.**
+  2.6x at 65,536 rows and 3.3x at 2,000,000 for a single column. `Particle` is three
+  64-bit fields, so a one-column scan touches one third of AoS's bytes; the reduction also
+  vectorises, which is why the large-case ratio slightly exceeds the byte ratio.
+- **Two columns narrow the gap as the byte model predicts** (1.83 vs 0.79; 4.01 vs 2.13).
+- **Random access favours AoS at both sizes** (3.98 vs 4.64; 11.35 vs 12.07). Misses
+  dominate, the layout saves nothing, and every SoA access still pays the header
+  element-count load plus two-scale address arithmetic. Unlike the millisecond pass, the
+  cycle data resolves this as a real, repeatable ~10–15% cost rather than noise.
+- **Writes split by working set.** Cache-resident, AoS is faster (2.01 vs 2.33): the
+  one-third byte saving does not yet repay the per-access addressing, and the store loop
+  does not vectorise. Bandwidth-bound, SoA wins clearly (6.02 vs 2.77) because the saved
+  traffic dominates. The same operation therefore has opposite winners at two sizes, which
+  is exactly the kind of claim a single benchmark cannot support.
+- **AoSoA is not a compromise at width 4.** It tracks AoS within 10% throughout (a 48-byte
+  block means scanning one field still pulls the whole block) and shows no vectorisation.
 
 ## What this does not show
 
-- One machine, one compiler build, one allocator. No NUMA, no pinning, no frequency
-  control, no cross-machine repetition.
-- Millisecond resolution: the cache-resident numbers are 2–22 ms, so several of them are
-  one or two clock ticks. Treat those ratios as directional.
-- `int` is 64-bit in this language, so `Particle` is 24 bytes; in a 32-bit-int language
-  the AoS stride would be 12 bytes and the byte-count ratios would be the same but the
-  absolute times different.
-- Random access for AoSoA is not compared: selecting a lane dynamically needs a branch
-  per access, which would measure the branch rather than the layout.
-- No profiling counters, so cache-miss counts and vectorisation are inferred from the
-  byte-count model, not measured.
-- SoA is not universally faster. It wins on sequential column scans and column-local
-  writes, ties on random access, and pays a fixed per-access cost for the count load and
-  offset arithmetic.
+- One machine, one build, one allocator; no pinning, no frequency control, no cross-machine
+  repetition.
+- `__rdtsc` is a reference counter, not core cycles: ratios are sound, absolute cycles per
+  row are not directly comparable across CPUs or turbo states. No frequency calibration was
+  applied.
+- Vector counts are per compilation unit, including initialisation, not per loop.
+- No hardware cache-miss counters. Those need PMU access (ETW/PDH on Windows or an external
+  tool such as `perf`/VTune); nothing here measures miss counts, and none are claimed. The
+  cache reasoning above rests on bytes touched and the observed codegen.
+- `int` is 64-bit here, so `Particle` is 24 bytes; a 32-bit-int language would keep the
+  ratios and change the absolutes.
+- AoSoA random access is not compared: dynamic lane selection needs a branch per access.
+- No claim that SoA is universally faster: it loses on cache-resident writes and on random
+  access, and ties only in the sense that both are memory-bound.
 
 ## Reproduce
 
     python benchmarks/soa_stage4/run.py
+    python benchmarks/soa_stage4/vectorization.py
 
-Builds every variant from `aos.nrqba`, `soa.nrqba`, `aosoa.nrqba` into `build/ao`,
-runs each 5 times, checks checksums and rewrites `RAW.md`.
+`run.py` rebuilds each variant from `aos.nrqba` / `soa.nrqba` / `aosoa.nrqba`, runs each 5
+times, verifies checksums and rewrites `RAW.md`. `vectorization.py` rewrites
+`VECTORIZATION.md`.
