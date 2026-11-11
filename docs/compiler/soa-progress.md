@@ -417,6 +417,58 @@ Suite: 210/210 unit, 281/281 integration.
 
 Views over containers, a source-level way to write a null managed reference, and the
 stage 4 benchmarks. 0.369 is opened for 2d, 2e and 3 (f4a6bb6).
+## Stage 3 post-implementation audit (this commit)
+
+Six areas were checked against the code at 3c63c47. Two defects were real; the rest
+held up.
+
+### Defect 1: the SoA descriptor pool ignored the element size
+
+`soa_layout_pool` was keyed by the column pair table alone. Two layouts can share
+reference geometry and differ in payload per row, for example
+`struct Narrow { managed<Node> node; }` and
+`struct Wide { managed<Node> node; int pad; }`, which both yield the pair (0, 8) with
+element sizes 8 and 16. The second container would have reused the first descriptor and
+inherited `payload_size = 8`, so tracing would compute `rows = payload_bytes / 8`, twice
+the real row count, and read padding words as pointers.
+
+Fixed by making the intern key `[element_bytes, pairs...]`. The descriptor still stores
+only the pairs, because `payload_size` already carries the size.
+Regression test: `positive/soa_reference_mixed_sizes`, which populates the padding
+slots with non-zero values so a misinterpreted walk is visible, then collects twice.
+
+### Defect 2: no validation of element size or column bases
+
+`nrq_gc_allocate_soa_rooted` cast `element_bytes` into the descriptor's `uint32`
+`payload_size` without a range check, and accepted any pair table. A malformed pair
+whose base was near the element size would have described pointer reads outside the
+payload. Fixed with an `element_bytes` range guard and a per-pair check that
+`base + sizeof(void*) <= element_bytes`, both returning null rather than building a
+descriptor that cannot be honoured.
+
+### Verified clean
+
+- **Root versus child tracing.** Offset 0 for `soa<T>` is produced by
+  `collect_managed_reference_offsets`, which feeds only root registration, where the
+  convention is that offset 0 names the slot's own pointer (`nrq_gc_root_register`
+  itself uses a zero offset). Element-relative child offsets live in the descriptor's
+  `reference_offsets`, a different mechanism that the SoA layout leaves null.
+- **Descriptor lifetime.** Pairs are copied into heap storage that is never reclaimed and
+  the descriptor is never freed, so a live object's descriptor and its pair table stay
+  valid for the process, across any number of collections and reuses.
+- **Tracing.** Multiple reference columns (`soa_reference_two_columns`) and a
+  reference inside a nested aggregate column (`soa_reference_nested`) both retain their
+  targets across two collections; zero elements and repeated collections were already
+  covered. Null entries are skipped by the walk, but no source-level null reference
+  exists in the language, so that branch remains untested and is recorded as such.
+- **Collector compatibility.** Ordinary descriptors are value-initialized, so the new
+  trailing fields are null and zero and `soa_column_pairs` is 0; the flat-table path and
+  custom trace callbacks are reached exactly as before. The suite is the evidence.
+- **Ownership gate.** `contains_owned_array` and `contains_array_view` both recurse
+  through structs, tuples and arrays and both treat `soa` as owned, so a column cannot
+  hide an owned array, an array view or a nested container behind a field type.
+
+Suite: 210/210 unit, 284/284 integration.
 ## Invariants that must not be broken
 
 - Ordinary structs, AoS layout, and their tests are untouched by every stage.

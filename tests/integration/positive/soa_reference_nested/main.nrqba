@@ -1,0 +1,32 @@
+// A column whose element is itself an aggregate holding a reference: the pair is
+// built from the intra-element offset, so the pointer is found inside the column
+// element rather than at its start.
+struct Node {
+    int value;
+}
+
+struct Inner {
+    managed<Node> node;
+}
+
+struct Row {
+    int tag;
+    Inner inner;
+}
+
+int function main() {
+    var rows = memory.owned_soa<Row>(2);
+
+    var node = array.allocate<Node>(1);
+    node[0].value = 81;
+
+    rows[1].tag = 5;
+    rows[1].inner.node = node;
+
+    gc.collect();
+    gc.collect();
+
+    print(rows[1].tag);
+    print(rows[1].inner.node[0].value);
+    return 0;
+}

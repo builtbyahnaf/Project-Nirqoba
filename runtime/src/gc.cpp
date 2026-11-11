@@ -3937,8 +3937,16 @@ std::unordered_map<std::vector<uint32_t>, const nrq_object_layout*, SoaPairsHash
     soa_layout_pool;
 const nrq_object_layout* soa_layout_for(size_t element_bytes,
                                         const std::vector<uint32_t>& pairs) {
+  // The key must include the element size: two layouts can carry identical
+  // reference geometry and still differ in payload per row, and sharing a
+  // descriptor between them would trace the wrong number of rows. The descriptor
+  // itself stores only the pairs, because payload_size already carries the size.
+  std::vector<uint32_t> key;
+  key.reserve(pairs.size() + 1);
+  key.push_back(static_cast<uint32_t>(element_bytes));
+  key.insert(key.end(), pairs.begin(), pairs.end());
   std::lock_guard<std::mutex> lock(layout_mutex);
-  const auto found = soa_layout_pool.find(pairs);
+  const auto found = soa_layout_pool.find(key);
   if (found != soa_layout_pool.end()) return found->second;
   auto* stored = new uint32_t[pairs.size()];
   std::copy(pairs.begin(), pairs.end(), stored);
@@ -3950,17 +3958,24 @@ const nrq_object_layout* soa_layout_for(size_t element_bytes,
   layout->trace = nullptr;
   layout->soa_columns = stored;
   layout->soa_column_pairs = static_cast<uint32_t>(pairs.size());
-  soa_layout_pool.emplace(pairs, layout);
+  soa_layout_pool.emplace(std::move(key), layout);
   return layout;
 }
 void* nrq_gc_allocate_soa_rooted(void** root_slot, size_t count,
                                  size_t element_bytes,
                                  const size_t* column_pairs, size_t pair_count) {
   if (!column_pairs || pair_count == 0 || (pair_count % 2) != 0) return nullptr;
+  // A descriptor stores its element size in a uint32 field, and a column base must
+  // leave room for a pointer inside one element. A malformed pair table would
+  // otherwise describe reads outside the payload, so it is refused here.
+  if (element_bytes == 0 || element_bytes > UINT32_MAX) return nullptr;
   std::vector<uint32_t> pairs(pair_count);
   for (size_t index = 0; index < pair_count; ++index) {
     if (column_pairs[index] > UINT32_MAX) return nullptr;
     pairs[index] = static_cast<uint32_t>(column_pairs[index]);
+    if ((index % 2) == 0 &&
+        static_cast<size_t>(pairs[index]) + sizeof(void*) > element_bytes)
+      return nullptr;
   }
   const nrq_object_layout* layout = soa_layout_for(element_bytes, pairs);
   return allocate_array_rooted_impl(root_slot, count, element_bytes, nullptr, 0,

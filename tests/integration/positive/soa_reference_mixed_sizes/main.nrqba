@@ -1,0 +1,40 @@
+// Two containers can share reference geometry (one pointer at offset 0, stride 8)
+// and still have different element sizes. Interning by geometry alone would give
+// the second container a descriptor whose payload size per row is wrong, so its row
+// count would be overstated and the padding slots would be read as references.
+struct Node {
+    int value;
+}
+
+struct Narrow {
+    managed<Node> node;
+}
+
+struct Wide {
+    managed<Node> node;
+    int pad;
+}
+
+int function main() {
+    var narrow = memory.owned_soa<Narrow>(2);
+    var wide = memory.owned_soa<Wide>(2);
+
+    var first = array.allocate<Node>(1);
+    first[0].value = 31;
+    var second = array.allocate<Node>(1);
+    second[0].value = 32;
+
+    narrow[0].node = first;
+    wide[0].node = second;
+    wide[0].pad = 7;
+    wide[1].pad = 9;
+
+    gc.collect();
+    gc.collect();
+
+    print(narrow[0].node[0].value);
+    print(wide[0].node[0].value);
+    print(wide[0].pad);
+    print(wide[1].pad);
+    return 0;
+}
