@@ -1,0 +1,11 @@
+struct Holder { owned file ptr byte handle; }
+
+void function consume(owned file ptr byte handle) { }
+
+int function main() {
+    let path = "tests/integration/positive/hello/expect.json";
+    var holder = Holder { handle: file.open(path, false) };
+    consume(holder.handle);
+    var again = holder.handle;
+    return 0;
+}

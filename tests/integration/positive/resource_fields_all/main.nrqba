@@ -1,0 +1,22 @@
+// All five resource domains own their fields and close them on scope exit.
+struct Resources {
+    owned file ptr byte file_handle;
+    owned socket ptr byte socket_handle;
+    owned mutex ptr byte lock_handle;
+    owned mapping ptr byte mapping_handle;
+    owned secure ptr byte secret;
+}
+
+int function main() {
+    let path = "tests/integration/positive/hello/expect.json";
+    var resources = Resources {
+        file_handle: file.open(path, false),
+        socket_handle: socket.connect("127.0.0.1", 7),
+        lock_handle: mutex.create(),
+        mapping_handle: memory.map_file(path, false),
+        secret: memory.secure_allocate<byte>(16)
+    };
+    memory.secure_zero(resources.secret, 16);
+    print("resource fields");
+    return 0;
+}

@@ -1,0 +1,8 @@
+struct Holder { owned file ptr byte handle; }
+
+int function main() {
+    let path = "tests/integration/positive/hello/expect.json";
+    var holder = Holder { handle: file.open(path, false) };
+    holder.handle = file.open(path, false);
+    return 0;
+}
