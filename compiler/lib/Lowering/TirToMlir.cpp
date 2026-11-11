@@ -778,6 +778,12 @@ static std::unordered_map<int, StackAllocationLayout> analyze_stack_allocations(
 
 static void collect_managed_reference_offsets(const Type& type, uint64_t base,
                                               std::vector<uint64_t>& offsets) {
+  // A container value is one pointer to a traced object, so a slot holding it is a
+  // pointer root. Its columns are traced through the object layout, not the slot.
+  if (type.is_soa()) {
+    offsets.push_back(base);
+    return;
+  }
   if (type.is_managed_pointer()) {
     offsets.push_back(base);
     return;
@@ -2767,16 +2773,47 @@ class FunctionTranslator {
               loc, builder_.getI64Type(),
               builder_.getI64IntegerAttr(static_cast<int64_t>(layout.element_bytes)))
                                 .getResult();
-          mlir::Value ref_count = builder_.create<mlir::LLVM::ConstantOp>(
-              loc, builder_.getI64Type(), builder_.getI64IntegerAttr(0)).getResult();
-          // No reference columns exist at this stage (semantic analysis refuses
-          // them), so the descriptor argument is empty and the runtime trusts the
-          // zero count.
-          mlir::Value offsets_pointer = builder_.create<mlir::LLVM::ZeroOp>(
-              loc, llvm_ptr_type(ctx_)).getResult();
-          mlir::Value result = builder_.create<mlir::LLVM::CallOp>(
-              loc, fn, mlir::ValueRange{root_slot, count, size, offsets_pointer,
-                                        ref_count}).getResult();
+          // Reference columns need strided tracing: each managed column is
+          // contiguous with its own stride, so the runtime receives (offset, stride)
+          // pairs and walks every column for the recorded element count.
+          std::vector<uint64_t> column_pairs;
+          for (const SoaColumn& column : layout.columns) {
+            std::vector<uint64_t> offsets;
+            collect_managed_reference_offsets(column.type, 0, offsets);
+            for (uint64_t offset : offsets) {
+              column_pairs.push_back(column.index_in_bytes + offset);
+              column_pairs.push_back(column.element_bytes);
+            }
+          }
+          mlir::Value result;
+          if (column_pairs.empty()) {
+            mlir::Value ref_count = builder_.create<mlir::LLVM::ConstantOp>(
+                loc, builder_.getI64Type(), builder_.getI64IntegerAttr(0)).getResult();
+            mlir::Value offsets_pointer = builder_.create<mlir::LLVM::ZeroOp>(
+                loc, llvm_ptr_type(ctx_)).getResult();
+            result = builder_.create<mlir::LLVM::CallOp>(
+                loc, fn, mlir::ValueRange{root_slot, count, size, offsets_pointer,
+                                          ref_count}).getResult();
+          } else {
+            mlir::Value pairs_slot = reference_layout_descriptor(column_pairs, loc);
+            if (!pairs_slot) {
+              diag_.error("NRQ4005", op.location,
+                          "internal: no descriptor for the reference columns");
+              return false;
+            }
+            auto soa_fn = ensure_runtime_fn(
+                module_, builder_, "nrq_gc_allocate_soa_rooted",
+                llvm_ptr_type(ctx_),
+                {llvm_ptr_type(ctx_), builder_.getI64Type(), builder_.getI64Type(),
+                 llvm_ptr_type(ctx_), builder_.getI64Type()});
+            mlir::Value pair_count = builder_.create<mlir::LLVM::ConstantOp>(
+                loc, builder_.getI64Type(),
+                builder_.getI64IntegerAttr(
+                    static_cast<int64_t>(column_pairs.size()))).getResult();
+            result = builder_.create<mlir::LLVM::CallOp>(
+                loc, soa_fn, mlir::ValueRange{root_slot, count, size, pairs_slot,
+                                              pair_count}).getResult();
+          }
           set(op.result, result);
           return true;
         }

@@ -1587,6 +1587,25 @@ void trace_children(ObjectHeader* header, nrq_gc_visit_fn visit,
   const size_t payload_bytes = object_payload_bytes(*header);
   if (layout->trace)
     layout->trace(header->payload(), payload_bytes, visit, context);
+  // A structure-of-arrays payload has no per-element reference map. Each managed
+  // column is contiguous with its own stride, so it is walked column by column;
+  // reading it as array elements would visit row-interleaved scalar slots.
+  if (layout->soa_column_pairs != 0 && layout->soa_columns) {
+    const size_t rows = layout->payload_size ? payload_bytes / layout->payload_size : 0;
+    const auto* bytes = static_cast<const unsigned char*>(header->payload());
+    for (uint32_t pair = 0; pair + 1 < layout->soa_column_pairs; pair += 2) {
+      const size_t base = layout->soa_columns[pair];
+      const size_t stride = layout->soa_columns[pair + 1];
+      for (size_t row = 0; row < rows; ++row) {
+        const size_t at = base + row * stride;
+        if (at + sizeof(void*) > payload_bytes) break;
+        void* referenced = nullptr;
+        std::memcpy(&referenced, bytes + at, sizeof(void*));
+        if (referenced) visit(referenced, context);
+      }
+    }
+    return;
+  }
   // The reference map lives in the descriptor: one table for all instances,
   // already proven to fit one element, so the walk needs one bounds test per
   // base rather than one per offset.
@@ -3903,6 +3922,50 @@ void* nrq_gc_allocate_array_typed_rooted(
                                     nullptr);
 }
 
+// Structure-of-arrays descriptors are interned by their column geometry. They keep
+// their own pool because the key is a pair table rather than an offset table, and a
+// shared pool would let one key mean two different layouts.
+struct SoaPairsHash {
+  size_t operator()(const std::vector<uint32_t>& pairs) const {
+    size_t hash = static_cast<size_t>(0xCBF29CE484222325ull);
+    for (const uint32_t value : pairs)
+      hash = (hash ^ value) * static_cast<size_t>(0x100000001B3ull);
+    return hash;
+  }
+};
+std::unordered_map<std::vector<uint32_t>, const nrq_object_layout*, SoaPairsHash>
+    soa_layout_pool;
+const nrq_object_layout* soa_layout_for(size_t element_bytes,
+                                        const std::vector<uint32_t>& pairs) {
+  std::lock_guard<std::mutex> lock(layout_mutex);
+  const auto found = soa_layout_pool.find(pairs);
+  if (found != soa_layout_pool.end()) return found->second;
+  auto* stored = new uint32_t[pairs.size()];
+  std::copy(pairs.begin(), pairs.end(), stored);
+  auto* layout = new nrq_object_layout{};
+  layout->payload_size = static_cast<uint32_t>(element_bytes);
+  layout->reference_count = 0;
+  layout->flags = NRQ_OBJECT_LAYOUT_ARRAY;
+  layout->reference_offsets = nullptr;
+  layout->trace = nullptr;
+  layout->soa_columns = stored;
+  layout->soa_column_pairs = static_cast<uint32_t>(pairs.size());
+  soa_layout_pool.emplace(pairs, layout);
+  return layout;
+}
+void* nrq_gc_allocate_soa_rooted(void** root_slot, size_t count,
+                                 size_t element_bytes,
+                                 const size_t* column_pairs, size_t pair_count) {
+  if (!column_pairs || pair_count == 0 || (pair_count % 2) != 0) return nullptr;
+  std::vector<uint32_t> pairs(pair_count);
+  for (size_t index = 0; index < pair_count; ++index) {
+    if (column_pairs[index] > UINT32_MAX) return nullptr;
+    pairs[index] = static_cast<uint32_t>(column_pairs[index]);
+  }
+  const nrq_object_layout* layout = soa_layout_for(element_bytes, pairs);
+  return allocate_array_rooted_impl(root_slot, count, element_bytes, nullptr, 0,
+                                    layout);
+}
 void nrq_gc_root_register(void** slot) {
   static constexpr size_t pointer_offset = 0;
   nrq_gc_root_register_typed(slot, sizeof(void*), &pointer_offset, 1);

@@ -39,6 +39,9 @@ void collect_struct_types(const Type& type, std::vector<Type>& found,
 }  // namespace
 
 uint64_t type_alignment(const Type& type) {
+  // A container value is one pointer to its payload block, so it occupies and
+  // aligns like a pointer, not like its element struct.
+  if (type.is_soa()) return sizeof(void*);
   if (type.is_pointer() || type.is_managed_pointer() || type.is_string() ||
       type.is_dynamic_array() || type.is_owned_array() || type.is_array_view()) return 8;
   if (type.is_array()) return type_alignment(type.element_type());
@@ -111,6 +114,9 @@ void for_each_field_in_layout_order(const Type& type,
 }
 
 uint64_t type_size(const Type& type) {
+  // A container value is one pointer to its payload block, so it occupies and
+  // aligns like a pointer, not like its element struct.
+  if (type.is_soa()) return sizeof(void*);
   if (type.is_pointer() || type.is_managed_pointer() || type.is_string() ||
       type.is_dynamic_array()) return 8;
   if (type.is_owned_array() || type.is_array_view()) return 16;

@@ -40,6 +40,11 @@ struct nrq_object_layout {
   // Visits references this table cannot describe. Null when the table is
   // complete, which is the usual case and keeps tracing table-driven.
   nrq_gc_trace_fn trace;
+  // Strided reference columns of a structure-of-arrays payload: (offset, stride)
+  // byte pairs. A column is contiguous per column rather than interleaved per row,
+  // so the flat offset table cannot describe it. Null when there are none.
+  const uint32_t* soa_columns;
+  uint32_t soa_column_pairs;
 };
 
 // Returns the descriptor for a layout, creating it the first time it is seen.
@@ -50,6 +55,12 @@ struct nrq_object_layout {
 const struct nrq_object_layout* nrq_gc_layout_intern(
     size_t payload_bytes, size_t element_bytes, nrq_gc_trace_fn trace,
     const size_t* reference_offsets, size_t reference_count);
+// Allocates a structure-of-arrays payload whose managed references live in strided
+// columns. `column_pairs` holds (offset, stride) byte pairs; the descriptor is
+// interned by that geometry, so every instance of one layout shares a description.
+void* nrq_gc_allocate_soa_rooted(void** root_slot, size_t count,
+                                 size_t element_bytes,
+                                 const size_t* column_pairs, size_t pair_count);
 // Allocation through a descriptor the caller owns. No copy is made and no
 // interning lookup runs: the pointer the object stores is the one passed here.
 // The descriptor must be immutable and must outlive every object allocated with

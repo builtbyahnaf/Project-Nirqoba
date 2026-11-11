@@ -1,0 +1,18 @@
+// A container with no rows has no column to walk, so tracing it must be a no-op
+// rather than reading the header of a payload that is not there.
+struct Node {
+    int value;
+}
+
+struct Row {
+    int tag;
+    managed<Node> node;
+}
+
+int function main() {
+    var empty = memory.owned_soa<Row>(0);
+    gc.collect();
+    gc.collect();
+    print(42);
+    return 0;
+}
