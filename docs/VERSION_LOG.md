@@ -6,6 +6,20 @@
 
 ---
 
+## Version 0.371-beta (working build)
+
+### Summary of Changes (since `0.369-beta`):
+
+*Opened after the Stage 3 GC audit hardened the SoA layout pool.*
+
+- **SoA layout descriptors are interned by element size as well as column geometry.**
+  Two containers can share reference geometry while differing in payload per row; the
+  shared descriptor used to give the second container the first one's element size, so
+  tracing overstated the row count and read padding words as references.
+- **Allocation refuses descriptors it cannot honour**: an element size that does not fit
+  the descriptor field, or a column base that leaves no room for a pointer in one
+  element.
+
 ## Version 0.369-beta (working build)
 
 ### Summary of Changes (since `0.363-beta`):
