@@ -1,0 +1,12 @@
+// A reference column needs a trace callback that walks it with stride. Until that
+// exists (stage 3), a container over a struct with a managed field must be refused:
+// allocating it would let the collector free a target that is still reachable.
+struct Node {
+    int tag;
+    managed<Node> next;
+}
+
+int function main() {
+    var nodes = memory.owned_soa<Node>(4);
+    return 0;
+}

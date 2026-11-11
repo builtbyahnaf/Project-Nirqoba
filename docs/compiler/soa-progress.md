@@ -11,8 +11,8 @@ that loses context can resume from it plus `git log`.
 | 1 | type kind, syntax, gate | done (`8f48c93`) |
 | 2a | authoritative column layout, sema owned rules, type allowed in signatures | done (bec12d3) |
 | 2b | struct-field resolution for `soa<T>` in signatures, layout report test | done (8425948) |
-| 2c | allocation entry point `memory.owned_soa<T>(n)` (scalar fields only) | next |
-| 2d | column addressing in TIR + lowering for `ps[i].f` | pending |
+| 2c | allocation entry point `memory.owned_soa<T>(n)` (scalar fields only) | done (this commit) |
+| 2d | column addressing in TIR + lowering for `ps[i].f` | next |
 | 3 | strided GC trace callback for reference columns | pending |
 | 4 | column views, benchmarks, docs, version milestone | pending |
 
@@ -131,6 +131,65 @@ Suite: 210/210 unit, 267/267 integration.
 4. Test: allocate, write and read one field per index, assert values; keep the
    `soa_allocation_unavailable` negative test replaced by a reference-struct rejection
    test.
+
+## Stage 2c (this commit)
+
+### What was implemented
+
+- **Sema builtin** `memory.owned_soa<T>(n)`: struct element only, exactly one argument,
+  and refused when any field is a managed reference. That refusal is the stage 3
+  boundary: without a strided trace callback a reference column would be invisible to
+  the collector. Diagnostic code `NRQ3015`, message names the offending column.
+- **Parser**: `owned_soa` added to the generic-call detection list
+  (`compiler/lib/Frontend/Parser.cpp:1108`). Without it the call was parsed as a
+  variable reference and failed with "undeclared variable 'memory'".
+- **Lowering** (`compiler/lib/Lowering/TirToMlir.cpp`, Call handler before the owned
+  array branch): one GC object, `element_bytes = describe_soa(...).element_bytes` as
+  both the runtime element size and the per-element byte cost, so the payload is
+  `count * element_bytes` and the header records `element_count = count`. Root slot
+  registered; descriptor pointer is an explicit null (`LLVM::ZeroOp`) with count 0.
+- **Representation**: `tir_type_to_mlir` maps a container to an LLVM pointer, the same
+  representation an owned array's data pointer uses.
+- **Release**: `soa.owned_release` unregisters the root and nothing else. The block is
+  the collector's, so freeing it would be a double free.
+
+### Discovered dependencies (each cost a failed attempt)
+
+1. A default-constructed `mlir::Value()` used as a call operand segfaults the
+   compiler; the null must be materialised with `LLVM::ZeroOp`.
+2. `nrq_memory_deallocate_checked` rejects a GC block at runtime ("invalid or already
+   freed pointer"), which is what proved the release path must be unregister-only.
+3. `tir_type_to_mlir` had to learn the type before any local of it could be allocated;
+   the first insertion attempt landed outside the function and changed nothing, so the
+   fix is anchored on the function signature itself.
+
+### Tests
+
+- `tests/integration/positive/soa_allocate_and_run` — allocates, prints, exits 0.
+- `tests/integration/negative/soa_reference_column_rejected` — `NRQ3015`.
+- Removed `soa_allocation_unavailable`, which asserted the absence of an allocation
+  path that now exists.
+
+Suite: 210/210 unit, 268/268 integration.
+
+## Stage 2d — next, exact plan
+
+Column addressing for `ps[i].f`. The address is `payload + column_base(f) + i *
+column_element_bytes(f)`, where the two column quantities come from `describe_soa`
+and nothing else. Sites:
+
+1. Sema index handling (`compiler/lib/Sema/TypeChecker.cpp:2226-2250`) must accept a
+   container base and return a *field proxy* concept rather than a struct value;
+   `&ps[i]` and `ps[i] = point` stay errors.
+2. TIR: the existing `GetElementPtr` op cannot express two independent scales, so add
+   a `SoaColumnPtr` op (base, element index, column index) or lower the pair
+   (index + field access) to one GEP with a runtime-computed offset; prefer the op so
+   the lowering stays total.
+3. Lowering: compute the mixed offset in i64 (`column.index_in_bytes * count +
+   i * column.element_bytes`) and reuse the existing alignment recording with the
+   column alignment.
+4. Test: write and read every field of every index, including the last index, then
+   force `gc.collect()` with the container reachable.
 
 ## Invariants that must not be broken
 
