@@ -191,7 +191,7 @@ and nothing else. Sites:
 4. Test: write and read every field of every index, including the last index, then
    force `gc.collect()` with the container reachable.
 
-### Findings from the first implementation pass (0.363)
+### Findings from the first implementation pass (0.363, opened in b556bd4)
 
 The obvious route - let indexing produce an element pointer, then let ordinary field
 access offset into it - is wrong, and the reason is structural rather than a missing
