@@ -33,6 +33,11 @@ struct Symbol {
   std::string cleanup_callee;
   bool borrowed = false;
   bool mutable_borrow = false;
+  // Lexical depth of this binding, and for a borrow the name of the binding
+  // whose storage it aliases. A borrow cannot outlive that owner, so the
+  // checker validates the origin before every rebind and call.
+  std::size_t scope_depth = 0;
+  std::string borrow_owner;
   // Set for '@Nullable' pointer bindings: the value may be nullptr, so dereference
   // requires a non-null proof in the current branch.
   bool nullable = false;
@@ -67,6 +72,8 @@ class SymbolTable {
   const Symbol* lookup(const std::string& name) const;
   void mark_allocation_moved(uint64_t allocation_id);
   bool allocation_is_moved(uint64_t allocation_id) const;
+  // Address-taking gives a scalar a tracked lifetime shared with its aliases.
+  uint64_t ensure_allocation_id(const std::string& name, uint64_t allocation_id);
   bool has_live_borrow(uint64_t allocation_id) const;
   bool has_conflicting_borrow(uint64_t allocation_id,
                               bool requested_mutable,
@@ -75,7 +82,8 @@ class SymbolTable {
   void set_pointer_ownership(const std::string& name, bool owns_allocation,
                              bool borrowed, bool mutable_borrow,
                              bool shared_allocation = false,
-                             std::string cleanup_callee = {});
+                             std::string cleanup_callee = {},
+                             std::string borrow_owner = {});
   void set_borrowed_resource_domain(const std::string& name,
                                     std::string cleanup_callee);
   bool field_is_moved(const std::string& name, const std::string& path) const;

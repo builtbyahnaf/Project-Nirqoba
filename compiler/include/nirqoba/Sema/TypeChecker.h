@@ -94,6 +94,10 @@ class TypeChecker {
   // once every child of an aggregate is initialized.
   void mark_field_initialized(const std::string& root, const std::string& path);
   const Symbol* find_borrow_origin(const Expr& expression) const;
+  // A borrow's originating binding must still exist and refer to the same
+  // allocation; borrowed parameters are their own origin inside a function.
+  bool borrow_owner_is_live(const Symbol& borrow) const;
+  std::string borrow_owner_name(const Symbol& origin) const;
   void consume_field_move(Expr& expression, const Type& value_type);
 
   // Struct catalog lookup helpers. `name` may be module-qualified; a bare name

@@ -9,6 +9,7 @@ bool SymbolTable::declare(Symbol symbol) {
   if (scopes_.empty()) scopes_.emplace_back();
   auto& scope = scopes_.back();
   const string name = symbol.name;
+  symbol.scope_depth = scopes_.size();
   auto [iterator, inserted] = scope.emplace(name, move(symbol));
   (void)iterator;
   return inserted;
@@ -28,6 +29,19 @@ void SymbolTable::mark_allocation_moved(uint64_t allocation_id) {
     for (auto& entry : scope)
       if (entry.second.allocation_id == allocation_id)
         entry.second.moved = true;
+}
+
+uint64_t SymbolTable::ensure_allocation_id(const string& name,
+                                           uint64_t allocation_id) {
+  for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+    auto found = scope->find(name);
+    if (found != scope->end()) {
+      if (found->second.allocation_id == 0)
+        found->second.allocation_id = allocation_id;
+      return found->second.allocation_id;
+    }
+  }
+  return 0;
 }
 
 bool SymbolTable::allocation_is_moved(uint64_t allocation_id) const {
@@ -82,7 +96,8 @@ void SymbolTable::set_pointer_ownership(const string& name,
                                         bool owns_allocation, bool borrowed,
                                         bool mutable_borrow,
                                         bool shared_allocation,
-                                        std::string cleanup_callee) {
+                                        std::string cleanup_callee,
+                                        std::string borrow_owner) {
   for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
     auto found = scope->find(name);
     if (found != scope->end()) {
@@ -91,6 +106,7 @@ void SymbolTable::set_pointer_ownership(const string& name,
       found->second.mutable_borrow = mutable_borrow;
       found->second.shared_allocation = shared_allocation;
       found->second.cleanup_callee = std::move(cleanup_callee);
+      found->second.borrow_owner = std::move(borrow_owner);
       return;
     }
   }

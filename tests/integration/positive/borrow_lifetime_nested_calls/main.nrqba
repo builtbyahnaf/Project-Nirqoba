@@ -1,0 +1,15 @@
+int function read(borrow int* value) {
+    return *value;
+}
+
+int function forward(borrow int* value) {
+    return read(value);
+}
+
+int function main() {
+    var owner = 21;
+    var borrowed = &owner;
+    print(forward(borrowed));
+    print(forward(&owner));
+    return 0;
+}
