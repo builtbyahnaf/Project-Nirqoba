@@ -12,7 +12,29 @@ recorded below is made under that authority.
 
 ---
 
-## Version 0.415-beta (working build)
+## Version 0.419-beta (working build)
+
+### Summary of Changes (since `0.415-beta`):
+
+*Opened after source-bound borrowed returns were hardened.*
+
+- **Borrowed returns name their source.** `borrow <source> T* function ...`
+  keeps a return tied to one borrowed parameter. Direct returns, forwarding
+  through nested calls, and selecting the declared source among several
+  parameters remain valid.
+- **Invalid sources are rejected.** A local owner, a temporary allocation, the
+  wrong parameter, a moved source, and a source that has left scope are all
+  diagnosed. A returned borrow stored in an outer binding is rejected as
+  outliving its owner.
+- **Live borrows block owner transfer.** Passing an owner to an owning pointer
+  parameter while its borrowed return is live is rejected instead of moving the
+  owner out from under the borrow.
+- **Assignment keeps lifetime identity.** An address-of origin receives a tracked
+  allocation identity when a borrowed value is assigned to an existing pointer.
+- **No runtime cost.** The checks are semantic only: no counters, locks, heap
+  descriptors, or generated borrow checks were added.
+
+## Version 0.415-beta
 
 ### Summary of Changes (since `0.411-beta`):
 

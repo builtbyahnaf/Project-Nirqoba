@@ -96,7 +96,11 @@
   originating owner and lexical depth; `&owner` aliases are tracked; borrowed
   arguments are revalidated through nested calls; outer-scope rebinding is
   rejected (`0.415-beta`, `reports/pre-mmm/phase-02.md`).
-- [ ] Implement safe borrowed returns for supported source relationships.
+- [x] Implement safe borrowed returns for supported source relationships.
+  Borrowed returns name an explicit source parameter; direct, forwarded, and
+  selected-source returns are checked against a live, unmoved owner, and the
+  owner cannot be transferred to an owning parameter while the return is live
+  (`0.419-beta`, `reports/pre-mmm/phase-02.md`).
 - [ ] Support borrowing from aggregate fields.
 - [ ] Implement correct mutable-borrow exclusivity across nested calls.
 - [ ] Add closure-capture ownership rules when closure support requires them.

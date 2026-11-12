@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.415-beta` |
+| Current Working Version | `0.419-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-12 03:14:58` |
-| Report Entries | `7` |
+| Last Report Update | `2026-11-12 14:11:41` |
+| Report Entries | `8` |
 
 ---
 
@@ -843,6 +843,135 @@ is claimed for this milestone.
 ---
 
 **End of Entry #007**
+
+## Entry #008 — Pre-MMM Phase 2: Safe source-bound borrowed returns
+
+**Version:** `0.419-beta`  
+**Date:** `2026-11-12 14:11:41`  
+**Scope:** `Pre-MMM Phase 2 / Borrow checking / Returned lifetimes`  
+**Status:** `Completed`
+
+### 1. Overview
+
+This entry completes the source-bound borrowed-return milestone of Pre-MMM
+Phase 2. Existing syntax already let a function declare which parameter a return
+borrows from, and direct, forwarded, and selected-source returns already worked.
+The remaining hole was lifetime enforcement at the edges: an owner could be
+transferred into an owning pointer parameter while its borrowed return was still
+live, and a borrowed source could lose liveness through an address-of assignment
+without a tracked allocation identity.
+
+### 2. Implementation Details
+
+- **What:** A borrowed return must name a live, unmoved source parameter. The
+  declaration and assignment paths now validate the source's owner liveness, and
+  an address-of origin receives an allocation identity during assignment.
+- **What:** Transferring an owner into an owning pointer parameter is rejected
+  when that allocation has a live borrow. The owner is not marked moved, so the
+  borrow remains consistent and the diagnostic identifies the invalid transfer.
+- **How:** `check_variable_declaration` adds `source->borrowed &&
+  !borrow_owner_is_live(*source)` to its source check. `check_assignment` calls
+  `ensure_allocation_id` for an unnumbered address-of origin. The owning-call
+  branch calls `has_live_borrow(source->allocation_id)` before setting ownership
+  transfer metadata.
+- **Why:** A returned borrow is only safe while the caller's owner exists and
+  cannot be moved or destroyed. Earlier checks covered deallocation, stale
+  forwarding, and outer-scope storage, but not ownership transfer through a
+  call. Adding the guard closes that accepted-invalid program without runtime
+  bookkeeping.
+- **Where:** `compiler/lib/Sema/TypeChecker.cpp`; focused cases under
+  `tests/integration/positive/borrowed_return_direct_forward_multi` and six
+  `tests/integration/negative/borrowed_return_*` directories.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `TypeChecker.cpp` declaration path | Reject a borrowed source whose own owner is no longer live | Keep returned borrows tied to live storage |
+| `TypeChecker.cpp` assignment path | Ensure an address-of origin has a tracked allocation id | Preserve lifetime identity across pointer assignment |
+| `TypeChecker.cpp` owning-call path | Reject owner transfer while `has_live_borrow` is true | Prevent moving an owner beneath a live returned borrow |
+| `positive/borrowed_return_direct_forward_multi` | Direct, forwarded, and selected-source return coverage | Prove valid source propagation |
+| Six `negative/borrowed_return_*` cases | Local, temporary, wrong-parameter, moved, live-transfer, and expired-source rejection | Prove invalid origins and escapes fail |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Clean RelWithDebInfo build | PASS | `scripts/build.ps1 -Configuration RelWithDebInfo -Clean` |
+| Unit suite | PASS | 214/214 |
+| Integration suite | PASS | 346/346 |
+| `positive/borrowed_return_direct_forward_multi` | PASS | Exit 42 |
+| `negative/borrowed_return_local_owner` | PASS | `returned borrow must come from the declared source parameter` |
+| `negative/borrowed_return_temporary_owner` | PASS | `returned borrow must come from the declared source parameter` |
+| `negative/borrowed_return_wrong_parameter` | PASS | `returned borrow must come from the declared source parameter` |
+| `negative/borrowed_return_moved_source` | PASS | `borrow return requires a named live source argument` |
+| `negative/borrowed_return_owner_move_call` | PASS | `cannot transfer an owner while a borrow is live` |
+| `negative/borrowed_return_expired_source` | PASS | `borrow of 'inner' cannot outlive its owner` |
+
+- **Build Status:** Successful.
+- **Regression Status:** None detected.
+- **Test Environment:** Windows 11 x64, MSVC 14.51.36231, LLVM/MLIR 23.1.4,
+  RelWithDebInfo.
+
+### 5. Performance & Resource Impact
+
+No runtime path changed. The new checks are semantic queries over existing
+symbol state; no counters, locks, descriptors, heap allocation, or generated
+borrow checks were added.
+
+### 6. Issues & Limitations
+
+- Borrowed returns require an explicit source parameter and do not infer one
+  from the body.
+- Source selection is not branch-sensitive; a return that may select different
+  owners on different paths is rejected unless it matches the declared source.
+- Borrowed parameters remain modularly checked: the callee treats its parameter
+  as the origin and the caller validates the real owner.
+- Borrowed struct fields still lack checked lifetimes, and mutable-borrow
+  exclusivity across nested calls remains separate work.
+- Safe rebinding of a borrowed pointer to a different live owner is still
+  rejected conservatively; closure capture and general escape analysis are not
+  implemented.
+
+### 7. Outstanding Work
+
+- [x] Implement safe borrowed returns for supported source relationships.
+- [ ] Support borrowing from aggregate fields.
+- [ ] Implement mutable-borrow exclusivity across nested calls.
+- [ ] Add closure-capture ownership rules when closures require them.
+- [ ] Add the minimum escape analysis needed for remaining lifetime transfers.
+
+### 8. Dependencies & Compatibility
+
+- **New Dependencies:** None.
+- **Removed Dependencies:** None.
+- **Platform Compatibility:** No platform-specific change.
+- **Breaking Changes:** Programs that transferred an owner while a borrowed
+  return was live are now rejected. Valid direct, forwarded, and selected-source
+  returns remain accepted.
+
+### 9. Agent Assessment
+
+- **Implementation Completeness:** Source-bound borrowed returns are complete
+  for the explicit-source form; the remaining Phase 2 checklist is untouched.
+- **Verification Confidence:** High — clean build and both full suites passed.
+- **Known Risks:** The analysis is lexical and not path-sensitive, so safe but
+  branch-selected sources remain conservatively rejected.
+- **Recommended Next Step:** Aggregate-field borrows or nested mutable-borrow
+  exclusivity, depending on the next approved Phase 2 slice.
+
+### 10. Evidence & References
+
+- **Commits:** `4eba86a` (semantic changes), `9420e6b` (focused tests)
+- **Relevant Files:** `compiler/lib/Sema/TypeChecker.cpp`,
+  `tests/integration/positive/borrowed_return_direct_forward_multi`,
+  `tests/integration/negative/borrowed_return_owner_move_call`.
+- **Documentation:** `reports/pre-mmm/phase-02.md`,
+  `project_context/Pre-MMM_ROADMAP.md`, `docs/memory/management.md`.
+
+---
+
+**End of Entry #008**
 
 <!-- REPORT ENTRIES END -->
 
