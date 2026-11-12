@@ -183,6 +183,7 @@ void SymbolTable::set_pointer_ownership(const string& name,
       found->second.owns_allocation = owns_allocation;
       found->second.borrowed = borrowed;
       found->second.mutable_borrow = mutable_borrow;
+      found->second.borrow_conditional = false;
       found->second.shared_allocation = shared_allocation;
       found->second.cleanup_callee = std::move(cleanup_callee);
       found->second.borrow_owner = std::move(borrow_owner);
@@ -346,16 +347,29 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
       const Symbol* then_symbol = then_state.lookup(destination.name);
       const Symbol* else_symbol = else_state.lookup(destination.name);
       if (!then_symbol || !else_symbol) continue;
+      const bool one_sided_borrow =
+          then_symbol->borrowed != else_symbol->borrowed;
       // The incoming state may still have an untracked allocation id (for
       // example a nullable pointer before either branch assigns a borrow). If
-      // both branches agree, their shared id is the merged identity.
+      // both branches agree, their shared id is the merged identity. A
+      // one-sided borrow may pair a tracked id with the untracked/null id.
       if (then_symbol->allocation_id != else_symbol->allocation_id) {
-        // A single symbol cannot represent different owners selected by
-        // mutually exclusive branches. Keep it unusable after the merge.
-        destination.moved = true;
-        continue;
+        const Symbol& inactive =
+            then_symbol->borrowed ? *else_symbol : *then_symbol;
+        // A one-sided borrow may pair a tracked owner with an ordinary pointer
+        // or null binding on the other path. The borrow path is still a real
+        // possibility, so retain it; ownership of an inactive owner cannot be
+        // merged away silently.
+        if (!(one_sided_borrow && !inactive.borrowed &&
+              !inactive.owns_allocation && !inactive.shared_allocation)) {
+          // A single symbol cannot represent different owners selected by
+          // mutually exclusive branches. Keep it unusable after the merge.
+          destination.moved = true;
+          continue;
+        }
       }
-      destination.allocation_id = then_symbol->allocation_id;
+      destination.allocation_id = then_symbol->allocation_id != 0
+          ? then_symbol->allocation_id : else_symbol->allocation_id;
       destination.moved = then_symbol->moved || else_symbol->moved;
       destination.owns_allocation = then_symbol->owns_allocation &&
                                     else_symbol->owns_allocation;
@@ -369,11 +383,21 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
         destination.borrow_owner = then_symbol->borrow_owner;
         destination.borrow_paths = then_symbol->borrow_paths;
         destination.borrow_paths.merge(else_symbol->borrow_paths);
+        destination.borrow_conditional = then_symbol->borrow_conditional ||
+                                         else_symbol->borrow_conditional;
+      } else if (one_sided_borrow) {
+        // The borrow may be live after the merge, but only on one path. Keep
+        // its owner and field projection so overlapping accesses are rejected;
+        // using the binding as a definite borrow is rejected at the use site.
+        const Symbol& active = then_symbol->borrowed ? *then_symbol
+                                                      : *else_symbol;
+        destination.borrow_owner = active.borrow_owner;
+        destination.borrow_paths = active.borrow_paths;
+        destination.borrow_conditional = true;
       } else {
-        // A borrow on only one path has no single safe projection after the
-        // merge; whole-owner access is the conservative choice.
         destination.borrow_owner.clear();
         destination.borrow_paths.set({});
+        destination.borrow_conditional = false;
       }
       destination.shared_allocation = then_symbol->shared_allocation ||
                                       else_symbol->shared_allocation;

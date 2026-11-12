@@ -63,6 +63,10 @@ struct Symbol {
   std::string cleanup_callee;
   bool borrowed = false;
   bool mutable_borrow = false;
+  // The borrow is live on at least one branch after a merge, but not on every
+  // path. Conflict checks must treat its field paths as possibly live, while
+  // using the binding itself as a borrow requires a definite borrow.
+  bool borrow_conditional = false;
   // Lexical depth of this binding, and for a borrow the name of the binding
   // whose storage it aliases. A borrow cannot outlive that owner, so the
   // checker validates the origin before every rebind and call.
