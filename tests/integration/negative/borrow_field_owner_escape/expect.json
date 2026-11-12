@@ -1,0 +1,5 @@
+{
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": ["borrow of 'p' cannot outlive its owner"]
+}

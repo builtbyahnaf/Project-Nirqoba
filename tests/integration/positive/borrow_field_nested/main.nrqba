@@ -1,0 +1,15 @@
+struct Inner {
+    int value;
+}
+
+struct Outer {
+    Inner inner;
+    int other;
+}
+
+int function main() {
+    var o = Outer { inner: Inner { value: 17 }, other: 4 };
+    let value = &o.inner.value;
+    o.other = 5;
+    return *value + o.other;
+}

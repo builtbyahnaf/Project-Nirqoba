@@ -1,0 +1,12 @@
+struct P {
+    int x;
+}
+
+int function main() {
+    @Nullable var ptr int escaped = nullptr;
+    {
+        var p = P { x: 3 };
+        escaped = &p.x;
+    }
+    return 0;
+}

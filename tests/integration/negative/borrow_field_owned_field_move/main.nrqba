@@ -1,0 +1,11 @@
+struct Holder {
+    owned_array<int> data;
+    int tag;
+}
+
+int function main() {
+    var h = Holder { data: memory.owned_array<int>(1), tag: 5 };
+    let tag = &h.tag;
+    let moved = h.data;
+    return *tag;
+}
