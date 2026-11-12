@@ -111,6 +111,10 @@
   path are rejected, argument order participates in exclusivity, forwarded
   returned borrows retain their path, and disjoint sibling fields remain
   independently borrowable (`0.427-beta`, `reports/pre-mmm/phase-02.md`).
+- [x] Preserve branch-selected borrow paths across conditional merges.
+  Distinct possible field paths are retained and all are checked for overlap,
+  while a one-sided borrow falls back to whole-owner access and different owner
+  allocations remain unusable (`0.431-beta`, `reports/pre-mmm/phase-02.md`).
 - [ ] Add closure-capture ownership rules when closure support requires them.
 - [ ] Prevent borrowed references from escaping their owner's lifetime.
 - [ ] Implement the minimum escape analysis needed to reject invalid lifetime transfers.

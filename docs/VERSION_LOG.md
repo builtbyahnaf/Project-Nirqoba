@@ -12,6 +12,31 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.431-beta (working build)
+
+### Summary of Changes (since `0.427-beta`):
+
+*Opened after branch-selected borrow paths became first-class semantic state.*
+
+- **Branches keep every possible field path.** When both arms leave a live borrow
+  of the same owner, the merged binding records `.x` and `.y` (or any nested
+  pair) instead of degrading to whole-owner access.
+- **Every path is checked.** A later mutable borrow, immutable borrow, read, call
+  argument, or returned borrow conflicts if it overlaps any possible path, while
+  a field disjoint from all alternatives remains usable.
+- **Aliases and calls preserve the set.** Branch-selected paths survive pointer
+  aliases, borrowed-return calls, and call-argument ordering. Returning a borrow
+  from an ambiguous live alias is rejected instead of creating a second mutable
+  alias.
+- **Owner identity survives the merge.** The merge carries the shared borrow
+  owner and adopts the branch allocation identity when both arms agree, so later
+  conflict queries use the owner the paths actually reference.
+- **Conservative fallbacks remain visible.** A borrow on only one arm falls back
+  to whole-owner access, and different owner allocations mark the binding
+  unusable.
+- **No runtime cost.** Path sets and conflict checks are compile-time only; no
+  counters, locks, descriptors, allocations, or generated checks were added.
+
 ## Version 0.427-beta (working build)
 
 ### Summary of Changes (since `0.423-beta`):

@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.427-beta` |
+| Current Working Version | `0.431-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-12 15:02:47` |
-| Report Entries | `10` |
+| Last Report Update | `2026-11-13 00:44:39` |
+| Report Entries | `11` |
 
 ---
 
@@ -1255,6 +1255,146 @@ checks. No benchmark is claimed for this increment.
 ---
 
 **End of Entry #010**
+
+## Entry #011 — Pre-MMM Phase 2: Branch-selected borrow paths
+
+**Version:** `0.431-beta`  
+**Date:** `2026-11-13 00:44:39`  
+**Scope:** `Pre-MMM Phase 2 / Borrow checking / Branch-sensitive paths`  
+**Status:** `Completed`
+
+### 1. Overview
+
+Conditional merges previously collapsed a borrowed binding's field path to the
+whole owner whenever the two branches disagreed. That was sound but rejected
+access to fields that were provably disjoint from both possible paths. This entry
+replaces the single path with a compact set of possible paths. Conflict checks
+test every path, so overlapping accesses still fail while disjoint fields remain
+available. The set is populated only when branches diverge, and the analysis has
+no runtime cost.
+
+### 2. Implementation Details
+
+- **What:** Added `BorrowPathSet` to `Symbol`, holding one primary path plus an
+  alternative vector. The vector stays empty for ordinary borrows; only a branch
+  merge with different paths allocates it.
+- **What:** `merge_conditional_ownership` now retains both branches' paths when
+  both leave a live borrow of the same owner. It carries the shared borrow owner
+  and adopts the allocation identity the branches agree on, even if the incoming
+  state had an untracked id. One-sided borrows fall back to whole-owner access;
+  different owner allocations mark the binding unusable.
+- **What:** `find_borrow_paths` replaces `find_borrow_field_path` and propagates
+  path sets through address-of, dereference, member projections, pointer aliases,
+  array views, and source-bound borrowed returns.
+- **What:** Conflict queries (`find_conflicting_borrow`, active call claims,
+  reads, writes) test the full path set. `borrow_display` names every possible
+  path in diagnostics. A returned borrow from an ambiguous live alias is rejected
+  instead of creating a second mutable alias.
+- **How:** `BorrowPathSet::overlaps` tests the primary path and each alternative
+  with the existing segment-prefix `borrow_paths_overlap` rule. `add`/`merge`
+  deduplicate and keep a whole-owner path dominant. `has_live_field_borrow`
+  ignores whole-owner paths as before but tests every projected alternative.
+- **Why:** A branch may select either field borrow at runtime. Discarding one path
+  loses useful precision; keeping a single arbitrary path is unsound. Keeping all
+  possible paths is both sound and precise for disjoint fields.
+- **Where:** `compiler/include/nirqoba/Sema/SymbolTable.h`,
+  `compiler/lib/Sema/SymbolTable.cpp`, `compiler/include/nirqoba/Sema/TypeChecker.h`,
+  `compiler/lib/Sema/TypeChecker.cpp`.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `SymbolTable.h` / `.cpp` | Added `BorrowPathSet`, overlap/add/merge helpers, and path-set queries | Retain distinct branch possibilities without runtime overhead |
+| `SymbolTable.cpp` | Merged path sets, owners, and agreed allocation ids across branches | Make post-merge conflict queries refer to the real owner |
+| `TypeChecker.h` / `.cpp` | Replaced single-path propagation with `find_borrow_paths` | Preserve alternatives through aliases, calls and returns |
+| `TypeChecker.cpp` | Updated reads, borrows, assignments and call arguments to use path sets | Reject any overlap while accepting provably disjoint paths |
+| `TypeChecker.cpp` | Rejected a returned borrow from an ambiguous live alias | Avoid a second mutable alias of the same borrow |
+| `branch_borrow_paths_*` cases | Three positives and five negatives | Cover direct, nested, call, alias and read behavior |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Clean RelWithDebInfo build | PASS | `scripts/build.ps1 -Configuration RelWithDebInfo -Clean` |
+| Unit suite | PASS | 214/214 on rerun; known GC flake crashed once first |
+| Integration suite | PASS | 375/375 |
+| `positive/branch_borrow_paths_disjoint` | PASS | Output `9`; `.x`/`.y` branch paths leave `p.z` available |
+| `positive/branch_borrow_paths_nested` | PASS | Output `9`; `.inner.a`/`.inner.b` leave `o.z` available |
+| `positive/branch_borrow_paths_call` | PASS | Ambiguous path set survives a borrowed-return call with disjoint `p.z` |
+| `negative/branch_borrow_paths_overlap` | PASS | Later `p.x` borrow rejected |
+| `negative/branch_borrow_paths_nested_overlap` | PASS | Later `o.inner.a` borrow rejected |
+| `negative/branch_borrow_paths_call_overlap` | PASS | Forwarded path set conflicts with a second argument |
+| `negative/branch_borrow_paths_alias_conflict` | PASS | Both `p.x` and `p.y` named in the alias conflict |
+| `negative/branch_borrow_paths_read_overlap` | PASS | Reading a possible branch path rejected |
+
+- **Build Status:** Successful.
+- **Regression Status:** None detected in integration or focused tests. The known
+  flaky GC case crashed once on the first post-clean unit run and passed on the
+  immediate rerun of the same binary; no source change was made between runs.
+- **Test Environment:** Windows 11 x64, MSVC 14.51.36231, LLVM/MLIR 23.1.4,
+  RelWithDebInfo.
+
+### 5. Performance & Resource Impact
+
+No runtime path changed. The path set is semantic state only. A single path keeps
+the existing string representation; the alternatives vector is empty and does not
+allocate unless branches select different paths. Conflict checks perform the
+small path-set comparison already required by field-aware borrowing. No runtime
+counters, locks, descriptors, heap allocations, or generated checks were added.
+
+### 6. Issues & Limitations
+
+- Precision depends on both branches leaving a live borrow of the same owner. A
+  one-sided borrow falls back to whole-owner access, and branches that select
+  different owner allocations mark the binding unusable.
+- The callee still treats a borrowed parameter as its own origin and does not
+  receive the caller's live-borrow set; interprocedural effects are not inferred.
+- Conditional owner selection remains unsupported beyond marking the binding
+  unusable. Closure capture and general escape analysis remain out of scope.
+- Borrowed struct fields still do not carry an independently checked lifetime, and
+  safe rebinding to a different live owner remains conservatively rejected.
+
+### 7. Outstanding Work
+
+- [x] Preserve branch-selected borrow paths across conditional merges.
+- [ ] Add closure-capture ownership rules when closures require them.
+- [ ] Add the minimum escape analysis needed for remaining lifetime transfers.
+- [ ] Support branch-selected owner identity when that becomes a practical need.
+
+### 8. Dependencies & Compatibility
+
+- **New Dependencies:** None.
+- **Removed Dependencies:** None.
+- **Platform Compatibility:** No platform-specific change.
+- **Breaking Changes:** Programs that previously relied on a disagreeing branch
+  collapsing to whole-owner access now retain the distinct paths. This accepts
+  more disjoint accesses and rejects overlapping ones more precisely; no valid
+  existing suite changed behavior.
+
+### 9. Agent Assessment
+
+- **Implementation Completeness:** Complete for conditional field-path merges,
+  including nested projections, aliases, call arguments and borrowed returns.
+- **Verification Confidence:** High — clean build and both full suites passed.
+- **Known Risks:** One-sided borrows and different owner allocations remain
+  conservative; callee effects are still modular.
+- **Recommended Next Step:** Closure-capture ownership rules, or branch-selected
+  owner identity if real programs require it.
+
+### 10. Evidence & References
+
+- **Commits:** `6f26f35` (semantic changes), `c06ef19` (focused tests)
+- **Relevant Files:** `compiler/lib/Sema/SymbolTable.cpp`,
+  `compiler/lib/Sema/TypeChecker.cpp`,
+  `tests/integration/positive/branch_borrow_paths_disjoint`,
+  `tests/integration/negative/branch_borrow_paths_overlap`.
+- **Documentation:** `reports/pre-mmm/phase-02.md`,
+  `project_context/Pre-MMM_ROADMAP.md`, `docs/memory/management.md`.
+
+---
+
+**End of Entry #011**
 
 <!-- REPORT ENTRIES END -->
 
