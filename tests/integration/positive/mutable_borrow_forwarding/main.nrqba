@@ -1,0 +1,26 @@
+struct P {
+    int x;
+    int y;
+}
+
+borrow mut source int* function inner(borrow mut int* source) {
+    return source;
+}
+
+borrow mut source int* function outer(borrow mut int* source) {
+    return inner(source);
+}
+
+borrow mut source int* function writable(borrow mut int* source) {
+    return source;
+}
+
+int function main() {
+    var p = P { x: 1, y: 2 };
+    var x = outer(&p.x);
+    var y = writable(&p.y);
+    *x = 6;
+    *y = 9;
+    print(*x + *y);
+    return 0;
+}

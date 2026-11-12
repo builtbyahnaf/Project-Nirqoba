@@ -1,0 +1,26 @@
+struct P {
+    int x;
+    int y;
+}
+
+borrow mut source int* function writable(borrow mut int* source) {
+    return source;
+}
+
+void function assign_pair(borrow mut int* first, borrow mut int* second) {
+    *first = 10;
+    *second = 20;
+}
+
+int function main() {
+    var p = P { x: 1, y: 2 };
+    {
+        var x = writable(&p.x);
+        var y = writable(&p.y);
+        *x = 7;
+        *y = 8;
+    }
+    assign_pair(&p.x, &p.y);
+    print(p.x + p.y);
+    return 0;
+}

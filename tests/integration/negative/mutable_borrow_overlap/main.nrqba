@@ -1,0 +1,15 @@
+struct P {
+    int x;
+    int y;
+}
+
+borrow mut source int* function writable(borrow mut int* source) {
+    return source;
+}
+
+int function main() {
+    var p = P { x: 1, y: 2 };
+    var first = writable(&p.x);
+    var second = writable(&p.x);
+    return *first + *second;
+}

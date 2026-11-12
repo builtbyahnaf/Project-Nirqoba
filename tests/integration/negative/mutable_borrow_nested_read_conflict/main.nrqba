@@ -1,0 +1,20 @@
+struct Inner {
+    int value;
+    int other;
+}
+
+struct Outer {
+    Inner inner;
+    int tag;
+}
+
+borrow mut source int* function writable(borrow mut int* source) {
+    return source;
+}
+
+int function main() {
+    var o = Outer { inner: Inner { value: 1, other: 2 }, tag: 3 };
+    var view = writable(&o.inner.value);
+    print(o.inner.value);
+    return *view;
+}
