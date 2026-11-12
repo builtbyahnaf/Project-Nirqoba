@@ -17,11 +17,19 @@ static std::string borrow_display(const std::string& owner,
   return path.empty() ? owner : owner + path;
 }
 
+static std::string borrow_display(const std::string& owner,
+                                  const BorrowPathSet& paths) {
+  std::string display = borrow_display(owner, paths.path);
+  for (const std::string& alternative : paths.alternatives)
+    display += "' or '" + borrow_display(owner, alternative);
+  return display;
+}
+
 static std::string borrow_display(const Symbol& symbol) {
   const std::string owner =
       symbol.borrowed && !symbol.borrow_owner.empty() ? symbol.borrow_owner
                                                       : symbol.name;
-  return borrow_display(owner, symbol.borrow_field);
+  return borrow_display(owner, symbol.borrow_paths);
 }
 
 static std::string field_display(const std::string& path) {
@@ -1021,8 +1029,8 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
             symbol.allocation_id = origin_id;
             symbol.borrowed = true;
             symbol.borrow_owner = borrow_owner_name(*origin);
-            symbol.borrow_field =
-                find_borrow_field_path(declaration.initializer());
+            symbol.borrow_paths =
+                find_borrow_paths(declaration.initializer());
             symbol.cleanup_callee = origin->cleanup_callee;
           }
         }
@@ -1084,12 +1092,22 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
             symbol.owns_allocation = false;
             symbol.allocation_id = source->allocation_id;
             symbol.borrow_owner = borrow_owner_name(*source);
-            symbol.borrow_field = find_borrow_field_path(
+            symbol.borrow_paths = find_borrow_paths(
                 *call.arguments()[source_index]);
             symbol.cleanup_callee = source->cleanup_callee;
-            // The call's borrow argument already rejects a conflicting live
-            // borrow and records same-call exclusivity, so the declaration does
-            // not repeat that diagnostic.
+            // The call's borrow argument already rejects conflicts with other
+            // live symbols. It deliberately skips the source alias itself, so a
+            // returned borrow that would create a second mutable alias of that
+            // same live source is rejected here instead.
+            if (source->borrowed &&
+                (signature->returns_mutable_borrow || source->mutable_borrow) &&
+                source->borrow_paths.overlaps(symbol.borrow_paths)) {
+              diagnostics_.error(
+                  diag::kTypeMismatch, declaration.initializer().location(),
+                  "returned borrow of '" + borrow_display(symbol) +
+                      "' conflicts with live borrow '" +
+                      borrow_display(*source) + "'");
+            }
             if (signature->returns_mutable_borrow &&
                 declaration.binding() != BindingKind::Var)
               diagnostics_.error(diag::kImmutableAssignment, declaration.location(),
@@ -1108,7 +1126,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
           symbol.borrowed = true;
           symbol.mutable_borrow = source->mutable_borrow;
           symbol.borrow_owner = borrow_owner_name(*source);
-          symbol.borrow_field = source->borrow_field;
+          symbol.borrow_paths = source->borrow_paths;
         }
         symbol.shared_allocation = source->shared_allocation;
         symbol.cleanup_callee = source->cleanup_callee;
@@ -1398,9 +1416,13 @@ bool TypeChecker::borrow_owner_is_live(const Symbol& borrow) const {
   const Symbol* owner = symbols_.lookup(borrow.borrow_owner);
   if (!owner || owner->moved || owner->allocation_id != borrow.allocation_id)
     return false;
-  if (!borrow.borrow_field.empty() &&
-      symbols_.field_is_moved(owner->name, borrow.borrow_field))
+  if (!borrow.borrow_paths.path.empty() &&
+      symbols_.field_is_moved(owner->name, borrow.borrow_paths.path))
     return false;
+  for (const string& alternative : borrow.borrow_paths.alternatives)
+    if (!alternative.empty() &&
+        symbols_.field_is_moved(owner->name, alternative))
+      return false;
   return true;
 }
 
@@ -1410,12 +1432,12 @@ std::string TypeChecker::borrow_owner_name(const Symbol& origin) const {
 }
 
 bool TypeChecker::active_borrow_conflicts(uint64_t allocation_id,
-                                          const std::string& path,
+                                          const BorrowPathSet& paths,
                                           bool requested_mutable) const {
   if (allocation_id == 0) return false;
   for (const ActiveBorrow& borrow : active_call_borrows_) {
     if (borrow.allocation_id != allocation_id ||
-        !borrow_paths_overlap(borrow.path, path))
+        !borrow.paths.overlaps(paths))
       continue;
     if (requested_mutable || borrow.mutable_borrow) return true;
   }
@@ -1423,11 +1445,11 @@ bool TypeChecker::active_borrow_conflicts(uint64_t allocation_id,
 }
 
 bool TypeChecker::has_live_mutable_access(uint64_t allocation_id,
-                                          const std::string& path) const {
+                                          const BorrowPathSet& paths) const {
   if (allocation_id == 0) return false;
-  if (symbols_.find_conflicting_borrow(allocation_id, false, path))
+  if (symbols_.find_conflicting_borrow(allocation_id, false, paths))
     return true;
-  return active_borrow_conflicts(allocation_id, path, false);
+  return active_borrow_conflicts(allocation_id, paths, false);
 }
 
 const Symbol* TypeChecker::find_borrow_origin(const Expr& expression) const {
@@ -1457,29 +1479,29 @@ const Symbol* TypeChecker::find_borrow_origin(const Expr& expression) const {
   return find_borrow_origin(*call.arguments()[source_index]);
 }
 
-std::string TypeChecker::find_borrow_field_path(const Expr& expression) const {
+BorrowPathSet TypeChecker::find_borrow_paths(const Expr& expression) const {
   if (expression.kind() == Expr::Kind::Unary) {
     const auto& unary = static_cast<const UnaryExpr&>(expression);
     if (unary.op() == UnaryOp::AddressOf || unary.op() == UnaryOp::Dereference)
-      return find_borrow_field_path(unary.operand());
+      return find_borrow_paths(unary.operand());
     return {};
   }
   if (expression.kind() == Expr::Kind::MemberAccess) {
     string root;
     string path;
-    if (field_path(expression, root, path)) return path;
+    if (field_path(expression, root, path)) return BorrowPathSet{path};
     return {};
   }
   if (expression.kind() == Expr::Kind::Name) {
     const Symbol* symbol = symbols_.lookup(
         static_cast<const NameExpr&>(expression).name());
-    return symbol && symbol->borrowed ? symbol->borrow_field : std::string{};
+    return symbol && symbol->borrowed ? symbol->borrow_paths : BorrowPathSet{};
   }
   if (expression.kind() != Expr::Kind::Call) return {};
   const auto& call = static_cast<const CallExpr&>(expression);
   if ((call.callee() == "memory.array_view" ||
        call.callee() == "memory.array_view_mut") && !call.arguments().empty())
-    return find_borrow_field_path(*call.arguments().front());
+    return find_borrow_paths(*call.arguments().front());
   const FunctionSignature* signature = find_function(call.callee());
   if (!signature || !signature->returns_borrowed) return {};
   const auto source_parameter = std::find(
@@ -1489,7 +1511,7 @@ std::string TypeChecker::find_borrow_field_path(const Expr& expression) const {
   const size_t source_index = static_cast<size_t>(
       source_parameter - signature->parameter_names.begin());
   if (source_index >= call.arguments().size()) return {};
-  return find_borrow_field_path(*call.arguments()[source_index]);
+  return find_borrow_paths(*call.arguments()[source_index]);
 }
 
 void TypeChecker::consume_field_move(Expr& expression, const Type& value_type) {
@@ -1881,7 +1903,7 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     bool shared_allocation = source && source->shared_allocation;
     std::string cleanup_callee = source ? source->cleanup_callee : std::string{};
     std::string borrow_owner;
-    std::string borrow_field;
+    BorrowPathSet borrow_paths;
     bool owns_allocation = source && source->owns_allocation && !source->moved;
     if (assignment.value().kind() == Expr::Kind::Call) {
       const auto& call = static_cast<const CallExpr&>(assignment.value());
@@ -1927,13 +1949,13 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       borrowed = true;
       mutable_borrow = requested_mutable;
       borrow_owner = borrow_owner_name(*borrow_origin);
-      borrow_field = find_borrow_field_path(assignment.value());
+      borrow_paths = find_borrow_paths(assignment.value());
       const string requested_display =
-          borrow_display(borrow_owner, borrow_field);
+          borrow_display(borrow_owner, borrow_paths);
       const Symbol* conflict = !assignment.value().type().is_valid()
           ? nullptr
           : symbols_.find_conflicting_borrow(
-                allocation_id, requested_mutable, borrow_field, assignment.name());
+                allocation_id, requested_mutable, borrow_paths, assignment.name());
       if (conflict) {
         diagnostics_.error(
             diag::kTypeMismatch, assignment.value().location(),
@@ -1946,7 +1968,7 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
         return;
       }
       if (assignment.value().type().is_valid() &&
-          active_borrow_conflicts(allocation_id, borrow_field,
+          active_borrow_conflicts(allocation_id, borrow_paths,
                                   requested_mutable)) {
         diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
                            "conflicting borrows of '" + requested_display +
@@ -1966,7 +1988,7 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     symbols_.rebind_pointer(assignment.name(), allocation_id);
     symbols_.set_pointer_ownership(assignment.name(), owns_allocation, borrowed,
                                    mutable_borrow, shared_allocation, cleanup_callee,
-                                   borrow_owner, borrow_field);
+                                   borrow_owner, borrow_paths);
     assignment.set_cleanup_callee(cleanup_callee);
   }
 }
@@ -2616,19 +2638,19 @@ Type TypeChecker::check_expression(Expr& expr) {
             type = Type::error();
           } else {
             const Symbol* origin = find_borrow_origin(unary.operand());
-            const string path = find_borrow_field_path(unary);
+            const BorrowPathSet paths = find_borrow_paths(unary);
             const Symbol* conflict = origin && origin->allocation_id != 0
                 ? symbols_.find_conflicting_borrow(
-                      origin->allocation_id, false, path,
+                      origin->allocation_id, false, paths,
                       origin->borrowed ? origin->name : std::string{})
                 : nullptr;
             if (conflict ||
                 (origin && active_borrow_conflicts(
-                               origin->allocation_id, path, false))) {
+                               origin->allocation_id, paths, false))) {
               diagnostics_.error(
                   diag::kTypeMismatch, unary.location(),
                   "cannot create a borrow of '" +
-                      borrow_display(borrow_owner_name(*origin), path) +
+                      borrow_display(borrow_owner_name(*origin), paths) +
                       "' while a mutable borrow is live");
               type = Type::error();
             } else {
@@ -3111,7 +3133,8 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
     string path;
     if (!field_path(access, root, path)) return;
     const Symbol* owner = symbols_.lookup(root);
-    if (owner && has_live_mutable_access(owner->allocation_id, path)) {
+    if (owner &&
+        has_live_mutable_access(owner->allocation_id, BorrowPathSet{path})) {
       diagnostics_.error(
           diag::kTypeMismatch, access.location(),
           "cannot read aggregate field '" + field_display(path) +
@@ -4848,12 +4871,12 @@ Type TypeChecker::check_call(CallExpr& call) {
         diagnostics_.error(diag::kImmutableAssignment, call.arguments()[i]->location(),
                            "mutable borrowing requires a mutable binding");
       }
-      const string borrowed_field_path =
-          find_borrow_field_path(*call.arguments()[i]);
+      const BorrowPathSet borrowed_paths =
+          find_borrow_paths(*call.arguments()[i]);
       const string requested_display =
-          borrow_display(borrow_owner_name(*source), borrowed_field_path);
+          borrow_display(borrow_owner_name(*source), borrowed_paths);
       const Symbol* conflict = symbols_.find_conflicting_borrow(
-          source->allocation_id, mutable_borrow, borrowed_field_path,
+          source->allocation_id, mutable_borrow, borrowed_paths,
           source->borrowed ? source->name : std::string{});
       if (conflict) {
         diagnostics_.error(
@@ -4866,7 +4889,7 @@ Type TypeChecker::check_call(CallExpr& call) {
                       borrow_display(*conflict) + "'");
         continue;
       }
-      if (active_borrow_conflicts(source->allocation_id, borrowed_field_path,
+      if (active_borrow_conflicts(source->allocation_id, borrowed_paths,
                                   mutable_borrow)) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                            "conflicting borrows of '" + requested_display +
@@ -4874,7 +4897,7 @@ Type TypeChecker::check_call(CallExpr& call) {
         continue;
       }
       active_call_borrows_.push_back(ActiveBorrow{
-          source->allocation_id, borrowed_field_path, mutable_borrow});
+          source->allocation_id, borrowed_paths, mutable_borrow});
     } else if (source && source->borrowed) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "a borrowed pointer cannot be transferred to an owning parameter");

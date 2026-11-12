@@ -8,6 +8,7 @@
 
 #include <string>
 #include <cstdint>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -22,6 +23,30 @@ namespace nirq {
 // ancestor/descendant pair, or either whole-binding empty path. Independent
 // sibling paths do not overlap.
 bool borrow_paths_overlap(const std::string& left, const std::string& right);
+
+// The possible field paths of a borrow. A single path stays in `path`; only a
+// branch merge with different paths allocates `alternatives`, so the common
+// case adds no container cost. Empty `path` means the whole binding.
+struct BorrowPathSet {
+  std::string path;
+  std::vector<std::string> alternatives;
+
+  BorrowPathSet() = default;
+  explicit BorrowPathSet(std::string value) : path(std::move(value)) {}
+
+  void set(std::string value) {
+    path = std::move(value);
+    alternatives.clear();
+  }
+  void add(const std::string& value);
+  void merge(const BorrowPathSet& other);
+  bool overlaps(const std::string& requested) const;
+  bool overlaps(const BorrowPathSet& requested) const;
+  // Whole-owner paths (empty) are ignored: this answers whether a projected
+  // field borrow overlaps the request.
+  bool overlaps_field(const std::string& requested) const;
+  bool has_field_projection() const;
+};
 
 struct Symbol {
   std::string name;
@@ -43,9 +68,11 @@ struct Symbol {
   // checker validates the origin before every rebind and call.
   std::size_t scope_depth = 0;
   std::string borrow_owner;
-  // Dotted field path from borrow_owner when this borrow aliases a field, for
-  // example `.inner.data`. Empty means the borrow covers the whole binding.
-  std::string borrow_field;
+  // Dotted field paths from borrow_owner when this borrow aliases a field, for
+  // example `.inner.data`. A branch merge keeps every possible path so a later
+  // overlapping access is rejected while disjoint fields stay available. An
+  // empty path means the borrow covers the whole binding.
+  BorrowPathSet borrow_paths;
   // Set for '@Nullable' pointer bindings: the value may be nullptr, so dereference
   // requires a non-null proof in the current branch.
   bool nullable = false;
@@ -90,7 +117,7 @@ class SymbolTable {
   // mutable borrows; mutable requests conflict with either kind.
   const Symbol* find_conflicting_borrow(
       uint64_t allocation_id, bool requested_mutable,
-      const std::string& requested_path = {},
+      const BorrowPathSet& requested_paths = {},
       const std::string& except_name = {}) const;
   void rebind_pointer(const std::string& name, uint64_t allocation_id);
   void set_pointer_ownership(const std::string& name, bool owns_allocation,
@@ -98,7 +125,7 @@ class SymbolTable {
                              bool shared_allocation = false,
                              std::string cleanup_callee = {},
                              std::string borrow_owner = {},
-                             std::string borrow_field = {});
+                             BorrowPathSet borrow_paths = {});
   void set_borrowed_resource_domain(const std::string& name,
                                     std::string cleanup_callee);
   bool field_is_moved(const std::string& name, const std::string& path) const;
