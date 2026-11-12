@@ -1,9 +1,9 @@
 # Pre-MMM Phase 2 - Lifetime propagation, borrowed returns, aggregate fields, and exclusivity
 
-**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, mutable-borrow exclusivity, branch-selected borrow paths, and one-sided conditional borrows complete)
-**Version:** 0.437-beta
+**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, mutable-borrow exclusivity, branch-selected borrow paths, one-sided conditional borrows, and null-check refinement complete; release pending `0.445-beta`)
+**Version:** 0.437-beta (unreleased `0.445-beta` work)
 **Date:** 2026-11-13
-**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`, `6f26f35`, `c06ef19`, `3959176`, `3e068c4`, `c4c684a`
+**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`, `6f26f35`, `c06ef19`, `3959176`, `3e068c4`, `c4c684a`, `fef0d00`, `58124f3`
 
 ## Implemented
 
@@ -166,6 +166,29 @@ possible but not present on every path.
   existing inline path. No runtime counters, locks, descriptors, allocations, or
   generated checks were added.
 
+## Flow-sensitive null refinement (pending 0.445-beta)
+
+A conditional borrow is no longer permanently indefinite. When one branch
+proves the binding non-null and the path where the borrow is absent is known to
+be null, the branch state clears the conditional marker and treats the borrow as
+definite. This is a semantic refinement only; the owner, mutability, and field
+path set are unchanged.
+
+- The one-sided merge records `borrow_conditional_absent_null` from the absent
+  branch. A non-null check refines only when that flag is true, so a non-null
+  pointer to another object cannot be mistaken for the conditional borrow.
+- Definite nullness is tracked with a compile-time flag. `nullptr` declarations
+  and assignments set it, other pointer assignments clear it, and branch merges
+  combine it with logical AND.
+- `if (view != nullptr)` refines the then-branch; `if (view == nullptr)` refines
+  the else path. If the null branch cannot fall through, the refined state
+  continues after the statement.
+- The refinement is branch-local. A join where both paths continue restores the
+  conditional marker, the null path keeps it, and a later assignment replaces it.
+- Confirmed conditional borrows still enforce their field-path exclusion. A
+  later borrow or read of the same path is rejected; disjoint fields remain
+  available. No runtime counters, locks, allocations, or generated checks exist.
+
 ## Tests
 
 - `positive/branch_borrow_paths_disjoint`: branch-selected `.x`/`.y` paths leave
@@ -196,6 +219,18 @@ possible but not present on every path.
   rejected as not definitely live.
 - `negative/one_sided_borrow_paths_return`: forwarding the conditional binding
   through a borrowed-return call is rejected as not definitely live.
+- `positive/conditional_borrow_null_refinement`: a non-null branch refines the
+  borrow, accepts an alias and a disjoint `p.z` borrow, and prints `9`, `4`.
+- `positive/conditional_borrow_guard_refinement`: an early return on the null
+  path carries the refined borrow past the guard; output `9`.
+- `positive/conditional_borrow_call_refinement`: a refined immutable borrow is
+  accepted by a nested read call; output `7`.
+- `negative/conditional_borrow_null_path`: aliasing the conditional borrow in
+  the null path is still rejected.
+- `negative/conditional_borrow_fallthrough`: refinement does not survive a join
+  where both paths continue; the later alias is rejected.
+- `negative/conditional_borrow_refined_overlap`: a refined borrow still rejects
+  a new borrow of the same field.
 - `positive/mutable_borrow_disjoint_fields`: mutable borrows of `p.x` and `p.y`
   coexist, and a call receives both disjoint field borrows; output `30`.
 - `positive/mutable_borrow_forwarding`: a mutable field borrow survives two
@@ -262,10 +297,11 @@ possible but not present on every path.
 
 ## Verification
 
-- Clean `RelWithDebInfo` build at `0.437-beta`.
+- Clean `RelWithDebInfo` build at `0.437-beta` (unreleased `0.445-beta` work).
 - Unit suite: 214/214 passed on the first post-clean run.
-- Integration suite: 381/381 passed, including the eight branch-path cases, the
-  six one-sided cases, and all previous mutable-borrow and aggregate-field cases.
+- Integration suite: 387/387 passed, including the eight branch-path cases, the
+  six one-sided cases, the six null-refinement cases, and all previous
+  mutable-borrow and aggregate-field cases.
 
 ## Limitations
 
@@ -280,10 +316,11 @@ possible but not present on every path.
 - Aggregate field borrowing is limited to leaf fields with numeric, boolean or
   pointer storage. Aggregate-valued fields, owned arrays and managed references
   remain unaddressable.
-- A one-sided borrow keeps its field path but is marked conditional. It cannot
-  be used as a definite borrow (alias, call argument, or return), so some
-  programs that explicitly guard the borrow's existence may still be rejected.
-  Branches that select different owner allocations mark the binding unusable.
+- A one-sided borrow keeps its field path but is marked conditional. It becomes
+  definite only after a non-null guard when the absent path is provably null.
+  The refinement is lost at a join where both paths continue, and it is not
+  available on the null path. Branches that select different owner allocations
+  still mark the binding unusable.
 - Owning aggregates still use the existing broad live-borrow guard for owner
   mutation, so an independent field write may be rejected conservatively and the
   diagnostic retains array-view wording.

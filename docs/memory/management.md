@@ -477,12 +477,13 @@ symbol, so a later read, write, or borrow overlapping the retained path is
 rejected exactly as if the borrow were definitely live; a disjoint sibling field
 remains accessible.
 
-A conditional borrow is not a definite borrow. Aliasing it, taking a new borrow
-through it, forwarding it to a call, or returning it produces `borrow of '...'
-may not be live on every branch`. That keeps the alias and returned-borrow rules
-sound without pretending the binding exists on both paths. Null checks and other
-ordinary pointer uses remain available, and an explicit assignment replaces the
-conditional state with the new binding's state.
+Outside a proven non-null guard, a conditional borrow is not a definite borrow.
+Aliasing it, taking a new borrow through it, forwarding it to a call, or
+returning it produces `borrow of '...' may not be live on every branch`. That
+keeps the alias and returned-borrow rules sound without pretending the binding
+exists on both paths. Null checks and other ordinary pointer uses remain
+available, and an explicit assignment replaces the conditional state with the
+new binding's state.
 
 The merge adopts the active branch's allocation identity when the other side is
 an ordinary or untracked pointer. If the inactive side owns or shares an
@@ -490,3 +491,28 @@ allocation, the binding remains unusable, so two owners are never collapsed into
 one. The flag is one boolean on the existing symbol and the path is the existing
 inline path, preserving the ordinary single-path fast path. No runtime counters,
 locks, descriptors, allocations, or generated checks were added.
+
+## Null-check refinement (pending 0.445-beta)
+
+A conditional borrow can be discharged on a path that explicitly proves the
+binding non-null. The merge records whether the path where the borrow is absent
+is definitely null; a non-null check can only turn the binding into a definite
+borrow when that condition holds. This prevents a non-null pointer to a
+different object from being mistaken for the borrow.
+
+Definite nullness is tracked as a small compile-time flag on the symbol. It is
+set by a `nullptr` declaration or assignment, cleared by any other pointer
+assignment, and merged with logical AND across branches. The merge also records
+`borrow_conditional_absent_null` on the one-sided conditional symbol.
+
+Inside `if (view != nullptr)`, or the else path of `if (view == nullptr)`, the
+branch state clears `borrow_conditional` when the absent path is null. The
+binding keeps its owner, mutability, and field-path set, so nested calls, aliases,
+and dereferences are accepted only while that non-null proof holds. The proof is
+branch-local: a join where both paths continue restores the conditional flag, a
+null path keeps it, and an early-return guard carries the refined state forward.
+
+Field-path exclusion is unchanged after refinement. A definite conditional
+borrow still blocks a later borrow or read of the same path, while disjoint
+fields remain available. The refinement adds two booleans to the existing symbol
+and no runtime state, counters, locks, allocations, or generated checks.
