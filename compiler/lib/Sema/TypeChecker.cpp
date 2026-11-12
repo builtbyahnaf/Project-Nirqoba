@@ -1086,6 +1086,9 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
               (source->borrowed && !borrow_owner_is_live(*source))) {
             diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
                                "borrow return requires a named live source argument");
+          } else if (source->borrow_conditional) {
+            // The call argument check already reports the conditional source;
+            // do not also create a definite returned borrow from it.
           } else {
             symbol.borrowed = true;
             symbol.mutable_borrow = signature->returns_mutable_borrow;
