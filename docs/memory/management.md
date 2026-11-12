@@ -408,10 +408,10 @@ aggregate replacement is also rejected. Compound writes such as `obj.data += 1`
 follow the same rule, while a different sibling field remains writable.
 
 Field borrowing is limited to leaves with numeric, boolean or pointer storage.
-Aggregate-valued fields, owned arrays and managed references cannot be addressed,
-and paths are not merged path-sensitively across conditional branches. Owning
-aggregates keep the existing broad live-borrow mutation guard, so some unrelated
-field writes remain conservatively rejected. No runtime state or checks are added.
+Aggregate-valued fields, owned arrays and managed references cannot be addressed.
+Branch-selected paths were not yet retained at 0.423; 0.431 preserves them.
+Owning aggregates keep the existing broad live-borrow mutation guard, so some
+unrelated field writes remain conservatively rejected. No runtime state or checks are added.
 
 ## Mutable-borrow exclusivity (0.427-beta)
 
@@ -435,9 +435,33 @@ borrows retain mutability when assigned, and forwarding through nested
 borrowed-return helpers preserves the caller's field path. Exclusivity ends when
 the borrow's lexical scope ends.
 
-Conditional branches that assign different field paths clear the cached path to
-whole-owner access, which can reject a later disjoint access conservatively. The
+At 0.427, conditional branches that assigned different field paths cleared the
+cached path to whole-owner access; 0.431 retains the distinct paths instead. The
 callee still treats a borrowed parameter as its own origin and does not receive
 the caller's allocation id or live-borrow set. Closure capture and general
 branch-sensitive analysis remain unimplemented, and no runtime counters, locks,
 descriptors, heap allocation, or generated checks are added.
+
+## Branch-selected borrow paths (0.431-beta)
+
+A borrowed binding keeps the set of field paths that can be live after a
+conditional merge. One path stays inline; alternatives are stored only when the
+branches select different paths, so ordinary borrows keep their compact state.
+
+When both branches leave a live borrow of the same owner, every possible path is
+retained. A later conflict query checks all of them: an access overlapping any
+possible path is rejected, while a field disjoint from every alternative remains
+independently accessible. Nested paths keep their full dotted identity, so
+`.inner.a` and `.inner.b` stay distinct even though either overlaps `.inner`.
+
+The merged symbol also retains the shared borrow owner and adopts the allocation
+identity both branches agree on. This is required for later queries to match the
+owner the paths actually reference. Branches that select different owners mark
+the binding unusable. A borrow present on only one branch falls back to
+whole-owner access, which is sound but less precise.
+
+Path sets propagate through pointer aliases, mutable borrow arguments, and
+source-bound borrowed returns. Returning a borrow from an ambiguous live alias is
+rejected rather than creating a second mutable alias. The representation and all
+overlap checks are compile-time semantic state only; no runtime tracking,
+counters, locks, descriptors, allocations, or generated checks are introduced.

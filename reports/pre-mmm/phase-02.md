@@ -1,9 +1,9 @@
 # Pre-MMM Phase 2 - Lifetime propagation, borrowed returns, aggregate fields, and exclusivity
 
-**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, and mutable-borrow exclusivity complete)
-**Version:** 0.427-beta
-**Date:** 2026-11-12
-**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`
+**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, mutable-borrow exclusivity, and branch-selected borrow paths complete)
+**Version:** 0.431-beta
+**Date:** 2026-11-13
+**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`, `6f26f35`, `c06ef19`
 
 ## Implemented
 
@@ -114,12 +114,54 @@ mutability; the checker returns the first live borrow that overlaps it.
 - Returned mutable borrows keep their mutability when assigned to a pointer.
   Forwarding through nested borrowed-return helpers preserves the caller's field
   path and therefore the conflict.
-- Cached field paths are cleared to whole-owner access when conditional branches
-  assign different paths. This is conservative: a later disjoint access may be
-  rejected rather than relying on a path that is not true on every branch.
+- At 0.427, cached field paths were cleared to whole-owner access when
+  conditional branches assigned different paths. This was conservative: a later
+  disjoint access could be rejected rather than relying on one branch's path.
+  0.431 retains the distinct paths instead.
+
+## Branch-selected borrow paths (0.431-beta)
+
+A borrowed binding now stores the set of field paths that can be live after a
+conditional merge. The representation keeps one primary path and allocates the
+alternative vector only when branches actually select different paths, so the
+normal single-path case stays compact.
+
+- When both branches leave a live borrow of the same owner, the merged symbol
+  records every possible path. Conflict checks test all of them, so a later
+  access to any overlapping path is rejected while a path disjoint from all
+  alternatives remains independently accessible.
+- Nested projections keep their full dotted paths (`.inner.a` and `.inner.b`
+  remain distinct, while an ancestor or descendant still overlaps).
+- Paths propagate through aliases, mutable borrow arguments, and source-bound
+  borrowed returns. A returned borrow from an ambiguous live alias is rejected
+  rather than creating a second mutable alias.
+- The merge also carries the shared borrow owner and adopts the branch allocation
+  identity when both branches agree. The incoming state may still have an
+  untracked id, so this is required before a later conflict query can be sound.
+- If only one branch has a live borrow, the merged binding falls back to
+  whole-owner access. If the branches select different owner allocations, the
+  binding is marked unusable. Both remain conservative.
+- Branch paths are compile-time semantic state only. There are no runtime
+  counters, locks, descriptors, allocations, or generated checks.
 
 ## Tests
 
+- `positive/branch_borrow_paths_disjoint`: branch-selected `.x`/`.y` paths leave
+  `p.z` independently available; output `9`.
+- `positive/branch_borrow_paths_nested`: branch-selected `.inner.a`/`.inner.b`
+  paths leave `o.z` available; output `9`.
+- `positive/branch_borrow_paths_call`: the ambiguous path set survives a
+  borrowed-return call while a disjoint `p.z` argument is accepted.
+- `negative/branch_borrow_paths_overlap`: a later mutable borrow of `p.x` is
+  rejected because `.x` remains one possible branch path.
+- `negative/branch_borrow_paths_nested_overlap`: a later borrow of
+  `o.inner.a` is rejected through the same nested path.
+- `negative/branch_borrow_paths_call_overlap`: the ambiguous path set forwarded
+  through a call conflicts with a second argument for `p.x`.
+- `negative/branch_borrow_paths_alias_conflict`: returning a borrow from the
+  ambiguous live alias is rejected with both possible paths named.
+- `negative/branch_borrow_paths_read_overlap`: reading `p.x` is rejected while
+  `.x` remains one possible branch path.
 - `positive/mutable_borrow_disjoint_fields`: mutable borrows of `p.x` and `p.y`
   coexist, and a call receives both disjoint field borrows; output `30`.
 - `positive/mutable_borrow_forwarding`: a mutable field borrow survives two
@@ -186,11 +228,12 @@ mutability; the checker returns the first live borrow that overlaps it.
 
 ## Verification
 
-- Clean `RelWithDebInfo` build at `0.427-beta`.
-- Unit suite: 214/214 passed (the previously flaky
-  `GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage` passed this run).
-- Integration suite: 367/367 passed, including the ten new mutable-borrow cases
-  and all previous aggregate-field cases.
+- Clean `RelWithDebInfo` build at `0.431-beta`.
+- Unit suite: 214/214 passed on rerun. The known flaky
+  `GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage` crashed once on the
+  first post-clean run and passed on the immediate rerun of the same binary.
+- Integration suite: 375/375 passed, including the eight new branch-path cases
+  and all previous mutable-borrow and aggregate-field cases.
 
 ## Limitations
 
@@ -205,9 +248,9 @@ mutability; the checker returns the first live borrow that overlaps it.
 - Aggregate field borrowing is limited to leaf fields with numeric, boolean or
   pointer storage. Aggregate-valued fields, owned arrays and managed references
   remain unaddressable.
-- Field paths are not merged path-sensitively across conditional branches. A
-  binding assigned different field borrows on different paths does not retain a
-  single checked field path.
+- Branch path merging is precise when both branches leave a live borrow of the
+  same owner. A one-sided borrow falls back to whole-owner access, and branches
+  that select different owner allocations mark the binding unusable.
 - Owning aggregates still use the existing broad live-borrow guard for owner
   mutation, so an independent field write may be rejected conservatively and the
   diagnostic retains array-view wording.
@@ -216,9 +259,6 @@ mutability; the checker returns the first live borrow that overlaps it.
   boundaries. The callee still treats a borrowed parameter as its own origin and
   does not receive the caller's allocation id or live-borrow set, so effects
   inside a callee are not inferred from a caller's active borrow.
-- Conditional branches that select different field paths clear the cached path to
-  whole-owner access. This is conservative and can reject a later disjoint field
-  access that would be safe on every path.
 - Safe rebinding of a borrowed pointer to a different live owner is still
   rejected conservatively.
 - Branch-sensitive owner selection, closure capture, and general escape analysis
