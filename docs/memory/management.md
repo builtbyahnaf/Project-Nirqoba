@@ -125,7 +125,7 @@ change device memory.
 
 Owned values from supported allocation and resource producers transfer when bound to another name, passed to an owning parameter, or returned through a matching owner return type. Resource-bearing structs, tuples, and fixed arrays move as whole values; their nested owned arrays are released recursively. Individual owned fields can be moved and reinitialized when the semantic checker can track the field path and all control-flow paths agree. This covers supported aggregate ownership, including nested owned arrays and resource-domain pointer fields. Dynamic owned arrays currently reject elements that themselves own allocations, because recursive element destruction is not implemented. Tracked owners are cleaned in LIFO order at lexical exit, including return, break, and continue. Owner moves clear the source slot so generated cleanup remains safe across conditional control flow. Reassigning a live owner is rejected; release it before reusing the binding.
 
-Use `borrow T* name` for an immutable pointer borrow and `borrow mut T* name` for an exclusive mutable pointer borrow. Opaque resource parameters declare their domain, for example `borrow file byte* handle`, `borrow socket byte* handle`, `borrow mutex byte* handle`, or `borrow mapping byte* handle`. Calls must pass a matching resource, and resource APIs inside the helper check that contract. Borrows cannot be freed, closed, returned, or passed to owning parameters. The checker rejects conflicting aliases at a call site. Borrowed array views are described below. Borrow analysis is conservative and lexical; general returned references, closure capture, arbitrary interprocedural lifetimes, and path-sensitive aggregate aliases are not implemented. Tracked pointer borrows carry their originating owner through nested calls, and `&owner` is tied to `owner`; using or forwarding the borrow after the owner's scope ends is rejected (0.415-beta).
+Use `borrow T* name` for an immutable pointer borrow and `borrow mut T* name` for an exclusive mutable pointer borrow. Opaque resource parameters declare their domain, for example `borrow file byte* handle`, `borrow socket byte* handle`, `borrow mutex byte* handle`, or `borrow mapping byte* handle`. Calls must pass a matching resource, and resource APIs inside the helper check that contract. Borrows cannot be freed, closed, returned, or passed to owning parameters. The checker rejects conflicting aliases at a call site. Borrowed array views are described below. Tracked pointer borrows carry their originating owner through nested calls, and `&owner` is tied to `owner`; using or forwarding the borrow after the owner's scope ends is rejected (0.415-beta). Borrowed returns use an explicit source parameter and are checked against that source (0.419-beta), described below. General interprocedural lifetime inference, closure capture, arbitrary returned references, and path-sensitive aggregate aliases remain unimplemented.
 
 `defer call(...)` captures call arguments when registered and runs calls in LIFO order on lexical block exit, including return, break, and continue. It can release explicit allocations, unpin GC objects, unlock mutexes, close files, and restore allocator selection. An explicit deferred cleanup overrides the inferred cleanup for that owner. Cleanup during exception unwinding is unavailable because the language has no exception model.
 
@@ -364,3 +364,29 @@ modular: it does not add caller allocation ids to the callee, does not check
 borrowed struct fields, does not implement branch-sensitive owner selection, and
 does not change mutable-borrow exclusivity across nested calls. It adds no runtime
 state or generated checks.
+
+## Source-bound borrowed returns (0.419-beta)
+
+A function returns a borrow only through an explicit source parameter:
+`borrow <source> T* function ...` for an immutable borrow, or
+`borrow mut <source> T* function ...` for a mutable one. The declared source must
+be a borrowed parameter, and every returned value must resolve to that parameter's
+allocation.
+
+Direct returns, forwarding through nested borrowed-return calls, and selecting
+one declared source among several parameters are accepted. The caller's real
+owner is preserved through the chain. A local owner, a temporary allocation, an
+undeclared parameter, a moved owner, and an expired source are rejected. Storing
+the returned borrow in a binding that outlives its owner is also rejected.
+
+An owner with a live returned borrow cannot be transferred into an owning pointer
+parameter. The checker rejects the call rather than marking the owner moved, so
+the borrow and the owner remain consistent. Assignment to an existing pointer also
+ensures an address-of origin has a tracked allocation identity before the borrow
+is recorded.
+
+Source selection is not branch-sensitive: a return that might choose different
+owners on different paths is rejected unless it matches the single declared source.
+Borrowed struct fields still lack checked lifetimes, and mutable-borrow exclusivity
+across nested calls remains separate work. The whole rule is compile-time only and
+adds no runtime counters, locks, descriptors, heap allocation, or generated checks.

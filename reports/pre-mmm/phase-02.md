@@ -1,9 +1,9 @@
-# Pre-MMM Phase 2 - Lifetime propagation across calls
+# Pre-MMM Phase 2 - Lifetime propagation and source-bound borrowed returns
 
-**Status:** In progress (first milestone complete)
-**Version:** 0.415-beta
+**Status:** In progress (lifetime propagation and source-bound borrowed returns complete)
+**Version:** 0.419-beta
 **Date:** 2026-11-12
-**Commits:** `429f01d`, `994e8bd`
+**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`
 
 ## Implemented
 
@@ -42,6 +42,28 @@
 5. Null assignment ends a borrow and is allowed; rebinding to another owner is
    rejected until replacement lifetimes can be proven safe.
 
+## Source-bound borrowed returns (0.419-beta)
+
+A function that returns a borrow must name the parameter it borrows from:
+`borrow [mut] <source> T* function ...`. The returned expression is resolved to
+its originating owner and checked against that declared source.
+
+- A direct `return source;` keeps the caller's owner identity.
+- Forwarding through another borrowed-return call preserves the original owner,
+  so nested helpers do not lose the lifetime.
+- With multiple parameters, only the declared source may be returned. Returning
+  a different borrowed parameter is rejected.
+- A local owner, a temporary allocation, a wrong parameter, a moved source, and
+  a source that has left its scope are rejected.
+- A borrow assigned to an outer binding is rejected because it would outlive its
+  owner.
+- An owner whose allocation still has a live borrow cannot be transferred into
+  an owning pointer parameter. This closes the hole where `take(owner)` could
+  run while a borrowed return into `owner` was still live.
+- Assignment to an existing pointer now gives an address-of origin a tracked
+  allocation identity, so a scalar address cannot lose its lifetime at the
+  assignment boundary.
+
 ## Tests
 
 - `positive/borrow_lifetime_nested_calls`: a local owner is borrowed with `&`,
@@ -52,20 +74,38 @@
   `borrow of 'inner' cannot outlive its owner`.
 - Existing borrow, borrowed-return, array-view, ownership, and nullable pointer
   regressions remain green.
+- `positive/borrowed_return_direct_forward_multi`: direct, forwarded, and
+  selected-source returns through three helpers; exits with `42`.
+- `negative/borrowed_return_local_owner`: `return &local;` is rejected.
+- `negative/borrowed_return_temporary_owner`: returning a fresh allocation is
+  rejected.
+- `negative/borrowed_return_wrong_parameter`: returning the non-source
+  parameter is rejected.
+- `negative/borrowed_return_moved_source`: a moved source is rejected.
+- `negative/borrowed_return_owner_move_call`: transferring an owner while its
+  returned borrow is live reports `cannot transfer an owner while a borrow is
+  live`.
+- `negative/borrowed_return_expired_source`: storing a returned borrow past its
+  source's scope reports `borrow of 'inner' cannot outlive its owner`.
 
 ## Verification
 
-- Clean `RelWithDebInfo` build.
-- Unit suite: 214/214 passed on the full rerun. The first post-clean run
-  segfaulted in the known flaky
-  `GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage`.
-- Integration suite: 339/339 passed.
+- Clean `RelWithDebInfo` build at `0.419-beta`.
+- Unit suite: 214/214 passed (the previously flaky
+  `GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage` passed this run).
+- Integration suite: 346/346 passed, including all seven new borrowed-return
+  cases.
 
 ## Limitations
 
 - Borrowed parameters are validated modularly. The callee does not receive a
   caller allocation id; it treats its parameter as the origin and the call site
   validates the caller's owner.
+- Borrowed returns require an explicit source parameter; the checker does not
+  infer a source from the function body.
+- Source selection is not branch-sensitive. A return that could select between
+  different owners on different paths is rejected unless it matches the one
+  declared source parameter.
 - Borrowed struct fields still do not carry a checked lifetime. Borrowing from
   aggregate fields is a separate Phase 2 item.
 - Mutable-borrow exclusivity across nested calls is unchanged and remains a
