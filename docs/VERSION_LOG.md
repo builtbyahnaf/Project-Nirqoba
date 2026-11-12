@@ -12,7 +12,29 @@ recorded below is made under that authority.
 
 ---
 
-## Version 0.419-beta (working build)
+## Version 0.423-beta (working build)
+
+### Summary of Changes (since `0.419-beta`):
+
+*Opened after aggregate-field borrows were tied to their owner path.*
+
+- **Field borrows remember the aggregate path.** `&obj.data` and nested
+  `&obj.inner.data` resolve to the aggregate binding and record the dotted field
+  path, so the borrow cannot outlive the aggregate that owns the storage.
+- **Forwarding keeps the path.** A field borrow can pass through `borrow`
+  parameters and source-bound borrowed returns; the caller's field identity is
+  preserved through the nested call.
+- **Overlapping replacement is rejected.** Writing the borrowed field, a parent
+  aggregate field, a descendant field, or the whole aggregate while the borrow is
+  live is diagnosed. Compound writes use the same rule.
+- **Sibling fields stay usable.** Independent fields of the same aggregate remain
+  writable while one field is borrowed.
+- **Moves and scope still guard the owner.** Moving an owning aggregate, moving an
+  owned field, or letting a field borrow leave its owner's scope remains rejected.
+- **No runtime cost.** Field identity and overlap checks are semantic only; no
+  counters, locks, descriptors, heap allocation, or generated checks were added.
+
+## Version 0.419-beta
 
 ### Summary of Changes (since `0.415-beta`):
 

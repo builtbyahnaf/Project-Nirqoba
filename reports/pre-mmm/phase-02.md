@@ -1,9 +1,9 @@
-# Pre-MMM Phase 2 - Lifetime propagation and source-bound borrowed returns
+# Pre-MMM Phase 2 - Lifetime propagation, borrowed returns, and aggregate-field borrows
 
-**Status:** In progress (lifetime propagation and source-bound borrowed returns complete)
-**Version:** 0.419-beta
+**Status:** In progress (lifetime propagation, source-bound borrowed returns, and aggregate-field borrows complete)
+**Version:** 0.423-beta
 **Date:** 2026-11-12
-**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`
+**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`
 
 ## Implemented
 
@@ -64,6 +64,30 @@ its originating owner and checked against that declared source.
   allocation identity, so a scalar address cannot lose its lifetime at the
   assignment boundary.
 
+## Aggregate-field borrows (0.423-beta)
+
+A borrow of a field projection such as `&obj.data` or `&obj.inner.data` now
+records the aggregate binding and the full dotted field path. The lifetime owner
+is the aggregate, not the projected field's type.
+
+- Direct field borrows and nested projections resolve to the root aggregate and
+  share its allocation identity.
+- A borrowed field can be forwarded through `borrow` parameters and returned
+  through an existing source-bound borrowed return. The caller's field path is
+  preserved through the nested call.
+- Replacing the borrowed field, one of its ancestors, or one of its descendants
+  while the borrow is live is rejected. Replacing a parent aggregate field is
+  rejected when a descendant is borrowed.
+- Compound field writes (`obj.field += ...`) use the same invalidation rule as
+  plain assignment.
+- Replacing the whole aggregate, moving an owning aggregate, moving an owned
+  field, and letting a field borrow outlive its owner remain rejected.
+- Independent sibling fields remain writable while another field is borrowed,
+  so the new check is path-specific rather than whole-aggregate-only.
+- Borrowing accepts leaf fields whose storage is numeric, boolean or pointer.
+  Aggregate-valued fields, owned arrays and managed references remain outside
+  the addressable subset.
+
 ## Tests
 
 - `positive/borrow_lifetime_nested_calls`: a local owner is borrowed with `&`,
@@ -87,13 +111,34 @@ its originating owner and checked against that declared source.
   live`.
 - `negative/borrowed_return_expired_source`: storing a returned borrow past its
   source's scope reports `borrow of 'inner' cannot outlive its owner`.
+- `positive/borrow_field_direct`: `&p.x` stays valid while sibling `p.y` is
+  written; exits with `22`.
+- `positive/borrow_field_nested`: `&o.inner.value` stays valid while sibling
+  `o.other` is written; exits with `22`.
+- `positive/borrow_field_forwarded_return`: a field borrow forwarded through two
+  borrowed-return helpers remains valid for an independent write; exits with `9`.
+- `negative/borrow_field_replacement`: direct replacement of `p.x` is rejected.
+- `negative/borrow_field_nested_replacement`: replacing `o.inner` while
+  `o.inner.value` is borrowed is rejected.
+- `negative/borrow_field_forwarded_replacement`: the path survives forwarding,
+  so replacing `p.x` after the returned borrow is rejected.
+- `negative/borrow_field_compound_replacement`: `p.x += 1` is rejected while
+  `&p.x` is live.
+- `negative/borrow_field_owner_escape`: a field borrow assigned to an outer
+  binding is rejected as outliving its owner.
+- `negative/borrow_field_owner_move`: moving an owning aggregate with a live
+  field borrow is rejected.
+- `negative/borrow_field_owned_field_move`: moving an owned field with a live
+  sibling field borrow is rejected.
+- `negative/borrow_field_aggregate_replacement`: replacing the whole aggregate
+  with a live field borrow is rejected.
 
 ## Verification
 
-- Clean `RelWithDebInfo` build at `0.419-beta`.
+- Clean `RelWithDebInfo` build at `0.423-beta`.
 - Unit suite: 214/214 passed (the previously flaky
   `GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage` passed this run).
-- Integration suite: 346/346 passed, including all seven new borrowed-return
+- Integration suite: 357/357 passed, including all eleven new aggregate-field
   cases.
 
 ## Limitations
@@ -106,8 +151,16 @@ its originating owner and checked against that declared source.
 - Source selection is not branch-sensitive. A return that could select between
   different owners on different paths is rejected unless it matches the one
   declared source parameter.
-- Borrowed struct fields still do not carry a checked lifetime. Borrowing from
-  aggregate fields is a separate Phase 2 item.
+- Aggregate field borrowing is limited to leaf fields with numeric, boolean or
+  pointer storage. Aggregate-valued fields, owned arrays and managed references
+  remain unaddressable.
+- Field paths are not merged path-sensitively across conditional branches. A
+  binding assigned different field borrows on different paths does not retain a
+  single checked field path.
+- Owning aggregates still use the existing broad live-borrow guard for owner
+  mutation, so an independent field write may be rejected conservatively and the
+  diagnostic retains array-view wording.
+- Borrowed struct fields still do not carry an independently checked lifetime.
 - Mutable-borrow exclusivity across nested calls is unchanged and remains a
   separate Phase 2 item.
 - Safe rebinding of a borrowed pointer to a different live owner is still
