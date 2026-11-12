@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.431-beta` |
+| Current Working Version | `0.437-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-13 00:44:39` |
-| Report Entries | `11` |
+| Last Report Update | `2026-11-13 01:03:56` |
+| Report Entries | `12` |
 
 ---
 
@@ -1395,6 +1395,129 @@ counters, locks, descriptors, heap allocations, or generated checks were added.
 ---
 
 **End of Entry #011**
+
+## Entry #012 — Pre-MMM Phase 2: One-sided conditional borrows
+
+**Version:** `0.437-beta`  
+**Date:** `2026-11-13 01:03:56`  
+**Scope:** `Pre-MMM Phase 2 / Borrow checking / Conditional merges`  
+**Status:** `Completed`
+
+### 1. Overview
+
+A conditional merge previously discarded the field projection whenever only one
+arm left a live borrow. That degraded later checks to whole-owner access and
+rejected safe sibling accesses. This entry retains the borrowing arm's owner and
+path, marks the binding conditional, and keeps conflict checks path-aware while
+rejecting uses that need the borrow to exist on every path.
+
+### 2. Implementation Details
+
+- **What:** Added `Symbol::borrow_conditional` and kept the active arm's
+  `borrow_owner`, `borrow_paths`, and mutability when exactly one branch borrows.
+- **What:** `merge_conditional_ownership` now permits a tracked borrow to pair
+  with an inactive ordinary or untracked binding, adopting the active allocation
+  identity. An inactive owner that owns or shares storage still marks the binding
+  unusable.
+- **What:** Reads, writes, and new borrows continue to query the retained path, so
+  an overlap on any reachable path is rejected and a disjoint field stays usable.
+- **What:** Aliases, new borrows through the binding, call arguments, and returned
+  borrows reject a conditional source with a dedicated diagnostic.
+- **How:** The merge tests `borrowed` on both branch states, preserves the path
+  set only on the borrowing side, and sets the conditional flag on the merged
+  destination. An explicit pointer assignment clears the flag.
+- **Why:** The borrow may be absent at runtime on the other path. Treating it as
+  definitely live would be unsound; discarding its path loses precision and
+  rejects valid disjoint access. A conditional may-borrow is the precise state.
+- **Where:** `compiler/include/nirqoba/Sema/SymbolTable.h`,
+  `compiler/lib/Sema/SymbolTable.cpp`, `compiler/lib/Sema/TypeChecker.cpp`.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `SymbolTable.h` / `.cpp` | Added conditional borrow state and one-sided merge retention | Preserve owner and path without pretending the borrow is definite |
+| `TypeChecker.cpp` | Rejected aliases, calls, new borrows, and returns from conditional sources | Require a definite borrow where the language needs one |
+| `TypeChecker.cpp` | Kept conflict queries on the retained path | Reject every reachable overlap and allow disjoint fields |
+| `one_sided_borrow_paths_*` cases | Two positives and four negatives | Cover direct, nested, overlap, read, alias, and returned-borrow behavior |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Clean RelWithDebInfo build | PASS | `scripts/build.ps1 -Configuration RelWithDebInfo -Clean` |
+| Unit suite | PASS | 214/214 on the first post-clean run |
+| Integration suite | PASS | 381/381 |
+| `positive/one_sided_borrow_paths_disjoint` | PASS | Output `9`; conditional `.x` leaves `p.z` available |
+| `positive/one_sided_borrow_paths_nested` | PASS | Output `9`; conditional `.inner.a` leaves `o.z` available |
+| `negative/one_sided_borrow_paths_overlap` | PASS | Later `p.x` borrow rejected |
+| `negative/one_sided_borrow_paths_read` | PASS | Later `p.x` read rejected |
+| `negative/one_sided_borrow_paths_alias` | PASS | Aliasing the conditional binding rejected |
+| `negative/one_sided_borrow_paths_return` | PASS | Forwarding it through a borrowed-return call rejected |
+
+- **Build Status:** Successful.
+- **Regression Status:** None detected in the full integration or unit suites.
+- **Test Environment:** Windows 11 x64, MSVC 14.51.36231, LLVM/MLIR 23.1.4,
+  RelWithDebInfo.
+
+### 5. Performance & Resource Impact
+
+No runtime code changed, so there is no runtime impact. The semantic state adds
+one boolean to `Symbol`; an ordinary single-path borrow keeps the existing inline
+path and does not allocate. A one-sided merge copies the existing path set once.
+No benchmark was run for this entry, so no measured compile-time number is
+claimed.
+
+### 6. Issues & Limitations
+
+- Conditional borrows are deliberately not definite: an alias, call argument, or
+  return requires a definite borrow even after a null check. This can reject a
+  safe program that guards the borrow before using it.
+- Branch-selected owner identity is still unsupported; branches that select
+  different owner allocations leave the binding unusable.
+- Callee effects remain modular, closure capture is out of scope, and general
+  escape analysis is not implemented.
+
+### 7. Outstanding Work
+
+- [x] Retain one-sided conditional borrow paths across merges.
+- [ ] Add closure-capture ownership rules when closures require them.
+- [ ] Add the minimum escape analysis needed for remaining lifetime transfers.
+- [ ] Support branch-selected owner identity when that becomes a practical need.
+
+### 8. Dependencies & Compatibility
+
+- **New Dependencies:** None.
+- **Removed Dependencies:** None.
+- **Platform Compatibility:** No platform-specific change.
+- **Breaking Changes:** A one-sided borrow now retains its field path instead of
+  falling back to whole-owner access. Disjoint sibling access is accepted and
+  overlapping access remains rejected; no existing integration case changed.
+
+### 9. Agent Assessment
+
+- **Implementation Completeness:** Complete for one-sided conditional borrow
+  merges, including nested paths, read/write overlap, aliases, calls, and returns.
+- **Verification Confidence:** High — clean build and both full suites passed.
+- **Known Risks:** Conditional borrows cannot yet serve as definite borrows even
+  after an explicit guard; this is conservative rather than unsound.
+- **Recommended Next Step:** Branch-selected owner identity, or guarded definite
+  borrow recovery if real programs need it.
+
+### 10. Evidence & References
+
+- **Commits:** `3959176` (semantic changes), `3e068c4` (focused tests),
+  `c4c684a` (single diagnostic on conditional returned borrows)
+- **Relevant Files:** `compiler/lib/Sema/SymbolTable.cpp`,
+  `compiler/lib/Sema/TypeChecker.cpp`,
+  `tests/integration/positive/one_sided_borrow_paths_disjoint`,
+  `tests/integration/negative/one_sided_borrow_paths_overlap`.
+- **Documentation:** `reports/pre-mmm/phase-02.md`,
+  `project_context/Pre-MMM_ROADMAP.md`, `docs/memory/management.md`.
+
+---
+
+**End of Entry #012**
 
 <!-- REPORT ENTRIES END -->
 

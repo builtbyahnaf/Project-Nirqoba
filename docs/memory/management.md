@@ -436,8 +436,9 @@ borrowed-return helpers preserves the caller's field path. Exclusivity ends when
 the borrow's lexical scope ends.
 
 At 0.427, conditional branches that assigned different field paths cleared the
-cached path to whole-owner access; 0.431 retains the distinct paths instead. The
-callee still treats a borrowed parameter as its own origin and does not receive
+cached path to whole-owner access; 0.431 retains the distinct paths instead, and
+0.437 keeps a one-sided borrow's path while marking it conditional. The callee
+still treats a borrowed parameter as its own origin and does not receive
 the caller's allocation id or live-borrow set. Closure capture and general
 branch-sensitive analysis remain unimplemented, and no runtime counters, locks,
 descriptors, heap allocation, or generated checks are added.
@@ -457,11 +458,35 @@ independently accessible. Nested paths keep their full dotted identity, so
 The merged symbol also retains the shared borrow owner and adopts the allocation
 identity both branches agree on. This is required for later queries to match the
 owner the paths actually reference. Branches that select different owners mark
-the binding unusable. A borrow present on only one branch falls back to
-whole-owner access, which is sound but less precise.
+the binding unusable. At 0.431 a borrow present on only one branch still fell
+back to whole-owner access; 0.437 retains it as a conditional borrow.
 
 Path sets propagate through pointer aliases, mutable borrow arguments, and
 source-bound borrowed returns. Returning a borrow from an ambiguous live alias is
 rejected rather than creating a second mutable alias. The representation and all
 overlap checks are compile-time semantic state only; no runtime tracking,
 counters, locks, descriptors, allocations, or generated checks are introduced.
+
+## One-sided conditional borrows (0.437-beta)
+
+When exactly one branch leaves a live borrow, the merge keeps that branch's
+owner, mutability, and field path instead of clearing the projection to
+whole-owner access. A separate `borrow_conditional` flag records that the borrow
+is possible but not present on every path. Conflict queries still include the
+symbol, so a later read, write, or borrow overlapping the retained path is
+rejected exactly as if the borrow were definitely live; a disjoint sibling field
+remains accessible.
+
+A conditional borrow is not a definite borrow. Aliasing it, taking a new borrow
+through it, forwarding it to a call, or returning it produces `borrow of '...'
+may not be live on every branch`. That keeps the alias and returned-borrow rules
+sound without pretending the binding exists on both paths. Null checks and other
+ordinary pointer uses remain available, and an explicit assignment replaces the
+conditional state with the new binding's state.
+
+The merge adopts the active branch's allocation identity when the other side is
+an ordinary or untracked pointer. If the inactive side owns or shares an
+allocation, the binding remains unusable, so two owners are never collapsed into
+one. The flag is one boolean on the existing symbol and the path is the existing
+inline path, preserving the ordinary single-path fast path. No runtime counters,
+locks, descriptors, allocations, or generated checks were added.
