@@ -13,8 +13,8 @@
 | Project | Nirqoba |
 | Current Working Version | `0.437-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-13 01:03:56` |
-| Report Entries | `12` |
+| Last Report Update | `2026-11-13 01:28:14` |
+| Report Entries | `13` |
 
 ---
 
@@ -1518,6 +1518,126 @@ claimed.
 ---
 
 **End of Entry #012**
+
+## Entry #013 — Pre-MMM Phase 2: Flow-sensitive conditional-borrow refinement
+
+**Version:** `0.437-beta` (unreleased `0.445-beta` work)  
+**Date:** `2026-11-13 01:28:14`  
+**Scope:** `Pre-MMM Phase 2 / Borrow checking / Null refinement`  
+**Status:** `Completed`
+
+### 1. Overview
+
+One-sided conditional borrows were safe but permanently indefinite: even after
+an explicit null check, aliases, calls, and returned borrows were rejected. This
+entry adds a branch-local refinement. When the absent path is known to hold
+nullptr, `view != nullptr` makes the conditional borrow definite inside the
+non-null branch. The field-path set, owner, and mutability remain unchanged, so
+overlapping accesses are still rejected while disjoint fields stay available.
+
+### 2. Implementation Details
+
+- **What:** Added `Symbol::definitely_null` and
+  `borrow_conditional_absent_null`. The latter is set by a one-sided merge only
+  when the inactive branch is provably null.
+- **What:** `SymbolTable::refine_conditional_borrow` clears the conditional
+  marker only when both conditions hold. The refinement is applied to the
+  then-branch of `view != nullptr` and the else path of `view == nullptr`.
+- **What:** Declarations and assignments update definite nullness; other pointer
+  assignments clear it; branch merges combine it with logical AND.
+- **What:** Early-return guards carry the refined state forward because the
+  non-falling-through branch selects the else state. Normal joins restore the
+  conditional marker.
+- **Why:** A non-null check alone does not prove the borrow is present if the
+  other path may hold a non-null pointer to another object. Requiring the absent
+  path to be null keeps the refinement sound; keeping the path set preserves
+  existing field exclusion.
+- **Where:** `compiler/include/nirqoba/Sema/SymbolTable.h`,
+  `compiler/lib/Sema/SymbolTable.cpp`, `compiler/lib/Sema/TypeChecker.cpp`.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `SymbolTable.h` / `.cpp` | Added definite-null and absent-null state plus branch-local refinement | Discharge a conditional borrow only on a proven path |
+| `TypeChecker.cpp` | Updated declarations, pointer assignments, and null-check branches | Maintain nullness and apply the proof in the right branch |
+| `conditional_borrow_*` cases | Three positives and three negatives | Cover then/guard refinement, calls, null paths, joins, and field exclusion |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Clean RelWithDebInfo build | PASS | `scripts/build.ps1 -Configuration RelWithDebInfo -Clean` |
+| Unit suite | PASS | 214/214 on the first post-clean run |
+| Integration suite | PASS | 387/387 |
+| `positive/conditional_borrow_null_refinement` | PASS | Refined alias and disjoint field; output `9`, `4` |
+| `positive/conditional_borrow_guard_refinement` | PASS | Early-return guard carries refinement; output `9` |
+| `positive/conditional_borrow_call_refinement` | PASS | Refined immutable borrow passed to a nested call; output `7` |
+| `negative/conditional_borrow_null_path` | PASS | Null path still rejects an alias |
+| `negative/conditional_borrow_fallthrough` | PASS | Join restores the conditional marker |
+| `negative/conditional_borrow_refined_overlap` | PASS | Refined borrow still excludes `p.x` |
+
+- **Build Status:** Successful.
+- **Regression Status:** None detected in the full integration or unit suites.
+- **Test Environment:** Windows 11 x64, MSVC 14.51.36231, LLVM/MLIR 23.1.4,
+  RelWithDebInfo.
+
+### 5. Performance & Resource Impact
+
+No runtime code changed, so there is no runtime impact. The semantic state adds
+two booleans to `Symbol` and a few branch-local lookups; the ordinary single-path
+borrow representation is unchanged. No benchmark was run, so no measured
+compile-time number is claimed.
+
+### 6. Issues & Limitations
+
+- Refinement requires the absent path to be provably null; a conditional borrow
+  mixed with another possible non-null pointer remains indefinite.
+- The refinement is branch-local and is intentionally lost at a join where both
+  paths continue, even if both paths later prove non-null.
+- Branch-selected owner identity, callee effects, closure capture, and general
+  escape analysis remain outside this entry.
+
+### 7. Outstanding Work
+
+- [x] Refine a conditional borrow after an explicit null check.
+- [ ] Measure compile-time cost on representative programs before the next release.
+- [ ] Add closure-capture ownership rules when closures require them.
+- [ ] Implement the minimum escape analysis needed to reject invalid lifetime transfers.
+
+### 8. Dependencies & Compatibility
+
+- **New Dependencies:** None.
+- **Removed Dependencies:** None.
+- **Platform Compatibility:** No platform-specific change.
+- **Breaking Changes:** Programs using a non-null guard can now use a
+  conditional borrow as definite inside that branch. Unguarded and null-path
+  behavior is unchanged.
+
+### 9. Agent Assessment
+
+- **Implementation Completeness:** Complete for null-check refinement of
+  one-sided conditional borrows, including then/else guards, early returns,
+  alias use, nested calls, joins, and field-path exclusion.
+- **Verification Confidence:** High — clean build and both full suites passed.
+- **Known Risks:** Refinement is deliberately limited to a provably null absent
+  path and does not survive a two-path join.
+- **Recommended Next Step:** Release `0.445-beta` after the second meaningful
+  upgrade, or benchmark the added compile-time checks first.
+
+### 10. Evidence & References
+
+- **Commits:** `fef0d00` (semantic changes), `58124f3` (focused tests)
+- **Relevant Files:** `compiler/lib/Sema/SymbolTable.cpp`,
+  `compiler/lib/Sema/TypeChecker.cpp`,
+  `tests/integration/positive/conditional_borrow_null_refinement`,
+  `tests/integration/negative/conditional_borrow_fallthrough`.
+- **Documentation:** `reports/pre-mmm/phase-02.md`,
+  `project_context/Pre-MMM_ROADMAP.md`, `docs/memory/management.md`.
+
+---
+
+**End of Entry #013**
 
 <!-- REPORT ENTRIES END -->
 
