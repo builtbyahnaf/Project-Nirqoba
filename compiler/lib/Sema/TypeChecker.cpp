@@ -1123,7 +1123,14 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
                      contains_owned_array(source->type))) {
         symbol.allocation_id = source->allocation_id;
         if (source->borrowed) {
+          if (source->borrow_conditional) {
+            diagnostics_.error(diag::kTypeMismatch,
+                               declaration.initializer().location(),
+                               "borrow of '" + source->name +
+                                   "' may not be live on every branch");
+          }
           symbol.borrowed = true;
+          symbol.borrow_conditional = source->borrow_conditional;
           symbol.mutable_borrow = source->mutable_borrow;
           symbol.borrow_owner = borrow_owner_name(*source);
           symbol.borrow_paths = source->borrow_paths;
@@ -1812,6 +1819,12 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                    (assignment.value().kind() == Expr::Kind::Name &&
                     origin->borrowed));
     if (value_is_borrow) {
+      if (origin->borrow_conditional) {
+        diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                           "borrow of '" + origin->name +
+                               "' may not be live on every branch");
+        return;
+      }
       if (!borrow_owner_is_live(*origin)) {
         diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
                            "borrow of '" + borrow_owner_name(*origin) +
@@ -2334,8 +2347,13 @@ void TypeChecker::check_return(ReturnStmt& statement) {
   const bool returns_borrowed = !current_return_borrow_parameter_.empty();
   if (returns_borrowed) {
     const Symbol* source = find_borrow_origin(*statement.value());
-    if (!current_return_borrow_allocation_id_ || !source || !source->borrowed ||
-        source->allocation_id != current_return_borrow_allocation_id_) {
+    if (source && source->borrow_conditional) {
+      diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                         "borrow of '" + source->name +
+                             "' may not be live on every branch");
+    } else if (!current_return_borrow_allocation_id_ || !source ||
+               !source->borrowed ||
+               source->allocation_id != current_return_borrow_allocation_id_) {
       diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                          "returned borrow must come from the declared source parameter '" +
                              current_return_borrow_parameter_ + "'");
@@ -2644,9 +2662,15 @@ Type TypeChecker::check_expression(Expr& expr) {
                       origin->allocation_id, false, paths,
                       origin->borrowed ? origin->name : std::string{})
                 : nullptr;
-            if (conflict ||
-                (origin && active_borrow_conflicts(
-                               origin->allocation_id, paths, false))) {
+            if (origin && origin->borrowed && origin->borrow_conditional) {
+              diagnostics_.error(
+                  diag::kTypeMismatch, unary.location(),
+                  "borrow of '" + origin->name +
+                      "' may not be live on every branch");
+              type = Type::error();
+            } else if (conflict ||
+                       (origin && active_borrow_conflicts(
+                                      origin->allocation_id, paths, false))) {
               diagnostics_.error(
                   diag::kTypeMismatch, unary.location(),
                   "cannot create a borrow of '" +
@@ -4768,6 +4792,12 @@ Type TypeChecker::check_call(CallExpr& call) {
         source->type != sig.parameter_types[i]) source = nullptr;
     if (source && direct_address_of && source->allocation_id == 0)
       symbols_.ensure_allocation_id(source->name, next_allocation_id_++);
+    if (source && source->borrow_conditional) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                         "borrow of '" + source->name +
+                             "' may not be live on every branch");
+      continue;
+    }
     if (source && source->borrowed && !borrow_owner_is_live(*source)) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "borrow of '" + borrow_owner_name(*source) +
