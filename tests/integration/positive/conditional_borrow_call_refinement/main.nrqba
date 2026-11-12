@@ -1,0 +1,28 @@
+struct P {
+    int x;
+    int y;
+    int z;
+}
+
+borrow source int* function readable(borrow int* source) {
+    return source;
+}
+
+int function read(borrow int* source) {
+    return *source;
+}
+
+int function main() {
+    var p = P { x: 7, y: 2, z: 3 };
+    {
+        let seed = &p.y;
+    }
+    @Nullable var ptr int view = nullptr;
+    if (p.y == 2) {
+        view = readable(&p.x);
+    }
+    if (view != nullptr) {
+        print(read(view));
+    }
+    return 0;
+}
