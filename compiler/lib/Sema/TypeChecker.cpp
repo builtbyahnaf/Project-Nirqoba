@@ -1007,6 +1007,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
   Symbol symbol{declaration.name(), binding_type, declaration.binding(),
                 declaration.location()};
   symbol.nullable = declaration.is_nullable();
+  symbol.definitely_null = is_null_pointer_literal(declaration.initializer());
   if ((binding_type.is_owned_array() || contains_owned_array(binding_type)) &&
       declaration.initializer().kind() == Expr::Kind::Index) {
     diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
@@ -1134,6 +1135,8 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
           }
           symbol.borrowed = true;
           symbol.borrow_conditional = source->borrow_conditional;
+          symbol.borrow_conditional_absent_null =
+              source->borrow_conditional_absent_null;
           symbol.mutable_borrow = source->mutable_borrow;
           symbol.borrow_owner = borrow_owner_name(*source);
           symbol.borrow_paths = source->borrow_paths;
@@ -2005,6 +2008,8 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     symbols_.set_pointer_ownership(assignment.name(), owns_allocation, borrowed,
                                    mutable_borrow, shared_allocation, cleanup_callee,
                                    borrow_owner, borrow_paths);
+    symbols_.set_definitely_null(
+        assignment.name(), is_null_pointer_literal(assignment.value()));
     assignment.set_cleanup_callee(cleanup_callee);
   }
 }
@@ -2123,13 +2128,19 @@ void TypeChecker::check_if(IfStmt& statement) {
   }
   const std::unordered_set<std::string> incoming_proven = nonnull_proven_;
   const SymbolTable incoming = symbols_;
-  if (then_nonnull) nonnull_proven_.insert(narrowed_name);
+  if (then_nonnull) {
+    nonnull_proven_.insert(narrowed_name);
+    symbols_.refine_conditional_borrow(narrowed_name);
+  }
   check_block(const_cast<BlockStmt&>(statement.then_branch()));
   const std::unordered_set<std::string> then_proven = nonnull_proven_;
   const SymbolTable then_state = symbols_;
   symbols_ = incoming;
   nonnull_proven_ = incoming_proven;
-  if (else_nonnull) nonnull_proven_.insert(narrowed_name);
+  if (else_nonnull) {
+    nonnull_proven_.insert(narrowed_name);
+    symbols_.refine_conditional_borrow(narrowed_name);
+  }
   if (statement.has_else()) {
     check_statement(const_cast<Stmt&>(*statement.else_branch()));
   }

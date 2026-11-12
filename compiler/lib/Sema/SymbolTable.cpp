@@ -170,6 +170,31 @@ void SymbolTable::rebind_pointer(const string& name, uint64_t allocation_id) {
   }
 }
 
+void SymbolTable::set_definitely_null(const string& name, bool definitely_null) {
+  for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+    auto found = scope->find(name);
+    if (found != scope->end()) {
+      found->second.definitely_null = definitely_null;
+      return;
+    }
+  }
+}
+
+bool SymbolTable::refine_conditional_borrow(const string& name) {
+  for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+    auto found = scope->find(name);
+    if (found == scope->end()) continue;
+    Symbol& symbol = found->second;
+    if (!symbol.borrow_conditional || !symbol.borrow_conditional_absent_null)
+      return false;
+    symbol.borrow_conditional = false;
+    symbol.borrow_conditional_absent_null = false;
+    symbol.definitely_null = false;
+    return true;
+  }
+  return false;
+}
+
 void SymbolTable::set_pointer_ownership(const string& name,
                                         bool owns_allocation, bool borrowed,
                                         bool mutable_borrow,
@@ -184,6 +209,8 @@ void SymbolTable::set_pointer_ownership(const string& name,
       found->second.borrowed = borrowed;
       found->second.mutable_borrow = mutable_borrow;
       found->second.borrow_conditional = false;
+      found->second.borrow_conditional_absent_null = false;
+      found->second.definitely_null = false;
       found->second.shared_allocation = shared_allocation;
       found->second.cleanup_callee = std::move(cleanup_callee);
       found->second.borrow_owner = std::move(borrow_owner);
@@ -370,6 +397,8 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
       }
       destination.allocation_id = then_symbol->allocation_id != 0
           ? then_symbol->allocation_id : else_symbol->allocation_id;
+      destination.definitely_null = then_symbol->definitely_null &&
+                                    else_symbol->definitely_null;
       destination.moved = then_symbol->moved || else_symbol->moved;
       destination.owns_allocation = then_symbol->owns_allocation &&
                                     else_symbol->owns_allocation;
@@ -385,19 +414,24 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
         destination.borrow_paths.merge(else_symbol->borrow_paths);
         destination.borrow_conditional = then_symbol->borrow_conditional ||
                                          else_symbol->borrow_conditional;
+        destination.borrow_conditional_absent_null = false;
       } else if (one_sided_borrow) {
         // The borrow may be live after the merge, but only on one path. Keep
         // its owner and field projection so overlapping accesses are rejected;
         // using the binding as a definite borrow is rejected at the use site.
         const Symbol& active = then_symbol->borrowed ? *then_symbol
                                                       : *else_symbol;
+        const Symbol& absent = then_symbol->borrowed ? *else_symbol
+                                                      : *then_symbol;
         destination.borrow_owner = active.borrow_owner;
         destination.borrow_paths = active.borrow_paths;
         destination.borrow_conditional = true;
+        destination.borrow_conditional_absent_null = absent.definitely_null;
       } else {
         destination.borrow_owner.clear();
         destination.borrow_paths.set({});
         destination.borrow_conditional = false;
+        destination.borrow_conditional_absent_null = false;
       }
       destination.shared_allocation = then_symbol->shared_allocation ||
                                       else_symbol->shared_allocation;

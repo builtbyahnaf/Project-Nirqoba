@@ -67,6 +67,9 @@ struct Symbol {
   // path. Conflict checks must treat its field paths as possibly live, while
   // using the binding itself as a borrow requires a definite borrow.
   bool borrow_conditional = false;
+  // True when the path where this conditional borrow is absent is known to hold
+  // nullptr. Only then does an explicit non-null check prove the borrow live.
+  bool borrow_conditional_absent_null = false;
   // Lexical depth of this binding, and for a borrow the name of the binding
   // whose storage it aliases. A borrow cannot outlive that owner, so the
   // checker validates the origin before every rebind and call.
@@ -80,6 +83,10 @@ struct Symbol {
   // Set for '@Nullable' pointer bindings: the value may be nullptr, so dereference
   // requires a non-null proof in the current branch.
   bool nullable = false;
+  // The current path proves this pointer is nullptr. Used only to make sure a
+  // non-null guard turns a conditional borrow into a definite borrow when the
+  // absent path is null; unknown and non-null both remain false.
+  bool definitely_null = false;
   // A partial aggregate move clears the corresponding runtime field. Keep the
   // path in semantic state so later reads and branch merges cannot resurrect it.
   std::unordered_set<std::string> moved_fields;
@@ -124,6 +131,10 @@ class SymbolTable {
       const BorrowPathSet& requested_paths = {},
       const std::string& except_name = {}) const;
   void rebind_pointer(const std::string& name, uint64_t allocation_id);
+  void set_definitely_null(const std::string& name, bool definitely_null);
+  // A non-null branch can discharge a conditional borrow only when the absence
+  // path is known null. Returns true when the binding became definite.
+  bool refine_conditional_borrow(const std::string& name);
   void set_pointer_ownership(const std::string& name, bool owns_allocation,
                              bool borrowed, bool mutable_borrow,
                              bool shared_allocation = false,
