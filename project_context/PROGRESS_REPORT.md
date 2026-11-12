@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.419-beta` |
+| Current Working Version | `0.423-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-12 14:11:41` |
-| Report Entries | `8` |
+| Last Report Update | `2026-11-12 14:32:02` |
+| Report Entries | `9` |
 
 ---
 
@@ -972,6 +972,141 @@ borrow checks were added.
 ---
 
 **End of Entry #008**
+
+## Entry #009 — Pre-MMM Phase 2: Aggregate-field borrow lifetimes
+
+**Version:** `0.423-beta`  
+**Date:** `2026-11-12 14:32:02`  
+**Scope:** `Pre-MMM Phase 2 / Borrow checking / Aggregate fields`  
+**Status:** `Completed`
+
+### 1. Overview
+
+This entry implements safe borrowing from aggregate fields. Address-of field
+expressions already lowered correctly, but the checker resolved them only to the
+aggregate root and discarded the field path. As a result, a live `&obj.field`
+alias was not invalidated when that field was replaced. The checker now records
+the owner and dotted field path, propagates that identity through borrowed returns
+and calls, and rejects overlapping field replacement while the borrow is live.
+
+### 2. Implementation Details
+
+- **What:** Added `borrow_field` to `Symbol` and a path-aware
+  `has_live_field_borrow` query. A borrow of `&obj.data` or `&obj.inner.data`
+  keeps the aggregate's allocation id and records the exact projection.
+- **What:** Field paths propagate through Name aliases, assignment to existing
+  pointers, borrowed-return calls, and nested forwarding. The returned borrow at
+  the caller is tied to the original aggregate field.
+- **What:** Plain assignment and compound assignment reject writes that overlap a
+  live field borrow. Replacing a parent field, a child field, or the whole
+  aggregate is rejected; independent sibling fields remain writable.
+- **How:** `find_borrow_field_path` walks address-of/member projections, aliases,
+  view constructors, and borrowed-return arguments. `field_paths_overlap` compares
+  dotted paths by equality or segment-prefix relationship. The assignment paths
+  query live borrows for the target aggregate and reject an overlap before the
+  write is accepted.
+- **Why:** A pointer into a field must inherit the aggregate's lifetime. Without
+  the field path, replacing the storage could leave a live alias observing a
+  different value or an overwritten field while the checker still considered the
+  borrow valid.
+- **Where:** `compiler/include/nirqoba/Sema/SymbolTable.h`,
+  `compiler/lib/Sema/SymbolTable.cpp`, `compiler/include/nirqoba/Sema/TypeChecker.h`,
+  `compiler/lib/Sema/TypeChecker.cpp`.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `SymbolTable.h` / `.cpp` | Added `borrow_field`, `has_live_field_borrow`, and path overlap matching | Preserve and query field identity |
+| `SymbolTable.cpp` | Extended pointer ownership rebinding with the field path | Keep assignment state consistent |
+| `TypeChecker.h` / `.cpp` | Added `find_borrow_field_path` and propagation through aliases/calls | Tie returned and forwarded borrows to the aggregate field |
+| `TypeChecker.cpp` | Added assignment and compound-assignment field guards | Reject overlapping replacement while a borrow is live |
+| `TypeChecker.cpp` | Added whole-aggregate replacement guard | Prevent replacing the owner's storage beneath a field borrow |
+| `borrow_field_*` integration cases | Three positives and eight negatives | Cover direct, nested, forwarded, escaped, moved and invalidated field borrows |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Clean RelWithDebInfo build | PASS | `scripts/build.ps1 -Configuration RelWithDebInfo -Clean` |
+| Unit suite | PASS | 214/214 |
+| Integration suite | PASS | 357/357 |
+| `positive/borrow_field_direct` | PASS | Exit 22 |
+| `positive/borrow_field_nested` | PASS | Exit 22 |
+| `positive/borrow_field_forwarded_return` | PASS | Exit 9 |
+| `negative/borrow_field_replacement` | PASS | `cannot replace aggregate field 'x' while a borrow of it is live` |
+| `negative/borrow_field_nested_replacement` | PASS | `cannot replace aggregate field 'inner' while a borrow of it is live` |
+| `negative/borrow_field_forwarded_replacement` | PASS | Path preserved through two borrowed-return calls |
+| `negative/borrow_field_compound_replacement` | PASS | Compound field write rejected |
+| `negative/borrow_field_owner_escape` | PASS | `borrow of 'p' cannot outlive its owner` |
+| `negative/borrow_field_owner_move` | PASS | Owner move rejected while field borrow is live |
+| `negative/borrow_field_owned_field_move` | PASS | Owned-field move rejected while field borrow is live |
+| `negative/borrow_field_aggregate_replacement` | PASS | Whole-aggregate replacement rejected |
+
+- **Build Status:** Successful.
+- **Regression Status:** None detected.
+- **Test Environment:** Windows 11 x64, MSVC 14.51.36231, LLVM/MLIR 23.1.4,
+  RelWithDebInfo.
+
+### 5. Performance & Resource Impact
+
+No runtime path changed. Field paths and overlap checks are semantic state only;
+there are no counters, locks, heap descriptors, or generated borrow checks. No
+benchmark is claimed for this increment.
+
+### 6. Issues & Limitations
+
+- Only leaf fields with numeric, boolean or pointer storage are addressable.
+  Aggregate-valued fields, owned arrays and managed references remain rejected.
+- Field paths are not merged path-sensitively across conditional branches; a
+  binding assigned different field borrows on different paths does not retain a
+  single checked field path.
+- Owning aggregates keep the existing broad live-borrow mutation guard, so some
+  independent field writes may be conservatively rejected with array-view wording.
+- Borrowed struct fields still lack independently checked lifetimes.
+- Mutable-borrow exclusivity across nested calls and closure capture are untouched.
+- Safe rebinding of a borrowed pointer to a different live owner remains
+  conservatively rejected.
+
+### 7. Outstanding Work
+
+- [x] Support borrowing from aggregate fields.
+- [ ] Implement mutable-borrow exclusivity across nested calls.
+- [ ] Add closure-capture ownership rules when closures require them.
+- [ ] Add the minimum escape analysis needed for remaining lifetime transfers.
+
+### 8. Dependencies & Compatibility
+
+- **New Dependencies:** None.
+- **Removed Dependencies:** None.
+- **Platform Compatibility:** No platform-specific change.
+- **Breaking Changes:** Programs that replace a field while a borrow of that
+  field path is live are now rejected. Independent sibling field access and
+  existing scalar/pointer address-of behavior remain accepted.
+
+### 9. Agent Assessment
+
+- **Implementation Completeness:** Aggregate-field borrowing is complete for
+  supported leaf fields, including nested paths and forwarding.
+- **Verification Confidence:** High — clean build and both full suites passed.
+- **Known Risks:** Branch-selected field paths are not path-sensitive, and
+  aggregate-valued fields remain outside the addressable subset.
+- **Recommended Next Step:** Nested mutable-borrow exclusivity, or branch-sensitive
+  field-path merging if that is prioritized first.
+
+### 10. Evidence & References
+
+- **Commits:** `b276ae6` (semantic changes), `cc595bf` (focused tests)
+- **Relevant Files:** `compiler/lib/Sema/TypeChecker.cpp`,
+  `compiler/lib/Sema/SymbolTable.cpp`,
+  `tests/integration/positive/borrow_field_forwarded_return`,
+  `tests/integration/negative/borrow_field_replacement`.
+- **Documentation:** `reports/pre-mmm/phase-02.md`,
+  `project_context/Pre-MMM_ROADMAP.md`, `docs/memory/management.md`.
+
+---
+
+**End of Entry #009**
 
 <!-- REPORT ENTRIES END -->
 

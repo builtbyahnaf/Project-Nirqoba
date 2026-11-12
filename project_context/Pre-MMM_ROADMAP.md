@@ -101,7 +101,11 @@
   selected-source returns are checked against a live, unmoved owner, and the
   owner cannot be transferred to an owning parameter while the return is live
   (`0.419-beta`, `reports/pre-mmm/phase-02.md`).
-- [ ] Support borrowing from aggregate fields.
+- [x] Support borrowing from aggregate fields.
+  Borrows record the aggregate binding and dotted field path; direct and nested
+  field borrows survive forwarding and borrowed returns, and replacing an
+  overlapping field, moving the owner, or escaping its scope is rejected
+  (`0.423-beta`, `reports/pre-mmm/phase-02.md`).
 - [ ] Implement correct mutable-borrow exclusivity across nested calls.
 - [ ] Add closure-capture ownership rules when closure support requires them.
 - [ ] Prevent borrowed references from escaping their owner's lifetime.
