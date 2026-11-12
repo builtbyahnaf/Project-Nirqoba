@@ -18,6 +18,11 @@
 
 namespace nirq {
 
+// True when two dotted field paths refer to the same storage: equal paths, an
+// ancestor/descendant pair, or either whole-binding empty path. Independent
+// sibling paths do not overlap.
+bool borrow_paths_overlap(const std::string& left, const std::string& right);
+
 struct Symbol {
   std::string name;
   Type type;
@@ -80,9 +85,13 @@ class SymbolTable {
   bool has_live_borrow(uint64_t allocation_id) const;
   bool has_live_field_borrow(uint64_t allocation_id,
                              const std::string& path) const;
-  bool has_conflicting_borrow(uint64_t allocation_id,
-                              bool requested_mutable,
-                              const std::string& except_name = {}) const;
+  // The first live borrow that conflicts with a request of the given
+  // mutability and path, or nullptr. Immutable requests conflict only with
+  // mutable borrows; mutable requests conflict with either kind.
+  const Symbol* find_conflicting_borrow(
+      uint64_t allocation_id, bool requested_mutable,
+      const std::string& requested_path = {},
+      const std::string& except_name = {}) const;
   void rebind_pointer(const std::string& name, uint64_t allocation_id);
   void set_pointer_ownership(const std::string& name, bool owns_allocation,
                              bool borrowed, bool mutable_borrow,

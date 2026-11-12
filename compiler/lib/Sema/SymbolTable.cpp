@@ -5,9 +5,7 @@
 namespace nirq {
 using namespace std;
 
-// A borrow of a field is invalidated by replacing that field, any ancestor, or
-// any descendant. Independent sibling fields do not overlap.
-static bool field_paths_overlap(const string& left, const string& right) {
+bool borrow_paths_overlap(const string& left, const string& right) {
   if (left.empty() || right.empty()) return true;
   if (left == right) return true;
   if (left.size() < right.size())
@@ -87,24 +85,25 @@ bool SymbolTable::has_live_field_borrow(uint64_t allocation_id,
       if (symbol.allocation_id != allocation_id || symbol.moved ||
           !symbol.borrowed || symbol.borrow_field.empty())
         continue;
-      if (field_paths_overlap(symbol.borrow_field, path)) return true;
+      if (borrow_paths_overlap(symbol.borrow_field, path)) return true;
     }
   return false;
 }
 
-bool SymbolTable::has_conflicting_borrow(uint64_t allocation_id,
-                                         bool requested_mutable,
-                                         const string& except_name) const {
-  if (allocation_id == 0) return false;
+const Symbol* SymbolTable::find_conflicting_borrow(
+    uint64_t allocation_id, bool requested_mutable,
+    const string& requested_path, const string& except_name) const {
+  if (allocation_id == 0) return nullptr;
   for (const auto& scope : scopes_)
     for (const auto& entry : scope) {
       const Symbol& symbol = entry.second;
-      if (symbol.name != except_name && symbol.allocation_id == allocation_id &&
-          symbol.borrowed &&
-          !symbol.moved && (requested_mutable || symbol.mutable_borrow))
-        return true;
+      if (symbol.name == except_name || symbol.allocation_id != allocation_id ||
+          !symbol.borrowed || symbol.moved)
+        continue;
+      if (!borrow_paths_overlap(symbol.borrow_field, requested_path)) continue;
+      if (requested_mutable || symbol.mutable_borrow) return &symbol;
     }
-  return false;
+  return nullptr;
 }
 
 void SymbolTable::rebind_pointer(const string& name, uint64_t allocation_id) {
@@ -309,6 +308,10 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
       destination.borrowed = then_symbol->borrowed || else_symbol->borrowed;
       destination.mutable_borrow = then_symbol->mutable_borrow ||
                                    else_symbol->mutable_borrow;
+      if (then_symbol->borrow_field != else_symbol->borrow_field)
+        destination.borrow_field.clear();
+      else
+        destination.borrow_field = then_symbol->borrow_field;
       destination.shared_allocation = then_symbol->shared_allocation ||
                                       else_symbol->shared_allocation;
       destination.moved_fields = then_symbol->moved_fields;
