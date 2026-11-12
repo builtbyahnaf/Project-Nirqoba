@@ -1,0 +1,5 @@
+{
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": "cannot read aggregate 'p' while a mutable borrow of it is live"
+}
