@@ -1,0 +1,13 @@
+borrow source byte* function alias(borrow byte* source) {
+    return source;
+}
+
+void function take(byte* value) {
+}
+
+int function main() {
+    var owner = memory.allocate<byte>(1);
+    let view = alias(owner);
+    take(owner);
+    return 0;
+}

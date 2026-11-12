@@ -1,0 +1,12 @@
+borrow source byte* function alias(borrow byte* source) {
+    return source;
+}
+
+int function main() {
+    @Nullable var ptr byte escaped = nullptr;
+    {
+        var inner = memory.allocate<byte>(1);
+        escaped = alias(inner);
+    }
+    return 0;
+}
