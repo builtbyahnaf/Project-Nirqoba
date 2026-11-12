@@ -62,7 +62,7 @@ class TypeChecker {
   };
   struct ActiveBorrow {
     uint64_t allocation_id = 0;
-    std::string path;
+    BorrowPathSet paths;
     bool mutable_borrow = false;
   };
   void check_function(FunctionDecl& function);
@@ -99,15 +99,16 @@ class TypeChecker {
   // once every child of an aggregate is initialized.
   void mark_field_initialized(const std::string& root, const std::string& path);
   const Symbol* find_borrow_origin(const Expr& expression) const;
-  std::string find_borrow_field_path(const Expr& expression) const;
+  BorrowPathSet find_borrow_paths(const Expr& expression) const;
   // A borrow's originating binding must still exist and refer to the same
   // allocation; borrowed parameters are their own origin inside a function.
   bool borrow_owner_is_live(const Symbol& borrow) const;
   std::string borrow_owner_name(const Symbol& origin) const;
-  bool active_borrow_conflicts(uint64_t allocation_id, const std::string& path,
+  bool active_borrow_conflicts(uint64_t allocation_id,
+                               const BorrowPathSet& paths,
                                bool requested_mutable) const;
   bool has_live_mutable_access(uint64_t allocation_id,
-                               const std::string& path) const;
+                               const BorrowPathSet& paths) const;
   void consume_field_move(Expr& expression, const Type& value_type);
 
   // Struct catalog lookup helpers. `name` may be module-qualified; a bare name

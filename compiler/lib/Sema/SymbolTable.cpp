@@ -15,6 +15,59 @@ bool borrow_paths_overlap(const string& left, const string& right) {
          left[right.size()] == '.';
 }
 
+void BorrowPathSet::add(const string& value) {
+  // An empty primary path already covers every field of the owner.
+  if (path.empty()) return;
+  if (value.empty()) {
+    path.clear();
+    alternatives.clear();
+    return;
+  }
+  if (value == path) return;
+  for (const string& alternative : alternatives)
+    if (alternative == value) return;
+  alternatives.push_back(value);
+}
+
+void BorrowPathSet::merge(const BorrowPathSet& other) {
+  if (other.path.empty()) {
+    path.clear();
+    alternatives.clear();
+    return;
+  }
+  add(other.path);
+  for (const string& alternative : other.alternatives) add(alternative);
+}
+
+bool BorrowPathSet::overlaps(const string& requested) const {
+  if (borrow_paths_overlap(path, requested)) return true;
+  for (const string& alternative : alternatives)
+    if (borrow_paths_overlap(alternative, requested)) return true;
+  return false;
+}
+
+bool BorrowPathSet::overlaps(const BorrowPathSet& requested) const {
+  if (overlaps(requested.path)) return true;
+  for (const string& alternative : requested.alternatives)
+    if (overlaps(alternative)) return true;
+  return false;
+}
+
+bool BorrowPathSet::overlaps_field(const string& requested) const {
+  if (!path.empty() && borrow_paths_overlap(path, requested)) return true;
+  for (const string& alternative : alternatives)
+    if (!alternative.empty() && borrow_paths_overlap(alternative, requested))
+      return true;
+  return false;
+}
+
+bool BorrowPathSet::has_field_projection() const {
+  if (!path.empty()) return true;
+  for (const string& alternative : alternatives)
+    if (!alternative.empty()) return true;
+  return false;
+}
+
 bool SymbolTable::declare(Symbol symbol) {
   if (scopes_.empty()) scopes_.emplace_back();
   auto& scope = scopes_.back();
@@ -83,16 +136,16 @@ bool SymbolTable::has_live_field_borrow(uint64_t allocation_id,
     for (const auto& entry : scope) {
       const Symbol& symbol = entry.second;
       if (symbol.allocation_id != allocation_id || symbol.moved ||
-          !symbol.borrowed || symbol.borrow_field.empty())
+          !symbol.borrowed || !symbol.borrow_paths.has_field_projection())
         continue;
-      if (borrow_paths_overlap(symbol.borrow_field, path)) return true;
+      if (symbol.borrow_paths.overlaps_field(path)) return true;
     }
   return false;
 }
 
 const Symbol* SymbolTable::find_conflicting_borrow(
     uint64_t allocation_id, bool requested_mutable,
-    const string& requested_path, const string& except_name) const {
+    const BorrowPathSet& requested_paths, const string& except_name) const {
   if (allocation_id == 0) return nullptr;
   for (const auto& scope : scopes_)
     for (const auto& entry : scope) {
@@ -100,7 +153,7 @@ const Symbol* SymbolTable::find_conflicting_borrow(
       if (symbol.name == except_name || symbol.allocation_id != allocation_id ||
           !symbol.borrowed || symbol.moved)
         continue;
-      if (!borrow_paths_overlap(symbol.borrow_field, requested_path)) continue;
+      if (!symbol.borrow_paths.overlaps(requested_paths)) continue;
       if (requested_mutable || symbol.mutable_borrow) return &symbol;
     }
   return nullptr;
@@ -123,7 +176,7 @@ void SymbolTable::set_pointer_ownership(const string& name,
                                         bool shared_allocation,
                                         std::string cleanup_callee,
                                         std::string borrow_owner,
-                                        std::string borrow_field) {
+                                        BorrowPathSet borrow_paths) {
   for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
     auto found = scope->find(name);
     if (found != scope->end()) {
@@ -133,7 +186,7 @@ void SymbolTable::set_pointer_ownership(const string& name,
       found->second.shared_allocation = shared_allocation;
       found->second.cleanup_callee = std::move(cleanup_callee);
       found->second.borrow_owner = std::move(borrow_owner);
-      found->second.borrow_field = std::move(borrow_field);
+      found->second.borrow_paths = std::move(borrow_paths);
       return;
     }
   }
@@ -293,25 +346,35 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
       const Symbol* then_symbol = then_state.lookup(destination.name);
       const Symbol* else_symbol = else_state.lookup(destination.name);
       if (!then_symbol || !else_symbol) continue;
-      const bool same_allocation =
-          then_symbol->allocation_id == else_symbol->allocation_id &&
-          then_symbol->allocation_id == destination.allocation_id;
-      if (!same_allocation) {
+      // The incoming state may still have an untracked allocation id (for
+      // example a nullable pointer before either branch assigns a borrow). If
+      // both branches agree, their shared id is the merged identity.
+      if (then_symbol->allocation_id != else_symbol->allocation_id) {
         // A single symbol cannot represent different owners selected by
         // mutually exclusive branches. Keep it unusable after the merge.
         destination.moved = true;
         continue;
       }
+      destination.allocation_id = then_symbol->allocation_id;
       destination.moved = then_symbol->moved || else_symbol->moved;
       destination.owns_allocation = then_symbol->owns_allocation &&
                                     else_symbol->owns_allocation;
       destination.borrowed = then_symbol->borrowed || else_symbol->borrowed;
       destination.mutable_borrow = then_symbol->mutable_borrow ||
                                    else_symbol->mutable_borrow;
-      if (then_symbol->borrow_field != else_symbol->borrow_field)
-        destination.borrow_field.clear();
-      else
-        destination.borrow_field = then_symbol->borrow_field;
+      if (then_symbol->borrowed && else_symbol->borrowed) {
+        // Both paths are real possibilities after the merge. Conflict checks
+        // test every one, so disjoint fields stay usable while any overlap is
+        // rejected without falling back to the whole owner.
+        destination.borrow_owner = then_symbol->borrow_owner;
+        destination.borrow_paths = then_symbol->borrow_paths;
+        destination.borrow_paths.merge(else_symbol->borrow_paths);
+      } else {
+        // A borrow on only one path has no single safe projection after the
+        // merge; whole-owner access is the conservative choice.
+        destination.borrow_owner.clear();
+        destination.borrow_paths.set({});
+      }
       destination.shared_allocation = then_symbol->shared_allocation ||
                                       else_symbol->shared_allocation;
       destination.moved_fields = then_symbol->moved_fields;
