@@ -60,6 +60,11 @@ class TypeChecker {
     const CallExpr* call = nullptr;
     uint64_t allocation_id = 0;
   };
+  struct ActiveBorrow {
+    uint64_t allocation_id = 0;
+    std::string path;
+    bool mutable_borrow = false;
+  };
   void check_function(FunctionDecl& function);
   void check_statement(Stmt& statement);
   void check_block(BlockStmt& block);
@@ -99,6 +104,10 @@ class TypeChecker {
   // allocation; borrowed parameters are their own origin inside a function.
   bool borrow_owner_is_live(const Symbol& borrow) const;
   std::string borrow_owner_name(const Symbol& origin) const;
+  bool active_borrow_conflicts(uint64_t allocation_id, const std::string& path,
+                               bool requested_mutable) const;
+  bool has_live_mutable_access(uint64_t allocation_id,
+                               const std::string& path) const;
   void consume_field_move(Expr& expression, const Type& value_type);
 
   // Struct catalog lookup helpers. `name` may be module-qualified; a bare name
@@ -138,6 +147,13 @@ class TypeChecker {
   uint64_t next_allocation_id_ = 1;
   bool checking_deferred_cleanup_ = false;
   bool checking_lvalue_ = false;
+  // Set while checking the operand of `&`, so creating a borrow does not also
+  // report an ordinary overlapping read.
+  bool checking_borrow_operand_ = false;
+  // Borrows already claimed by earlier arguments of the call currently being
+  // checked. This makes argument ordering obey the same exclusivity rule as
+  // live lexical borrows.
+  std::vector<ActiveBorrow> active_call_borrows_;
   // Set while checking the base of a member access. A container element has no
   // value of its own, so `ps[i]` is only a legal expression when it is claimed
   // as the base of `ps[i].field`.

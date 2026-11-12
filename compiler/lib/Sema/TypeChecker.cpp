@@ -12,6 +12,22 @@ using namespace std;
 static const Symbol* find_root_symbol(const Expr& expr,
                                       const SymbolTable& symbols);
 
+static std::string borrow_display(const std::string& owner,
+                                  const std::string& path) {
+  return path.empty() ? owner : owner + path;
+}
+
+static std::string borrow_display(const Symbol& symbol) {
+  const std::string owner =
+      symbol.borrowed && !symbol.borrow_owner.empty() ? symbol.borrow_owner
+                                                      : symbol.name;
+  return borrow_display(owner, symbol.borrow_field);
+}
+
+static std::string field_display(const std::string& path) {
+  return !path.empty() && path.front() == '.' ? path.substr(1) : path;
+}
+
 namespace {
 
 constexpr const char* kPrintBuiltin = "print";
@@ -1071,11 +1087,9 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
             symbol.borrow_field = find_borrow_field_path(
                 *call.arguments()[source_index]);
             symbol.cleanup_callee = source->cleanup_callee;
-            if (symbols_.has_conflicting_borrow(
-                    source->allocation_id, signature->returns_mutable_borrow,
-                    source->name))
-              diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
-                                 "returned borrow conflicts with an existing live borrow");
+            // The call's borrow argument already rejects a conflicting live
+            // borrow and records same-call exclusivity, so the declaration does
+            // not repeat that diagnostic.
             if (signature->returns_mutable_borrow &&
                 declaration.binding() != BindingKind::Var)
               diagnostics_.error(diag::kImmutableAssignment, declaration.location(),
@@ -1133,9 +1147,11 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
         if (source && source->allocation_id != 0 && !source->moved) {
           symbol.allocation_id = source->allocation_id;
           symbol.borrow_owner = borrow_owner_name(*source);
-          if (symbols_.has_conflicting_borrow(source->allocation_id,
-                                              signature->returns_mutable_borrow,
-                                              source->name))
+          if (symbols_.find_conflicting_borrow(source->allocation_id,
+                                               signature->returns_mutable_borrow,
+                                               {}, source->name) ||
+              active_borrow_conflicts(source->allocation_id, {},
+                                      signature->returns_mutable_borrow))
             diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
                                "returned array view conflicts with a live mutable borrow");
         }
@@ -1391,6 +1407,27 @@ bool TypeChecker::borrow_owner_is_live(const Symbol& borrow) const {
 std::string TypeChecker::borrow_owner_name(const Symbol& origin) const {
   if (origin.borrowed && !origin.borrow_owner.empty()) return origin.borrow_owner;
   return origin.name;
+}
+
+bool TypeChecker::active_borrow_conflicts(uint64_t allocation_id,
+                                          const std::string& path,
+                                          bool requested_mutable) const {
+  if (allocation_id == 0) return false;
+  for (const ActiveBorrow& borrow : active_call_borrows_) {
+    if (borrow.allocation_id != allocation_id ||
+        !borrow_paths_overlap(borrow.path, path))
+      continue;
+    if (requested_mutable || borrow.mutable_borrow) return true;
+  }
+  return false;
+}
+
+bool TypeChecker::has_live_mutable_access(uint64_t allocation_id,
+                                          const std::string& path) const {
+  if (allocation_id == 0) return false;
+  if (symbols_.find_conflicting_borrow(allocation_id, false, path))
+    return true;
+  return active_borrow_conflicts(allocation_id, path, false);
 }
 
 const Symbol* TypeChecker::find_borrow_origin(const Expr& expression) const {
@@ -1833,6 +1870,14 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     if (allocation_id == 0) allocation_id = next_allocation_id_++;
     bool borrowed = source && source->borrowed;
     bool mutable_borrow = source && source->mutable_borrow;
+    bool requested_mutable = mutable_borrow;
+    if (address_of_value) {
+      requested_mutable = false;
+    } else if (assignment.value().kind() == Expr::Kind::Call) {
+      const auto& value_call = static_cast<const CallExpr&>(assignment.value());
+      const FunctionSignature* value_signature = find_function(value_call.callee());
+      requested_mutable = value_signature && value_signature->returns_mutable_borrow;
+    }
     bool shared_allocation = source && source->shared_allocation;
     std::string cleanup_callee = source ? source->cleanup_callee : std::string{};
     std::string borrow_owner;
@@ -1880,9 +1925,34 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
         symbols_.ensure_allocation_id(borrow_origin->name, next_allocation_id_++);
       allocation_id = borrow_origin->allocation_id;
       borrowed = true;
-      mutable_borrow = borrow_origin->mutable_borrow;
+      mutable_borrow = requested_mutable;
       borrow_owner = borrow_owner_name(*borrow_origin);
       borrow_field = find_borrow_field_path(assignment.value());
+      const string requested_display =
+          borrow_display(borrow_owner, borrow_field);
+      const Symbol* conflict = !assignment.value().type().is_valid()
+          ? nullptr
+          : symbols_.find_conflicting_borrow(
+                allocation_id, requested_mutable, borrow_field, assignment.name());
+      if (conflict) {
+        diagnostics_.error(
+            diag::kTypeMismatch, assignment.value().location(),
+            requested_mutable
+                ? "mutable borrow of '" + requested_display +
+                      "' conflicts with live borrow '" + borrow_display(*conflict) + "'"
+                : "borrow of '" + requested_display +
+                      "' conflicts with live mutable borrow '" +
+                      borrow_display(*conflict) + "'");
+        return;
+      }
+      if (assignment.value().type().is_valid() &&
+          active_borrow_conflicts(allocation_id, borrow_field,
+                                  requested_mutable)) {
+        diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                           "conflicting borrows of '" + requested_display +
+                               "' in one call");
+        return;
+      }
       cleanup_callee = borrow_origin->cleanup_callee;
       owns_allocation = false;
     }
@@ -2416,6 +2486,13 @@ Type TypeChecker::check_expression(Expr& expr) {
                              "use of '" + name.name() +
                                  "' after its allocation was deallocated");
         }
+        if (!checking_lvalue_ && !checking_aggregate_base_ &&
+            !checking_borrow_operand_ && symbol->type.is_struct() &&
+            has_live_mutable_access(symbol->allocation_id, {})) {
+          diagnostics_.error(diag::kTypeMismatch, name.location(),
+                             "cannot read aggregate '" + name.name() +
+                                 "' while a mutable borrow of it is live");
+        }
         // A partially initialized aggregate may only be used field by field; copy,
         // move, return, argument passing and other whole-value uses are rejected.
         if (!checking_lvalue_ && !checking_aggregate_base_ &&
@@ -2473,7 +2550,10 @@ Type TypeChecker::check_expression(Expr& expr) {
       break;
     case Expr::Kind::Unary: {
       auto& unary = static_cast<UnaryExpr&>(expr);
+      const bool previous_borrow_operand = checking_borrow_operand_;
+      if (unary.op() == UnaryOp::AddressOf) checking_borrow_operand_ = true;
       const Type operand_type = check_expression(const_cast<Expr&>(unary.operand()));
+      checking_borrow_operand_ = previous_borrow_operand;
       if (!operand_type.is_valid()) break;
 
       switch (unary.op()) {
@@ -2535,7 +2615,25 @@ Type TypeChecker::check_expression(Expr& expr) {
                                    "' is not supported yet");
             type = Type::error();
           } else {
-            type = Type::pointer_type(operand_type);
+            const Symbol* origin = find_borrow_origin(unary.operand());
+            const string path = find_borrow_field_path(unary);
+            const Symbol* conflict = origin && origin->allocation_id != 0
+                ? symbols_.find_conflicting_borrow(
+                      origin->allocation_id, false, path,
+                      origin->borrowed ? origin->name : std::string{})
+                : nullptr;
+            if (conflict ||
+                (origin && active_borrow_conflicts(
+                               origin->allocation_id, path, false))) {
+              diagnostics_.error(
+                  diag::kTypeMismatch, unary.location(),
+                  "cannot create a borrow of '" +
+                      borrow_display(borrow_owner_name(*origin), path) +
+                      "' while a mutable borrow is live");
+              type = Type::error();
+            } else {
+              type = Type::pointer_type(operand_type);
+            }
           }
           break;
         }
@@ -2919,7 +3017,7 @@ Type TypeChecker::check_index_expr(IndexExpr& expr) {
 
   if (!checking_lvalue_ && base_type.is_owned_array()) {
     const Symbol* owner = find_root_symbol(expr.base(), symbols_);
-    if (owner && symbols_.has_conflicting_borrow(owner->allocation_id, false)) {
+    if (owner && has_live_mutable_access(owner->allocation_id, {})) {
       diagnostics_.error(diag::kTypeMismatch, expr.base().location(),
                          "cannot read an owned array while a mutable view is live");
       return Type::error();
@@ -3006,6 +3104,21 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
   checking_soa_column_base_ = enclosing_soa_column;
   if (!base_type.is_valid()) return Type::error();
 
+  auto check_mutable_read = [&](const MemberAccessExpr& access) {
+    if (checking_lvalue_ || checking_aggregate_base_ || checking_borrow_operand_)
+      return;
+    string root;
+    string path;
+    if (!field_path(access, root, path)) return;
+    const Symbol* owner = symbols_.lookup(root);
+    if (owner && has_live_mutable_access(owner->allocation_id, path)) {
+      diagnostics_.error(
+          diag::kTypeMismatch, access.location(),
+          "cannot read aggregate field '" + field_display(path) +
+              "' while a mutable borrow of it is live");
+    }
+  };
+
   // Tuple element access: tup.0
   if (expr.is_tuple_access()) {
     if (!base_type.is_tuple()) {
@@ -3024,6 +3137,7 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
       return Type::error();
     }
     const Type field_type = elems[static_cast<size_t>(idx)];
+    check_mutable_read(expr);
     string root;
     string path;
     if (!checking_lvalue_ && field_path(expr, root, path) &&
@@ -3059,6 +3173,7 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
     for (const Parameter& field : info->fields) {
       if (field.name == expr.member()) {
         const Type field_type = resolve_aggregate_type(field.type);
+        check_mutable_read(expr);
         string root;
         string path;
         if (!checking_lvalue_ && field_path(expr, root, path) &&
@@ -3319,16 +3434,19 @@ Type TypeChecker::check_call(CallExpr& call) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "mutable array views require a mutable owned array");
     } else if (mutable_view &&
-               symbols_.has_conflicting_borrow(source->allocation_id, true,
-                                               source->borrowed ? source->name : std::string{})) {
+               (symbols_.find_conflicting_borrow(
+                    source->allocation_id, true, {},
+                    source->borrowed ? source->name : std::string{}) ||
+                active_borrow_conflicts(source->allocation_id, {}, true))) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "mutable array view conflicts with another live borrow");
     } else if (!mutable_view && source->mutable_borrow && source->borrowed) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "cannot create an immutable alias from a live mutable array view");
     } else if (!mutable_view &&
-               symbols_.has_conflicting_borrow(source->allocation_id, false,
-                                               source->name)) {
+               (symbols_.find_conflicting_borrow(source->allocation_id, false,
+                                                 {}, source->name) ||
+                active_borrow_conflicts(source->allocation_id, {}, false))) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "array view conflicts with a live mutable borrow");
     }
@@ -4531,7 +4649,7 @@ Type TypeChecker::check_call(CallExpr& call) {
 
   const size_t count = min(call.arguments().size(), sig.parameter_types.size());
   vector<uint64_t> ownership_transfers;
-  unordered_map<uint64_t, bool> active_borrows;
+  const size_t active_borrow_base = active_call_borrows_.size();
   for (size_t i = 0; i < count; ++i) {
     const Type arg_type = check_expression(const_cast<Expr&>(*call.arguments()[i]));
     if (arg_type.is_valid() && arg_type != sig.parameter_types[i]) {
@@ -4568,19 +4686,16 @@ Type TypeChecker::check_call(CallExpr& call) {
                            source->allocation_id) != ownership_transfers.end()) {
         diagnostics_.error(diag::kTypeMismatch, argument.location(),
                            "cannot borrow an owner in a call that also transfers it");
-      } else if (symbols_.has_conflicting_borrow(source->allocation_id,
-                                                 expects_mutable,
-                                                 source->borrowed ? source->name :
-                                                                    std::string{})) {
+      } else if (symbols_.find_conflicting_borrow(
+                     source->allocation_id, expects_mutable, {},
+                     source->borrowed ? source->name : std::string{}) ||
+                 active_borrow_conflicts(source->allocation_id, {},
+                                         expects_mutable)) {
         diagnostics_.error(diag::kTypeMismatch, argument.location(),
                            "array view argument conflicts with another live borrow");
       } else {
-        auto found = active_borrows.find(source->allocation_id);
-        if (found != active_borrows.end() &&
-            (found->second || expects_mutable))
-          diagnostics_.error(diag::kTypeMismatch, argument.location(),
-                             "conflicting borrows of the same allocation in one call");
-        active_borrows[source->allocation_id] = expects_mutable;
+        active_call_borrows_.push_back(
+            ActiveBorrow{source->allocation_id, {}, expects_mutable});
       }
       continue;
     }
@@ -4594,7 +4709,11 @@ Type TypeChecker::check_call(CallExpr& call) {
       if (source && source->borrowed) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                            "borrowed values cannot be transferred as owned resources");
-      } else if (source && active_borrows.find(source->allocation_id) != active_borrows.end()) {
+      } else if (source &&
+                 std::any_of(active_call_borrows_.begin(), active_call_borrows_.end(),
+                             [&](const ActiveBorrow& borrow) {
+                               return borrow.allocation_id == source->allocation_id;
+                             })) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                            "cannot transfer an owner while another argument borrows it");
       } else if (source && std::find(ownership_transfers.begin(), ownership_transfers.end(),
@@ -4721,32 +4840,49 @@ Type TypeChecker::check_call(CallExpr& call) {
                            "cannot borrow an owner in a call that also transfers it");
         continue;
       }
+      // A failed borrow expression (for example one already rejected while
+      // creating its address) must not produce a second conflict diagnostic at
+      // the argument boundary.
+      if (!arg_type.is_valid()) continue;
       if (mutable_borrow && !source->is_mutable()) {
         diagnostics_.error(diag::kImmutableAssignment, call.arguments()[i]->location(),
                            "mutable borrowing requires a mutable binding");
       }
-      string borrowed_source_name = source->name;
-      string borrowed_field_path;
-      string argument_root;
-      if (field_path(*call.arguments()[i], argument_root, borrowed_field_path))
-        borrowed_source_name = argument_root;
-      if (symbols_.has_conflicting_borrow(source->allocation_id, mutable_borrow,
-                                          borrowed_source_name)) {
-        diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
-                           "borrow argument conflicts with an existing live borrow");
+      const string borrowed_field_path =
+          find_borrow_field_path(*call.arguments()[i]);
+      const string requested_display =
+          borrow_display(borrow_owner_name(*source), borrowed_field_path);
+      const Symbol* conflict = symbols_.find_conflicting_borrow(
+          source->allocation_id, mutable_borrow, borrowed_field_path,
+          source->borrowed ? source->name : std::string{});
+      if (conflict) {
+        diagnostics_.error(
+            diag::kTypeMismatch, call.arguments()[i]->location(),
+            mutable_borrow
+                ? "mutable borrow of '" + requested_display +
+                      "' conflicts with live borrow '" + borrow_display(*conflict) + "'"
+                : "borrow of '" + requested_display +
+                      "' conflicts with live mutable borrow '" +
+                      borrow_display(*conflict) + "'");
         continue;
       }
-      auto found = active_borrows.find(source->allocation_id);
-      if (found != active_borrows.end() && (found->second || mutable_borrow)) {
+      if (active_borrow_conflicts(source->allocation_id, borrowed_field_path,
+                                  mutable_borrow)) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
-                           "conflicting borrows of the same allocation in one call");
+                           "conflicting borrows of '" + requested_display +
+                               "' in one call");
+        continue;
       }
-      active_borrows[source->allocation_id] = mutable_borrow;
+      active_call_borrows_.push_back(ActiveBorrow{
+          source->allocation_id, borrowed_field_path, mutable_borrow});
     } else if (source && source->borrowed) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "a borrowed pointer cannot be transferred to an owning parameter");
     } else if (source &&
-               active_borrows.find(source->allocation_id) != active_borrows.end()) {
+               std::any_of(active_call_borrows_.begin(), active_call_borrows_.end(),
+                           [&](const ActiveBorrow& borrow) {
+                             return borrow.allocation_id == source->allocation_id;
+                           })) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "cannot transfer an owner while another argument borrows it");
     } else if (source && source->owns_allocation && !source->moved &&
@@ -4773,6 +4909,8 @@ Type TypeChecker::check_call(CallExpr& call) {
   for (size_t i = count; i < call.arguments().size(); ++i) {
     check_expression(const_cast<Expr&>(*call.arguments()[i]));
   }
+
+  active_call_borrows_.resize(active_borrow_base);
 
   for (uint64_t allocation_id : ownership_transfers)
     symbols_.mark_allocation_moved(allocation_id);
