@@ -12,6 +12,30 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.437-beta (working build)
+
+### Summary of Changes (since `0.431-beta`):
+
+*Opened after one-sided conditional merges retain a live borrow's field path.*
+
+- **One-sided borrows keep their projection.** When only one arm leaves a live
+  borrow, the merged binding keeps that arm's owner and field path instead of
+  collapsing to whole-owner access. The binding is marked conditional because
+  the borrow may not exist on the other path.
+- **Every reachable conflict is still rejected.** Reads, writes, and new borrows
+  that overlap the conditional path are rejected, while a sibling field disjoint
+  from it remains independently accessible.
+- **Definite uses require a definite borrow.** Aliasing a conditional borrow,
+  forwarding it to a call, taking a new borrow through it, or returning it is
+  rejected with `borrow of '...' may not be live on every branch`. Direct null
+  checks and other ordinary pointer uses remain available.
+- **Owner identity is adopted only when safe.** A tracked borrow may pair with an
+  untracked or null binding on the other path; an inactive owner that owns or
+  shares storage still marks the binding unusable.
+- **No runtime cost.** The conditional flag and path retention are compile-time
+  semantic state only. No counters, locks, descriptors, allocations, or generated
+  checks were added.
+
 ## Version 0.431-beta (working build)
 
 ### Summary of Changes (since `0.427-beta`):

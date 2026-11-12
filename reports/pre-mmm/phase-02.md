@@ -1,9 +1,9 @@
 # Pre-MMM Phase 2 - Lifetime propagation, borrowed returns, aggregate fields, and exclusivity
 
-**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, mutable-borrow exclusivity, and branch-selected borrow paths complete)
-**Version:** 0.431-beta
+**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, mutable-borrow exclusivity, branch-selected borrow paths, and one-sided conditional borrows complete)
+**Version:** 0.437-beta
 **Date:** 2026-11-13
-**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`, `6f26f35`, `c06ef19`
+**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`, `6f26f35`, `c06ef19`, `3959176`, `3e068c4`, `c4c684a`
 
 ## Implemented
 
@@ -138,11 +138,33 @@ normal single-path case stays compact.
 - The merge also carries the shared borrow owner and adopts the branch allocation
   identity when both branches agree. The incoming state may still have an
   untracked id, so this is required before a later conflict query can be sound.
-- If only one branch has a live borrow, the merged binding falls back to
-  whole-owner access. If the branches select different owner allocations, the
-  binding is marked unusable. Both remain conservative.
+- At 0.431, if only one branch had a live borrow, the merged binding fell back
+  to whole-owner access; 0.437 retains its path as a conditional borrow. If the
+  branches select different owner allocations, the binding is marked unusable.
 - Branch paths are compile-time semantic state only. There are no runtime
   counters, locks, descriptors, allocations, or generated checks.
+
+## One-sided conditional borrows (0.437-beta)
+
+When only one branch leaves a live borrow, the merged binding now keeps that
+branch's owner, mutability, and field path instead of clearing the projection to
+whole-owner access. A new `borrow_conditional` flag records that the borrow is
+possible but not present on every path.
+
+- Conflict queries still include the symbol and test its retained path. A later
+  read, write, or new borrow overlapping the path is rejected on every reachable
+  execution, while a sibling field disjoint from the path remains available.
+- A conditional borrow is not usable as a definite borrow. Aliasing it, taking a
+  new borrow through it, forwarding it to a call, or returning it is rejected
+  with `borrow of '...' may not be live on every branch`.
+- The merge adopts the active branch's allocation identity when the other side is
+  an ordinary or untracked pointer. If the inactive side owns or shares an
+  allocation, the binding remains unusable, so distinct owners are not merged.
+- An explicit assignment replaces the conditional state with the new binding's
+  state, keeping the ordinary single-path fast path unchanged.
+- The state is compile-time only: one boolean on the existing symbol and the
+  existing inline path. No runtime counters, locks, descriptors, allocations, or
+  generated checks were added.
 
 ## Tests
 
@@ -162,6 +184,18 @@ normal single-path case stays compact.
   ambiguous live alias is rejected with both possible paths named.
 - `negative/branch_borrow_paths_read_overlap`: reading `p.x` is rejected while
   `.x` remains one possible branch path.
+- `positive/one_sided_borrow_paths_disjoint`: only one branch borrows `.x`; the
+  merged conditional path still leaves `p.z` available; output `9`.
+- `positive/one_sided_borrow_paths_nested`: only one branch borrows
+  `o.inner.a`; the conditional path leaves `o.z` available; output `9`.
+- `negative/one_sided_borrow_paths_overlap`: a later mutable borrow of `p.x` is
+  rejected because the one-sided path may be live.
+- `negative/one_sided_borrow_paths_read`: reading `p.x` is rejected for the same
+  reason.
+- `negative/one_sided_borrow_paths_alias`: aliasing the conditional binding is
+  rejected as not definitely live.
+- `negative/one_sided_borrow_paths_return`: forwarding the conditional binding
+  through a borrowed-return call is rejected as not definitely live.
 - `positive/mutable_borrow_disjoint_fields`: mutable borrows of `p.x` and `p.y`
   coexist, and a call receives both disjoint field borrows; output `30`.
 - `positive/mutable_borrow_forwarding`: a mutable field borrow survives two
@@ -228,12 +262,10 @@ normal single-path case stays compact.
 
 ## Verification
 
-- Clean `RelWithDebInfo` build at `0.431-beta`.
-- Unit suite: 214/214 passed on rerun. The known flaky
-  `GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage` crashed once on the
-  first post-clean run and passed on the immediate rerun of the same binary.
-- Integration suite: 375/375 passed, including the eight new branch-path cases
-  and all previous mutable-borrow and aggregate-field cases.
+- Clean `RelWithDebInfo` build at `0.437-beta`.
+- Unit suite: 214/214 passed on the first post-clean run.
+- Integration suite: 381/381 passed, including the eight branch-path cases, the
+  six one-sided cases, and all previous mutable-borrow and aggregate-field cases.
 
 ## Limitations
 
@@ -248,9 +280,10 @@ normal single-path case stays compact.
 - Aggregate field borrowing is limited to leaf fields with numeric, boolean or
   pointer storage. Aggregate-valued fields, owned arrays and managed references
   remain unaddressable.
-- Branch path merging is precise when both branches leave a live borrow of the
-  same owner. A one-sided borrow falls back to whole-owner access, and branches
-  that select different owner allocations mark the binding unusable.
+- A one-sided borrow keeps its field path but is marked conditional. It cannot
+  be used as a definite borrow (alias, call argument, or return), so some
+  programs that explicitly guard the borrow's existence may still be rejected.
+  Branches that select different owner allocations mark the binding unusable.
 - Owning aggregates still use the existing broad live-borrow guard for owner
   mutation, so an independent field write may be rejected conservatively and the
   diagnostic retains array-view wording.

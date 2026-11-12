@@ -113,8 +113,13 @@
   independently borrowable (`0.427-beta`, `reports/pre-mmm/phase-02.md`).
 - [x] Preserve branch-selected borrow paths across conditional merges.
   Distinct possible field paths are retained and all are checked for overlap,
-  while a one-sided borrow falls back to whole-owner access and different owner
-  allocations remain unusable (`0.431-beta`, `reports/pre-mmm/phase-02.md`).
+  while different owner allocations remain unusable (`0.431-beta`,
+  `reports/pre-mmm/phase-02.md`).
+- [x] Retain one-sided conditional borrows.
+  A borrow live on only one path keeps its owner and field projection; every
+  reachable overlapping access is rejected, disjoint fields stay available,
+  and aliases, calls or returns that require a definite borrow are rejected
+  (`0.437-beta`, `reports/pre-mmm/phase-02.md`).
 - [ ] Add closure-capture ownership rules when closure support requires them.
 - [ ] Prevent borrowed references from escaping their owner's lifetime.
 - [ ] Implement the minimum escape analysis needed to reject invalid lifetime transfers.
