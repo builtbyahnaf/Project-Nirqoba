@@ -106,7 +106,11 @@
   field borrows survive forwarding and borrowed returns, and replacing an
   overlapping field, moving the owner, or escaping its scope is rejected
   (`0.423-beta`, `reports/pre-mmm/phase-02.md`).
-- [ ] Implement correct mutable-borrow exclusivity across nested calls.
+- [x] Implement correct mutable-borrow exclusivity across nested calls.
+  Overlapping mutable borrows and immutable accesses to the same owner or field
+  path are rejected, argument order participates in exclusivity, forwarded
+  returned borrows retain their path, and disjoint sibling fields remain
+  independently borrowable (`0.427-beta`, `reports/pre-mmm/phase-02.md`).
 - [ ] Add closure-capture ownership rules when closure support requires them.
 - [ ] Prevent borrowed references from escaping their owner's lifetime.
 - [ ] Implement the minimum escape analysis needed to reject invalid lifetime transfers.

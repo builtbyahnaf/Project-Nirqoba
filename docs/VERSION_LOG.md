@@ -12,6 +12,33 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.427-beta (working build)
+
+### Summary of Changes (since `0.423-beta`):
+
+*Opened after mutable-borrow exclusivity became path-aware across calls.*
+
+- **Mutable borrows are exclusive by owner and field path.** While a mutable
+  borrow is live, a competing mutable borrow or an immutable access to the same
+  path or an ancestor/descendant path is rejected. Disjoint sibling fields remain
+  independently borrowable.
+- **Reads participate in exclusivity.** Reading the borrowed field, a parent or
+  child projection, or the whole aggregate while a mutable borrow is live is
+  rejected. Reading a disjoint field remains legal.
+- **Calls enforce argument-order exclusivity.** Borrows claimed by earlier
+  arguments are visible while later arguments are checked, so one call cannot
+  receive two overlapping mutable borrows. Disjoint field arguments still pass.
+- **Forwarding preserves the conflict.** A mutable field borrow remains tied to
+  its caller path through nested borrowed-return helpers, so a later borrow of
+  the same path is rejected while a sibling path is accepted.
+- **Mutable returned borrows keep their mutability.** Assignment records whether
+  the returned borrow is mutable instead of treating every returned pointer as
+  immutable.
+- **Scope exit releases exclusivity.** Once a borrow's lexical scope ends, the
+  owner or field can be borrowed again.
+- **No runtime cost.** Conflict checks are semantic only; no counters, locks,
+  descriptors, heap allocation, or generated checks were added.
+
 ## Version 0.423-beta (working build)
 
 ### Summary of Changes (since `0.419-beta`):

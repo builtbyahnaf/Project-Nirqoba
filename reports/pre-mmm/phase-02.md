@@ -1,9 +1,9 @@
-# Pre-MMM Phase 2 - Lifetime propagation, borrowed returns, and aggregate-field borrows
+# Pre-MMM Phase 2 - Lifetime propagation, borrowed returns, aggregate fields, and exclusivity
 
-**Status:** In progress (lifetime propagation, source-bound borrowed returns, and aggregate-field borrows complete)
-**Version:** 0.423-beta
+**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, and mutable-borrow exclusivity complete)
+**Version:** 0.427-beta
 **Date:** 2026-11-12
-**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`
+**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`
 
 ## Implemented
 
@@ -88,8 +88,59 @@ is the aggregate, not the projected field's type.
   Aggregate-valued fields, owned arrays and managed references remain outside
   the addressable subset.
 
+## Mutable-borrow exclusivity (0.427-beta)
+
+Borrow conflicts are now queried by owner and dotted field path rather than by
+allocation alone. A request is described by its allocation id, path, and
+mutability; the checker returns the first live borrow that overlaps it.
+
+- Two immutable borrows of the same path remain legal. A mutable request
+  conflicts with any overlapping borrow, and an immutable request conflicts with
+  an overlapping mutable borrow.
+- Disjoint sibling fields do not overlap. Mutable borrows of `p.x` and `p.y`
+  may coexist, while `p.x` and `p.inner.value` conflict by path ancestry.
+- Creating an address with `&` is rejected when an overlapping mutable borrow is
+  live. The operand is checked in a borrow-operand mode so creating the borrow
+  does not also report an ordinary read.
+- Reading a struct or tuple field, an owned array, or the whole aggregate while
+  an overlapping mutable borrow is live is rejected. The aggregate base of a
+  member access is not treated as a whole-value read, so disjoint field access
+  stays legal.
+- Calls track borrows already claimed by earlier arguments. A later argument that
+  overlaps an earlier mutable borrow is rejected, including when the same path is
+  claimed twice in one call. Disjoint field arguments remain accepted.
+- The earlier arguments are also visible to reads and address-of checks inside a
+  later argument, so argument order cannot hide a conflicting access.
+- Returned mutable borrows keep their mutability when assigned to a pointer.
+  Forwarding through nested borrowed-return helpers preserves the caller's field
+  path and therefore the conflict.
+- Cached field paths are cleared to whole-owner access when conditional branches
+  assign different paths. This is conservative: a later disjoint access may be
+  rejected rather than relying on a path that is not true on every branch.
+
 ## Tests
 
+- `positive/mutable_borrow_disjoint_fields`: mutable borrows of `p.x` and `p.y`
+  coexist, and a call receives both disjoint field borrows; output `30`.
+- `positive/mutable_borrow_forwarding`: a mutable field borrow survives two
+  forwarded borrowed-return calls while a disjoint sibling remains borrowable;
+  output `15`.
+- `positive/mutable_borrow_expiration`: a new mutable borrow of `p.x` is accepted
+  after the previous borrow's block ends; output `9`.
+- `negative/mutable_borrow_overlap`: a second mutable borrow of `p.x` while the
+  first is live is rejected.
+- `negative/mutable_borrow_immutable_conflict`: a mutable borrow of `p.x` while an
+  immutable borrow of the same path is live is rejected.
+- `negative/mutable_borrow_read_conflict`: reading `p.x` while it is mutably
+  borrowed is rejected.
+- `negative/mutable_borrow_nested_read_conflict`: reading `o.inner.value` while
+  that nested path is mutably borrowed is rejected.
+- `negative/mutable_borrow_whole_read`: passing the whole aggregate while one of
+  its fields is mutably borrowed is rejected.
+- `negative/mutable_borrow_call_argument_conflict`: the same mutable alias passed
+  twice to one call is rejected.
+- `negative/mutable_borrow_forwarded_conflict`: a forwarded mutable field borrow
+  conflicts with a later borrow of the same path.
 - `positive/borrow_lifetime_nested_calls`: a local owner is borrowed with `&`,
   passed through two calls, and read successfully; the same is repeated with a
   direct `&owner` argument. Output: `21`, `21`.
@@ -135,11 +186,11 @@ is the aggregate, not the projected field's type.
 
 ## Verification
 
-- Clean `RelWithDebInfo` build at `0.423-beta`.
+- Clean `RelWithDebInfo` build at `0.427-beta`.
 - Unit suite: 214/214 passed (the previously flaky
   `GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage` passed this run).
-- Integration suite: 357/357 passed, including all eleven new aggregate-field
-  cases.
+- Integration suite: 367/367 passed, including the ten new mutable-borrow cases
+  and all previous aggregate-field cases.
 
 ## Limitations
 
@@ -161,8 +212,13 @@ is the aggregate, not the projected field's type.
   mutation, so an independent field write may be rejected conservatively and the
   diagnostic retains array-view wording.
 - Borrowed struct fields still do not carry an independently checked lifetime.
-- Mutable-borrow exclusivity across nested calls is unchanged and remains a
-  separate Phase 2 item.
+- Mutable-borrow exclusivity is enforced at borrow creation, reads, and call
+  boundaries. The callee still treats a borrowed parameter as its own origin and
+  does not receive the caller's allocation id or live-borrow set, so effects
+  inside a callee are not inferred from a caller's active borrow.
+- Conditional branches that select different field paths clear the cached path to
+  whole-owner access. This is conservative and can reject a later disjoint field
+  access that would be safe on every path.
 - Safe rebinding of a borrowed pointer to a different live owner is still
   rejected conservatively.
 - Branch-sensitive owner selection, closure capture, and general escape analysis

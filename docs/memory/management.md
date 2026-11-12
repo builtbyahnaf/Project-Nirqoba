@@ -125,7 +125,7 @@ change device memory.
 
 Owned values from supported allocation and resource producers transfer when bound to another name, passed to an owning parameter, or returned through a matching owner return type. Resource-bearing structs, tuples, and fixed arrays move as whole values; their nested owned arrays are released recursively. Individual owned fields can be moved and reinitialized when the semantic checker can track the field path and all control-flow paths agree. This covers supported aggregate ownership, including nested owned arrays and resource-domain pointer fields. Dynamic owned arrays currently reject elements that themselves own allocations, because recursive element destruction is not implemented. Tracked owners are cleaned in LIFO order at lexical exit, including return, break, and continue. Owner moves clear the source slot so generated cleanup remains safe across conditional control flow. Reassigning a live owner is rejected; release it before reusing the binding.
 
-Use `borrow T* name` for an immutable pointer borrow and `borrow mut T* name` for an exclusive mutable pointer borrow. Opaque resource parameters declare their domain, for example `borrow file byte* handle`, `borrow socket byte* handle`, `borrow mutex byte* handle`, or `borrow mapping byte* handle`. Calls must pass a matching resource, and resource APIs inside the helper check that contract. Borrows cannot be freed, closed, or passed to owning parameters; returning one requires the explicit source-bound borrowed-return form. The checker rejects conflicting aliases at a call site. Borrowed array views are described below. Tracked pointer borrows carry their originating owner through nested calls, and `&owner` is tied to `owner`; using or forwarding the borrow after the owner's scope ends is rejected (0.415-beta). Borrowed returns use an explicit source parameter and are checked against that source (0.419-beta), described below. A borrow of an aggregate field records the owner and dotted field path, so replacing that field, an ancestor, or a descendant while the borrow is live is rejected while independent sibling fields remain writable (0.423-beta). General interprocedural lifetime inference, closure capture, arbitrary returned references, and path-sensitive aggregate aliases remain unimplemented.
+Use `borrow T* name` for an immutable pointer borrow and `borrow mut T* name` for an exclusive mutable pointer borrow. Opaque resource parameters declare their domain, for example `borrow file byte* handle`, `borrow socket byte* handle`, `borrow mutex byte* handle`, or `borrow mapping byte* handle`. Calls must pass a matching resource, and resource APIs inside the helper check that contract. Borrows cannot be freed, closed, or passed to owning parameters; returning one requires the explicit source-bound borrowed-return form. The checker rejects conflicting aliases at a call site. Borrowed array views are described below. Tracked pointer borrows carry their originating owner through nested calls, and `&owner` is tied to `owner`; using or forwarding the borrow after the owner's scope ends is rejected (0.415-beta). Borrowed returns use an explicit source parameter and are checked against that source (0.419-beta), described below. A borrow of an aggregate field records the owner and dotted field path, so replacing that field, an ancestor, or a descendant while the borrow is live is rejected while independent sibling fields remain writable (0.423-beta). Mutable borrows are exclusive by owner and path: a competing mutable borrow or an overlapping read is rejected while the borrow is live, while disjoint sibling fields remain independently borrowable and call argument order participates in the same rule (0.427-beta). General interprocedural lifetime inference, closure capture, arbitrary returned references, and path-sensitive aggregate aliases remain unimplemented.
 
 `defer call(...)` captures call arguments when registered and runs calls in LIFO order on lexical block exit, including return, break, and continue. It can release explicit allocations, unpin GC objects, unlock mutexes, close files, and restore allocator selection. An explicit deferred cleanup overrides the inferred cleanup for that owner. Cleanup during exception unwinding is unavailable because the language has no exception model.
 
@@ -411,5 +411,33 @@ Field borrowing is limited to leaves with numeric, boolean or pointer storage.
 Aggregate-valued fields, owned arrays and managed references cannot be addressed,
 and paths are not merged path-sensitively across conditional branches. Owning
 aggregates keep the existing broad live-borrow mutation guard, so some unrelated
-field writes remain conservatively rejected. Nested mutable-borrow exclusivity and
-closure capture are untouched. No runtime state or checks are added.
+field writes remain conservatively rejected. No runtime state or checks are added.
+
+## Mutable-borrow exclusivity (0.427-beta)
+
+Borrow conflict queries now carry the requested owner, dotted field path and
+mutability. Two immutable borrows of one path may coexist. A mutable borrow
+conflicts with any overlapping borrow, and an immutable borrow or read conflicts
+with an overlapping mutable borrow. Whole-binding access uses the empty path, so
+it overlaps every field of that owner; sibling fields do not overlap each other.
+
+Creating `&obj.field` is rejected while an overlapping mutable borrow is live.
+Reading a field, nested field, tuple element, owned array or whole aggregate is
+rejected under the same condition. A member access is checked at its leaf path,
+not as a whole-value read of the base, so a disjoint sibling remains readable and
+writable.
+
+Calls track the borrows claimed by earlier arguments while checking later ones.
+Passing two overlapping mutable borrows to one call, or claiming the same alias
+twice, is rejected; disjoint field arguments are accepted. Address-of and read
+checks inside a later argument also see the earlier claims. Returned mutable
+borrows retain mutability when assigned, and forwarding through nested
+borrowed-return helpers preserves the caller's field path. Exclusivity ends when
+the borrow's lexical scope ends.
+
+Conditional branches that assign different field paths clear the cached path to
+whole-owner access, which can reject a later disjoint access conservatively. The
+callee still treats a borrowed parameter as its own origin and does not receive
+the caller's allocation id or live-borrow set. Closure capture and general
+branch-sensitive analysis remain unimplemented, and no runtime counters, locks,
+descriptors, heap allocation, or generated checks are added.

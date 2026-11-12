@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.423-beta` |
+| Current Working Version | `0.427-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-12 14:32:02` |
-| Report Entries | `9` |
+| Last Report Update | `2026-11-12 15:02:47` |
+| Report Entries | `10` |
 
 ---
 
@@ -1107,6 +1107,154 @@ benchmark is claimed for this increment.
 ---
 
 **End of Entry #009**
+
+## Entry #010 — Pre-MMM Phase 2: Mutable-borrow exclusivity across calls
+
+**Version:** `0.427-beta`  
+**Date:** `2026-11-12 15:02:47`  
+**Scope:** `Pre-MMM Phase 2 / Borrow checking / Mutable exclusivity`  
+**Status:** `Completed`
+
+### 1. Overview
+
+This entry implements path-aware mutable-borrow exclusivity. The checker already
+tracked a borrow's owner and aggregate field path, but conflict queries still
+compared allocation ids only. As a result, two mutable borrows of the same field,
+or a mutable borrow and an overlapping read, could coexist. Conflict queries now
+include the requested path and mutability, and every borrow creation, read, and
+call boundary consults the same rule. Disjoint sibling fields remain independently
+borrowable, and no runtime borrow tracking was added.
+
+### 2. Implementation Details
+
+- **What:** Replaced `has_conflicting_borrow` with `find_conflicting_borrow`,
+  which returns the first live borrow matching an allocation id whose path
+  overlaps the requested path and whose mutability is incompatible. Exposed
+  `borrow_paths_overlap` for the same segment-prefix rule used by field guards.
+- **What:** Added `ActiveBorrow` entries for the current call. Earlier arguments'
+  borrows are consulted by later arguments and by reads or address-of checks
+  nested inside them. The list is restored on call exit, so nested calls do not
+  leak claims.
+- **What:** Address-of creation rejects an overlapping mutable borrow, while a
+  `checking_borrow_operand_` flag suppresses an ordinary read diagnostic for the
+  same expression. Struct and tuple field reads, owned-array reads, and whole
+  aggregate reads now reject overlapping mutable borrows. The aggregate base of a
+  member access is not treated as a whole-value read.
+- **What:** Call borrow arguments use owner, path and mutability. Two overlapping
+  borrows in one call are rejected, while `p.x` and `p.y` remain valid arguments.
+  Returned mutable borrows keep their mutability when assigned. Forwarded
+  borrowed returns preserve the caller's path through nested calls.
+- **What:** Conditional-branch merging clears a cached field path when the two
+  branches disagree, conservatively degrading to whole-owner access.
+- **How:** `find_conflicting_borrow` skips moved and self aliases, applies
+  `borrow_paths_overlap`, and returns the conflicting symbol for precise
+  diagnostics. `has_live_mutable_access` combines the lexical symbol table with
+  the active call list. Read checks run only for value contexts, not assignment
+  targets, aggregate bases, or borrow operands.
+- **Why:** A mutable borrow promises exclusive access to its storage. Allowing a
+  second mutable alias or an overlapping read would let the program observe or
+  overwrite a value the borrow is entitled to assume is stable.
+- **Where:** `compiler/include/nirqoba/Sema/SymbolTable.h`,
+  `compiler/lib/Sema/SymbolTable.cpp`, `compiler/include/nirqoba/Sema/TypeChecker.h`,
+  `compiler/lib/Sema/TypeChecker.cpp`.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `SymbolTable.h` / `.cpp` | Added shared `borrow_paths_overlap` and path/mutability-aware `find_conflicting_borrow` | Make conflict queries precise instead of allocation-wide |
+| `SymbolTable.cpp` | Clear a merged borrow path when conditional branches disagree | Avoid claiming a path that is not true on every path |
+| `TypeChecker.h` / `.cpp` | Added `ActiveBorrow`, call-local borrow claims, and `checking_borrow_operand_` | Enforce exclusivity across argument order and address-of |
+| `TypeChecker.cpp` | Added address-of, field/nested field, tuple, owned-array and whole-aggregate read guards | Reject incompatible reads while a mutable borrow is live |
+| `TypeChecker.cpp` | Applied path-aware conflicts to call borrow arguments and assignments; preserved returned mutable mutability | Close direct, forwarded and assignment bypasses |
+| `mutable_borrow_*` integration cases | Three positives and seven negatives | Cover direct overlap, immutable conflict, reads, whole aggregate, nested paths, forwarding, call order and scope expiry |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Clean RelWithDebInfo build | PASS | `scripts/build.ps1 -Configuration RelWithDebInfo -Clean` |
+| Unit suite | PASS | 214/214 |
+| Integration suite | PASS | 367/367 |
+| `positive/mutable_borrow_disjoint_fields` | PASS | Output `30`; direct and call-argument sibling borrows coexist |
+| `positive/mutable_borrow_forwarding` | PASS | Output `15`; forwarded field path stays exclusive |
+| `positive/mutable_borrow_expiration` | PASS | Output `9`; scope exit releases exclusivity |
+| `negative/mutable_borrow_overlap` | PASS | Second mutable borrow of `p.x` rejected |
+| `negative/mutable_borrow_immutable_conflict` | PASS | `mutable borrow of 'p.x' conflicts with live borrow 'p.x'` |
+| `negative/mutable_borrow_read_conflict` | PASS | `cannot read aggregate field 'x' while a mutable borrow of it is live` |
+| `negative/mutable_borrow_nested_read_conflict` | PASS | `cannot read aggregate field 'inner.value' ...` |
+| `negative/mutable_borrow_whole_read` | PASS | Whole aggregate read rejected |
+| `negative/mutable_borrow_call_argument_conflict` | PASS | `conflicting borrows of 'p.x' in one call` |
+| `negative/mutable_borrow_forwarded_conflict` | PASS | Overlap after forwarding rejected |
+
+- **Build Status:** Successful.
+- **Regression Status:** None detected; all previous borrowing, aggregate-field,
+  ownership and runtime suites remain green.
+- **Test Environment:** Windows 11 x64, MSVC 14.51.36231, LLVM/MLIR 23.1.4,
+  RelWithDebInfo.
+
+### 5. Performance & Resource Impact
+
+No runtime path changed. Conflict checks operate on semantic state only; there
+are no counters, locks, heap descriptors, retained borrow records, or generated
+checks. No benchmark is claimed for this increment.
+
+### 6. Issues & Limitations
+
+- Exclusivity is enforced at borrow creation, reads and call boundaries. The
+  callee still treats a borrowed parameter as its own origin and does not receive
+  the caller's allocation id or live-borrow set, so callee effects are not inferred
+  from a caller's active borrow.
+- Conditional branches that select different field paths clear the cached path to
+  whole-owner access. This is conservative and can reject a later disjoint access
+  that would be safe on every path.
+- Closure captures and general branch-sensitive borrow analysis remain out of
+  scope for this pass.
+- Borrowed struct fields still do not carry an independently checked lifetime, and
+  safe rebinding of a borrowed pointer to a different live owner remains rejected
+  conservatively.
+
+### 7. Outstanding Work
+
+- [x] Implement mutable-borrow exclusivity across nested calls.
+- [ ] Add closure-capture ownership rules when closures require them.
+- [ ] Add the minimum escape analysis needed for remaining lifetime transfers.
+- [ ] Add branch-sensitive field-path merging if it becomes a practical blocker.
+
+### 8. Dependencies & Compatibility
+
+- **New Dependencies:** None.
+- **Removed Dependencies:** None.
+- **Platform Compatibility:** No platform-specific change.
+- **Breaking Changes:** Programs that create overlapping mutable borrows, read an
+  overlapping field, read the whole aggregate, or pass overlapping mutable borrows
+  to one call are now rejected. Immutable/immutable aliases, disjoint sibling field
+  access, and existing ownership behavior remain accepted.
+
+### 9. Agent Assessment
+
+- **Implementation Completeness:** Complete for path-aware mutable exclusivity at
+  borrow creation, reads, assignment and call boundaries, including nested returned
+  borrows.
+- **Verification Confidence:** High — clean build and both full suites passed.
+- **Known Risks:** Interprocedural effects and branch-selected paths remain
+  conservative, so some safe programs may be rejected.
+- **Recommended Next Step:** Closure-capture ownership rules, or branch-sensitive
+  field-path merging if real programs hit the conservative restriction first.
+
+### 10. Evidence & References
+
+- **Commits:** `3ef1e49` (semantic changes), `03505c8` (focused tests)
+- **Relevant Files:** `compiler/lib/Sema/TypeChecker.cpp`,
+  `compiler/lib/Sema/SymbolTable.cpp`,
+  `tests/integration/positive/mutable_borrow_disjoint_fields`,
+  `tests/integration/negative/mutable_borrow_call_argument_conflict`.
+- **Documentation:** `reports/pre-mmm/phase-02.md`,
+  `project_context/Pre-MMM_ROADMAP.md`, `docs/memory/management.md`.
+
+---
+
+**End of Entry #010**
 
 <!-- REPORT ENTRIES END -->
 
