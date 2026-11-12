@@ -1,0 +1,28 @@
+struct Inner {
+    int a;
+    int b;
+}
+
+struct Outer {
+    Inner inner;
+    int z;
+}
+
+borrow mut source int* function writable(borrow mut int* source) {
+    return source;
+}
+
+int function main() {
+    var o = Outer { inner: Inner { a: 1, b: 2 }, z: 3 };
+    {
+        let seed = &o.inner.a;
+    }
+    @Nullable var ptr int view = nullptr;
+    if (o.inner.a == 1) {
+        view = writable(&o.inner.a);
+    } else {
+        view = writable(&o.inner.b);
+    }
+    var a = writable(&o.inner.a);
+    return *a;
+}
