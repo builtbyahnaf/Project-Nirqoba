@@ -1,0 +1,22 @@
+struct P {
+    int x;
+    int y;
+    int z;
+}
+
+borrow mut source int* function writable(borrow mut int* source) {
+    return source;
+}
+
+int function main() {
+    var p = P { x: 1, y: 2, z: 3 };
+    {
+        let seed = &p.x;
+    }
+    @Nullable var ptr int view = nullptr;
+    if (p.x == 1) {
+        view = writable(&p.x);
+    }
+    print(p.x);
+    return 0;
+}
