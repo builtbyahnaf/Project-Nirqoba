@@ -1,0 +1,22 @@
+borrow source byte* function alias(borrow byte* source) {
+    return source;
+}
+
+borrow source byte* function forward(borrow byte* source) {
+    return alias(source);
+}
+
+borrow backing byte* function select(borrow byte* other, borrow byte* backing) {
+    return backing;
+}
+
+byte function main() {
+    var first = memory.allocate<byte>(1);
+    var second = memory.allocate<byte>(1);
+    first[0] = 11u8;
+    second[0] = 42u8;
+    let direct = alias(first);
+    let nested = forward(second);
+    let selected = select(direct, nested);
+    return selected[0];
+}

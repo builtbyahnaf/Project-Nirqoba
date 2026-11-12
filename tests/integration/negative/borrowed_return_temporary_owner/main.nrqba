@@ -1,0 +1,7 @@
+borrow source byte* function invalid(borrow byte* source) {
+    return memory.allocate<byte>(1);
+}
+
+int function main() {
+    return 0;
+}
