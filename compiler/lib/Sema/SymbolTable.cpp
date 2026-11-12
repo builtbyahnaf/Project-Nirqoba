@@ -5,6 +5,18 @@
 namespace nirq {
 using namespace std;
 
+// A borrow of a field is invalidated by replacing that field, any ancestor, or
+// any descendant. Independent sibling fields do not overlap.
+static bool field_paths_overlap(const string& left, const string& right) {
+  if (left.empty() || right.empty()) return true;
+  if (left == right) return true;
+  if (left.size() < right.size())
+    return right.compare(0, left.size(), left) == 0 &&
+           right[left.size()] == '.';
+  return left.compare(0, right.size(), right) == 0 &&
+         left[right.size()] == '.';
+}
+
 bool SymbolTable::declare(Symbol symbol) {
   if (scopes_.empty()) scopes_.emplace_back();
   auto& scope = scopes_.back();
@@ -66,6 +78,20 @@ bool SymbolTable::has_live_borrow(uint64_t allocation_id) const {
   return false;
 }
 
+bool SymbolTable::has_live_field_borrow(uint64_t allocation_id,
+                                         const string& path) const {
+  if (allocation_id == 0) return false;
+  for (const auto& scope : scopes_)
+    for (const auto& entry : scope) {
+      const Symbol& symbol = entry.second;
+      if (symbol.allocation_id != allocation_id || symbol.moved ||
+          !symbol.borrowed || symbol.borrow_field.empty())
+        continue;
+      if (field_paths_overlap(symbol.borrow_field, path)) return true;
+    }
+  return false;
+}
+
 bool SymbolTable::has_conflicting_borrow(uint64_t allocation_id,
                                          bool requested_mutable,
                                          const string& except_name) const {
@@ -97,7 +123,8 @@ void SymbolTable::set_pointer_ownership(const string& name,
                                         bool mutable_borrow,
                                         bool shared_allocation,
                                         std::string cleanup_callee,
-                                        std::string borrow_owner) {
+                                        std::string borrow_owner,
+                                        std::string borrow_field) {
   for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
     auto found = scope->find(name);
     if (found != scope->end()) {
@@ -107,6 +134,7 @@ void SymbolTable::set_pointer_ownership(const string& name,
       found->second.shared_allocation = shared_allocation;
       found->second.cleanup_callee = std::move(cleanup_callee);
       found->second.borrow_owner = std::move(borrow_owner);
+      found->second.borrow_field = std::move(borrow_field);
       return;
     }
   }

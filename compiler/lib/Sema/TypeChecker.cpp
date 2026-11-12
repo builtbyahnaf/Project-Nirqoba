@@ -1005,6 +1005,8 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
             symbol.allocation_id = origin_id;
             symbol.borrowed = true;
             symbol.borrow_owner = borrow_owner_name(*origin);
+            symbol.borrow_field =
+                find_borrow_field_path(declaration.initializer());
             symbol.cleanup_callee = origin->cleanup_callee;
           }
         }
@@ -1066,6 +1068,8 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
             symbol.owns_allocation = false;
             symbol.allocation_id = source->allocation_id;
             symbol.borrow_owner = borrow_owner_name(*source);
+            symbol.borrow_field = find_borrow_field_path(
+                *call.arguments()[source_index]);
             symbol.cleanup_callee = source->cleanup_callee;
             if (symbols_.has_conflicting_borrow(
                     source->allocation_id, signature->returns_mutable_borrow,
@@ -1090,6 +1094,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
           symbol.borrowed = true;
           symbol.mutable_borrow = source->mutable_borrow;
           symbol.borrow_owner = borrow_owner_name(*source);
+          symbol.borrow_field = source->borrow_field;
         }
         symbol.shared_allocation = source->shared_allocation;
         symbol.cleanup_callee = source->cleanup_callee;
@@ -1375,7 +1380,12 @@ bool TypeChecker::borrow_owner_is_live(const Symbol& borrow) const {
   if (!borrow.borrowed || borrow.borrow_owner.empty()) return true;
   if (borrow.borrow_owner == borrow.name) return !borrow.moved;
   const Symbol* owner = symbols_.lookup(borrow.borrow_owner);
-  return owner && !owner->moved && owner->allocation_id == borrow.allocation_id;
+  if (!owner || owner->moved || owner->allocation_id != borrow.allocation_id)
+    return false;
+  if (!borrow.borrow_field.empty() &&
+      symbols_.field_is_moved(owner->name, borrow.borrow_field))
+    return false;
+  return true;
 }
 
 std::string TypeChecker::borrow_owner_name(const Symbol& origin) const {
@@ -1408,6 +1418,41 @@ const Symbol* TypeChecker::find_borrow_origin(const Expr& expression) const {
       source_parameter - signature->parameter_names.begin());
   if (source_index >= call.arguments().size()) return nullptr;
   return find_borrow_origin(*call.arguments()[source_index]);
+}
+
+std::string TypeChecker::find_borrow_field_path(const Expr& expression) const {
+  if (expression.kind() == Expr::Kind::Unary) {
+    const auto& unary = static_cast<const UnaryExpr&>(expression);
+    if (unary.op() == UnaryOp::AddressOf || unary.op() == UnaryOp::Dereference)
+      return find_borrow_field_path(unary.operand());
+    return {};
+  }
+  if (expression.kind() == Expr::Kind::MemberAccess) {
+    string root;
+    string path;
+    if (field_path(expression, root, path)) return path;
+    return {};
+  }
+  if (expression.kind() == Expr::Kind::Name) {
+    const Symbol* symbol = symbols_.lookup(
+        static_cast<const NameExpr&>(expression).name());
+    return symbol && symbol->borrowed ? symbol->borrow_field : std::string{};
+  }
+  if (expression.kind() != Expr::Kind::Call) return {};
+  const auto& call = static_cast<const CallExpr&>(expression);
+  if ((call.callee() == "memory.array_view" ||
+       call.callee() == "memory.array_view_mut") && !call.arguments().empty())
+    return find_borrow_field_path(*call.arguments().front());
+  const FunctionSignature* signature = find_function(call.callee());
+  if (!signature || !signature->returns_borrowed) return {};
+  const auto source_parameter = std::find(
+      signature->parameter_names.begin(), signature->parameter_names.end(),
+      signature->return_borrow_parameter);
+  if (source_parameter == signature->parameter_names.end()) return {};
+  const size_t source_index = static_cast<size_t>(
+      source_parameter - signature->parameter_names.begin());
+  if (source_index >= call.arguments().size()) return {};
+  return find_borrow_field_path(*call.arguments()[source_index]);
 }
 
 void TypeChecker::consume_field_move(Expr& expression, const Type& value_type) {
@@ -1564,6 +1609,22 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                        "borrowed array view bindings cannot be reassigned");
     return;
   }
+  if (symbol && symbol->is_mutable() &&
+      assignment.target().kind() == Expr::Kind::MemberAccess) {
+    string borrow_root;
+    string borrow_path;
+    if (field_path(assignment.target(), borrow_root, borrow_path)) {
+      const Symbol* borrow_owner = symbols_.lookup(borrow_root);
+      if (borrow_owner && symbols_.has_live_field_borrow(
+                              borrow_owner->allocation_id, borrow_path)) {
+        diagnostics_.error(
+            diag::kTypeMismatch, assignment.target().location(),
+            "cannot replace aggregate field '" + borrow_path.substr(1) +
+                "' while a borrow of it is live");
+        return;
+      }
+    }
+  }
   if (symbol && symbol->owns_allocation &&
       symbols_.has_live_borrow(symbol->allocation_id)) {
     diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
@@ -1580,6 +1641,12 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                        "'" + symbol->name + "' was declared as " +
                            string(binding_kind_spelling(symbol->binding)) +
                            " and cannot be mutated; declare it with 'var' to mutate it");
+    return;
+  }
+  if (assignment.is_simple_name() && symbol && target_type.is_struct() &&
+      symbols_.has_live_field_borrow(symbol->allocation_id, {})) {
+    diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
+                       "cannot replace an aggregate while a borrow of one of its fields is live");
     return;
   }
   if (assignment.target().kind() == Expr::Kind::MemberAccess &&
@@ -1769,6 +1836,7 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     bool shared_allocation = source && source->shared_allocation;
     std::string cleanup_callee = source ? source->cleanup_callee : std::string{};
     std::string borrow_owner;
+    std::string borrow_field;
     bool owns_allocation = source && source->owns_allocation && !source->moved;
     if (assignment.value().kind() == Expr::Kind::Call) {
       const auto& call = static_cast<const CallExpr&>(assignment.value());
@@ -1814,6 +1882,7 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       borrowed = true;
       mutable_borrow = borrow_origin->mutable_borrow;
       borrow_owner = borrow_owner_name(*borrow_origin);
+      borrow_field = find_borrow_field_path(assignment.value());
       cleanup_callee = borrow_origin->cleanup_callee;
       owns_allocation = false;
     }
@@ -1827,7 +1896,7 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     symbols_.rebind_pointer(assignment.name(), allocation_id);
     symbols_.set_pointer_ownership(assignment.name(), owns_allocation, borrowed,
                                    mutable_borrow, shared_allocation, cleanup_callee,
-                                   borrow_owner);
+                                   borrow_owner, borrow_field);
     assignment.set_cleanup_callee(cleanup_callee);
   }
 }
@@ -1848,6 +1917,22 @@ void TypeChecker::check_compound_assignment(CompoundAssignmentStmt& assignment) 
                            string(binding_kind_spelling(symbol->binding)) +
                            " and cannot be mutated; declare it with 'var' to mutate it");
     return;
+  }
+  if (symbol && symbol->is_mutable() &&
+      assignment.target().kind() == Expr::Kind::MemberAccess) {
+    string borrow_root;
+    string borrow_path;
+    if (field_path(assignment.target(), borrow_root, borrow_path)) {
+      const Symbol* borrow_owner = symbols_.lookup(borrow_root);
+      if (borrow_owner && symbols_.has_live_field_borrow(
+                              borrow_owner->allocation_id, borrow_path)) {
+        diagnostics_.error(
+            diag::kTypeMismatch, assignment.target().location(),
+            "cannot replace aggregate field '" + borrow_path.substr(1) +
+                "' while a borrow of it is live");
+        return;
+      }
+    }
   }
   if (!target_type.is_valid() || !value_type.is_valid()) return;
 
