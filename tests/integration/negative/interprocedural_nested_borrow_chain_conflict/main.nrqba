@@ -1,0 +1,14 @@
+struct P { int x; int y; }
+
+borrow mut source int* function alias(borrow mut int* source) {
+    return source;
+}
+
+void function pair(borrow mut int* a, borrow mut int* b) { }
+
+int function main() {
+    var p = P { x: 1, y: 2 };
+    { let seed = &p.x; }
+    pair(alias(alias(&p.x)), &p.x);
+    return 0;
+}
