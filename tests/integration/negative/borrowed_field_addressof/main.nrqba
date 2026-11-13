@@ -1,0 +1,9 @@
+struct Doc { borrow ptr int value; }
+
+int function main() {
+    var x = 5;
+    var d = Doc { value: &x };
+    var p: ptr int = &*d.value;
+    *p = 9;
+    return 0;
+}
