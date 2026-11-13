@@ -1,0 +1,11 @@
+struct P { int x; }
+struct Doc { borrow mut ptr int value; }
+
+int function main() {
+    var p = P { x: 1 };
+    var d = Doc { value: &p.x };
+    var e = d;
+    e.value[0] = 8;
+    print(e.value[0]);
+    return 0;
+}
