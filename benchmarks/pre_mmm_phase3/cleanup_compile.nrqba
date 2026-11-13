@@ -1,0 +1,2156 @@
+// Cleanup-heavy compile benchmark: many lexical cleanup scopes and defers.
+int function main() {
+    var total = 0;
+    {
+        let first_0 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_0);
+        total += 0;
+    }
+    {
+        let first_1 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_1);
+        total += 1;
+    }
+    {
+        let first_2 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_2);
+        total += 2;
+    }
+    {
+        let first_3 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_3);
+        total += 3;
+    }
+    {
+        let first_4 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_4);
+        total += 4;
+    }
+    {
+        let first_5 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_5);
+        total += 5;
+    }
+    {
+        let first_6 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_6);
+        total += 6;
+    }
+    {
+        let first_7 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_7);
+        total += 7;
+    }
+    {
+        let first_8 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_8);
+        total += 8;
+    }
+    {
+        let first_9 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_9);
+        total += 9;
+    }
+    {
+        let first_10 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_10);
+        total += 10;
+    }
+    {
+        let first_11 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_11);
+        total += 11;
+    }
+    {
+        let first_12 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_12);
+        total += 12;
+    }
+    {
+        let first_13 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_13);
+        total += 13;
+    }
+    {
+        let first_14 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_14);
+        total += 14;
+    }
+    {
+        let first_15 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_15);
+        total += 15;
+    }
+    {
+        let first_16 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_16);
+        total += 16;
+    }
+    {
+        let first_17 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_17);
+        total += 0;
+    }
+    {
+        let first_18 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_18);
+        total += 1;
+    }
+    {
+        let first_19 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_19);
+        total += 2;
+    }
+    {
+        let first_20 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_20);
+        total += 3;
+    }
+    {
+        let first_21 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_21);
+        total += 4;
+    }
+    {
+        let first_22 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_22);
+        total += 5;
+    }
+    {
+        let first_23 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_23);
+        total += 6;
+    }
+    {
+        let first_24 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_24);
+        total += 7;
+    }
+    {
+        let first_25 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_25);
+        total += 8;
+    }
+    {
+        let first_26 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_26);
+        total += 9;
+    }
+    {
+        let first_27 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_27);
+        total += 10;
+    }
+    {
+        let first_28 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_28);
+        total += 11;
+    }
+    {
+        let first_29 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_29);
+        total += 12;
+    }
+    {
+        let first_30 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_30);
+        total += 13;
+    }
+    {
+        let first_31 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_31);
+        total += 14;
+    }
+    {
+        let first_32 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_32);
+        total += 15;
+    }
+    {
+        let first_33 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_33);
+        total += 16;
+    }
+    {
+        let first_34 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_34);
+        total += 0;
+    }
+    {
+        let first_35 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_35);
+        total += 1;
+    }
+    {
+        let first_36 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_36);
+        total += 2;
+    }
+    {
+        let first_37 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_37);
+        total += 3;
+    }
+    {
+        let first_38 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_38);
+        total += 4;
+    }
+    {
+        let first_39 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_39);
+        total += 5;
+    }
+    {
+        let first_40 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_40);
+        total += 6;
+    }
+    {
+        let first_41 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_41);
+        total += 7;
+    }
+    {
+        let first_42 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_42);
+        total += 8;
+    }
+    {
+        let first_43 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_43);
+        total += 9;
+    }
+    {
+        let first_44 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_44);
+        total += 10;
+    }
+    {
+        let first_45 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_45);
+        total += 11;
+    }
+    {
+        let first_46 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_46);
+        total += 12;
+    }
+    {
+        let first_47 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_47);
+        total += 13;
+    }
+    {
+        let first_48 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_48);
+        total += 14;
+    }
+    {
+        let first_49 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_49);
+        total += 15;
+    }
+    {
+        let first_50 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_50);
+        total += 16;
+    }
+    {
+        let first_51 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_51);
+        total += 0;
+    }
+    {
+        let first_52 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_52);
+        total += 1;
+    }
+    {
+        let first_53 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_53);
+        total += 2;
+    }
+    {
+        let first_54 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_54);
+        total += 3;
+    }
+    {
+        let first_55 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_55);
+        total += 4;
+    }
+    {
+        let first_56 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_56);
+        total += 5;
+    }
+    {
+        let first_57 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_57);
+        total += 6;
+    }
+    {
+        let first_58 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_58);
+        total += 7;
+    }
+    {
+        let first_59 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_59);
+        total += 8;
+    }
+    {
+        let first_60 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_60);
+        total += 9;
+    }
+    {
+        let first_61 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_61);
+        total += 10;
+    }
+    {
+        let first_62 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_62);
+        total += 11;
+    }
+    {
+        let first_63 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_63);
+        total += 12;
+    }
+    {
+        let first_64 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_64);
+        total += 13;
+    }
+    {
+        let first_65 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_65);
+        total += 14;
+    }
+    {
+        let first_66 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_66);
+        total += 15;
+    }
+    {
+        let first_67 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_67);
+        total += 16;
+    }
+    {
+        let first_68 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_68);
+        total += 0;
+    }
+    {
+        let first_69 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_69);
+        total += 1;
+    }
+    {
+        let first_70 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_70);
+        total += 2;
+    }
+    {
+        let first_71 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_71);
+        total += 3;
+    }
+    {
+        let first_72 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_72);
+        total += 4;
+    }
+    {
+        let first_73 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_73);
+        total += 5;
+    }
+    {
+        let first_74 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_74);
+        total += 6;
+    }
+    {
+        let first_75 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_75);
+        total += 7;
+    }
+    {
+        let first_76 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_76);
+        total += 8;
+    }
+    {
+        let first_77 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_77);
+        total += 9;
+    }
+    {
+        let first_78 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_78);
+        total += 10;
+    }
+    {
+        let first_79 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_79);
+        total += 11;
+    }
+    {
+        let first_80 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_80);
+        total += 12;
+    }
+    {
+        let first_81 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_81);
+        total += 13;
+    }
+    {
+        let first_82 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_82);
+        total += 14;
+    }
+    {
+        let first_83 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_83);
+        total += 15;
+    }
+    {
+        let first_84 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_84);
+        total += 16;
+    }
+    {
+        let first_85 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_85);
+        total += 0;
+    }
+    {
+        let first_86 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_86);
+        total += 1;
+    }
+    {
+        let first_87 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_87);
+        total += 2;
+    }
+    {
+        let first_88 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_88);
+        total += 3;
+    }
+    {
+        let first_89 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_89);
+        total += 4;
+    }
+    {
+        let first_90 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_90);
+        total += 5;
+    }
+    {
+        let first_91 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_91);
+        total += 6;
+    }
+    {
+        let first_92 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_92);
+        total += 7;
+    }
+    {
+        let first_93 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_93);
+        total += 8;
+    }
+    {
+        let first_94 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_94);
+        total += 9;
+    }
+    {
+        let first_95 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_95);
+        total += 10;
+    }
+    {
+        let first_96 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_96);
+        total += 11;
+    }
+    {
+        let first_97 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_97);
+        total += 12;
+    }
+    {
+        let first_98 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_98);
+        total += 13;
+    }
+    {
+        let first_99 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_99);
+        total += 14;
+    }
+    {
+        let first_100 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_100);
+        total += 15;
+    }
+    {
+        let first_101 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_101);
+        total += 16;
+    }
+    {
+        let first_102 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_102);
+        total += 0;
+    }
+    {
+        let first_103 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_103);
+        total += 1;
+    }
+    {
+        let first_104 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_104);
+        total += 2;
+    }
+    {
+        let first_105 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_105);
+        total += 3;
+    }
+    {
+        let first_106 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_106);
+        total += 4;
+    }
+    {
+        let first_107 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_107);
+        total += 5;
+    }
+    {
+        let first_108 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_108);
+        total += 6;
+    }
+    {
+        let first_109 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_109);
+        total += 7;
+    }
+    {
+        let first_110 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_110);
+        total += 8;
+    }
+    {
+        let first_111 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_111);
+        total += 9;
+    }
+    {
+        let first_112 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_112);
+        total += 10;
+    }
+    {
+        let first_113 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_113);
+        total += 11;
+    }
+    {
+        let first_114 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_114);
+        total += 12;
+    }
+    {
+        let first_115 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_115);
+        total += 13;
+    }
+    {
+        let first_116 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_116);
+        total += 14;
+    }
+    {
+        let first_117 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_117);
+        total += 15;
+    }
+    {
+        let first_118 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_118);
+        total += 16;
+    }
+    {
+        let first_119 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_119);
+        total += 0;
+    }
+    {
+        let first_120 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_120);
+        total += 1;
+    }
+    {
+        let first_121 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_121);
+        total += 2;
+    }
+    {
+        let first_122 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_122);
+        total += 3;
+    }
+    {
+        let first_123 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_123);
+        total += 4;
+    }
+    {
+        let first_124 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_124);
+        total += 5;
+    }
+    {
+        let first_125 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_125);
+        total += 6;
+    }
+    {
+        let first_126 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_126);
+        total += 7;
+    }
+    {
+        let first_127 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_127);
+        total += 8;
+    }
+    {
+        let first_128 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_128);
+        total += 9;
+    }
+    {
+        let first_129 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_129);
+        total += 10;
+    }
+    {
+        let first_130 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_130);
+        total += 11;
+    }
+    {
+        let first_131 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_131);
+        total += 12;
+    }
+    {
+        let first_132 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_132);
+        total += 13;
+    }
+    {
+        let first_133 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_133);
+        total += 14;
+    }
+    {
+        let first_134 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_134);
+        total += 15;
+    }
+    {
+        let first_135 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_135);
+        total += 16;
+    }
+    {
+        let first_136 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_136);
+        total += 0;
+    }
+    {
+        let first_137 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_137);
+        total += 1;
+    }
+    {
+        let first_138 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_138);
+        total += 2;
+    }
+    {
+        let first_139 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_139);
+        total += 3;
+    }
+    {
+        let first_140 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_140);
+        total += 4;
+    }
+    {
+        let first_141 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_141);
+        total += 5;
+    }
+    {
+        let first_142 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_142);
+        total += 6;
+    }
+    {
+        let first_143 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_143);
+        total += 7;
+    }
+    {
+        let first_144 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_144);
+        total += 8;
+    }
+    {
+        let first_145 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_145);
+        total += 9;
+    }
+    {
+        let first_146 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_146);
+        total += 10;
+    }
+    {
+        let first_147 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_147);
+        total += 11;
+    }
+    {
+        let first_148 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_148);
+        total += 12;
+    }
+    {
+        let first_149 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_149);
+        total += 13;
+    }
+    {
+        let first_150 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_150);
+        total += 14;
+    }
+    {
+        let first_151 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_151);
+        total += 15;
+    }
+    {
+        let first_152 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_152);
+        total += 16;
+    }
+    {
+        let first_153 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_153);
+        total += 0;
+    }
+    {
+        let first_154 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_154);
+        total += 1;
+    }
+    {
+        let first_155 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_155);
+        total += 2;
+    }
+    {
+        let first_156 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_156);
+        total += 3;
+    }
+    {
+        let first_157 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_157);
+        total += 4;
+    }
+    {
+        let first_158 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_158);
+        total += 5;
+    }
+    {
+        let first_159 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_159);
+        total += 6;
+    }
+    {
+        let first_160 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_160);
+        total += 7;
+    }
+    {
+        let first_161 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_161);
+        total += 8;
+    }
+    {
+        let first_162 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_162);
+        total += 9;
+    }
+    {
+        let first_163 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_163);
+        total += 10;
+    }
+    {
+        let first_164 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_164);
+        total += 11;
+    }
+    {
+        let first_165 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_165);
+        total += 12;
+    }
+    {
+        let first_166 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_166);
+        total += 13;
+    }
+    {
+        let first_167 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_167);
+        total += 14;
+    }
+    {
+        let first_168 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_168);
+        total += 15;
+    }
+    {
+        let first_169 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_169);
+        total += 16;
+    }
+    {
+        let first_170 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_170);
+        total += 0;
+    }
+    {
+        let first_171 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_171);
+        total += 1;
+    }
+    {
+        let first_172 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_172);
+        total += 2;
+    }
+    {
+        let first_173 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_173);
+        total += 3;
+    }
+    {
+        let first_174 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_174);
+        total += 4;
+    }
+    {
+        let first_175 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_175);
+        total += 5;
+    }
+    {
+        let first_176 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_176);
+        total += 6;
+    }
+    {
+        let first_177 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_177);
+        total += 7;
+    }
+    {
+        let first_178 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_178);
+        total += 8;
+    }
+    {
+        let first_179 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_179);
+        total += 9;
+    }
+    {
+        let first_180 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_180);
+        total += 10;
+    }
+    {
+        let first_181 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_181);
+        total += 11;
+    }
+    {
+        let first_182 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_182);
+        total += 12;
+    }
+    {
+        let first_183 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_183);
+        total += 13;
+    }
+    {
+        let first_184 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_184);
+        total += 14;
+    }
+    {
+        let first_185 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_185);
+        total += 15;
+    }
+    {
+        let first_186 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_186);
+        total += 16;
+    }
+    {
+        let first_187 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_187);
+        total += 0;
+    }
+    {
+        let first_188 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_188);
+        total += 1;
+    }
+    {
+        let first_189 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_189);
+        total += 2;
+    }
+    {
+        let first_190 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_190);
+        total += 3;
+    }
+    {
+        let first_191 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_191);
+        total += 4;
+    }
+    {
+        let first_192 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_192);
+        total += 5;
+    }
+    {
+        let first_193 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_193);
+        total += 6;
+    }
+    {
+        let first_194 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_194);
+        total += 7;
+    }
+    {
+        let first_195 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_195);
+        total += 8;
+    }
+    {
+        let first_196 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_196);
+        total += 9;
+    }
+    {
+        let first_197 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_197);
+        total += 10;
+    }
+    {
+        let first_198 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_198);
+        total += 11;
+    }
+    {
+        let first_199 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_199);
+        total += 12;
+    }
+    {
+        let first_200 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_200);
+        total += 13;
+    }
+    {
+        let first_201 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_201);
+        total += 14;
+    }
+    {
+        let first_202 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_202);
+        total += 15;
+    }
+    {
+        let first_203 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_203);
+        total += 16;
+    }
+    {
+        let first_204 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_204);
+        total += 0;
+    }
+    {
+        let first_205 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_205);
+        total += 1;
+    }
+    {
+        let first_206 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_206);
+        total += 2;
+    }
+    {
+        let first_207 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_207);
+        total += 3;
+    }
+    {
+        let first_208 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_208);
+        total += 4;
+    }
+    {
+        let first_209 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_209);
+        total += 5;
+    }
+    {
+        let first_210 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_210);
+        total += 6;
+    }
+    {
+        let first_211 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_211);
+        total += 7;
+    }
+    {
+        let first_212 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_212);
+        total += 8;
+    }
+    {
+        let first_213 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_213);
+        total += 9;
+    }
+    {
+        let first_214 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_214);
+        total += 10;
+    }
+    {
+        let first_215 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_215);
+        total += 11;
+    }
+    {
+        let first_216 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_216);
+        total += 12;
+    }
+    {
+        let first_217 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_217);
+        total += 13;
+    }
+    {
+        let first_218 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_218);
+        total += 14;
+    }
+    {
+        let first_219 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_219);
+        total += 15;
+    }
+    {
+        let first_220 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_220);
+        total += 16;
+    }
+    {
+        let first_221 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_221);
+        total += 0;
+    }
+    {
+        let first_222 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_222);
+        total += 1;
+    }
+    {
+        let first_223 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_223);
+        total += 2;
+    }
+    {
+        let first_224 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_224);
+        total += 3;
+    }
+    {
+        let first_225 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_225);
+        total += 4;
+    }
+    {
+        let first_226 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_226);
+        total += 5;
+    }
+    {
+        let first_227 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_227);
+        total += 6;
+    }
+    {
+        let first_228 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_228);
+        total += 7;
+    }
+    {
+        let first_229 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_229);
+        total += 8;
+    }
+    {
+        let first_230 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_230);
+        total += 9;
+    }
+    {
+        let first_231 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_231);
+        total += 10;
+    }
+    {
+        let first_232 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_232);
+        total += 11;
+    }
+    {
+        let first_233 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_233);
+        total += 12;
+    }
+    {
+        let first_234 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_234);
+        total += 13;
+    }
+    {
+        let first_235 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_235);
+        total += 14;
+    }
+    {
+        let first_236 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_236);
+        total += 15;
+    }
+    {
+        let first_237 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_237);
+        total += 16;
+    }
+    {
+        let first_238 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_238);
+        total += 0;
+    }
+    {
+        let first_239 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_239);
+        total += 1;
+    }
+    {
+        let first_240 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_240);
+        total += 2;
+    }
+    {
+        let first_241 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_241);
+        total += 3;
+    }
+    {
+        let first_242 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_242);
+        total += 4;
+    }
+    {
+        let first_243 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_243);
+        total += 5;
+    }
+    {
+        let first_244 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_244);
+        total += 6;
+    }
+    {
+        let first_245 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_245);
+        total += 7;
+    }
+    {
+        let first_246 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_246);
+        total += 8;
+    }
+    {
+        let first_247 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_247);
+        total += 9;
+    }
+    {
+        let first_248 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_248);
+        total += 10;
+    }
+    {
+        let first_249 = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first_249);
+        total += 11;
+    }
+    if (total % 2 == 0) {
+        let branch_0 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_0);
+        total += 1;
+    } else {
+        let other_0 = memory.shared_allocate<byte>(32);
+        let moved_0 = other_0;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_1 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_1);
+        total += 1;
+    } else {
+        let other_1 = memory.shared_allocate<byte>(32);
+        let moved_1 = other_1;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_2 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_2);
+        total += 1;
+    } else {
+        let other_2 = memory.shared_allocate<byte>(32);
+        let moved_2 = other_2;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_3 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_3);
+        total += 1;
+    } else {
+        let other_3 = memory.shared_allocate<byte>(32);
+        let moved_3 = other_3;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_4 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_4);
+        total += 1;
+    } else {
+        let other_4 = memory.shared_allocate<byte>(32);
+        let moved_4 = other_4;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_5 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_5);
+        total += 1;
+    } else {
+        let other_5 = memory.shared_allocate<byte>(32);
+        let moved_5 = other_5;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_6 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_6);
+        total += 1;
+    } else {
+        let other_6 = memory.shared_allocate<byte>(32);
+        let moved_6 = other_6;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_7 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_7);
+        total += 1;
+    } else {
+        let other_7 = memory.shared_allocate<byte>(32);
+        let moved_7 = other_7;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_8 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_8);
+        total += 1;
+    } else {
+        let other_8 = memory.shared_allocate<byte>(32);
+        let moved_8 = other_8;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_9 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_9);
+        total += 1;
+    } else {
+        let other_9 = memory.shared_allocate<byte>(32);
+        let moved_9 = other_9;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_10 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_10);
+        total += 1;
+    } else {
+        let other_10 = memory.shared_allocate<byte>(32);
+        let moved_10 = other_10;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_11 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_11);
+        total += 1;
+    } else {
+        let other_11 = memory.shared_allocate<byte>(32);
+        let moved_11 = other_11;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_12 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_12);
+        total += 1;
+    } else {
+        let other_12 = memory.shared_allocate<byte>(32);
+        let moved_12 = other_12;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_13 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_13);
+        total += 1;
+    } else {
+        let other_13 = memory.shared_allocate<byte>(32);
+        let moved_13 = other_13;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_14 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_14);
+        total += 1;
+    } else {
+        let other_14 = memory.shared_allocate<byte>(32);
+        let moved_14 = other_14;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_15 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_15);
+        total += 1;
+    } else {
+        let other_15 = memory.shared_allocate<byte>(32);
+        let moved_15 = other_15;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_16 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_16);
+        total += 1;
+    } else {
+        let other_16 = memory.shared_allocate<byte>(32);
+        let moved_16 = other_16;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_17 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_17);
+        total += 1;
+    } else {
+        let other_17 = memory.shared_allocate<byte>(32);
+        let moved_17 = other_17;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_18 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_18);
+        total += 1;
+    } else {
+        let other_18 = memory.shared_allocate<byte>(32);
+        let moved_18 = other_18;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_19 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_19);
+        total += 1;
+    } else {
+        let other_19 = memory.shared_allocate<byte>(32);
+        let moved_19 = other_19;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_20 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_20);
+        total += 1;
+    } else {
+        let other_20 = memory.shared_allocate<byte>(32);
+        let moved_20 = other_20;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_21 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_21);
+        total += 1;
+    } else {
+        let other_21 = memory.shared_allocate<byte>(32);
+        let moved_21 = other_21;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_22 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_22);
+        total += 1;
+    } else {
+        let other_22 = memory.shared_allocate<byte>(32);
+        let moved_22 = other_22;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_23 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_23);
+        total += 1;
+    } else {
+        let other_23 = memory.shared_allocate<byte>(32);
+        let moved_23 = other_23;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_24 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_24);
+        total += 1;
+    } else {
+        let other_24 = memory.shared_allocate<byte>(32);
+        let moved_24 = other_24;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_25 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_25);
+        total += 1;
+    } else {
+        let other_25 = memory.shared_allocate<byte>(32);
+        let moved_25 = other_25;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_26 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_26);
+        total += 1;
+    } else {
+        let other_26 = memory.shared_allocate<byte>(32);
+        let moved_26 = other_26;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_27 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_27);
+        total += 1;
+    } else {
+        let other_27 = memory.shared_allocate<byte>(32);
+        let moved_27 = other_27;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_28 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_28);
+        total += 1;
+    } else {
+        let other_28 = memory.shared_allocate<byte>(32);
+        let moved_28 = other_28;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_29 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_29);
+        total += 1;
+    } else {
+        let other_29 = memory.shared_allocate<byte>(32);
+        let moved_29 = other_29;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_30 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_30);
+        total += 1;
+    } else {
+        let other_30 = memory.shared_allocate<byte>(32);
+        let moved_30 = other_30;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_31 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_31);
+        total += 1;
+    } else {
+        let other_31 = memory.shared_allocate<byte>(32);
+        let moved_31 = other_31;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_32 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_32);
+        total += 1;
+    } else {
+        let other_32 = memory.shared_allocate<byte>(32);
+        let moved_32 = other_32;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_33 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_33);
+        total += 1;
+    } else {
+        let other_33 = memory.shared_allocate<byte>(32);
+        let moved_33 = other_33;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_34 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_34);
+        total += 1;
+    } else {
+        let other_34 = memory.shared_allocate<byte>(32);
+        let moved_34 = other_34;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_35 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_35);
+        total += 1;
+    } else {
+        let other_35 = memory.shared_allocate<byte>(32);
+        let moved_35 = other_35;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_36 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_36);
+        total += 1;
+    } else {
+        let other_36 = memory.shared_allocate<byte>(32);
+        let moved_36 = other_36;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_37 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_37);
+        total += 1;
+    } else {
+        let other_37 = memory.shared_allocate<byte>(32);
+        let moved_37 = other_37;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_38 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_38);
+        total += 1;
+    } else {
+        let other_38 = memory.shared_allocate<byte>(32);
+        let moved_38 = other_38;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_39 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_39);
+        total += 1;
+    } else {
+        let other_39 = memory.shared_allocate<byte>(32);
+        let moved_39 = other_39;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_40 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_40);
+        total += 1;
+    } else {
+        let other_40 = memory.shared_allocate<byte>(32);
+        let moved_40 = other_40;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_41 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_41);
+        total += 1;
+    } else {
+        let other_41 = memory.shared_allocate<byte>(32);
+        let moved_41 = other_41;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_42 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_42);
+        total += 1;
+    } else {
+        let other_42 = memory.shared_allocate<byte>(32);
+        let moved_42 = other_42;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_43 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_43);
+        total += 1;
+    } else {
+        let other_43 = memory.shared_allocate<byte>(32);
+        let moved_43 = other_43;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_44 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_44);
+        total += 1;
+    } else {
+        let other_44 = memory.shared_allocate<byte>(32);
+        let moved_44 = other_44;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_45 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_45);
+        total += 1;
+    } else {
+        let other_45 = memory.shared_allocate<byte>(32);
+        let moved_45 = other_45;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_46 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_46);
+        total += 1;
+    } else {
+        let other_46 = memory.shared_allocate<byte>(32);
+        let moved_46 = other_46;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_47 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_47);
+        total += 1;
+    } else {
+        let other_47 = memory.shared_allocate<byte>(32);
+        let moved_47 = other_47;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_48 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_48);
+        total += 1;
+    } else {
+        let other_48 = memory.shared_allocate<byte>(32);
+        let moved_48 = other_48;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_49 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_49);
+        total += 1;
+    } else {
+        let other_49 = memory.shared_allocate<byte>(32);
+        let moved_49 = other_49;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_50 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_50);
+        total += 1;
+    } else {
+        let other_50 = memory.shared_allocate<byte>(32);
+        let moved_50 = other_50;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_51 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_51);
+        total += 1;
+    } else {
+        let other_51 = memory.shared_allocate<byte>(32);
+        let moved_51 = other_51;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_52 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_52);
+        total += 1;
+    } else {
+        let other_52 = memory.shared_allocate<byte>(32);
+        let moved_52 = other_52;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_53 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_53);
+        total += 1;
+    } else {
+        let other_53 = memory.shared_allocate<byte>(32);
+        let moved_53 = other_53;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_54 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_54);
+        total += 1;
+    } else {
+        let other_54 = memory.shared_allocate<byte>(32);
+        let moved_54 = other_54;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_55 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_55);
+        total += 1;
+    } else {
+        let other_55 = memory.shared_allocate<byte>(32);
+        let moved_55 = other_55;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_56 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_56);
+        total += 1;
+    } else {
+        let other_56 = memory.shared_allocate<byte>(32);
+        let moved_56 = other_56;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_57 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_57);
+        total += 1;
+    } else {
+        let other_57 = memory.shared_allocate<byte>(32);
+        let moved_57 = other_57;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_58 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_58);
+        total += 1;
+    } else {
+        let other_58 = memory.shared_allocate<byte>(32);
+        let moved_58 = other_58;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_59 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_59);
+        total += 1;
+    } else {
+        let other_59 = memory.shared_allocate<byte>(32);
+        let moved_59 = other_59;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_60 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_60);
+        total += 1;
+    } else {
+        let other_60 = memory.shared_allocate<byte>(32);
+        let moved_60 = other_60;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_61 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_61);
+        total += 1;
+    } else {
+        let other_61 = memory.shared_allocate<byte>(32);
+        let moved_61 = other_61;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_62 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_62);
+        total += 1;
+    } else {
+        let other_62 = memory.shared_allocate<byte>(32);
+        let moved_62 = other_62;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_63 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_63);
+        total += 1;
+    } else {
+        let other_63 = memory.shared_allocate<byte>(32);
+        let moved_63 = other_63;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_64 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_64);
+        total += 1;
+    } else {
+        let other_64 = memory.shared_allocate<byte>(32);
+        let moved_64 = other_64;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_65 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_65);
+        total += 1;
+    } else {
+        let other_65 = memory.shared_allocate<byte>(32);
+        let moved_65 = other_65;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_66 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_66);
+        total += 1;
+    } else {
+        let other_66 = memory.shared_allocate<byte>(32);
+        let moved_66 = other_66;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_67 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_67);
+        total += 1;
+    } else {
+        let other_67 = memory.shared_allocate<byte>(32);
+        let moved_67 = other_67;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_68 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_68);
+        total += 1;
+    } else {
+        let other_68 = memory.shared_allocate<byte>(32);
+        let moved_68 = other_68;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_69 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_69);
+        total += 1;
+    } else {
+        let other_69 = memory.shared_allocate<byte>(32);
+        let moved_69 = other_69;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_70 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_70);
+        total += 1;
+    } else {
+        let other_70 = memory.shared_allocate<byte>(32);
+        let moved_70 = other_70;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_71 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_71);
+        total += 1;
+    } else {
+        let other_71 = memory.shared_allocate<byte>(32);
+        let moved_71 = other_71;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_72 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_72);
+        total += 1;
+    } else {
+        let other_72 = memory.shared_allocate<byte>(32);
+        let moved_72 = other_72;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_73 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_73);
+        total += 1;
+    } else {
+        let other_73 = memory.shared_allocate<byte>(32);
+        let moved_73 = other_73;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_74 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_74);
+        total += 1;
+    } else {
+        let other_74 = memory.shared_allocate<byte>(32);
+        let moved_74 = other_74;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_75 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_75);
+        total += 1;
+    } else {
+        let other_75 = memory.shared_allocate<byte>(32);
+        let moved_75 = other_75;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_76 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_76);
+        total += 1;
+    } else {
+        let other_76 = memory.shared_allocate<byte>(32);
+        let moved_76 = other_76;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_77 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_77);
+        total += 1;
+    } else {
+        let other_77 = memory.shared_allocate<byte>(32);
+        let moved_77 = other_77;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_78 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_78);
+        total += 1;
+    } else {
+        let other_78 = memory.shared_allocate<byte>(32);
+        let moved_78 = other_78;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_79 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_79);
+        total += 1;
+    } else {
+        let other_79 = memory.shared_allocate<byte>(32);
+        let moved_79 = other_79;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_80 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_80);
+        total += 1;
+    } else {
+        let other_80 = memory.shared_allocate<byte>(32);
+        let moved_80 = other_80;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_81 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_81);
+        total += 1;
+    } else {
+        let other_81 = memory.shared_allocate<byte>(32);
+        let moved_81 = other_81;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_82 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_82);
+        total += 1;
+    } else {
+        let other_82 = memory.shared_allocate<byte>(32);
+        let moved_82 = other_82;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_83 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_83);
+        total += 1;
+    } else {
+        let other_83 = memory.shared_allocate<byte>(32);
+        let moved_83 = other_83;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_84 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_84);
+        total += 1;
+    } else {
+        let other_84 = memory.shared_allocate<byte>(32);
+        let moved_84 = other_84;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_85 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_85);
+        total += 1;
+    } else {
+        let other_85 = memory.shared_allocate<byte>(32);
+        let moved_85 = other_85;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_86 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_86);
+        total += 1;
+    } else {
+        let other_86 = memory.shared_allocate<byte>(32);
+        let moved_86 = other_86;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_87 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_87);
+        total += 1;
+    } else {
+        let other_87 = memory.shared_allocate<byte>(32);
+        let moved_87 = other_87;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_88 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_88);
+        total += 1;
+    } else {
+        let other_88 = memory.shared_allocate<byte>(32);
+        let moved_88 = other_88;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_89 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_89);
+        total += 1;
+    } else {
+        let other_89 = memory.shared_allocate<byte>(32);
+        let moved_89 = other_89;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_90 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_90);
+        total += 1;
+    } else {
+        let other_90 = memory.shared_allocate<byte>(32);
+        let moved_90 = other_90;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_91 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_91);
+        total += 1;
+    } else {
+        let other_91 = memory.shared_allocate<byte>(32);
+        let moved_91 = other_91;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_92 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_92);
+        total += 1;
+    } else {
+        let other_92 = memory.shared_allocate<byte>(32);
+        let moved_92 = other_92;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_93 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_93);
+        total += 1;
+    } else {
+        let other_93 = memory.shared_allocate<byte>(32);
+        let moved_93 = other_93;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_94 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_94);
+        total += 1;
+    } else {
+        let other_94 = memory.shared_allocate<byte>(32);
+        let moved_94 = other_94;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_95 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_95);
+        total += 1;
+    } else {
+        let other_95 = memory.shared_allocate<byte>(32);
+        let moved_95 = other_95;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_96 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_96);
+        total += 1;
+    } else {
+        let other_96 = memory.shared_allocate<byte>(32);
+        let moved_96 = other_96;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_97 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_97);
+        total += 1;
+    } else {
+        let other_97 = memory.shared_allocate<byte>(32);
+        let moved_97 = other_97;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_98 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_98);
+        total += 1;
+    } else {
+        let other_98 = memory.shared_allocate<byte>(32);
+        let moved_98 = other_98;
+        total += 2;
+    }
+    if (total % 2 == 0) {
+        let branch_99 = memory.shared_allocate<byte>(16);
+        defer memory.shared_release(branch_99);
+        total += 1;
+    } else {
+        let other_99 = memory.shared_allocate<byte>(32);
+        let moved_99 = other_99;
+        total += 2;
+    }
+    print(total);
+    return 0;
+}

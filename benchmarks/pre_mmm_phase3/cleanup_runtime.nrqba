@@ -1,0 +1,18 @@
+// Cleanup-heavy runtime benchmark: every iteration exercises nested scopes,
+// a move, and an explicit defer that supersedes automatic destruction.
+int function main() {
+    var index = 0;
+    var checksum = 0;
+    while (index < 1000000) {
+        let first = memory.shared_allocate<byte>(8);
+        defer memory.shared_release(first);
+        {
+            let second = memory.shared_allocate<byte>(16);
+            let moved = second;
+            checksum += index % 7;
+        }
+        index += 1;
+    }
+    print(checksum);
+    return 0;
+}
