@@ -12,11 +12,32 @@ recorded below is made under that authority.
 
 ---
 
-## Version 0.457-beta (working build)
+## Version 0.461-beta (working build)
+
+### Summary of Changes (since `0.457-beta`):
+
+*Deterministic-destruction Phase 3 working build; `0.457-beta` remains the released `n-1` checkpoint.*
+
+- **A deferred owner cannot be transferred afterwards.** A move, return, field
+  extraction, aggregate pack, or owning call transfer after `defer` captured the
+  owner is rejected instead of producing two owners for one allocation.
+- **Cleanup actions are liveness-tracked.** A transfer outside a conditional
+  region removes the dead automatic action; conditional moves and defers keep
+  their fallback on the path where they do not execute.
+- **`for` initializers have a loop cleanup scope.** They are released on loop
+  exit, `break`, and `return`, while `continue` keeps them alive.
+- **Explicit defers supersede the automatic action they replace.** Unconditional
+  and same-scope defers leave one destruction site; conditional defers retain
+  the outer fallback.
+- **GC and native cleanup remain separate.** Return edges run cleanup before
+  closing the activation root frame; typed native destructors remain independent
+  of GC reclamation.
+
+## Version 0.457-beta (released)
 
 ### Summary of Changes (since `0.453-beta`):
 
-*Soundness-audit working build; `0.453-beta` remains the released `n-1` checkpoint.*
+*Soundness-audit checkpoint; `0.453-beta` is the previous released build.*
 
 - **Immutable borrows are read-only at every write boundary.** Dereference,
   indexed, compound, and address-through-dereference targets now reject writes
