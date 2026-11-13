@@ -1,0 +1,13 @@
+managed<int> function make_value() {
+    let handle = file.open("NUL", true);
+    var cell = array.allocate<int>(1);
+    cell[0] = 3;
+    return cell;
+}
+
+int function main() {
+    let value = make_value();
+    gc.collect();
+    print(value[0]);
+    return 0;
+}

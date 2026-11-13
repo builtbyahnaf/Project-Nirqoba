@@ -1,0 +1,8 @@
+{
+  "expect_exit": 0,
+  "expect_stdout": "7\n",
+  "expect_ir_counts": {
+    "call void @nrq_gc_root_frame_end": 3,
+    "call i32 @nrq_memory_shared_release": 2
+  }
+}

@@ -1,0 +1,16 @@
+void function release_early(bool take_early) {
+    let outer = memory.shared_allocate<byte>(8);
+    {
+        let inner = memory.shared_allocate<byte>(16);
+        if (take_early) {
+            return;
+        }
+    }
+    memory.shared_release(outer);
+}
+
+int function main() {
+    release_early(true);
+    release_early(false);
+    return 0;
+}
