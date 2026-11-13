@@ -15,6 +15,16 @@ namespace nirq {
 
 struct ModuleUnit;
 
+// Compact per-parameter effect bits inferred for a function body. Effects are
+// intentionally independent of any caller allocation: they describe what the
+// callee may do to a borrowed parameter and are merged through nested calls.
+enum BorrowEffectFlag : uint8_t {
+  BorrowEffectRead = 1u << 0,
+  BorrowEffectWrite = 1u << 1,
+  BorrowEffectEscape = 1u << 2,
+  BorrowEffectAlias = 1u << 3,
+};
+
 struct FunctionSignature {
   std::string name;
   Type return_type;
@@ -40,6 +50,11 @@ struct FunctionSignature {
   // effect summary instead of searching the parameter-name vector per call.
   int return_borrow_parameter_index = -1;
   bool returns_mutable_borrow = false;
+  // One compact effect byte per parameter. Declared effects are available
+  // before the body is checked; `effects_known` records that inferred nested
+  // effects have replaced the conservative declaration-only summary.
+  std::vector<uint8_t> parameter_effects;
+  bool effects_known = false;
 };
 
 // Lightweight catalog entry for a registered struct type.
@@ -113,6 +128,21 @@ class TypeChecker {
   bool has_live_mutable_access(uint64_t allocation_id,
                                const BorrowPathSet& paths) const;
   void consume_field_move(Expr& expression, const Type& value_type);
+  // Records a read/write/escape/alias of a current borrowed parameter.
+  void record_parameter_use(const Expr& expression, uint8_t effect);
+  // Merges the callee's summary for one argument into the current function's
+  // parameter summary. Unknown/external callees contribute all effects.
+  void merge_callee_effects(const FunctionSignature& signature, size_t index,
+                            const Expr& argument);
+  void publish_function_effects(const FunctionDecl& function);
+  // True when a struct type contains a borrowed field at any nesting depth.
+  bool contains_borrowed_field(const Type& type) const;
+  bool contains_borrowed_field(const Type& type,
+                               std::unordered_set<std::string>& active) const;
+  std::vector<BorrowTarget> aggregate_borrows_for(const Expr& expr) const;
+  void validate_aggregate_borrow_lifetime(const std::vector<BorrowTarget>& borrows,
+                                          size_t target_depth,
+                                          const SourceLocation& location);
 
   // Struct catalog lookup helpers. `name` may be module-qualified; a bare name
   // first resolves against the module currently being checked, then against the
@@ -158,6 +188,13 @@ class TypeChecker {
   // checked. This makes argument ordering obey the same exclusivity rule as
   // live lexical borrows.
   std::vector<ActiveBorrow> active_call_borrows_;
+  // Effect summary for the function body currently being checked.
+  bool tracking_function_effects_ = false;
+  std::vector<uint8_t> current_parameter_effects_;
+  std::unordered_map<std::string, size_t> current_parameter_indices_;
+  // Borrowed-field origins recovered from struct initializers, keyed by the
+  // initializer expression so nested aggregates can contribute transitively.
+  std::unordered_map<const Expr*, std::vector<BorrowTarget>> aggregate_borrows_;
   // Set while checking the base of a member access. A container element has no
   // value of its own, so `ps[i]` is only a legal expression when it is claimed
   // as the base of `ps[i].field`.

@@ -93,6 +93,10 @@ struct Symbol {
   // Additional owner/path possibilities selected by mutually exclusive branches.
   // Empty for ordinary borrows; populated only when branch owners differ.
   std::vector<BorrowTarget> borrow_targets;
+  // Borrowed-field origins held inside an aggregate value. They travel with the
+  // aggregate on declaration/move so an outer binding can reject a lifetime
+  // escape before its borrowed fields are used.
+  std::vector<BorrowTarget> field_borrows;
   // Set for '@Nullable' pointer bindings: the value may be nullptr, so dereference
   // requires a non-null proof in the current branch.
   bool nullable = false;
@@ -145,6 +149,8 @@ class SymbolTable {
       const std::string& except_name = {}) const;
   void rebind_pointer(const std::string& name, uint64_t allocation_id);
   void set_definitely_null(const std::string& name, bool definitely_null);
+  void set_field_borrows(const std::string& name,
+                         std::vector<BorrowTarget> field_borrows);
   // A non-null branch can discharge a conditional borrow only when the absence
   // path is known null. Returns true when the binding became definite.
   bool refine_conditional_borrow(const std::string& name);

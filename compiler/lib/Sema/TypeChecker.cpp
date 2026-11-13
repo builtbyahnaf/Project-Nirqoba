@@ -496,6 +496,15 @@ bool TypeChecker::check(Program& program) {
     if (return_source != sig.parameter_names.end())
       sig.return_borrow_parameter_index = static_cast<int>(
           return_source - sig.parameter_names.begin());
+    sig.parameter_effects.assign(sig.parameter_names.size(), 0);
+    for (size_t i = 0; i < sig.parameter_names.size(); ++i) {
+      if (i < sig.parameter_borrowed.size() && sig.parameter_borrowed[i]) {
+        sig.parameter_effects[i] |= BorrowEffectRead;
+        if (sig.parameter_mutable_borrow[i]) sig.parameter_effects[i] |= BorrowEffectWrite;
+      }
+      if (static_cast<int>(i) == sig.return_borrow_parameter_index)
+        sig.parameter_effects[i] |= BorrowEffectEscape;
+    }
 
     if (!functions_.emplace(function->name(), move(sig)).second) {
       diagnostics_.error(diag::kDuplicateFunction, function->location(),
@@ -666,6 +675,16 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
       if (return_source != sig.parameter_names.end())
         sig.return_borrow_parameter_index = static_cast<int>(
             return_source - sig.parameter_names.begin());
+      sig.parameter_effects.assign(sig.parameter_names.size(), 0);
+      for (size_t i = 0; i < sig.parameter_names.size(); ++i) {
+        if (i < sig.parameter_borrowed.size() && sig.parameter_borrowed[i]) {
+          sig.parameter_effects[i] |= BorrowEffectRead;
+          if (sig.parameter_mutable_borrow[i])
+            sig.parameter_effects[i] |= BorrowEffectWrite;
+        }
+        if (static_cast<int>(i) == sig.return_borrow_parameter_index)
+          sig.parameter_effects[i] |= BorrowEffectEscape;
+      }
 
       // Every module is reachable by its qualified name, including the entry
       // module, so `import app; app.helper()` keeps working.
@@ -803,6 +822,19 @@ void TypeChecker::check_function(FunctionDecl& function) {
   current_return_borrow_parameter_ = function.return_borrow_parameter();
   current_return_mutable_borrow_ = function.returns_mutable_borrow();
   current_return_borrow_allocation_id_ = 0;
+  tracking_function_effects_ = true;
+  current_parameter_effects_.assign(function.parameters().size(), 0);
+  current_parameter_indices_.clear();
+  for (size_t i = 0; i < function.parameters().size(); ++i) {
+    const Parameter& parameter = function.parameters()[i];
+    current_parameter_indices_[parameter.name] = i;
+    if (!parameter.borrowed) continue;
+    current_parameter_effects_[i] |= BorrowEffectRead;
+    if (parameter.mutable_borrow)
+      current_parameter_effects_[i] |= BorrowEffectWrite;
+    if (parameter.name == current_return_borrow_parameter_)
+      current_parameter_effects_[i] |= BorrowEffectEscape;
+  }
   if (current_return_shared_ && !current_return_type_.is_pointer()) {
     diagnostics_.error(diag::kTypeMismatch, function.location(),
                        "shared return types must be pointers");
@@ -874,6 +906,7 @@ void TypeChecker::check_function(FunctionDecl& function) {
   }
 
   check_block(const_cast<BlockStmt&>(function.body()));
+  publish_function_effects(function);
 
   if (!current_return_type_.is_void() && block_can_fall_through(function.body())) {
     diagnostics_.error(diag::kMissingReturn, function.location(),
@@ -889,6 +922,9 @@ void TypeChecker::check_function(FunctionDecl& function) {
   current_return_borrow_parameter_.clear();
   current_return_borrow_allocation_id_ = 0;
   current_return_mutable_borrow_ = false;
+  tracking_function_effects_ = false;
+  current_parameter_effects_.clear();
+  current_parameter_indices_.clear();
 }
 
 void TypeChecker::check_block(BlockStmt& block) {
@@ -991,6 +1027,9 @@ void TypeChecker::check_deferred_cleanup(DeferredCleanupStmt& statement) {
 void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaration) {
   const Type initializer_type =
       check_expression(const_cast<Expr&>(declaration.initializer()));
+  if (declaration.initializer().kind() == Expr::Kind::Name)
+    record_parameter_use(declaration.initializer(),
+                         BorrowEffectRead | BorrowEffectAlias);
   Type binding_type = initializer_type;
 
   if (declaration.has_annotation()) {
@@ -1026,6 +1065,17 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
                        "owned array elements cannot be moved out individually");
   }
   const Symbol* transferred_owner = nullptr;
+  if (contains_borrowed_field(binding_type)) {
+    std::vector<BorrowTarget> borrows = aggregate_borrows_for(declaration.initializer());
+    if (borrows.empty() && declaration.initializer().kind() != Expr::Kind::StructInit &&
+        declaration.initializer().kind() != Expr::Kind::Name) {
+      diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
+                         "an aggregate holding borrowed references must be constructed from a tracked borrow");
+    }
+    validate_aggregate_borrow_lifetime(borrows, symbols_.scope_depth(),
+                                       declaration.initializer().location());
+    symbol.field_borrows = std::move(borrows);
+  }
   if (binding_type.is_pointer() || binding_type.is_owned_array() ||
       contains_owned_array(binding_type)) {
     symbol.owns_allocation = expression_creates_owned_pointer(declaration.initializer());
@@ -1482,6 +1532,103 @@ bool TypeChecker::has_live_mutable_access(uint64_t allocation_id,
   return active_borrow_conflicts(allocation_id, paths, false);
 }
 
+void TypeChecker::record_parameter_use(const Expr& expression, uint8_t effect) {
+  if (!tracking_function_effects_ || current_parameter_effects_.empty()) return;
+  const Symbol* root = find_root_symbol(expression, symbols_);
+  if (!root) return;
+  const auto found = current_parameter_indices_.find(root->name);
+  if (found != current_parameter_indices_.end())
+    current_parameter_effects_[found->second] |= effect;
+}
+
+void TypeChecker::merge_callee_effects(const FunctionSignature& signature,
+                                       size_t index, const Expr& argument) {
+  if (!tracking_function_effects_ || current_parameter_effects_.empty()) return;
+  const Symbol* root = find_root_symbol(argument, symbols_);
+  if (!root) return;
+  const auto found = current_parameter_indices_.find(root->name);
+  if (found == current_parameter_indices_.end()) return;
+  uint8_t effect = index < signature.parameter_effects.size()
+                       ? signature.parameter_effects[index]
+                       : 0;
+  // A declaration without a checked body cannot promise anything beyond its
+  // declared mutability and return source. Preserve soundness by assuming the
+  // remaining effects for external or not-yet-checked callees.
+  if (!signature.effects_known)
+    effect |= BorrowEffectRead | BorrowEffectWrite |
+              BorrowEffectEscape | BorrowEffectAlias;
+  current_parameter_effects_[found->second] |= effect;
+}
+
+void TypeChecker::publish_function_effects(const FunctionDecl& function) {
+  for (auto& entry : functions_) {
+    FunctionSignature& signature = entry.second;
+    if (signature.name != function.name() ||
+        signature.module_name != current_module_)
+      continue;
+    signature.parameter_effects = current_parameter_effects_;
+    signature.effects_known = true;
+  }
+}
+
+bool TypeChecker::contains_borrowed_field(const Type& type) const {
+  std::unordered_set<std::string> active;
+  return contains_borrowed_field(type, active);
+}
+
+bool TypeChecker::contains_borrowed_field(
+    const Type& type, std::unordered_set<std::string>& active) const {
+  if (!type.is_valid()) return false;
+  if (type.is_struct()) {
+    const std::string& name = type.struct_name();
+    if (!active.insert(name).second) return false;
+    const StructInfo* info = find_struct(name);
+    if (!info) return false;
+    for (const Parameter& field : info->fields) {
+      if (field.borrowed) return true;
+      if (contains_borrowed_field(field.type, active)) return true;
+    }
+    return false;
+  }
+  if (type.is_array() || type.is_dynamic_array() || type.is_owned_array() ||
+      type.is_array_view() || type.is_soa())
+    return contains_borrowed_field(type.element_type(), active);
+  if (type.is_tuple()) {
+    for (const Type& element : type.tuple_elements())
+      if (contains_borrowed_field(element, active)) return true;
+  }
+  return false;
+}
+
+std::vector<BorrowTarget> TypeChecker::aggregate_borrows_for(const Expr& expr) const {
+  const auto found = aggregate_borrows_.find(&expr);
+  if (found != aggregate_borrows_.end()) return found->second;
+  if (expr.kind() == Expr::Kind::Name) {
+    const Symbol* symbol = find_root_symbol(expr, symbols_);
+    if (symbol) return symbol->field_borrows;
+  }
+  return {};
+}
+
+void TypeChecker::validate_aggregate_borrow_lifetime(
+    const std::vector<BorrowTarget>& borrows, size_t target_depth,
+    const SourceLocation& location) {
+  for (const BorrowTarget& borrow : borrows) {
+    const Symbol* owner = symbols_.lookup(borrow.owner);
+    if (!owner || owner->moved || owner->allocation_id != borrow.allocation_id) {
+      diagnostics_.error(diag::kTypeMismatch, location,
+                         "borrowed field of '" + borrow.owner +
+                             "' requires a live tracked owner");
+      continue;
+    }
+    if (owner->scope_depth > target_depth) {
+      diagnostics_.error(diag::kTypeMismatch, location,
+                         "an aggregate holding a borrow of '" + borrow.owner +
+                             "' cannot outlive that owner");
+    }
+  }
+}
+
 const Symbol* TypeChecker::find_borrow_origin(const Expr& expression) const {
   if (expression.kind() == Expr::Kind::Unary) {
     const auto& unary = static_cast<const UnaryExpr&>(expression);
@@ -1588,6 +1735,12 @@ static bool has_cleanup_domain(const Expr& expr, const SymbolTable& symbols,
 }
 
 void TypeChecker::check_assignment(AssignmentStmt& assignment) {
+  if (assignment.is_simple_name()) {
+    const Symbol* target = symbols_.lookup(assignment.name());
+    if (target) {
+      record_parameter_use(assignment.target(), BorrowEffectWrite);
+    }
+  }
   const Type value_type = check_expression(const_cast<Expr&>(assignment.value()));
   const bool was_checking_lvalue = checking_lvalue_;
   checking_lvalue_ = true;
@@ -1662,6 +1815,13 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                        "borrowed array views cannot be stored in aggregate or allocated memory");
     return;
   }
+  if ((assignment.target().kind() == Expr::Kind::MemberAccess ||
+       assignment.target().kind() == Expr::Kind::Index) &&
+      contains_borrowed_field(target_type)) {
+    diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
+                       "an aggregate holding borrowed references cannot be stored in aggregate or allocated memory");
+    return;
+  }
 
   // Assigning a non-owned field initializes it, clearing that field's subtree so
   // later reads are allowed. Owned fields clear this on their reinit path, after
@@ -1723,6 +1883,14 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                            string(binding_kind_spelling(symbol->binding)) +
                            " and cannot be mutated; declare it with 'var' to mutate it");
     return;
+  }
+  if (assignment.is_simple_name() && symbol &&
+      contains_borrowed_field(target_type)) {
+    std::vector<BorrowTarget> borrows =
+        aggregate_borrows_for(assignment.value());
+    validate_aggregate_borrow_lifetime(borrows, symbol->scope_depth,
+                                       assignment.value().location());
+    symbols_.set_field_borrows(assignment.name(), std::move(borrows));
   }
   if (assignment.is_simple_name() && symbol && target_type.is_struct() &&
       symbols_.has_live_field_borrow(symbol->allocation_id, {})) {
@@ -2426,6 +2594,10 @@ void TypeChecker::check_return(ReturnStmt& statement) {
                            "' but this 'return' yields '" + value_type.to_string() + "'");
   }
   const bool returns_borrowed = !current_return_borrow_parameter_.empty();
+  if (contains_borrowed_field(value_type) && !returns_borrowed) {
+    diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                       "an aggregate holding borrowed references cannot escape through a return value");
+  }
   if (returns_borrowed) {
     const Symbol* source = find_borrow_origin(*statement.value());
     if (source && !source->borrow_targets.empty()) {
@@ -2530,6 +2702,8 @@ void TypeChecker::check_return(ReturnStmt& statement) {
 }
 
 Type TypeChecker::check_expression(Expr& expr) {
+  record_parameter_use(expr, checking_lvalue_ ? BorrowEffectWrite
+                                              : BorrowEffectRead);
   Type type = Type::error();
   switch (expr.kind()) {
     case Expr::Kind::IntegerLiteral: {
@@ -3388,6 +3562,47 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
   }
 
   const vector<Parameter>& fields = info->fields;
+  aggregate_borrows_[&expr].clear();
+  const auto record_field_borrow = [&](const Parameter& field,
+                                       const Expr& value) {
+    if (field.borrowed) {
+      record_parameter_use(value, BorrowEffectRead | BorrowEffectAlias);
+      const Symbol* origin = find_borrow_origin(value);
+      if (!origin || origin->moved) {
+        diagnostics_.error(diag::kTypeMismatch, value.location(),
+                           "borrowed field '" + field.name +
+                               "' requires a live borrow origin");
+      } else if (!origin->borrow_targets.empty()) {
+        diagnostics_.error(diag::kTypeMismatch, value.location(),
+                           "borrowed field '" + field.name +
+                               "' cannot select between multiple owners");
+      } else if (origin->borrow_conditional) {
+        diagnostics_.error(diag::kTypeMismatch, value.location(),
+                           "borrowed field '" + field.name +
+                               "' must be live on every branch");
+      } else {
+        uint64_t allocation_id = origin->allocation_id;
+        if (allocation_id == 0)
+          allocation_id = symbols_.ensure_allocation_id(
+              origin->name, next_allocation_id_++);
+        aggregate_borrows_[&expr].push_back(BorrowTarget{
+            allocation_id, borrow_owner_name(*origin),
+            find_borrow_paths(value), field.mutable_borrow});
+      }
+    }
+    for (const BorrowTarget& nested : aggregate_borrows_for(value)) {
+      const auto duplicate = std::find_if(
+          aggregate_borrows_[&expr].begin(), aggregate_borrows_[&expr].end(),
+          [&](const BorrowTarget& existing) {
+            return existing.allocation_id == nested.allocation_id &&
+                   existing.owner == nested.owner &&
+                   existing.paths.path == nested.paths.path &&
+                   existing.paths.alternatives == nested.paths.alternatives;
+          });
+      if (duplicate == aggregate_borrows_[&expr].end())
+        aggregate_borrows_[&expr].push_back(nested);
+    }
+  };
 
   if (expr.is_positional()) {
     if (expr.positional_inits().size() != fields.size()) {
@@ -3432,6 +3647,7 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
         check_resource_field_value(fields[i], field_type,
                                    *expr.positional_inits()[i], symbols_,
                                    diagnostics_);
+      record_field_borrow(fields[i], *expr.positional_inits()[i]);
       if (contains_owned_array(field_type)) {
         Expr& value = const_cast<Expr&>(*expr.positional_inits()[i]);
         const Symbol* source = value.kind() == Expr::Kind::Name
@@ -3499,6 +3715,7 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
         check_resource_field_value(*field_def,
                                    resolve_aggregate_type(field_def->type),
                                    *kv.second, symbols_, diagnostics_);
+      if (field_def) record_field_borrow(*field_def, *kv.second);
       if (field_def && contains_owned_array(resolve_aggregate_type(field_def->type))) {
         Expr& value = const_cast<Expr&>(*kv.second);
         const Symbol* source = value.kind() == Expr::Kind::Name
@@ -4790,6 +5007,12 @@ Type TypeChecker::check_call(CallExpr& call) {
   const size_t active_borrow_base = active_call_borrows_.size();
   for (size_t i = 0; i < count; ++i) {
     const Type arg_type = check_expression(const_cast<Expr&>(*call.arguments()[i]));
+    merge_callee_effects(sig, i, *call.arguments()[i]);
+    if (contains_borrowed_field(arg_type) &&
+        !aggregate_borrows_for(*call.arguments()[i]).empty()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                         "an aggregate holding borrowed references cannot escape through a call");
+    }
     if (arg_type.is_valid() && arg_type != sig.parameter_types[i]) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "argument " + to_string(i + 1) + " of '" + call.callee() +
@@ -4970,8 +5193,12 @@ Type TypeChecker::check_call(CallExpr& call) {
                            "borrow arguments must refer to a named pointer with a tracked lifetime");
         continue;
       }
-      const bool mutable_borrow = i < sig.parameter_mutable_borrow.size() &&
-                                  sig.parameter_mutable_borrow[i];
+      const uint8_t borrow_effect = i < sig.parameter_effects.size()
+                                        ? sig.parameter_effects[i] : 0;
+      const bool mutable_borrow =
+          (i < sig.parameter_mutable_borrow.size() &&
+           sig.parameter_mutable_borrow[i]) ||
+          (borrow_effect & BorrowEffectWrite) != 0;
       const std::string expected_resource =
           i < sig.parameter_resource_domains.size()
               ? cleanup_for_borrow_domain(sig.parameter_resource_domains[i])

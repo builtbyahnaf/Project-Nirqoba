@@ -134,7 +134,10 @@ bool SymbolTable::has_live_borrow(uint64_t allocation_id) const {
   for (const auto& scope : scopes_)
     for (const auto& entry : scope) {
       const Symbol& symbol = entry.second;
-      if (!symbol.borrowed || symbol.moved) continue;
+      if (symbol.moved) continue;
+      for (const auto& target : symbol.field_borrows)
+        if (target.allocation_id == allocation_id) return true;
+      if (!symbol.borrowed) continue;
       if (symbol.allocation_id == allocation_id) return true;
       for (const auto& target : symbol.borrow_targets)
         if (target.allocation_id == allocation_id) return true;
@@ -148,7 +151,13 @@ bool SymbolTable::has_live_field_borrow(uint64_t allocation_id,
   for (const auto& scope : scopes_)
     for (const auto& entry : scope) {
       const Symbol& symbol = entry.second;
-      if (symbol.moved || !symbol.borrowed) continue;
+      if (symbol.moved) continue;
+      for (const auto& target : symbol.field_borrows)
+        if (target.allocation_id == allocation_id &&
+            target.paths.has_field_projection() &&
+            target.paths.overlaps_field(path))
+          return true;
+      if (!symbol.borrowed) continue;
       if (symbol.allocation_id == allocation_id &&
           symbol.borrow_paths.has_field_projection() &&
           symbol.borrow_paths.overlaps_field(path))
@@ -169,8 +178,14 @@ const Symbol* SymbolTable::find_conflicting_borrow(
   for (const auto& scope : scopes_)
     for (const auto& entry : scope) {
       const Symbol& symbol = entry.second;
-      if (symbol.name == except_name || !symbol.borrowed || symbol.moved)
+      if (symbol.name == except_name || symbol.moved)
         continue;
+      for (const auto& target : symbol.field_borrows)
+        if (target.allocation_id == allocation_id &&
+            target.paths.overlaps(requested_paths) &&
+            (requested_mutable || target.mutable_borrow))
+          return &symbol;
+      if (!symbol.borrowed) continue;
       if (symbol.allocation_id == allocation_id &&
           symbol.borrow_paths.overlaps(requested_paths) &&
           (requested_mutable || symbol.mutable_borrow))
@@ -200,6 +215,17 @@ void SymbolTable::set_definitely_null(const string& name, bool definitely_null) 
     auto found = scope->find(name);
     if (found != scope->end()) {
       found->second.definitely_null = definitely_null;
+      return;
+    }
+  }
+}
+
+void SymbolTable::set_field_borrows(const string& name,
+                                    vector<BorrowTarget> field_borrows) {
+  for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+    auto found = scope->find(name);
+    if (found != scope->end()) {
+      found->second.field_borrows = std::move(field_borrows);
       return;
     }
   }
@@ -510,6 +536,23 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
         destination.borrow_conditional = false;
         destination.borrow_conditional_absent_null = false;
       }
+      destination.field_borrows.clear();
+      const auto add_field_borrows = [&](const Symbol& source) {
+        for (const BorrowTarget& target : source.field_borrows) {
+          const auto duplicate = std::find_if(
+              destination.field_borrows.begin(), destination.field_borrows.end(),
+              [&](const BorrowTarget& existing) {
+                return existing.allocation_id == target.allocation_id &&
+                       existing.owner == target.owner &&
+                       existing.paths.path == target.paths.path &&
+                       existing.paths.alternatives == target.paths.alternatives;
+              });
+          if (duplicate == destination.field_borrows.end())
+            destination.field_borrows.push_back(target);
+        }
+      };
+      add_field_borrows(*then_symbol);
+      add_field_borrows(*else_symbol);
       destination.shared_allocation = then_symbol->shared_allocation ||
                                       else_symbol->shared_allocation;
       destination.moved_fields = then_symbol->moved_fields;
