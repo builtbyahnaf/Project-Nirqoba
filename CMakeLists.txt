@@ -8,7 +8,7 @@ project(nirqoba VERSION 0.431.0 LANGUAGES C CXX)
 # Human-readable release label shown by the compiler and the runtime. The
 # canonical numeric version lives in the project() call above; this label adds
 # the pre-release channel (e.g. -beta) that the numeric form cannot express.
-set(NIRQOBA_VERSION_LABEL "0.465-beta")
+set(NIRQOBA_VERSION_LABEL "0.469-beta")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
