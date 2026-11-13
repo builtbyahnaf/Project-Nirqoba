@@ -1,0 +1,9 @@
+{
+  "mode": "build_and_run",
+  "args": ["--emit=llvm", "-O2"],
+  "expect_exit": 0,
+  "expect_ir_counts": {
+    "call void @nrq_gc_root_register_typed": 1,
+    "call void @nrq_gc_root_store": 0
+  }
+}
