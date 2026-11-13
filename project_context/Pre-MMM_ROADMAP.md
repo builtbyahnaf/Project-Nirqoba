@@ -249,7 +249,8 @@
   `allocator_mutex`.
 - [x] Reduce unnecessary synchronization in allocator operations. Shards lock
   independently; default allocations/releases skip the global allocator mutex
-  and operation pin. Explicit per-allocation handles still need the pin.
+  and operation pin. Explicit per-allocation handles retain the pin on
+  allocation and use the live ownership record on release (`0.469-beta`).
 - [x] Improve small-allocation throughput. Allocation-heavy median fell from
   182.83M to 131.79M cycles (-27.9%) in the Phase 4 workload.
 - [x] Improve bulk allocation and release. Twenty-thousand-block churn and
@@ -294,14 +295,14 @@ stress, and the migration-scale Phase 3 programs pass. Report:
 
 ### Implementation
 
-- [ ] Make ownership-domain transitions explicit in compiler lowering.
-- [ ] Ensure owned containers holding managed references register and unregister roots correctly.
-- [ ] Ensure GC-managed objects never enter ordinary owned deallocation paths.
-- [ ] Ensure owned objects never accidentally acquire GC reclamation responsibility.
-- [ ] Preserve write barriers for managed-reference stores.
-- [ ] Optimize root registration and unregistration where profiling justifies it.
-- [ ] Ensure GC-managed references remain valid across supported allocation and collection points.
-- [ ] Keep cyclic object graphs in the GC domain rather than introducing unnecessary shared ownership cycles.
+- [x] Make ownership-domain transitions explicit in compiler lowering. Owned pointer storage with managed fields now registers a typed root on allocation, moves it on reallocation, and unregisters it before release or at frame end; shared storage uses a rooted allocation entry point (`0.469-beta`, `reports/pre-mmm/phase-05.md`).
+- [x] Ensure owned containers holding managed references register and unregister roots correctly. Owned pointer storage and existing owned arrays publish typed roots only when their pointee/element has managed offsets; managed-field-free storage pays no GC tracking.
+- [x] Ensure GC-managed objects never enter ordinary owned deallocation paths. Existing semantic negative tests reject `memory.deallocate` on managed, borrowed, shared, and resource values; Phase 5 adds no exception to that rule.
+- [x] Ensure owned objects never accidentally acquire GC reclamation responsibility. Explicit storage keeps deterministic release; the collector only traces its managed fields while the root is live.
+- [x] Preserve write barriers for managed-reference stores. Managed stores into owned and shared blocks continue through the existing barrier; frame-scoped roots use the established registration paths.
+- [x] Optimize root registration and unregistration where profiling justifies it. Typed descriptors are shared per layout and only emitted when managed offsets exist; no measured need justified a new cache in this phase.
+- [x] Ensure GC-managed references remain valid across supported allocation and collection points. New heap, stack, reallocation, cleanup-exit, and shared probes collect twice and read back `73`; managed call results and array roots retain their existing tests.
+- [x] Keep cyclic object graphs in the GC domain rather than introducing unnecessary shared ownership cycles. Shared storage remains explicit reference counting; collector cycle handling is unchanged and covered by the existing GC suite.
 
 ### Performance requirements
 
@@ -310,7 +311,7 @@ stress, and the migration-scale Phase 3 programs pass. Report:
 - Avoid unnecessary cross-domain conversions.
 - Keep GC metadata and ownership metadata separate.
 
-**Completion:** Both domains work independently and can safely interact through explicit boundaries.
+**Completion:** Complete at `0.469-beta` for the supported boundary. Typed roots keep managed fields in owned and shared storage visible until deterministic release; roots are removed before release or at frame end. 228 unit tests and 455 integration tests pass, including `owned_pointer_gc_roots`, `stack_owned_pointer_gc_roots`, `owned_pointer_gc_reallocation`, `owned_pointer_cleanup_gc_roots`, and `shared_pointer_gc_roots`. The explicit allocator-handle release path also dropped its redundant pin: 1/2/4-worker medians improved 21.0%/27.1%/46.3%. A pre-existing compiler crash for aggregate fields declared as `shared ptr T`/`owned ptr T` when `T` contains managed fields remains a documented limitation. Report: `reports/pre-mmm/phase-05.md`.
 
 ---
 
