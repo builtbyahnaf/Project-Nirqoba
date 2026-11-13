@@ -1,0 +1,8 @@
+struct Doc { borrow mut ptr int value; }
+
+int function main() {
+    let x = 5;
+    var d = Doc { value: &x };
+    d.value[0] = 9;
+    return 0;
+}
