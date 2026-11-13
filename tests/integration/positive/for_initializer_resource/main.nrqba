@@ -1,0 +1,6 @@
+int function main() {
+    for (var handle = file.open("NUL", true); false; ) {
+    }
+    print("loop resource closed");
+    return 0;
+}

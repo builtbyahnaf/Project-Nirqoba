@@ -1,0 +1,7 @@
+{
+  "expect_exit": 0,
+  "expect_stdout": "0\n",
+  "expect_ir_counts": {
+    "call i32 @nrq_memory_shared_release": 1
+  }
+}
