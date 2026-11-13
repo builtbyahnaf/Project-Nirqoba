@@ -3349,6 +3349,12 @@ Type TypeChecker::resolve_aggregate_type(const Type& type,
     return Type::owned_pointer_type(
         resolve_aggregate_type(type.element_type(), active),
         type.resource_domain());
+  // A shared pointee is an aggregate the program can dereference and whose
+  // fields must have layouts for member access. Resolve it like an owned
+  // pointee; the active-name set still stops self-referential recursion.
+  if (type.is_shared_pointer())
+    return Type::shared_pointer_type(
+        resolve_aggregate_type(type.element_type(), active));
   if (type.is_array_view())
     return Type::array_view_type(resolve_aggregate_type(type.element_type(), active));
   // Pointer elements are deliberately left shallow: layout of a pointee is
