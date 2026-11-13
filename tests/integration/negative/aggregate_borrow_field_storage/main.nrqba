@@ -1,0 +1,10 @@
+struct Doc { borrow ptr int value; }
+struct Wrapper { Doc doc; }
+
+int function main() {
+    var x = 5;
+    var d = Doc { value: &x };
+    var w = Wrapper { doc: Doc { value: &x } };
+    w.doc = d;
+    return 0;
+}

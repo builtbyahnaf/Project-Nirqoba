@@ -1,0 +1,10 @@
+struct Inner { borrow mut ptr int value; }
+struct Outer { Inner inner; }
+
+int function main() {
+    var x = 5;
+    var o = Outer { inner: Inner { value: &x } };
+    o.inner.value[0] = 9;
+    print(o.inner.value[0]);
+    return 0;
+}

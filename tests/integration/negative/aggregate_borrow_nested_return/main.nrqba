@@ -1,0 +1,12 @@
+struct Inner { borrow ptr int value; }
+struct Outer { Inner inner; }
+
+Outer function make(borrow int* source) {
+    return Outer { inner: Inner { value: source } };
+}
+
+int function main() {
+    var x = 5;
+    var o = make(&x);
+    return 0;
+}

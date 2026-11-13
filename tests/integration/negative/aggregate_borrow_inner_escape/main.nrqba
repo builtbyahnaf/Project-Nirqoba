@@ -1,0 +1,12 @@
+struct Doc { borrow ptr int value; }
+
+int function main() {
+    var outer = 1;
+    var d = Doc { value: &outer };
+    {
+        var inner = 2;
+        var e = Doc { value: &inner };
+        d = e;
+    }
+    return 0;
+}

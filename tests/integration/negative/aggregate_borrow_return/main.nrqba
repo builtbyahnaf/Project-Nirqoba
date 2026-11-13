@@ -1,0 +1,11 @@
+struct Doc { borrow ptr int value; }
+
+Doc function make(borrow int* source) {
+    return Doc { value: source };
+}
+
+int function main() {
+    var x = 5;
+    var d = make(&x);
+    return 0;
+}
