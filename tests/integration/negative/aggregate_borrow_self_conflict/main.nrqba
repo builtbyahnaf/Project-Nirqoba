@@ -1,0 +1,9 @@
+struct Doc { borrow ptr int read_value; borrow mut ptr int write_value; }
+
+int function main() {
+    var x = 5;
+    var d = Doc { read_value: &x, write_value: &x };
+    d.write_value[0] = 9;
+    print(d.read_value[0]);
+    return 0;
+}
