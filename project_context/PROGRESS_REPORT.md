@@ -2019,17 +2019,17 @@ not a full compiler benchmark.
 
 **End of Entry #016**
 
-## Entry #017 — Release: 0.453-beta borrow effects and escape safety
+## Entry #017 — Working build: 0.453-beta borrow effects and escape safety
 
 **Version:** `0.453-beta`  
 **Date:** `2026-11-13 11:52:36`  
-**Scope:** `Release / Borrow checking / Effect summaries / Escape analysis`  
+**Scope:** `Working build / Borrow checking / Effect summaries / Escape analysis`  
 **Status:** `Completed`
 
 ### 1. Overview
 
-This milestone splits the former `0.449-beta` follow-up work into a `0.451-beta`
-working checkpoint and the final `0.453-beta` release. It adds compact
+This milestone records the `0.451-beta` released checkpoint and the `0.453-beta`
+working build for the former `0.449-beta` follow-up work. It adds compact
 per-parameter function-effect summaries and uses them at call boundaries, then
 closes the aggregate escape path for borrowed fields. Both upgrades are
 compile-time-only and preserve the existing borrow fast paths.

@@ -16,7 +16,7 @@ recorded below is made under that authority.
 
 ### Summary of Changes (since `0.451-beta`):
 
-*Final release of the interprocedural-summary and escape-safety checkpoint.*
+*Working build after the interprocedural-summary and escape-safety checkpoint.*
 
 - **Effect summaries are complete for the checked bodies.** Every signature
   carries one compact effect byte per parameter. Nested calls merge the callee's
@@ -37,11 +37,11 @@ recorded below is made under that authority.
   metadata participates in the existing live-borrow queries.
 - **No runtime cost.** All summaries and escape metadata are compile-time-only.
 
-## Version 0.451-beta (working checkpoint)
+## Version 0.451-beta (released)
 
 ### Summary of Changes (since `0.449-beta`):
 
-*Opened for the two post-`0.449-beta` borrowing upgrades.*
+*Released checkpoint for the two post-`0.449-beta` borrowing upgrades.*
 
 - **Interprocedural effect summaries.** Added compact read/write/alias/escape
   bits per borrowed parameter and propagated them through nested and recursive
@@ -52,7 +52,7 @@ recorded below is made under that authority.
   paths remain accepted.
 - **No runtime borrow tracking.** The checkpoint adds only semantic state.
 
-## Version 0.449-beta (working build)
+## Version 0.449-beta (released)
 
 ### Summary of Changes (since `0.445-beta`):
 
@@ -83,7 +83,7 @@ recorded below is made under that authority.
   semantic data. No runtime counters, locks, descriptors, allocations, or
   generated checks were added.
 
-## Version 0.445-beta (working build)
+## Version 0.445-beta (released)
 
 ### Summary of Changes (since `0.441-beta`):
 
@@ -107,7 +107,7 @@ recorded below is made under that authority.
 - **No runtime cost.** All new state is compile-time semantic data. No runtime
   counters, locks, descriptors, allocations, or generated checks were added.
 
-## Version 0.441-beta (working build)
+## Version 0.441-beta (released)
 
 ### Summary of Changes (since `0.437-beta`):
 
@@ -131,7 +131,7 @@ recorded below is made under that authority.
   branch-local symbol-table queries. No runtime counters, locks, descriptors,
   allocations, or generated checks were added.
 
-## Version 0.437-beta (working build)
+## Version 0.437-beta (released)
 
 ### Summary of Changes (since `0.431-beta`):
 
@@ -155,7 +155,7 @@ recorded below is made under that authority.
   semantic state only. No counters, locks, descriptors, allocations, or generated
   checks were added.
 
-## Version 0.431-beta (working build)
+## Version 0.431-beta (released)
 
 ### Summary of Changes (since `0.427-beta`):
 
@@ -180,7 +180,7 @@ recorded below is made under that authority.
 - **No runtime cost.** Path sets and conflict checks are compile-time only; no
   counters, locks, descriptors, allocations, or generated checks were added.
 
-## Version 0.427-beta (working build)
+## Version 0.427-beta (released)
 
 ### Summary of Changes (since `0.423-beta`):
 
@@ -207,7 +207,7 @@ recorded below is made under that authority.
 - **No runtime cost.** Conflict checks are semantic only; no counters, locks,
   descriptors, heap allocation, or generated checks were added.
 
-## Version 0.423-beta (working build)
+## Version 0.423-beta (released)
 
 ### Summary of Changes (since `0.419-beta`):
 
