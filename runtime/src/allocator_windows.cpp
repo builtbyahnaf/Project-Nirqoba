@@ -1516,7 +1516,6 @@ int32_t nrq_memory_shared_release(void* pointer) {
     if (!owner || owner->owner.operation_in_flight)
       return 0;
     allocator = owner->owner.allocator;
-    if (!increment_operation_pin_locked(allocator)) return 0;
     // A zero count reserves this final release. Retain and competing releases
     // cannot claim the pointer while its allocator callback runs unlocked.
     shared->second = 0;
@@ -1549,7 +1548,6 @@ int32_t nrq_memory_shared_release(void* pointer) {
       shared->second = 1;
       shard->changed.notify_all();
     }
-    release_operation_pin_locked(allocator);
   }
   if (callback_failed)
     nrq_runtime_fatal("allocator deallocation callback failed during shared release");
@@ -1615,18 +1613,12 @@ void nrq_memory_deallocate_checked(void* pointer) {
     return;
   }
 
-  // The in-flight flag in the shard keeps a non-default allocator alive between
-  // the pointer lookup and the pin. The process-default general allocator is
-  // static, so its ordinary releases take no global lock at all. No shard lock
-  // is held while acquiring the allocator mutex, so registry scans and ordinary
-  // releases cannot deadlock.
-  const bool pinned = allocator != &default_allocator;
-  if (pinned) {
-    std::lock_guard<std::mutex> lock(allocator_mutex);
-    if (!increment_operation_pin_locked(allocator))
-      nrq_runtime_fatal("memory.deallocate could not pin the owning allocator");
-  }
-
+  // The live ownership record is the allocator lifetime reference here. Both
+  // allocator destruction and reset scan every record while holding the shard
+  // locks, and this record remains in flight until the callback has finished and
+  // the record is erased. A separate operation pin would only repeat that
+  // guarantee and would add the global allocator mutex to every explicit-handle
+  // release.
   bool released = false;
   bool callback_failed = false;
   try {
@@ -1635,10 +1627,6 @@ void nrq_memory_deallocate_checked(void* pointer) {
     callback_failed = true;
   }
 
-  if (pinned) {
-    std::lock_guard<std::mutex> lock(allocator_mutex);
-    release_operation_pin_locked(allocator);
-  }
   {
     std::lock_guard<std::mutex> lock(shard.mutex);
     auto* found = shard.allocations.find(pointer);
@@ -1703,20 +1691,9 @@ void* nrq_memory_reallocate(void* pointer, size_t bytes) {
     alignment = found->owner.alignment;
     found->owner.operation_in_flight = true;
   }
-  const bool pinned = allocator != &default_allocator;
-  if (pinned) {
-    std::lock_guard<std::mutex> lock(allocator_mutex);
-    std::lock_guard<std::mutex> shard_lock(old_shard.mutex);
-    auto* found = old_shard.allocations.find(pointer);
-    if (!found || !found->owner.operation_in_flight)
-      nrq_runtime_fatal("allocator ownership changed during reallocation");
-    if (!increment_operation_pin_locked(allocator)) {
-      found->owner.operation_in_flight = false;
-      old_shard.changed.notify_all();
-      return nullptr;
-    }
-  }
-
+  // The in-flight ownership record keeps this allocator alive for the same
+  // reason as the deallocation path: destroy/reset must scan that record and
+  // will refuse while the operation is in progress.
   void* replacement = nullptr;
   try {
     replacement = allocator->reallocate_serialized(pointer, old_bytes, bytes,
@@ -1733,10 +1710,6 @@ void* nrq_memory_reallocate(void* pointer, size_t bytes) {
         nrq_runtime_fatal("allocator ownership changed during reallocation");
       found->owner.operation_in_flight = false;
       old_shard.changed.notify_all();
-    }
-    if (pinned) {
-      std::lock_guard<std::mutex> lock(allocator_mutex);
-      release_operation_pin_locked(allocator);
     }
     return nullptr;  // The original allocation is untouched.
   }
@@ -1789,10 +1762,6 @@ void* nrq_memory_reallocate(void* pointer, size_t bytes) {
   if (second.owns_lock()) second.unlock();
   first.unlock();
 
-  if (pinned) {
-    std::lock_guard<std::mutex> lock(allocator_mutex);
-    release_operation_pin_locked(allocator);
-  }
   return replacement;
 }
 

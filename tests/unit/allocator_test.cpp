@@ -233,6 +233,66 @@ TEST(AllocatorTest, DeallocationDoesNotHoldTheGlobalAllocatorRegistryLock) {
   ASSERT_EQ(nrq_allocator_destroy(unrelated), int32_t{1});
 }
 
+TEST(AllocatorTest, ExplicitReleaseRecordKeepsAllocatorAliveWithoutOperationPin) {
+  BlockingDeallocateState state;
+  const NrqCustomAllocatorVTable callbacks{
+      &state, blocking_deallocate_allocate, blocking_deallocate_wait, nullptr};
+  void* allocator = nrq_allocator_create_custom(&callbacks);
+  ASSERT_NE(allocator, nullptr);
+  void* pointer = nrq_memory_allocate_from(allocator, 128, 64);
+  ASSERT_NE(pointer, nullptr);
+  std::thread worker([&] { nrq_memory_deallocate_checked(pointer); });
+  {
+    std::unique_lock<std::mutex> lock(state.mutex);
+    state.condition.wait(lock, [&] { return state.entered; });
+  }
+  // The in-flight ownership record is the lifetime reference. Destroy and reset
+  // must both see it even though the deallocation path no longer increments the
+  // operation pin.
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{0});
+  ASSERT_EQ(nrq_allocator_reset(allocator), int32_t{0});
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.release = true;
+  }
+  state.condition.notify_all();
+  worker.join();
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
+}
+
+TEST(AllocatorTest, ExplicitReallocationRecordKeepsAllocatorAliveWithoutOperationPin) {
+  BlockingReallocateState state;
+  const NrqCustomAllocatorVTable callbacks{
+      &state, blocking_reallocate_allocate,
+      blocking_reallocate_deallocate, nullptr};
+  void* allocator = nrq_allocator_create_custom(&callbacks);
+  ASSERT_NE(allocator, nullptr);
+  void* pointer = nrq_memory_allocate_from(allocator, 32, 16);
+  ASSERT_NE(pointer, nullptr);
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.block = true;
+  }
+  std::atomic<void*> resized = nullptr;
+  std::thread worker([&] { resized = nrq_memory_reallocate(pointer, 256); });
+  {
+    std::unique_lock<std::mutex> lock(state.mutex);
+    state.condition.wait(lock, [&] { return state.entered; });
+  }
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{0});
+  ASSERT_EQ(nrq_allocator_reset(allocator), int32_t{0});
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.release = true;
+  }
+  state.condition.notify_all();
+  worker.join();
+  void* replacement = resized.load();
+  ASSERT_NE(replacement, nullptr);
+  nrq_memory_deallocate_checked(replacement);
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
+}
+
 TEST(AllocatorTest, SecureReleaseDoesNotHoldTheGlobalAllocatorRegistryLock) {
   BlockingDeallocateState state;
   const NrqCustomAllocatorVTable callbacks{
@@ -436,6 +496,8 @@ TEST(AllocatorTest, FinalSharedReleaseDoesNotHoldTheGlobalRegistryLock) {
   ASSERT_EQ(nrq_memory_shared_count(pointer), uint64_t{0});
   ASSERT_EQ(nrq_memory_shared_retain(pointer), nullptr);
   ASSERT_EQ(nrq_memory_shared_release(pointer), int32_t{0});
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{0});
+  ASSERT_EQ(nrq_allocator_reset(allocator), int32_t{0});
   void* unrelated = nrq_allocator_create(NRQ_ALLOCATOR_GENERAL, 0);
   {
     std::lock_guard<std::mutex> lock(state.mutex);
@@ -1023,6 +1085,37 @@ TEST(AllocatorTest, BenchmarksDefaultAllocationContentionAcrossThreads) {
               << " thread(s): " << worker_count * kIterationsPerThread
               << " allocate/free pairs in " << elapsed << " us" << std::endl;
   }
+}
+
+TEST(AllocatorTest, BenchmarksExplicitHandleAllocationContention) {
+  constexpr int kIterationsPerThread = 10000;
+  void* allocator = nrq_allocator_create(NRQ_ALLOCATOR_GENERAL, 0);
+  ASSERT_NE(allocator, nullptr);
+  for (int worker_count : {1, 2, 4}) {
+    std::atomic<int> failures{0};
+    std::vector<std::thread> workers;
+    workers.reserve(worker_count);
+    const auto start = std::chrono::steady_clock::now();
+    for (int worker = 0; worker < worker_count; ++worker) {
+      workers.emplace_back([&] {
+        for (int i = 0; i < kIterationsPerThread; ++i) {
+          auto* block = static_cast<unsigned char*>(
+              nrq_memory_allocate_from(allocator, 64, 16));
+          if (!block) { ++failures; continue; }
+          block[0] = static_cast<unsigned char>(i);
+          nrq_memory_deallocate_checked(block);
+        }
+      });
+    }
+    for (std::thread& worker : workers) worker.join();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    ASSERT_EQ(failures.load(), 0);
+    std::cout << "[benchmark] explicit general handle with " << worker_count
+              << " thread(s): " << worker_count * kIterationsPerThread
+              << " allocate/free pairs in " << elapsed << " us" << std::endl;
+  }
+  ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
 }
 
 TEST(AllocatorTest, GeneralHeapSupportsConcurrentAllocateWriteAndRelease) {
