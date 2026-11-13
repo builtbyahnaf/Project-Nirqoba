@@ -1,0 +1,35 @@
+// Mixed workload: small cached blocks, a bulk owned array, conditional growth,
+// nested scopes, and a for-initializer owner all run in one loop.
+int function main() {
+    var iterations = 200000;
+    var small_bytes = (memory.cpu_count() as int) + 48;
+    var checksum = 0;
+    var start = time.cycles();
+    for (var index = 0; index < iterations; index += 1) {
+        var small = memory.allocate<byte>(small_bytes);
+        small[0] = (index % 251) as byte;
+        checksum += small[0] as int;
+        memory.deallocate(small);
+
+        var bulk = memory.owned_array<int>(256);
+        bulk[0] = index;
+        bulk[255] = index * 2;
+        checksum += bulk[0] + bulk[255];
+
+        if (index % 7 == 0) {
+            var grown = memory.allocate<byte>(small_bytes);
+            grown[0] = (index % 97) as byte;
+            grown = memory.reallocate<byte>(grown, 4096);
+            grown[4095] = ((index + 3) % 97) as byte;
+            checksum += grown[0] as int + grown[4095] as int;
+            memory.deallocate(grown);
+        }
+    }
+    for (var seed = memory.owned_array<int>(4); false; ) {
+        checksum += seed[0];
+    }
+    var stop = time.cycles();
+    print(checksum);
+    print(stop - start);
+    return 0;
+}

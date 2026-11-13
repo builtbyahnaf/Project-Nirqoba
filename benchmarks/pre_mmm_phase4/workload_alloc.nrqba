@@ -1,0 +1,21 @@
+// Allocation-heavy explicit-allocation workload: one 64-byte block is
+// allocated, written, read, and released per iteration. The block contents are
+// observable, so neither the allocation pair nor the loop can be folded away.
+int function main() {
+    var iterations = 1000000;
+    var width = (memory.cpu_count() as int) + 48;
+    var checksum = 0;
+    var start = time.cycles();
+    for (var index = 0; index < iterations; index += 1) {
+        var block = memory.allocate<byte>(width);
+        block[0] = (index % 251) as byte;
+        block[width - 1] = ((index * 3) % 251) as byte;
+        checksum += block[0] as int;
+        checksum += block[width - 1] as int;
+        memory.deallocate(block);
+    }
+    var stop = time.cycles();
+    print(checksum);
+    print(stop - start);
+    return 0;
+}
