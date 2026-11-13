@@ -1,0 +1,9 @@
+struct Doc { borrow ptr int value; }
+
+void function consume(Doc doc) { }
+
+int function main() {
+    var x = 5;
+    consume(Doc { value: &x });
+    return 0;
+}
