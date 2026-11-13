@@ -1,0 +1,20 @@
+struct P { int x; int y; int z; }
+
+borrow mut source int* function writable(borrow mut int* source) {
+    return source;
+}
+
+int function main() {
+    var p = P { x: 1, y: 2, z: 3 };
+    var q = P { x: 4, y: 5, z: 6 };
+    { let seed_p = &p.x; }
+    { let seed_q = &q.x; }
+    @Nullable var ptr int view = nullptr;
+    if (p.x == 1) {
+        view = writable(&p.x);
+    } else {
+        view = writable(&q.x);
+    }
+    var alias = view;
+    return 0;
+}
