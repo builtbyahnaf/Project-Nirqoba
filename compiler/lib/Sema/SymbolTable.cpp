@@ -414,7 +414,14 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
         destination.borrow_paths.merge(else_symbol->borrow_paths);
         destination.borrow_conditional = then_symbol->borrow_conditional ||
                                          else_symbol->borrow_conditional;
-        destination.borrow_conditional_absent_null = false;
+        // A definite branch has no absent path; for conditional branches the
+        // absent path is null only when every possible absence is null.
+        const bool then_absence_null = !then_symbol->borrow_conditional ||
+                                       then_symbol->borrow_conditional_absent_null;
+        const bool else_absence_null = !else_symbol->borrow_conditional ||
+                                       else_symbol->borrow_conditional_absent_null;
+        destination.borrow_conditional_absent_null =
+            then_absence_null && else_absence_null;
       } else if (one_sided_borrow) {
         // The borrow may be live after the merge, but only on one path. Keep
         // its owner and field projection so overlapping accesses are rejected;
