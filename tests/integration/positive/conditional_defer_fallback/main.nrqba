@@ -1,0 +1,13 @@
+void function run(bool schedule_defer) {
+    let buffer = memory.shared_allocate<byte>(8);
+    if (schedule_defer) {
+        defer memory.shared_release(buffer);
+    }
+}
+
+int function main() {
+    run(true);
+    run(false);
+    print("conditional defer");
+    return 0;
+}
