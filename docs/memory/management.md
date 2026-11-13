@@ -653,3 +653,54 @@ marked initialized only when both branches agree, and completing a nested
 aggregate clears its stale partial marker.
 
 These checks are compile-time-only and add no runtime ownership state.
+
+## Deterministic cleanup (0.461-beta)
+
+Compiler-generated destruction and `defer` share one lexical cleanup stack.
+Each automatic entry is recorded when an owned binding is initialized. Explicit
+`defer` calls are appended when they are encountered. On scope exit the stack is
+consumed from the innermost scope outward and from the last entry to the first,
+which is reverse initialization/declaration order. Function parameters are
+initialized before the body, so body values are destroyed first and parameters
+last, in reverse parameter order.
+
+An explicit defer in the owner's own lexical scope replaces the automatic
+cleanup for that owner: both actions run at the same scope exit, so keeping both
+would call the same destructor twice. An unconditional defer may also replace an
+outer declaration's cleanup. A defer in a conditional scope keeps the outer
+automatic fallback; if the branch is not taken, the fallback still destroys the
+value, and if it is taken the explicit cleanup clears the slot so the fallback
+is a no-op. Moves follow the same rule: a transfer outside any conditional region
+proves the owner is gone on every path to its scope exit and removes the dead
+automatic action, while a move in a branch or loop body retains the fallback for
+the path where the move did not happen.
+
+A `for` initializer has its own cleanup scope. Its values live across the
+condition, body, and step, are destroyed on `break` or a false condition at the
+loop exit edge, are destroyed by `return`, and remain alive across `continue`.
+Body values are destroyed before initializer values. Nested aggregates recurse
+through owned fields in reverse field order; an uninitialized or moved field is
+zeroed, so its typed destructor receives a null handle and performs no release.
+
+Moving, returning, field-extracting, aggregate-packing, or transferring an owner
+after a defer captured it is rejected. The defer argument is evaluated at the
+defer statement; allowing a later transfer would give two owners to one
+allocation. Reassigning the same binding to a new owner remains valid: the defer
+releases the captured value and the automatically tracked binding releases the
+new value at scope exit.
+
+GC root frames are still function-activation state. Cleanup runs before every
+`return`, and the root frame closes after cleanup on each return edge; loop
+`break` and `continue` do not close the activation's frame. Native resources are
+released by their typed runtime destructors (`file.close`, `socket.close`,
+`mutex.destroy`, mapping/secure release), independently of GC reclamation and
+of `nrq_gc_root_unregister` for owned collector storage.
+
+The error/unwind model is not implemented. Its integration point is the same
+lexical cleanup stack: a future unwind edge must run the active entries down to
+the handler's scope depth before transferring control, in the same reverse order.
+No landing pads, exception state, or unwind tables are generated today.
+
+Raw `&` pointers remain a lower-level boundary and are not treated as ownership
+actions. Cleanup applies to bindings whose type or producer carries an owned
+resource, not to trivial values, borrows, or managed references.
