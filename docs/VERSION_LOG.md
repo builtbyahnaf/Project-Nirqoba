@@ -12,7 +12,28 @@ recorded below is made under that authority.
 
 ---
 
-## Version 0.453-beta (working build)
+## Version 0.457-beta (working build)
+
+### Summary of Changes (since `0.453-beta`):
+
+*Soundness-audit working build; `0.453-beta` remains the released `n-1` checkpoint.*
+
+- **Immutable borrows are read-only at every write boundary.** Dereference,
+  indexed, compound, and address-through-dereference targets now reject writes
+  through explicitly immutable borrowed fields and pointers.
+- **Mutable field borrows require mutable storage.** A `borrow mut` field can no
+  longer be initialized from an immutable binding, and borrowed fields cannot be
+  extracted into untracked raw pointers.
+- **Mutable aggregate aliases are rejected.** Copying an aggregate that holds a
+  `borrow mut` field, or placing conflicting mutable/immutable borrows of the
+  same owner path in one aggregate, is now diagnosed.
+- **Branch initialization state survives joins.** Partially initialized fields
+  and allocated nested values from either branch cannot be overwritten as if the
+  field were untouched; completed nested values are tracked without stale
+  partial markers.
+- **No runtime cost.** These are semantic checks only.
+
+## Version 0.453-beta (released)
 
 ### Summary of Changes (since `0.451-beta`):
 
