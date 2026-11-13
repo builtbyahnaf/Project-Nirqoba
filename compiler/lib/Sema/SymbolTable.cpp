@@ -252,7 +252,8 @@ void SymbolTable::set_pointer_ownership(const string& name,
                                         bool shared_allocation,
                                         std::string cleanup_callee,
                                         std::string borrow_owner,
-                                        BorrowPathSet borrow_paths) {
+                                        BorrowPathSet borrow_paths,
+                                        bool explicit_borrow) {
   for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
     auto found = scope->find(name);
     if (found != scope->end()) {
@@ -267,6 +268,7 @@ void SymbolTable::set_pointer_ownership(const string& name,
       found->second.cleanup_callee = std::move(cleanup_callee);
       found->second.borrow_owner = std::move(borrow_owner);
       found->second.borrow_paths = std::move(borrow_paths);
+      found->second.explicit_borrow = explicit_borrow;
       return;
     }
   }
@@ -470,6 +472,8 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
       destination.borrowed = then_symbol->borrowed || else_symbol->borrowed;
       destination.mutable_borrow = then_symbol->mutable_borrow ||
                                    else_symbol->mutable_borrow;
+      destination.explicit_borrow = then_symbol->explicit_borrow ||
+                                    else_symbol->explicit_borrow;
       destination.borrow_targets.clear();
       if (both_borrowed) {
         // Both paths are real possibilities after the merge. Conflict checks
@@ -555,6 +559,24 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
       add_field_borrows(*else_symbol);
       destination.shared_allocation = then_symbol->shared_allocation ||
                                       else_symbol->shared_allocation;
+      // Initialization state is path-sensitive. A field that is still
+      // uninitialized on either path must remain unavailable after the merge;
+      // otherwise a branch-local allocation could be overwritten wholesale and
+      // leaked. A field is initialized only when both paths initialized it.
+      destination.uninitialized_fields = then_symbol->uninitialized_fields;
+      destination.uninitialized_fields.insert(
+          else_symbol->uninitialized_fields.begin(),
+          else_symbol->uninitialized_fields.end());
+      destination.partially_initialized_fields =
+          then_symbol->partially_initialized_fields;
+      destination.partially_initialized_fields.insert(
+          else_symbol->partially_initialized_fields.begin(),
+          else_symbol->partially_initialized_fields.end());
+      destination.initialized_fields.clear();
+      for (const string& path : then_symbol->initialized_fields)
+        if (else_symbol->initialized_fields.find(path) !=
+            else_symbol->initialized_fields.end())
+          destination.initialized_fields.insert(path);
       destination.moved_fields = then_symbol->moved_fields;
       destination.moved_fields.insert(else_symbol->moved_fields.begin(),
                                       else_symbol->moved_fields.end());

@@ -73,6 +73,10 @@ struct Symbol {
   std::string cleanup_callee;
   bool borrowed = false;
   bool mutable_borrow = false;
+  // True when this binding was introduced by an explicit borrow contract
+  // (`borrow` parameter, returned borrow, or borrowed field), rather than a raw
+  // address-of pointer. Only explicit immutable borrows are read-only.
+  bool explicit_borrow = false;
   // The borrow is live on at least one branch after a merge, but not on every
   // path. Conflict checks must treat its field paths as possibly live, while
   // using the binding itself as a borrow requires a definite borrow.
@@ -159,7 +163,8 @@ class SymbolTable {
                              bool shared_allocation = false,
                              std::string cleanup_callee = {},
                              std::string borrow_owner = {},
-                             BorrowPathSet borrow_paths = {});
+                             BorrowPathSet borrow_paths = {},
+                             bool explicit_borrow = false);
   void set_borrowed_resource_domain(const std::string& name,
                                     std::string cleanup_callee);
   bool field_is_moved(const std::string& name, const std::string& path) const;

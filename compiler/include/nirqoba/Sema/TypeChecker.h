@@ -128,6 +128,17 @@ class TypeChecker {
   bool has_live_mutable_access(uint64_t allocation_id,
                                const BorrowPathSet& paths) const;
   void consume_field_move(Expr& expression, const Type& value_type);
+  // Rejects a write through an explicitly immutable borrowed pointer or field.
+  // Raw pointers produced by `&` are not treated as immutable borrows: their
+  // pointee mutability is checked by the existing owner/argument rules.
+  bool write_through_immutable_borrow(const Expr& target,
+                                      std::string& subject,
+                                      bool& is_field) const;
+  // True when this expression is a direct projection of a borrowed aggregate
+  // field. Such a pointer must stay inside its aggregate contract, because a
+  // raw copy would carry no owner/lifetime metadata.
+  bool borrowed_field_pointer(const Expr& expression,
+                              bool& mutable_borrow) const;
   // Records a read/write/escape/alias of a current borrowed parameter.
   void record_parameter_use(const Expr& expression, uint8_t effect);
   // Merges the callee's summary for one argument into the current function's
