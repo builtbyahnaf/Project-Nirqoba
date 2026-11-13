@@ -1,0 +1,7 @@
+{
+  "expect_exit": 0,
+  "expect_stdout": "loop resource closed\n",
+  "expect_ir_counts": {
+    "call i32 @nrq_file_close_handle": 1
+  }
+}

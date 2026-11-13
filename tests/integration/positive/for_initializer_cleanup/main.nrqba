@@ -1,0 +1,7 @@
+int function main() {
+    var index = 0;
+    for (var buffer = memory.shared_allocate<byte>(8); index < 0; index += 1) {
+    }
+    print(index);
+    return 0;
+}
