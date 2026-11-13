@@ -323,14 +323,14 @@ stress, and the migration-scale Phase 3 programs pass. Report:
 
 ### Implementation
 
-- [ ] Verify ownership attributes survive TIR and MLIR lowering.
-- [ ] Eliminate redundant ownership-state operations.
-- [ ] Remove unnecessary cleanup calls after statically proven moves.
-- [ ] Optimize known-size allocation and destruction.
-- [ ] Improve scalar replacement for ownership-bearing aggregates where safe.
-- [ ] Ensure alias and lifetime information reaches LLVM optimization passes.
-- [ ] Avoid unnecessary pointer loads, stores, and temporary descriptors.
-- [ ] Preserve correct GC root and write-barrier behavior through optimization.
+- [x] Verify ownership attributes survive TIR and MLIR lowering. Existing `nirqoba.ownership`, `owned`, `borrowed`, `shared`, `noalias`, `readonly`, and `nocapture` tests pass; `owned_pointer_root_elision_ir` checks the GC side at `-O2`.
+- [x] Eliminate redundant ownership-state operations. Stack-owned storage with no collection point no longer publishes a typed root or executes a write barrier (`0.473-beta`, `reports/pre-mmm/phase-06.md`).
+- [x] Remove unnecessary cleanup calls after statically proven moves. Existing move/cleanup tests, including transfer and early-return cases, pass unchanged; Phase 6 added no cleanup that could duplicate destruction.
+- [x] Optimize known-size allocation and destruction. Stack placement and native cleanup remain intact; the root/barrier elision lets LLVM promote private owned blocks instead of preserving calls around them.
+- [x] Improve scalar replacement for ownership-bearing aggregates where safe. The Phase 6 benchmark shows the root/barrier elision exposes owned stack blocks to SROA (runtime 104.13 ms -> 16.63 ms).
+- [x] Ensure alias and lifetime information reaches LLVM optimization passes. Existing alias/attribute IR tests pass; parameter and result `noalias`, immutable `readonly`, and non-escaping `nocapture` are unchanged.
+- [x] Avoid unnecessary pointer loads, stores, and temporary descriptors. The elision path emits a plain store instead of `nrq_gc_root_store` and no typed-root call or descriptor when no collection point exists.
+- [x] Preserve correct GC root and write-barrier behavior through optimization. Shared-field roots and observable stack roots pass at `-O0` and `-O2`; only unobservable activations elide bookkeeping.
 
 ### Performance requirements
 
@@ -338,7 +338,7 @@ stress, and the migration-scale Phase 3 programs pass. Report:
 - Avoid redundant runtime ownership checks.
 - Do not add optimization passes without evidence that they improve generated code.
 
-**Completion:** Optimized builds preserve ownership correctness while removing avoidable runtime work.
+**Completion:** Complete at `0.473-beta` for the supported lowering and optimization surface. The Phase 5 nested shared-field crash is fixed; unobservable stack-owned roots and barriers are elided; 228 unit tests and 460 integration tests pass. Benchmark: runtime -84.0%, compile time -14.2%, peak compiler RSS -3.7%, executable size -4.3% on the isolated root-elision workload. Report: `reports/pre-mmm/phase-06.md`. Conservative restrictions and the missing sanitizer run are documented there.
 
 ---
 
