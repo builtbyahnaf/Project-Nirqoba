@@ -73,6 +73,30 @@ destroyed. Custom allocators cannot currently be reset or declared directly in
 Nirqoba source, and container integration is not supported;
 `memory.reallocate` reaches them through the generic allocate-copy-free path.
 
+## Owned allocation registry (0.465-beta)
+
+Every live explicit allocation has an ownership record so invalid and repeated
+frees can be rejected. The registry is split into eight pointer-selected shards,
+and each shard stores its records inline in a linear-probing table instead of an
+`unordered_map` node. Ordinary process-default allocations and releases skip the
+global allocator mutex and the operation pin because that allocator cannot be
+destroyed or reset; they take only the owning shard's mutex. Explicit
+per-allocation handles still take the global mutex and pin because their
+allocator can be reset or destroyed.
+
+`memory.reallocate` moves the ownership record to the shard selected by the new
+pointer. Shared releases look up the record's shared flag and update the
+reference count under the same record lock. Profiler counters are guarded by a
+dedicated lock and an atomic enable flag, so a capture sees a consistent count
+while allocations continue. A table grows when live records exceed 70% of its
+capacity and compacts when a mostly empty table would keep probing a large
+tombstone field; churn at a stable live count does not grow it.
+
+The default path's measured improvement is documented in
+`reports/pre-mmm/phase-04.md`. It changes no ownership rule: the record still
+identifies the allocator, size, alignment, and shared state, and destruction is
+still exactly once.
+
 Use `memory.profiler.start()`, `.capture()`, and `.stop()` to track explicit
 allocator memory. Secure buffers allocated through `memory.secure_allocate`
 are also tracked and can be released with the zeroing
