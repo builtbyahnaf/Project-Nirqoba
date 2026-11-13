@@ -427,8 +427,15 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
           continue;
         }
       }
-      destination.allocation_id = then_symbol->allocation_id != 0
-          ? then_symbol->allocation_id : else_symbol->allocation_id;
+      // Keep the active borrow's owner identity when only one branch borrows.
+      // A null/ordinary pointer assignment can allocate a fresh id on the
+      // inactive branch; preferring that id would hide the still-possible
+      // borrow from conflict checks after the merge.
+      destination.allocation_id = one_sided_borrow
+          ? (then_symbol->borrowed ? then_symbol->allocation_id
+                                   : else_symbol->allocation_id)
+          : (then_symbol->allocation_id != 0
+                 ? then_symbol->allocation_id : else_symbol->allocation_id);
       destination.definitely_null = then_symbol->definitely_null &&
                                     else_symbol->definitely_null;
       destination.moved = then_symbol->moved || else_symbol->moved;
