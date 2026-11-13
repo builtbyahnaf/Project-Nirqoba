@@ -1095,6 +1095,14 @@ std::mutex allocator_mutex;
 std::unordered_map<void*, std::unique_ptr<Allocator>> allocator_handles;
 std::unordered_map<Allocator*, size_t> selected_counts;
 std::unordered_map<void*, uint64_t> shared_reference_counts;
+// Shared allocations whose explicit storage contains managed references need a
+// root for as long as the last reference token exists. The runtime records the
+// descriptor at allocation so final release can unregister it before freeing.
+struct SharedRootMetadata {
+  size_t object_size = 0;
+  std::vector<size_t> offsets;
+};
+std::unordered_map<void*, SharedRootMetadata> shared_roots;
 std::mutex memory_profile_mutex;
 NrqMemoryProfile memory_profile{};
 std::atomic<bool> memory_profiler_enabled{false};
@@ -1502,6 +1510,8 @@ int32_t nrq_memory_shared_release(void* pointer) {
   if (!pointer) return 0;
   Allocator* allocator = nullptr;
   AllocationShard* shard = nullptr;
+  bool rooted = false;
+  SharedRootMetadata root_metadata;
   {
     std::lock_guard<std::mutex> lock(allocator_mutex);
     auto shared = shared_reference_counts.find(pointer);
@@ -1516,11 +1526,24 @@ int32_t nrq_memory_shared_release(void* pointer) {
     if (!owner || owner->owner.operation_in_flight)
       return 0;
     allocator = owner->owner.allocator;
-    // A zero count reserves this final release. Retain and competing releases
-    // cannot claim the pointer while its allocator callback runs unlocked.
+    auto root = shared_roots.find(pointer);
+    if (root != shared_roots.end()) {
+      root_metadata = std::move(root->second);
+      shared_roots.erase(root);
+      rooted = true;
+    }
+    // A zero count reserves this final release. The live ownership record keeps
+    // the allocator alive until the callback and record erase complete; destroy
+    // and reset scan that record and refuse while it is in flight.
     shared->second = 0;
     owner->owner.operation_in_flight = true;
   }
+
+  // Remove the collector-visible root before the storage can be freed. The
+  // reference count is already reserved at zero, so no concurrent retain can
+  // resurrect the object between these two steps.
+  if (rooted)
+    nrq_gc_root_unregister(reinterpret_cast<void**>(pointer));
 
   bool released = false;
   bool callback_failed = false;
@@ -1549,11 +1572,54 @@ int32_t nrq_memory_shared_release(void* pointer) {
       shard->changed.notify_all();
     }
   }
+  if (!released && rooted) {
+    // The allocator rejected the release (a stack allocator requires LIFO), so
+    // the object is still live. Restore its root before reporting the failure.
+    nrq_gc_root_register_typed(pointer, root_metadata.object_size,
+                               root_metadata.offsets.data(),
+                               root_metadata.offsets.size());
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    try {
+      shared_roots.emplace(pointer, std::move(root_metadata));
+    } catch (...) {
+      nrq_runtime_fatal("failed to restore a shared allocation's GC root");
+    }
+  }
   if (callback_failed)
     nrq_runtime_fatal("allocator deallocation callback failed during shared release");
   if (!released)
     nrq_runtime_fatal("stack allocator allocations must be deallocated in LIFO order");
   return 1;
+}
+
+void* nrq_memory_shared_allocate_rooted(size_t bytes, size_t alignment,
+                                        size_t object_size,
+                                        const size_t* reference_offsets,
+                                        size_t reference_count) {
+  if (object_size == 0 || reference_count == 0 || !reference_offsets)
+    return nullptr;
+  for (size_t index = 0; index < reference_count; ++index) {
+    if (reference_offsets[index] > object_size ||
+        sizeof(void*) > object_size - reference_offsets[index])
+      return nullptr;
+  }
+  void* pointer = nrq_memory_shared_allocate(bytes, alignment);
+  if (!pointer) return nullptr;
+  SharedRootMetadata metadata;
+  metadata.object_size = object_size;
+  try {
+    metadata.offsets.assign(reference_offsets,
+                            reference_offsets + reference_count);
+    nrq_gc_root_register_typed(pointer, object_size, reference_offsets,
+                               reference_count);
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    shared_roots.emplace(pointer, std::move(metadata));
+  } catch (...) {
+    nrq_gc_root_unregister(reinterpret_cast<void**>(pointer));
+    nrq_memory_shared_release(pointer);
+    return nullptr;
+  }
+  return pointer;
 }
 
 uint64_t nrq_memory_shared_count(void* pointer) {

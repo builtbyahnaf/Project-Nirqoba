@@ -114,6 +114,12 @@ void nrq_memory_array_bounds_check(uint64_t index, uint64_t length);
 void nrq_memory_array_bounds_fail(void);
 void nrq_memory_array_range_check(uint64_t start, uint64_t count, uint64_t length);
 void* nrq_memory_shared_allocate(size_t bytes, size_t alignment);
+// Shared allocation whose storage contains managed references. The descriptor
+// is registered as a GC root and is removed on the final shared release.
+void* nrq_memory_shared_allocate_rooted(size_t bytes, size_t alignment,
+                                        size_t object_size,
+                                        const size_t* reference_offsets,
+                                        size_t reference_count);
 void* nrq_memory_shared_retain(void* pointer);
 int32_t nrq_memory_shared_release(void* pointer);
 uint64_t nrq_memory_shared_count(void* pointer);

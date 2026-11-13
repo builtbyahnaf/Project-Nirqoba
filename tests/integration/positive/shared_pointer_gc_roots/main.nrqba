@@ -1,0 +1,30 @@
+// A shared object is reference-counted, not collector-managed, but its managed
+// fields still need a root while any shared reference token exists. The final
+// release must remove that root before freeing the explicit storage.
+struct Node {
+    int value;
+    managed<Node> child;
+}
+
+managed<Node> function make_child() {
+    var child = array.allocate<Node>(1);
+    child[0].value = 73;
+    return child;
+}
+
+int function main() {
+    var holder = memory.shared_allocate<Node>(64);
+    (*holder).child = make_child();
+    var reference = memory.shared_retain(holder);
+    memory.shared_release(holder);
+    gc.collect();
+    gc.collect();
+    var while_shared = gc.get_statistics();
+    print(while_shared.live_objects);
+    print((*reference).child[0].value);
+    memory.shared_release(reference);
+    gc.collect();
+    var after_release = gc.get_statistics();
+    print(after_release.live_objects);
+    return 0;
+}

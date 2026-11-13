@@ -3396,6 +3396,31 @@ class FunctionTranslator {
           mlir::Value alignment = builder_.create<mlir::LLVM::ConstantOp>(
               loc, builder_.getI64Type(),
               builder_.getI64IntegerAttr(type_alignment(op.result.type.element_type()))).getResult();
+          std::vector<uint64_t> root_offsets;
+          collect_managed_reference_offsets(
+              op.result.type.element_type(), 0, root_offsets);
+          if (!root_offsets.empty()) {
+            mlir::Value offsets_slot = reference_layout_descriptor(root_offsets, loc);
+            if (!offsets_slot) return false;
+            auto fn = ensure_runtime_fn(
+                module_, builder_, "nrq_memory_shared_allocate_rooted",
+                llvm_ptr_type(ctx_),
+                {builder_.getI64Type(), builder_.getI64Type(),
+                 builder_.getI64Type(), llvm_ptr_type(ctx_),
+                 builder_.getI64Type()});
+            mlir::Value object_size = builder_.create<mlir::LLVM::ConstantOp>(
+                loc, builder_.getI64Type(),
+                builder_.getI64IntegerAttr(type_size(op.result.type.element_type()))).getResult();
+            mlir::Value reference_count = builder_.create<mlir::LLVM::ConstantOp>(
+                loc, builder_.getI64Type(),
+                builder_.getI64IntegerAttr(
+                    static_cast<int64_t>(root_offsets.size()))).getResult();
+            set(op.result, builder_.create<mlir::LLVM::CallOp>(
+                loc, fn, mlir::ValueRange{bytes, alignment, object_size,
+                                          offsets_slot, reference_count})
+                               .getResult());
+            return true;
+          }
           auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_shared_allocate",
               llvm_ptr_type(ctx_), {builder_.getI64Type(), builder_.getI64Type()});
           set(op.result, builder_.create<mlir::LLVM::CallOp>(
