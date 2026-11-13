@@ -1,0 +1,16 @@
+struct Inner { int a; int b; }
+struct Outer { Inner inner; int extra; }
+
+int function main() {
+    var o: Outer = uninit;
+    if (1 == 1) {
+        o.inner.a = 1;
+        o.inner.b = 2;
+    } else {
+        o.inner.a = 3;
+        o.inner.b = 4;
+    }
+    o.extra = 5;
+    print(o.inner.a + o.inner.b + o.extra);
+    return 0;
+}
