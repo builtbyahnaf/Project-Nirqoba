@@ -12,6 +12,35 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.469-beta (working build)
+
+### Summary of Changes (since `0.465-beta`):
+
+*Pre-MMM Phase 5 GC/ownership-boundary working build; `0.457-beta` remains the released `n-1` checkpoint.*
+
+- **Explicitly owned pointer storage can now contain managed fields safely.**
+  Heap and stack-placed `memory.allocate<T>` publish typed GC roots for the
+  managed offsets in `T`; reallocation moves the root only on success, and
+  deallocation removes it before the block is freed.
+- **Stack-owned roots end with the activation frame.** A function whose only
+  managed reference is inside stack-placed owned storage is marked GC-using, and
+  the root is published inside its frame instead of leaking past return.
+- **Shared storage keeps its managed fields rooted until the final release.**
+  Non-final shared releases retain the root; the last release unregisters it
+  before freeing, and restores it if the allocator rejects the free.
+- **Explicit allocator-handle release no longer takes a redundant operation
+  pin.** Release, reallocation, and final shared release use the live ownership
+  record; destroy/reset already refuse while that record is live or in flight.
+  Allocation keeps its pin because no record exists before the allocator returns.
+- **Measured explicit-handle contention (1/2/4 workers):** 2,330/5,005/16,068 us
+  at `0.465-beta` versus 1,840/3,650/8,622 us, improvements of 21.0%, 27.1%, and
+  46.3%. The explicit path remains slower than the default path.
+- **Validation:** 228 unit tests and 455 integration tests pass. Managed fields
+  remain visible across collection in heap, stack, reallocated, cleanup-exit, and
+  shared probes. A pre-existing compiler crash for aggregate fields declared as
+  `shared ptr T`/`owned ptr T` when `T` contains managed fields remains a known
+  limitation.
+
 ## Version 0.465-beta (working build)
 
 ### Summary of Changes (since `0.461-beta`):
