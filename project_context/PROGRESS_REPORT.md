@@ -2447,7 +2447,7 @@ or exactly-once destruction rule changed, and GC remains non-default.
 | Check | Result |
 |---|---|
 | Clean `RelWithDebInfo` build | PASS |
-| Unit suite | 224/224 on the final direct run; known GC stress flake reproduced in 2 of 4 earlier runs |
+| Unit suite | 225/225 on the final direct run; known GC stress flake reproduced in 2 of 4 earlier runs |
 | Integration suite | 450/450 |
 | Migration-scale Phase 3 aggregate program | PASS (`5513361`) |
 | Migration-scale Phase 3 loop program | PASS (`252200`) |
@@ -2461,7 +2461,7 @@ No ASan/UBSan run was available in the MSVC configuration. Evidence is the full
 suites, exact profiler assertions, cross-thread stress, raw IR/cleanup counts from
 Phase 3, and the migration-scale programs. During final clean verification,
 `GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage` segfaulted in 2 of 4
-direct full-suite runs; the final direct run passed 224/224, the test passes in
+direct full-suite runs; the final direct run passed 225/225, the test passes in
 isolation, and five full runs under gdb passed. This is the same pre-existing GC
 stress flake recorded in Entry #019 and remains separate work.
 
