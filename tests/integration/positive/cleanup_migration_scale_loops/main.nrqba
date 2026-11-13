@@ -1,0 +1,25 @@
+// Migration-scale loop cleanup: a for-initializer owner crosses condition,
+// body, step, continue, and break. Nested body owners must be released on
+// every iteration path, and the initializer must be released exactly once at
+// the loop exit edge.
+int function main() {
+    var total = 0;
+    for (var seed = memory.owned_array<int>(4); total < 500000; total += seed[0]) {
+        seed[0] = total % 7 + 1;
+        {
+            var inner = memory.allocate<byte>(32);
+            inner[0] = (total % 251) as byte;
+            inner[31] = ((total * 3) % 251) as byte;
+            total += inner[0] as int + inner[31] as int;
+            if (total % 11 == 0) {
+                total += 1;
+                continue;
+            }
+            if (total > 250000 && total % 97 == 0) {
+                break;
+            }
+        }
+    }
+    print(total);
+    return 0;
+}
