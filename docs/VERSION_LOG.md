@@ -12,6 +12,34 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.473-beta (working build)
+
+### Summary of Changes (since `0.469-beta`):
+
+*Pre-MMM Phase 6 compiler-lowering and optimization working build; `0.457-beta` remains the released `n-1` checkpoint.*
+
+- **Shared pointer aggregate fields resolve their pointee layout.** The Phase 5
+  crash and out-of-bounds GEP for `shared ptr T` fields when `T` contains managed
+  fields are fixed. The active-name cycle guard still prevents recursive
+  expansion.
+- **Unobservable stack-owned roots and write barriers are elided.** A stack-owned
+  block with managed fields publishes no typed root and uses a plain store when
+  the activation has no collection point. Calls that may collect and loop backedges
+  retain the root and barrier; heap, shared, and observable stack storage are
+  unchanged.
+- **Ownership and alias attributes remain intact.** `noalias`, `readonly`,
+  `nocapture`, ownership spelling, cleanup ordering, and exactly-once destruction
+  pass the existing IR and integration cases through `-O0` and `-O2`.
+- **Isolated benchmark (`root_elision`):** runtime 104.13 ms -> 16.63 ms
+  (-84.0%), compile 56.9 ms -> 48.8 ms (-14.2%), compiler peak RSS 29.8 MB ->
+  28.7 MB (-3.7%), executable 94,208 B -> 90,112 B (-4.3%). The runtime gain is
+  from exposing SROA after removing unobservable bookkeeping, not from weakening
+  a check.
+- **Validation:** 228 unit tests and 460 integration tests pass, including the
+  new shared-field O0/O2 cases and root-elision runtime/IR cases. No ASan/UBSan
+  run is available in the MSVC configuration; the Phase 4 GC stress flake remains
+  separate.
+
 ## Version 0.469-beta (working build)
 
 ### Summary of Changes (since `0.465-beta`):
