@@ -101,7 +101,9 @@ automatic collection is currently active, without affecting explicit
 
 Explicit allocations use the default general allocator unless the current
 thread selects another allocator. These allocations are not visible to the GC.
-See [allocator strategies](allocators.md) for selection and lifetime rules.
+See [allocator strategies](allocators.md) for selection and lifetime rules,
+including the sharded inline ownership registry used by the default path
+(0.465-beta).
 
 `defer call(...)` captures call arguments when registered and runs calls in
 LIFO order when a lexical block exits, including return, break, and continue.
