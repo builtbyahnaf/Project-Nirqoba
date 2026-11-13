@@ -1,0 +1,155 @@
+{
+  "environment": {
+    "baseline_compiler": "nirqoba compiler version 0.461-beta (Phase 6)",
+    "current_compiler": "nirqoba compiler version 0.465-beta (Phase 6)",
+    "runs": 9,
+    "timer": "time.cycles() around the workload only",
+    "os": "Windows_NT"
+  },
+  "results": [
+    {
+      "workload": "allocation_heavy",
+      "source": "workload_alloc.nrqba",
+      "iterations": 1000000,
+      "checksum": 249996480,
+      "baseline": {
+        "median": 182829660,
+        "mean": 183442019.66666666,
+        "min": 167317970,
+        "max": 196086884,
+        "samples": [
+          167317970,
+          172646979,
+          182829660,
+          194983848,
+          196086884,
+          181801184,
+          191566751,
+          189642598,
+          174102303
+        ]
+      },
+      "current": {
+        "median": 131792268,
+        "mean": 133010431.22222222,
+        "min": 128106176,
+        "max": 141818724,
+        "samples": [
+          130897821,
+          132863572,
+          130429489,
+          134028040,
+          128106176,
+          141818724,
+          130421299,
+          131792268,
+          136736492
+        ]
+      },
+      "baseline_cycles_per_iteration": 182.82966,
+      "current_cycles_per_iteration": 131.792268,
+      "baseline_memory": {
+        "peak_wset_bytes": 10362880
+      },
+      "current_memory": {
+        "peak_wset_bytes": 10350592
+      }
+    },
+    {
+      "workload": "destruction_heavy",
+      "source": "workload_destroy.nrqba",
+      "iterations": 300000,
+      "checksum": 212766730918,
+      "baseline": {
+        "median": 125627815,
+        "mean": 126257381,
+        "min": 121097746,
+        "max": 134624815,
+        "samples": [
+          123554736,
+          121097746,
+          124848791,
+          128292944,
+          134624815,
+          125627815,
+          129977696,
+          125851286,
+          122440600
+        ]
+      },
+      "current": {
+        "median": 100470479,
+        "mean": 101905221.22222222,
+        "min": 98793813,
+        "max": 105560803,
+        "samples": [
+          98793813,
+          99551920,
+          100470479,
+          99991540,
+          104443090,
+          105560803,
+          105444622,
+          98901489,
+          103989235
+        ]
+      },
+      "baseline_cycles_per_iteration": 418.75938333333335,
+      "current_cycles_per_iteration": 334.90159666666665,
+      "baseline_memory": {
+        "peak_wset_bytes": 10391552
+      },
+      "current_memory": {
+        "peak_wset_bytes": 10395648
+      }
+    },
+    {
+      "workload": "mixed",
+      "source": "workload_mixed.nrqba",
+      "iterations": 200000,
+      "checksum": 60027437998,
+      "baseline": {
+        "median": 61573000,
+        "mean": 61850221.666666664,
+        "min": 58808646,
+        "max": 65992313,
+        "samples": [
+          61573000,
+          58808646,
+          59853919,
+          59897199,
+          65992313,
+          64162759,
+          58854408,
+          63550047,
+          63959704
+        ]
+      },
+      "current": {
+        "median": 49748902,
+        "mean": 49891038.333333336,
+        "min": 47870249,
+        "max": 52633657,
+        "samples": [
+          48105975,
+          47870249,
+          51592659,
+          48687446,
+          52633657,
+          49253884,
+          50152887,
+          50973686,
+          49748902
+        ]
+      },
+      "baseline_cycles_per_iteration": 307.865,
+      "current_cycles_per_iteration": 248.74451,
+      "baseline_memory": {
+        "peak_wset_bytes": 10407936
+      },
+      "current_memory": {
+        "peak_wset_bytes": 10424320
+      }
+    }
+  ]
+}
