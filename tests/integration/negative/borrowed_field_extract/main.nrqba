@@ -1,0 +1,15 @@
+struct Doc { borrow ptr int value; }
+
+int function main() {
+    @Nullable var escaped: ptr int = nullptr;
+    {
+        var x = 5;
+        var d = Doc { value: &x };
+        escaped = d.value;
+    }
+    if (escaped == nullptr) {
+        return 1;
+    }
+    print(*escaped);
+    return 0;
+}
