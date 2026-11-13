@@ -490,6 +490,12 @@ bool TypeChecker::check(Program& program) {
       sig.parameter_resource_domains.push_back(param.resource_domain);
       sig.parameter_names.push_back(param.name);
     }
+    const auto return_source = std::find(sig.parameter_names.begin(),
+                                          sig.parameter_names.end(),
+                                          sig.return_borrow_parameter);
+    if (return_source != sig.parameter_names.end())
+      sig.return_borrow_parameter_index = static_cast<int>(
+          return_source - sig.parameter_names.begin());
 
     if (!functions_.emplace(function->name(), move(sig)).second) {
       diagnostics_.error(diag::kDuplicateFunction, function->location(),
@@ -654,6 +660,12 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
         sig.parameter_resource_domains.push_back(param.resource_domain);
         sig.parameter_names.push_back(param.name);
       }
+      const auto return_source = std::find(sig.parameter_names.begin(),
+                                            sig.parameter_names.end(),
+                                            sig.return_borrow_parameter);
+      if (return_source != sig.parameter_names.end())
+        sig.return_borrow_parameter_index = static_cast<int>(
+            return_source - sig.parameter_names.begin());
 
       // Every module is reachable by its qualified name, including the entry
       // module, so `import app; app.helper()` keeps working.
@@ -1072,17 +1084,15 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
         symbol.cleanup_callee = cleanup_for_type(signature->return_type);
         if (symbol.cleanup_callee.empty()) symbol.cleanup_callee = "memory.deallocate";
       if (signature && signature->returns_borrowed) {
-        const auto source_parameter = std::find(
-            signature->parameter_names.begin(), signature->parameter_names.end(),
-            signature->return_borrow_parameter);
-        if (source_parameter == signature->parameter_names.end()) {
+        const int source_index = signature->return_borrow_parameter_index;
+        if (source_index < 0) {
           diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
                              "borrow return refers to an unknown source parameter");
         } else {
-          const size_t source_index = static_cast<size_t>(
-              source_parameter - signature->parameter_names.begin());
-          const Symbol* source = source_index < call.arguments().size()
-              ? find_borrow_origin(*call.arguments()[source_index]) : nullptr;
+          const Symbol* source = static_cast<size_t>(source_index) <
+                                         call.arguments().size()
+              ? find_borrow_origin(*call.arguments()[static_cast<size_t>(source_index)])
+              : nullptr;
           if (!source || source->moved || !source->allocation_id ||
               (source->borrowed && !borrow_owner_is_live(*source))) {
             diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
@@ -1489,14 +1499,10 @@ const Symbol* TypeChecker::find_borrow_origin(const Expr& expression) const {
     return find_borrow_origin(*call.arguments().front());
   const FunctionSignature* signature = find_function(call.callee());
   if (!signature || !signature->returns_borrowed) return nullptr;
-  const auto source_parameter = std::find(
-      signature->parameter_names.begin(), signature->parameter_names.end(),
-      signature->return_borrow_parameter);
-  if (source_parameter == signature->parameter_names.end()) return nullptr;
-  const size_t source_index = static_cast<size_t>(
-      source_parameter - signature->parameter_names.begin());
-  if (source_index >= call.arguments().size()) return nullptr;
-  return find_borrow_origin(*call.arguments()[source_index]);
+  const int source_index = signature->return_borrow_parameter_index;
+  if (source_index < 0 || static_cast<size_t>(source_index) >= call.arguments().size())
+    return nullptr;
+  return find_borrow_origin(*call.arguments()[static_cast<size_t>(source_index)]);
 }
 
 BorrowPathSet TypeChecker::find_borrow_paths(const Expr& expression) const {
@@ -1524,14 +1530,10 @@ BorrowPathSet TypeChecker::find_borrow_paths(const Expr& expression) const {
     return find_borrow_paths(*call.arguments().front());
   const FunctionSignature* signature = find_function(call.callee());
   if (!signature || !signature->returns_borrowed) return {};
-  const auto source_parameter = std::find(
-      signature->parameter_names.begin(), signature->parameter_names.end(),
-      signature->return_borrow_parameter);
-  if (source_parameter == signature->parameter_names.end()) return {};
-  const size_t source_index = static_cast<size_t>(
-      source_parameter - signature->parameter_names.begin());
-  if (source_index >= call.arguments().size()) return {};
-  return find_borrow_paths(*call.arguments()[source_index]);
+  const int source_index = signature->return_borrow_parameter_index;
+  if (source_index < 0 || static_cast<size_t>(source_index) >= call.arguments().size())
+    return {};
+  return find_borrow_paths(*call.arguments()[static_cast<size_t>(source_index)]);
 }
 
 void TypeChecker::consume_field_move(Expr& expression, const Type& value_type) {
@@ -4872,8 +4874,17 @@ Type TypeChecker::check_call(CallExpr& call) {
         call.arguments()[i]->kind() == Expr::Kind::Unary &&
         static_cast<const UnaryExpr&>(*call.arguments()[i]).op() ==
             UnaryOp::AddressOf;
+    bool borrowed_result = false;
+    if (call.arguments()[i]->kind() == Expr::Kind::Call) {
+      const auto& argument_call =
+          static_cast<const CallExpr&>(*call.arguments()[i]);
+      const FunctionSignature* argument_signature =
+          find_function(argument_call.callee());
+      borrowed_result = argument_signature &&
+                        argument_signature->returns_borrowed;
+    }
     const Symbol* source = find_borrow_origin(*call.arguments()[i]);
-    if (source && !direct_address_of &&
+    if (source && !direct_address_of && !borrowed_result &&
         source->type != sig.parameter_types[i]) source = nullptr;
     if (source && direct_address_of && source->allocation_id == 0)
       symbols_.ensure_allocation_id(source->name, next_allocation_id_++);

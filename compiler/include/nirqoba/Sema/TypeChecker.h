@@ -36,6 +36,9 @@ struct FunctionSignature {
   bool returns_borrowed = false;
   std::string return_resource_domain;
   std::string return_borrow_parameter;
+  // Resolved once when the signature is built; callers reuse this compact
+  // effect summary instead of searching the parameter-name vector per call.
+  int return_borrow_parameter_index = -1;
   bool returns_mutable_borrow = false;
 };
 
