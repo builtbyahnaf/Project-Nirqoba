@@ -1600,14 +1600,16 @@ bool TypeChecker::contains_borrowed_field(
   return false;
 }
 
-std::vector<BorrowTarget> TypeChecker::aggregate_borrows_for(const Expr& expr) const {
+const std::vector<BorrowTarget>& TypeChecker::aggregate_borrows_for(
+    const Expr& expr) const {
+  static const std::vector<BorrowTarget> empty;
   const auto found = aggregate_borrows_.find(&expr);
   if (found != aggregate_borrows_.end()) return found->second;
   if (expr.kind() == Expr::Kind::Name) {
     const Symbol* symbol = find_root_symbol(expr, symbols_);
     if (symbol) return symbol->field_borrows;
   }
-  return {};
+  return empty;
 }
 
 void TypeChecker::validate_aggregate_borrow_lifetime(
