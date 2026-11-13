@@ -190,6 +190,13 @@ tests extend the same checks to the default registry and shard transitions.
 - **No sanitizer run.** The MSVC configuration has no ASan pass. Evidence is the
   full suites, exact profiler assertions, cross-thread stress, and migration
   programs.
+- **The known pre-existing GC stress flake remains.** During final clean
+  verification, `GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage`
+  segfaulted in 2 of 4 direct full-suite runs. The final direct run passed
+  224/224, the test passes in isolation, and five full runs under gdb passed. It
+  is the same test recorded in Phase 3 and predates this work; no allocator test
+  or ownership path is involved. It is not fixed here and remains separate GC
+  test-hardening work.
 - **No multi-thread language-level allocation workload.** Concurrency is
   measured through the focused C++ allocator benchmark; the language integration
   programs are single-threaded. This is called out rather than extrapolated.
