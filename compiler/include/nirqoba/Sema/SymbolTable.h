@@ -48,6 +48,16 @@ struct BorrowPathSet {
   bool has_field_projection() const;
 };
 
+// A secondary possible borrow target after a branch merge. The primary target
+// stays in Symbol's existing fields so ordinary single-owner borrows do not
+// allocate this representation.
+struct BorrowTarget {
+  uint64_t allocation_id = 0;
+  std::string owner;
+  BorrowPathSet paths;
+  bool mutable_borrow = false;
+};
+
 struct Symbol {
   std::string name;
   Type type;
@@ -80,6 +90,9 @@ struct Symbol {
   // overlapping access is rejected while disjoint fields stay available. An
   // empty path means the borrow covers the whole binding.
   BorrowPathSet borrow_paths;
+  // Additional owner/path possibilities selected by mutually exclusive branches.
+  // Empty for ordinary borrows; populated only when branch owners differ.
+  std::vector<BorrowTarget> borrow_targets;
   // Set for '@Nullable' pointer bindings: the value may be nullptr, so dereference
   // requires a non-null proof in the current branch.
   bool nullable = false;
