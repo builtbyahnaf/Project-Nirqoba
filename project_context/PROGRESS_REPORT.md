@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.457-beta` |
+| Current Working Version | `0.461-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-13 14:48:47` |
-| Report Entries | `18` |
+| Last Report Update | `2026-11-13 15:29:23` |
+| Report Entries | `19` |
 
 ---
 
@@ -2258,6 +2258,135 @@ smoke benchmark, not a full compiler benchmark.
 ---
 
 **End of Entry #018**
+
+## Entry #019 — Pre-MMM Phase 3: Deterministic Destruction
+
+**Version:** `0.461-beta`  
+**Date:** `2026-11-13 15:29:23`  
+**Scope:** `Cleanup lowering / defer / ownership transfers / loops / GC roots / native resources`  
+**Status:** `Completed for supported exits; error/unwind cleanup future work`
+
+### 1. Overview
+
+Phase 3 started from the committed `0.457-beta` audit build. The existing
+cleanup path already used deferred calls and nulled moved sources, so the audit
+focused on ownership state that was not reflected in lowering. Two correctness
+bugs were reproduced:
+
+1. A defer followed by a transfer of the same owner produced a runtime
+   `memory.deallocate received an invalid or already freed pointer` abort.
+2. A `for` initializer owner remained live until the enclosing block ended,
+   instead of being destroyed at the loop boundary.
+
+Two lower-severity quality gaps were also confirmed: automatic cleanup was still
+emitted after proven moves, and an explicit defer duplicated the automatic
+destruction action (the duplicate received a null slot, so it did not free twice).
+
+### 2. Implementation
+
+- **Deferred-owner transfer rejection.** Sema records the allocation id of every
+  pending deferred release. Moving, returning, extracting a field, packing into
+  an aggregate, or passing that owner to an owning parameter after the defer is
+  rejected with `NRQ3033`. Reassigning the binding to a fresh owner remains legal.
+- **Shared lexical cleanup ordering.** Automatic and explicit actions remain on
+  one stack. Scope exit consumes innermost scope first and reverse declaration/
+  defer order. Body values precede parameters; aggregate fields are destroyed in
+  reverse field order.
+- **Transfer liveness in TIR.** A conditional-region depth distinguishes a
+  transfer that dominates its scope exit from one that runs only on a branch or
+  loop iteration. Proven transfers deactivate the automatic cleanup. Conditional
+  moves retain the fallback for the untaken path.
+- **Defer precedence.** A same-scope defer, or an unconditional defer of an outer
+  owner, supersedes the automatic action at the same exit. Conditional defers
+  keep the outer fallback and clear the slot when executed.
+- **Loop cleanup scope.** `for` now owns a deferred-expression scope containing
+  the initializer. The exit edge releases it for `break` and normal termination;
+  `return` releases it through the ordinary function cleanup path; `continue`
+  keeps it alive through the step.
+- **GC and native separation.** Every `return` runs cleanup and then closes the
+  activation root frame. Loop exits do not close the activation frame. Native
+  resource destructors remain separate from GC root unregistration and collector
+  storage release.
+
+### 3. Verification
+
+| Check | Result |
+|---|---|
+| Clean `RelWithDebInfo` build | PASS |
+| Unit suite | 220/220 |
+| Integration suite | 448/448 |
+| Deferred-owner move/return/call negatives | PASS |
+| Transfer cleanup IR counts | PASS |
+| Defer owner/parameter IR counts | PASS |
+| Conditional defer/move both runtime paths | PASS |
+| For-initializer memory and file cleanup | PASS |
+| Early-return GC frame closure | PASS |
+| Native/GC separation | PASS |
+| 2,000-iteration nested cleanup stress | PASS |
+
+No ASan/UBSan run was available in the MSVC configuration. Verification used
+raw LLVM IR cleanup counts, runtime execution, full suites, and the stress case.
+
+### 4. Benchmark
+
+Cleanup-heavy compile and runtime benchmarks compare detached `0.457-beta`
+against Phase 3. Three trials produced:
+
+- compile cleanup median-of-medians: `45.144 ms` baseline vs `43.937 ms`
+  Phase 3 (about 2.7% lower);
+- runtime cleanup median-of-medians: `467.828 ms` baseline vs `471.902 ms`
+  Phase 3 (0.9% higher, within noise);
+- runtime cleanup mean: `541.021 ms` baseline vs `479.543 ms` Phase 3 (lower,
+  but not claimed as a speedup because the medians overlap);
+- raw IR release sites per benchmark loop: four baseline vs three Phase 3, with
+  identical output `2999997`.
+
+The benchmark harness and methodology are in `benchmarks/pre_mmm_phase3/` and
+`reports/pre-mmm/phase-03.md`.
+
+### 5. Limitations
+
+- Transfers after a pending defer are rejected; there is no defer cancellation or
+  ownership-transfer syntax.
+- Conditional moves and defers keep fallback cleanup that may run on a null slot.
+  Removing it requires path-sensitive cleanup guards at labels.
+- Partially initialized aggregate fields still reach typed destructors with null;
+  null is defined as a no-op and no generic runtime dispatch is added.
+- Raw `&` pointers remain outside deterministic cleanup.
+- Error/unwind cleanup is not implemented. The future integration point is the
+  active lexical cleanup stack; no landing pads or unwind tables are generated.
+- The benchmark is cleanup-focused, not a whole-compiler performance suite.
+
+### 6. Commits
+
+- `792d3fd` `sema: reject transfers after deferred cleanup`
+- `2d3165f` `tir: unify cleanup liveness and loop scope`
+- `62ec090` `test: reject transfers after deferred cleanup`
+- `06ac283` `test: unit-test cleanup liveness and loop scope`
+- `4fe756a` `test: cover transfer cleanup elision`
+- `2182c07` `test: cover defer ownership destruction`
+- `4c4e70e` `test: preserve conditional cleanup fallbacks`
+- `06d25ea` `test: cover for-initializer destruction`
+- `ff0d0ed` `test: cover GC frame closure and native cleanup`
+- `cc954e6` `test: stress repeated cleanup paths`
+- `b31ba35` `test: track inlined escaping allocation`
+- `4a3e47c` `benchmark: measure cleanup compilation and runtime`
+- `5d7638c` `docs: document deterministic cleanup ordering`
+
+### 7. Agent Assessment
+
+- **Implementation completeness:** Complete for every currently supported exit
+  path; error/unwind cleanup remains explicitly open.
+- **Verification confidence:** High for the reproduced defects and regression
+  suite; no sanitizer run was available.
+- **Performance:** No runtime speedup claimed. One dead release site per loop was
+  removed; compiler benchmark improved modestly.
+- **Recommended next step:** Validate Phase 3 on migration-scale programs and
+  carry the documented unwind integration point into the future error model.
+
+---
+
+**End of Entry #019**
 
 <!-- REPORT ENTRIES END -->
 
