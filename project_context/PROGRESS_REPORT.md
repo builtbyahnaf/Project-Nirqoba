@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.461-beta` |
+| Current Working Version | `0.465-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-13 15:29:23` |
-| Report Entries | `19` |
+| Last Report Update | `2026-11-14 00:38:13` |
+| Report Entries | `20` |
 
 ---
 
@@ -2394,6 +2394,150 @@ The benchmark harness and methodology are in `benchmarks/pre_mmm_phase3/` and
 ---
 
 **End of Entry #019**
+
+## Entry #020 — Pre-MMM Phase 4: Owned Allocator Optimization
+
+**Version:** `0.465-beta`  
+**Date:** `2026-11-14 00:38:13`  
+**Scope:** `Owned allocation registry / default fast path / synchronization / profiler / benchmarks`  
+**Status:** `Completed`
+
+### 1. Overview
+
+Phase 4 started from the committed `0.461-beta` Phase 3 build (`487aa93`). The
+registry, not the general heap, was the measured bottleneck. Every default
+allocation and release took one process-wide `allocator_mutex`, an operation pin,
+and an `unordered_map` node allocation. The thread-local 64-entry / 1,024-byte
+cache already absorbed the underlying `HeapAlloc` traffic for small blocks, so
+the benchmark was measuring registry bookkeeping.
+
+Two independent implementation upgrades were completed, each with focused
+concurrency, reallocation, and bulk-ownership tests. No ownership, move, defer,
+or exactly-once destruction rule changed, and GC remains non-default.
+
+### 2. Implementation
+
+**Upgrade 1 — sharded registry and default fast path (`9eebb88`).**
+
+- Split the registry into eight pointer-selected shards with independent mutexes
+  and condition variables.
+- Ordinary process-default allocations and releases skip `allocator_mutex` and
+  the operation pin. The default general allocator is process-owned and cannot
+  be destroyed or reset, so the pin is unnecessary. Per-allocation handles still
+  take the mutex and pin because their allocator can be reset or destroyed.
+- Reallocation finds the old shard and moves the ownership record to the new
+  shard with ordered locks.
+- The profiler uses an atomic enable flag and a dedicated profile mutex; bulk
+  tests assert exact allocation/deallocation totals.
+- `AllocationOwner` records shared state so release chooses the correct path.
+
+**Upgrade 2 — inline open-addressed records (`3af03be`).**
+
+- Each shard now stores records inline in a linear-probing table instead of an
+  `unordered_map`.
+- Erasure leaves a tombstone; insertion reuses the first tombstone on the probe
+  path. The table grows when live records exceed 70% of capacity and compacts
+  when an almost-empty table would otherwise keep probing a large tombstone
+  field. Stable live counts do not grow it.
+- No record node is allocated or freed per pointer. Lookup, growth, compaction,
+  iteration, and reallocation remain under the owning shard's mutex.
+
+### 3. Verification
+
+| Check | Result |
+|---|---|
+| Clean `RelWithDebInfo` build | PASS |
+| Unit suite | 224/224 |
+| Integration suite | 450/450 |
+| Migration-scale Phase 3 aggregate program | PASS (`5513361`) |
+| Migration-scale Phase 3 loop program | PASS (`252200`) |
+| 20,000-block bulk churn with exact profiler counts | PASS |
+| 8-thread cross-thread bulk ownership | PASS |
+| 4,096 cross-shard reallocations preserve payload | PASS |
+| Concurrent explicit allocator tests | PASS |
+| Repeated checksum stability | PASS |
+
+No ASan/UBSan run was available in the MSVC configuration. Evidence is the full
+suites, exact profiler assertions, cross-thread stress, raw IR/cleanup counts from
+Phase 3, and the migration-scale programs. The pre-existing intermittent GC
+stress crash recorded in Entry #019 remains separate work.
+
+### 4. Benchmark
+
+Windows 11 x64, MSVC 14.51, `RelWithDebInfo`, LLVM 23.1.4, nine alternating
+samples per workload.
+
+| Workload | 0.461 median cycles | 0.465 median cycles | Change |
+|---|---:|---:|---:|
+| allocation_heavy | 182,829,660 | 131,792,268 | **-27.9%** |
+| destruction_heavy | 125,627,815 | 100,470,479 | **-20.0%** |
+| mixed | 61,573,000 | 49,748,902 | **-19.2%** |
+
+All samples produced identical checksums (`249996480`, `212766730918`,
+`60027437998`). Peak working set stayed within 16 KB of the baseline.
+
+Upgrade 1 alone was near-neutral single-threaded and slightly negative on two
+workloads (allocation -3.0%, destruction +2.1%, mixed +2.9%), but improved the
+concurrent default-allocation microbenchmark from 4,836 us to 1,934 us at four
+workers (2.50x). Upgrade 2 supplied the single-thread win: against the sharded-map
+intermediate it lowered allocation 26.1%, destruction 21.0%, and mixed 18.7%.
+The final four-worker result is 1,563 us, about 3.1x faster than 0.461.
+
+An early tombstone-heavy table implementation increased peak memory from about
+10 MB to 73 MB because freed slots counted toward the load factor. The memory
+probe caught it; tombstone reuse plus compaction fixed it before the committed
+version, and the final measurements above show no retained regression.
+
+### 5. Limitations
+
+- Explicit per-allocation handles remain globally serialized by
+  `allocator_mutex` and an operation pin. Removing that needs a refcounted
+  allocator lifetime, which is outside Phase 4's measured scope.
+- The existing thread-local cache thresholds are unchanged. Measurements pointed
+  to the registry node and lock, not the cache size.
+- Table capacity follows the high-water live set; compaction handles the
+  mostly-empty case, but live bulk data retains its shard arrays.
+- Concurrency is measured through the C++ allocator benchmark. The language
+  integration programs are single-threaded because the compiler exposes no
+  thread-creation API.
+- Cycle measurements are single-machine relative comparisons; raw samples are
+  stored in `benchmarks/pre_mmm_phase4/results.json`.
+
+### 6. Commits
+
+- `test: validate cleanup on migration-scale programs`
+- `docs: report migration-scale cleanup validation`
+- `allocator: shard ownership registry and bypass the default global path`
+- `allocator: store ownership records inline in open-addressed shards`
+- `benchmark: add owned allocation Phase 4 workloads`
+- `benchmark: add Phase 4 comparison runner`
+- `benchmark: document and record Phase 4 results`
+- `docs: document the sharded owned allocation registry`
+- `docs: link the owned allocation registry from memory management`
+- `docs: write the Phase 4 allocator report`
+- `docs: complete Phase 4 roadmap`
+- `release: bump to 0.465-beta`
+- `docs: record 0.465-beta in the version log`
+- `docs: add Phase 4 progress entry`
+
+### 7. Agent Assessment
+
+- **Implementation completeness:** Complete for the Phase 4 roadmap scope. Both
+  upgrades are independent and measured; no ownership semantics changed.
+- **Verification confidence:** High for the supported paths. Full unit and
+  integration suites, cross-thread stress, exact profiler sums, checksum-stable
+  benchmarks, and migration-scale cleanup programs pass.
+- **Performance:** Allocation-heavy -27.9%, destruction-heavy -20.0%, mixed
+  -19.2%; concurrent default allocation about 3.1x at four workers. Upgrade 1's
+  small single-thread regressions are reported, not hidden, and Upgrade 2
+  reverses them.
+- **Recommended next step:** Refcount the allocator lifetime so explicit
+  per-allocation handles can leave the global pin without weakening reset or
+  destroy safety.
+
+---
+
+**End of Entry #020**
 
 <!-- REPORT ENTRIES END -->
 
