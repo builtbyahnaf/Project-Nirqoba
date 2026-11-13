@@ -555,3 +555,43 @@ borrows are rejected with `selects between multiple owners`. Direct reads and
 dereferences remain valid because every target is a live borrow of the same
 value type. The representation remains compile-time only and the ordinary
 single-path case adds no allocation.
+
+## Interprocedural borrowed-return effects (0.449-beta)
+
+A borrowed return already names its source parameter. The signature now also
+stores the resolved index of that parameter, computed once when the signature
+is built. Callers use this compact effect summary when recovering the origin of
+a returned borrow, so nested and chained calls do not rescan the parameter-name
+list.
+
+When a call that returns a borrow is itself used as a call argument, the
+checker walks back through the declared source parameter to the original owner.
+It also recovers the field-path set from the source expression. The result is
+treated as a real borrow argument: overlapping nested results conflict with a
+live borrow or with an earlier argument, while disjoint fields remain usable.
+Because only the declared source is stored, compilation remains modular and the
+callee does not need the caller's allocation ids.
+
+A stored returned borrow remains an alias of its source. Rebinding or clearing
+the binding that produced it does not release other aliases of the same owner,
+so stale aliases continue to participate in exclusivity checks.
+
+## Flow-sensitive borrow expiration and rebinding (0.449-beta)
+
+A borrowed binding may be rebound to another validated borrow or cleared with
+`nullptr`. Both operations end the old borrow. The replacement's origin must be
+live, must not select between multiple owners, and must outlive the target
+binding. Its owner/path pair is installed in place of the old one, so a later
+borrow of the released field is accepted while a borrow through any remaining
+alias is still rejected. Rebinding to a plain owned or raw pointer remains
+rejected because that would bypass explicit borrow semantics.
+
+Control-flow merges preserve borrows that may still exist. When one arm clears a
+borrow and the other keeps it, the merged symbol retains the active borrow's
+owner identity and path even though the inactive arm allocated a fresh pointer
+id. This keeps the still-possible borrow visible to conflict checks. When every
+continuing arm releases the old field, the merged binding no longer blocks that
+field; sibling fields and any newly selected paths remain independently tracked.
+
+The expiration state is entirely compile-time. No runtime borrow counters,
+locks, descriptors, allocations, or generated checks are introduced.

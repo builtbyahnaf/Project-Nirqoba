@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.445-beta` |
+| Current Working Version | `0.449-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-13 10:42:50` |
-| Report Entries | `15` |
+| Last Report Update | `2026-11-13 11:06:20` |
+| Report Entries | `16` |
 
 ---
 
@@ -1880,6 +1880,144 @@ full compiler benchmark.
 ---
 
 **End of Entry #015**
+
+## Entry #016 — Release: 0.449-beta interprocedural borrow effects and flow-sensitive expiration
+
+**Version:** `0.449-beta`  
+**Date:** `2026-11-13 11:06:20`  
+**Scope:** `Release / Borrow checking / Interprocedural effects / Expiration`  
+**Status:** `Completed`
+
+### 1. Overview
+
+This checkpoint completes the final two Phase 2 borrowing upgrades. Borrowed
+returns now preserve their source owner and field path through nested and
+chained calls, including when the result is passed directly as another call
+argument. Borrowed bindings can also expire or be rebound along control flow:
+`nullptr` clears a borrow, another validated borrow replaces it, and branch
+merges retain any borrow that may still be live. Both changes are compile-time
+only and preserve the existing fast path for ordinary single-owner borrows.
+
+### 2. Implementation Details
+
+- **Compact return-source effect:** `FunctionSignature` stores the resolved
+  index of `return_borrow_parameter`. Both signature-building paths fill it, and
+  `find_borrow_origin`, `find_borrow_paths`, and returned-borrow declarations
+  reuse it instead of rescanning parameter names.
+- **Nested call origins:** A call returning a borrow is recognized as a sourced
+  borrow argument rather than discarded by the ordinary argument-type check.
+  Its owner and field paths flow into the caller's active-borrow checks.
+- **Borrow rebinding:** A borrowed binding may be assigned another validated
+  borrow or `nullptr`. The replacement is checked for a live origin, a definite
+  owner, and sufficient owner lifetime; the old owner/path is replaced.
+- **Stale aliases stay live:** Rebinding or clearing one binding does not clear
+  independent aliases. Any remaining alias continues to block overlapping
+  reads and borrows.
+- **Merge soundness fix:** A one-sided borrow/null merge now keeps the active
+  borrow's allocation id. The inactive null assignment can allocate a fresh id,
+  and preferring it previously hid a still-possible borrow.
+- **Where:** `compiler/include/nirqoba/Sema/TypeChecker.h`,
+  `compiler/lib/Sema/TypeChecker.cpp`, `compiler/lib/Sema/SymbolTable.cpp`.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `TypeChecker.h` / `.cpp` | Cached returned-borrow source index and propagated call results | Keep nested borrow origins and paths without repeated scans |
+| `TypeChecker.cpp` | Allowed validated borrow rebinding and preserved null expiration | Release obsolete paths while retaining lifetime checks |
+| `SymbolTable.cpp` | Kept the active owner id in one-sided merges | Prevent a still-possible borrow from disappearing after a merge |
+| Interprocedural cases | Five focused cases | Cover nested/chained disjoint use and overlapping/stored conflicts |
+| Flow-sensitive cases | Seven focused cases | Cover rebinding, branch-local/null expiration, retained paths, stale aliases, and short-lived replacements |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Clean RelWithDebInfo build | PASS | Clean completed; interrupted link resumed and `--version` reported `0.449-beta` |
+| Unit suite | PASS | 214/214 on final post-clean run |
+| Integration suite | PASS | 411/411 |
+| `positive/interprocedural_*` | PASS | Nested, chained, and disjoint borrowed-return arguments |
+| `negative/interprocedural_*` | PASS | Nested, chained, and stored-alias conflicts rejected |
+| `positive/flow_borrow_*` | PASS | Rebind release, branch-local expiration, branch-wide release |
+| `negative/flow_borrow_*` | PASS | Retained borrow, stale aliases, and short-lived owner rejected |
+| Compiler check benchmark | PASS | Three 20-run trials: median-of-medians 19.559 ms baseline vs 19.488 ms current |
+
+- **Build Status:** Successful.
+- **Regression Status:** None in the final full suites.
+- **Test Environment:** Windows 11 x64, MSVC 14.51.36231, LLVM/MLIR 23.1.4,
+  RelWithDebInfo.
+- One earlier unit run during development segfaulted in an unrelated GC test;
+  immediate full reruns passed, including the final post-clean run.
+
+### 5. Performance & Resource Impact
+
+No runtime code changed, so runtime impact is zero. The signature index removes
+repeated parameter-name scans, but the dominant cost of checking these small
+programs is elsewhere. Across three trials of 20 timed `nirqoba check` runs on
+`allocator_strategies/main.nrqba`, median-of-trial-medians was 19.559 ms for
+`0.441-beta` and 19.488 ms for `0.449-beta`; mean was 19.619 ms vs 19.746 ms,
+p95 20.592 ms vs 20.850 ms, and median peak RSS 15.828 MiB vs 15.957 MiB. The
+difference is within run-to-run noise. This is a single-file smoke benchmark,
+not a full compiler benchmark.
+
+### 6. Issues & Limitations
+
+- Declared borrowed-return sources propagate through nested calls, but full
+  mutation and alias effect summaries for arbitrary callee bodies are not
+  inferred. The callee still treats its parameter as its own origin.
+- Rebinding accepts another validated borrow or `nullptr`; plain owned/raw
+  pointer replacement remains rejected.
+- Assigning `nullptr` to an owner with a live borrow remains conservatively
+  rejected rather than invalidating every alias.
+- Branch-sensitive owner selection for borrowed returns, closure capture, and
+  general escape analysis remain outside this checkpoint.
+- One transient unit-suite segfault occurred in an unrelated GC test and did not
+  reproduce on subsequent full runs.
+
+### 7. Outstanding Work
+
+- [x] Propagate interprocedural borrowed-return effects.
+- [x] Improve flow-sensitive expiration and reassignment.
+- [ ] Add closure-capture ownership rules when closure support requires them.
+- [ ] Implement the minimum general escape analysis needed for remaining
+  lifetime transfers.
+
+### 8. Dependencies & Compatibility
+
+- **New Dependencies:** None.
+- **Removed Dependencies:** None.
+- **Platform Compatibility:** No platform-specific change.
+- **Breaking Changes:** A borrowed binding can now be rebound to another
+  validated borrow; previously this was rejected. Programs that relied on the
+  old conservative error now compile. Rebinding to a non-borrow pointer still
+  reports a dedicated error, and a one-sided borrow/null merge is now stricter
+  because the active owner is retained.
+
+### 9. Agent Assessment
+
+- **Implementation Completeness:** Complete for the checkpoint's interprocedural
+  borrowed-return propagation and flow-sensitive expiration/reassignment.
+- **Verification Confidence:** High — clean build, 214/214 unit, 411/411
+  integration, and repeated baseline benchmarking passed.
+- **Known Risks:** The benchmark is a single-file smoke measurement; the one
+  unreproduced GC-test segfault is recorded as an intermittent risk.
+- **Recommended Next Step:** Move to the remaining Phase 2 escape/lifetime
+  items, or close Phase 2 with the documented conservative limits.
+
+### 10. Evidence & References
+
+- **Commits:** `bc1bc16`, `6acc26a` (interprocedural effects), `5d348e6`,
+  `7acbfec` (expiration/rebinding and tests)
+- **Relevant Files:** `compiler/include/nirqoba/Sema/TypeChecker.h`,
+  `compiler/lib/Sema/TypeChecker.cpp`, `compiler/lib/Sema/SymbolTable.cpp`,
+  `tests/integration/positive/interprocedural_nested_borrow_disjoint`,
+  `tests/integration/positive/flow_borrow_rebind_releases_path`.
+- **Documentation:** `docs/VERSION_LOG.md`, `reports/pre-mmm/phase-02.md`,
+  `project_context/Pre-MMM_ROADMAP.md`, `docs/memory/management.md`.
+
+---
+
+**End of Entry #016**
 
 <!-- REPORT ENTRIES END -->
 

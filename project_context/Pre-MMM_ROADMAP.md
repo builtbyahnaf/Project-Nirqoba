@@ -133,6 +133,16 @@
   secondary targets; every owner/path combination participates in conflict and
   liveness checks, while ambiguous aliases and calls remain rejected
   (`0.445-beta`, `reports/pre-mmm/phase-02.md`).
+- [x] Propagate borrowed-return effects through nested calls.
+  The declared return source is cached in the function signature; nested and
+  chained borrowed-return calls recover the original owner and field path, and
+  overlapping results conflict while disjoint fields remain usable
+  (`0.449-beta`, `reports/pre-mmm/phase-02.md`).
+- [x] Expire and reassign borrows along control flow.
+  A borrow can be cleared with `nullptr` or replaced by another validated borrow;
+  the old path is released, replacement owners must outlive the binding, and
+  branch merges retain any borrow still possible on a continuing path
+  (`0.449-beta`, `reports/pre-mmm/phase-02.md`).
 - [ ] Add closure-capture ownership rules when closure support requires them.
 - [ ] Prevent borrowed references from escaping their owner's lifetime.
 - [ ] Implement the minimum escape analysis needed to reject invalid lifetime transfers.

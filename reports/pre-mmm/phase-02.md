@@ -1,9 +1,9 @@
 # Pre-MMM Phase 2 - Lifetime propagation, borrowed returns, aggregate fields, and exclusivity
 
-**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, mutable-borrow exclusivity, branch-selected borrow paths, one-sided conditional borrows, null-check refinement, short-circuit null facts, and branch-dependent owner identity complete)
-**Version:** 0.445-beta
+**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, mutable-borrow exclusivity, branch-selected borrow paths, one-sided conditional borrows, null-check refinement, short-circuit null facts, branch-dependent owner identity, interprocedural borrowed-return effects, and flow-sensitive expiration/reassignment complete)
+**Version:** 0.449-beta
 **Date:** 2026-11-13
-**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`, `6f26f35`, `c06ef19`, `3959176`, `3e068c4`, `c4c684a`, `fef0d00`, `58124f3`, `734cad0`, `b809487`, `77c05a9`, `6539655`, `17697c7`, `6251871`
+**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`, `6f26f35`, `c06ef19`, `3959176`, `3e068c4`, `c4c684a`, `fef0d00`, `58124f3`, `734cad0`, `b809487`, `77c05a9`, `6539655`, `17697c7`, `6251871`, `bc1bc16`, `6acc26a`, `5d348e6`, `7acbfec`
 
 ## Implemented
 
@@ -26,8 +26,9 @@
 - `borrow` parameters are their own origin inside the callee, so forwarding a
   borrowed parameter through nested calls remains valid. A caller-side chain
   resolves back to the caller's real owner.
-- `p = nullptr` still releases a borrow. Other rebinding of a borrowed pointer
-  remains conservatively rejected.
+- `p = nullptr` releases a borrow. A borrowed binding may also be rebound to
+  another validated borrow; the old owner/path is released and the replacement
+  must be live and outlive the binding.
 
 ## Rules enforced
 
@@ -39,8 +40,9 @@
    revalidates the original owner.
 4. Borrowing does not transfer ownership. Borrowed values remain non-owning and
    are not cleaned up.
-5. Null assignment ends a borrow and is allowed; rebinding to another owner is
-   rejected until replacement lifetimes can be proven safe.
+5. Null assignment ends a borrow. Rebinding to another validated borrow is
+   allowed when the replacement origin is live and its owner outlives the
+   binding; the previous owner/path is released.
 
 ## Source-bound borrowed returns (0.419-beta)
 
@@ -221,6 +223,41 @@ ambiguous-owner binding are rejected with `selects between multiple owners`, so
 no branch's identity is silently chosen. Direct reads and dereferences remain
 available because all targets are live borrows of the same value type.
 
+## Interprocedural borrowed-return effects (0.449-beta)
+
+A borrowed return names one source parameter. That source is now resolved to an
+index once when the signature is built and reused as a compact effect summary.
+Recovering the origin and field paths of a returned borrow therefore does not
+rescan the parameter-name vector at each call site, and compilation stays
+modular: the callee still owns its parameter origin while the caller supplies
+the concrete allocation.
+
+A call returning a borrow can now be passed directly as a borrow argument.
+Previously its original owner was discarded by an argument-type check, producing
+a spurious `borrow arguments must refer to a named pointer` error. The checker
+now treats the result as a sourced borrow, propagates its owner and path, and
+participates in the same argument-order exclusivity checks as a direct borrow.
+Nested and chained results that overlap are rejected; disjoint fields remain
+usable. Stored returned borrows remain aliases after their producer is rebound or
+cleared.
+
+## Flow-sensitive borrow expiration and rebinding (0.449-beta)
+
+A borrowed binding can be reassigned to another validated borrow or cleared with
+`nullptr`. The old owner/path ends at the assignment. The replacement must have a
+live origin, a definite owner, and an owner that outlives the binding; its
+allocation id, mutability, owner, and path replace the old state. Assigning a
+plain owned or raw pointer is still rejected because it would bypass explicit
+borrow semantics. An alias of the old borrow is independent state and continues
+to block overlapping accesses.
+
+The conditional merge now keeps the allocation id of the branch that is still
+borrowed. A null/ordinary pointer assignment on the inactive branch can allocate
+a fresh id; preferring that id previously hid the still-possible borrow from
+conflict checks. Keeping the active id makes borrow-then-null merges sound while
+still allowing the old field once every continuing arm releases it. The
+remaining state is compile-time only.
+
 ## Tests
 
 - `positive/branch_borrow_paths_disjoint`: branch-selected `.x`/`.y` paths leave
@@ -287,6 +324,31 @@ available because all targets are live borrows of the same value type.
   rejected through the secondary target.
 - `negative/branch_owner_identity_primary_conflict`: a later `p.x` borrow is
   rejected through the primary target.
+- `positive/interprocedural_nested_borrow_disjoint`: a borrowed-return result
+  passed directly to a call leaves a disjoint field available; output `7`, `8`.
+- `positive/interprocedural_nested_borrow_chain_disjoint`: two nested
+  borrowed-return calls keep their owner/path and leave a disjoint field
+  available; output `11`, `12`.
+- `negative/interprocedural_nested_borrow_conflict`: a nested borrowed-return
+  result conflicts with a later argument for the same field.
+- `negative/interprocedural_nested_borrow_chain_conflict`: the same conflict is
+  detected through a chain of borrowed-return calls.
+- `negative/interprocedural_returned_alias_conflict`: a stored returned borrow
+  remains live and conflicts with a new borrow of its source field.
+- `positive/flow_borrow_rebind_releases_path`: rebinding `view` from `p.x` to
+  `p.y` releases `p.x`; output `2`, `9`.
+- `positive/flow_borrow_branch_local_expiration`: clearing a borrow inside a
+  branch releases its path for that branch.
+- `positive/flow_borrow_branch_release`: rebinding or clearing on every arm
+  releases the old field after the merge.
+- `negative/flow_borrow_branch_retains_conflict`: a borrow still possible on the
+  other arm blocks the old field after the merge.
+- `negative/flow_borrow_rebind_stale_alias_conflict`: an independent alias of the
+  old borrow still blocks the released field after rebinding.
+- `negative/flow_borrow_null_stale_alias_conflict`: the same stale-alias check
+  applies after null expiration.
+- `negative/flow_borrow_rebind_short_lived_owner`: rebinding to an inner-scope
+  owner reports `borrow of 'inner' cannot outlive its owner`.
 - `positive/mutable_borrow_disjoint_fields`: mutable borrows of `p.x` and `p.y`
   coexist, and a call receives both disjoint field borrows; output `30`.
 - `positive/mutable_borrow_forwarding`: a mutable field borrow survives two
@@ -353,21 +415,30 @@ available because all targets are live borrows of the same value type.
 
 ## Verification
 
-- Clean `RelWithDebInfo` build at `0.445-beta`.
-- Unit suite: 214/214 passed on the first post-clean run.
-- Integration suite: 399/399 passed, including the six logical-refinement cases,
-  the five branch-owner cases, all earlier branch-path/null cases, and the
-  previous mutable-borrow and aggregate-field cases.
-- Compiler check benchmark (`allocator_strategies`, 20 runs, warm process
-  startup): baseline `0.441-beta` median 22.344 ms, current median 22.078 ms;
-  median peak RSS 15.955 MiB vs 15.916 MiB. This is a single-file smoke
-  benchmark, not a full compiler benchmark.
+- Clean `RelWithDebInfo` build at `0.449-beta`; the interrupted clean build was
+  resumed without re-cleaning and linked successfully.
+- Unit suite: 214/214 passed on the final post-clean run.
+- Integration suite: 411/411 passed, including the five interprocedural cases,
+  the seven flow-sensitive expiration/rebinding cases, all earlier
+  branch-path/null/owner cases, and the previous mutable-borrow and
+  aggregate-field cases.
+- Compiler check benchmark (`allocator_strategies`, three trials of 20 timed
+  runs after warmup): trial medians for baseline `0.441-beta` were 20.323,
+  19.333, and 19.559 ms; current `0.449-beta` medians were 19.448, 19.488, and
+  19.575 ms. Median of trial medians: 19.559 ms baseline vs 19.488 ms current;
+  mean was 19.619 ms vs 19.746 ms, p95 20.592 ms vs 20.850 ms, and median peak
+  RSS 15.828 MiB vs 15.957 MiB. The difference is within run-to-run noise and
+  this is a single-file smoke benchmark, not a full compiler benchmark.
+- One earlier full unit run during development segfaulted in an unrelated GC
+  test; immediate full reruns passed, including the final post-clean run. The
+  intermittent GC-test failure was not reproduced.
 
 ## Limitations
 
-- Borrowed parameters are validated modularly. The callee does not receive a
-  caller allocation id; it treats its parameter as the origin and the call site
-  validates the caller's owner.
+- Borrowed parameters are validated modularly. The callee treats its parameter
+  as the origin and the call site validates the caller's owner. Declared
+  borrowed-return sources propagate through nested calls, but full mutation and
+  alias effect summaries for arbitrary callee bodies are not inferred.
 - Borrowed returns require an explicit source parameter; the checker does not
   infer a source from the function body.
 - Source selection is not branch-sensitive. A return that could select between
@@ -387,12 +458,14 @@ available because all targets are live borrows of the same value type.
   diagnostic retains array-view wording.
 - Borrowed struct fields still do not carry an independently checked lifetime.
 - Mutable-borrow exclusivity is enforced at borrow creation, reads, and call
-  boundaries. The callee still treats a borrowed parameter as its own origin and
-  does not receive the caller's allocation id or live-borrow set, so effects
-  inside a callee are not inferred from a caller's active borrow.
-- Safe rebinding of a borrowed pointer to a different live owner is still
-  rejected conservatively.
-- Branch-sensitive owner selection, closure capture, and general escape analysis
-  are not implemented.
+  boundaries. Borrowed-return sources now propagate through nested calls, but
+  the callee does not receive the caller's allocation id or live-borrow set, and
+  effects inside a callee are not inferred from a caller's active borrow.
+- Reassignment supports another validated borrow or `nullptr`. Rebinding to a
+  plain owned or raw pointer remains rejected, and assigning `nullptr` to an
+  owner that still has a live borrow remains conservatively rejected rather than
+  silently invalidating every alias.
+- Branch-sensitive owner selection for borrowed returns, closure capture, and
+  general escape analysis are not implemented.
 - The work adds no runtime counters, locks, descriptors, heap allocation, or
   generated checks; borrowing remains compile-time only.
