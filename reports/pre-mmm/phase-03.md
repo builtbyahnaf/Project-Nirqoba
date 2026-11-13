@@ -131,7 +131,7 @@ Managed references do not enter deterministic deallocation.
 | Check | Result |
 |---|---|
 | Clean `RelWithDebInfo` build | PASS |
-| Unit suite | 220/220 |
+| Unit suite | 220/220 on four of five final runs; one intermittent GC stress crash, reproduced on the pre-Phase-3 baseline (same test) |
 | Integration suite | 448/448 |
 | Deferred-owner negatives | PASS (`defer_then_move`, `defer_then_return`, `defer_then_call_transfer`) |
 | Transfer cleanup positives | PASS (returned local, moved local) |
@@ -147,6 +147,13 @@ The stress case exercises nested scopes, `continue`, and `break` with repeated
 shared allocations. No ASan/UBSan run was available in this MSVC configuration;
 correctness evidence is the full suites, raw-IR cleanup counts, runtime runs, and
 the stress case.
+
+The existing GC stress test
+`GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage` crashed intermittently
+in both builds: 1 of 5 final Phase 3 runs and 1 of 10 pre-Phase-3 baseline runs,
+at the same test. It is recorded as a pre-existing GC test flake, not a Phase 3
+cleanup regression; the successful unit runs completed 220/220 and all 448
+integration cases passed.
 
 ## Benchmark
 
@@ -182,6 +189,10 @@ iteration: four in the baseline, three in Phase 3, with identical output
   documented.
 - The benchmark is cleanup-focused, not a whole-compiler or whole-program
   performance suite.
+- The existing GC stress test `GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage`
+  has an intermittent crash that predates Phase 3 (reproduced at `ab8eeab` and in
+  the Phase 3 build). It is not fixed here and should be treated as separate GC
+  test hardening work.
 
 ## Commits
 
