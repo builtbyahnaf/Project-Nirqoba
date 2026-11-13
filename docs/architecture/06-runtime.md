@@ -54,12 +54,16 @@ broken:
    it, and the marking path marks from the same validated table rather than from
    offsets it recomputed. Publication is all-or-nothing
    (`tests/unit/gc_test.cpp`, the frame registration cases).
-3. **Registration is never elided, only described.** A type the lowering reports as
-   managed publishes an offset; if its layout walk ever returned nothing, the slot
-   is registered at offset 0 rather than skipped. A program with no managed
-   storage elides the protocol entirely — no descriptor, no mutator entry, no poll
-   (`tests/integration/positive/gc_root_elision_owned`), and every optimization
-   level keeps registration (`tests/integration/positive/gc_root_at_O0`).
+3. **Registration is described or elided only when unobservable, never guessed.**
+   A type the lowering reports as managed publishes an offset; if its layout walk
+   ever returned nothing, the slot is registered at offset 0 rather than skipped.
+   A stack-owned block in an activation with no collection point is the one
+   exception: no collector can snapshot it, so the root and write barrier are
+   omitted (`tests/integration/positive/owned_pointer_root_elision_ir`). A
+   function that may collect, including through a callee or loop backedge, keeps
+   registration (`tests/integration/positive/stack_owned_pointer_gc_roots`), and
+   every optimization level keeps the observable case
+   (`tests/integration/positive/gc_root_at_O0`).
 
 ### 3.2 The safepoint bound
 
@@ -157,7 +161,7 @@ rather than per function.
 - **Who needs a region.** A function needs one when it holds a managed value, or when
   it calls a function that does, propagated to a fixed point over direct calls.
   Runtime entry points are not propagated: querying or toggling collection needs no
-  region of its own. A region need is not a root need — a driver loop that only calls
+  region of its own. A region need is not a root need ï¿½ a driver loop that only calls
   an allocating helper opens a region and registers no roots
   (`tests/integration/positive/gc_region_transitive`).
 - **Who establishes one.** The entry wrapper the C runtime calls is the outermost
