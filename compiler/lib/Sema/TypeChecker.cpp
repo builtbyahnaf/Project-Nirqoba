@@ -1816,6 +1816,7 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     mark_field_initialized(field_owner, field_name);
     return;
   }
+  bool replacement_is_borrow = false;
   if (symbol != nullptr && assignment.is_simple_name() &&
       symbol->type.is_pointer()) {
     const bool address_of_value =
@@ -1834,6 +1835,7 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                    (assignment.value().kind() == Expr::Kind::Name &&
                     origin->borrowed));
     if (value_is_borrow) {
+      replacement_is_borrow = true;
       if (!origin->borrow_targets.empty()) {
         diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
                            "borrow of '" + origin->name +
@@ -1864,13 +1866,15 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       }
     }
   }
-  // Clearing a borrow with nullptr releases it; any other rebind would change
-  // which owner the binding aliases and is rejected until lifetime inference
-  // can prove the replacement outlives the binding.
+  // Clearing a borrow with nullptr releases it. Replacing it with another
+  // borrow is also safe once the replacement origin and owner lifetime have
+  // been validated; the old owner/path is released by the rebind below. Plain
+  // pointer aliases still require an explicit borrow so exclusivity cannot be
+  // bypassed.
   if (symbol != nullptr && symbol->borrowed && assignment.is_simple_name() &&
-      !is_null_pointer_literal(assignment.value())) {
+      !is_null_pointer_literal(assignment.value()) && !replacement_is_borrow) {
     diagnostics_.error(diag::kImmutableAssignment, assignment.target().location(),
-                       "a borrowed binding cannot be rebound");
+                       "a borrowed binding can only be rebound to another borrow or nullptr");
     return;
   }
   // Any assignment can change what a name refers to, so no earlier non-null proof
