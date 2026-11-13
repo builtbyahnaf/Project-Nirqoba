@@ -1,4 +1,5 @@
 {
-  "expect_exit": 0,
-  "expect_stdout": "8\n"
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": "an aggregate with a mutable borrowed field cannot be copied"
 }
