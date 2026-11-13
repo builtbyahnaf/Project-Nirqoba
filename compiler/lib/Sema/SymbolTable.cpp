@@ -89,9 +89,13 @@ const Symbol* SymbolTable::lookup(const string& name) const {
 void SymbolTable::mark_allocation_moved(uint64_t allocation_id) {
   if (allocation_id == 0) return;
   for (auto& scope : scopes_)
-    for (auto& entry : scope)
-      if (entry.second.allocation_id == allocation_id)
-        entry.second.moved = true;
+    for (auto& entry : scope) {
+      Symbol& symbol = entry.second;
+      bool matches = symbol.allocation_id == allocation_id;
+      for (const auto& target : symbol.borrow_targets)
+        matches = matches || target.allocation_id == allocation_id;
+      if (matches) symbol.moved = true;
+    }
 }
 
 uint64_t SymbolTable::ensure_allocation_id(const string& name,
@@ -112,20 +116,29 @@ bool SymbolTable::allocation_is_moved(uint64_t allocation_id) const {
   bool found_allocation = false;
   bool found_live_allocation = false;
   for (const auto& scope : scopes_)
-    for (const auto& entry : scope)
-      if (entry.second.allocation_id == allocation_id) {
+    for (const auto& entry : scope) {
+      const Symbol& symbol = entry.second;
+      bool matches = symbol.allocation_id == allocation_id;
+      for (const auto& target : symbol.borrow_targets)
+        matches = matches || target.allocation_id == allocation_id;
+      if (matches) {
         found_allocation = true;
-        if (!entry.second.moved) found_live_allocation = true;
+        if (!symbol.moved) found_live_allocation = true;
       }
+    }
   return found_allocation && !found_live_allocation;
 }
 
 bool SymbolTable::has_live_borrow(uint64_t allocation_id) const {
   if (allocation_id == 0) return false;
   for (const auto& scope : scopes_)
-    for (const auto& entry : scope)
-      if (entry.second.allocation_id == allocation_id &&
-          entry.second.borrowed && !entry.second.moved) return true;
+    for (const auto& entry : scope) {
+      const Symbol& symbol = entry.second;
+      if (!symbol.borrowed || symbol.moved) continue;
+      if (symbol.allocation_id == allocation_id) return true;
+      for (const auto& target : symbol.borrow_targets)
+        if (target.allocation_id == allocation_id) return true;
+    }
   return false;
 }
 
@@ -135,10 +148,16 @@ bool SymbolTable::has_live_field_borrow(uint64_t allocation_id,
   for (const auto& scope : scopes_)
     for (const auto& entry : scope) {
       const Symbol& symbol = entry.second;
-      if (symbol.allocation_id != allocation_id || symbol.moved ||
-          !symbol.borrowed || !symbol.borrow_paths.has_field_projection())
-        continue;
-      if (symbol.borrow_paths.overlaps_field(path)) return true;
+      if (symbol.moved || !symbol.borrowed) continue;
+      if (symbol.allocation_id == allocation_id &&
+          symbol.borrow_paths.has_field_projection() &&
+          symbol.borrow_paths.overlaps_field(path))
+        return true;
+      for (const auto& target : symbol.borrow_targets)
+        if (target.allocation_id == allocation_id &&
+            target.paths.has_field_projection() &&
+            target.paths.overlaps_field(path))
+          return true;
     }
   return false;
 }
@@ -150,11 +169,17 @@ const Symbol* SymbolTable::find_conflicting_borrow(
   for (const auto& scope : scopes_)
     for (const auto& entry : scope) {
       const Symbol& symbol = entry.second;
-      if (symbol.name == except_name || symbol.allocation_id != allocation_id ||
-          !symbol.borrowed || symbol.moved)
+      if (symbol.name == except_name || !symbol.borrowed || symbol.moved)
         continue;
-      if (!symbol.borrow_paths.overlaps(requested_paths)) continue;
-      if (requested_mutable || symbol.mutable_borrow) return &symbol;
+      if (symbol.allocation_id == allocation_id &&
+          symbol.borrow_paths.overlaps(requested_paths) &&
+          (requested_mutable || symbol.mutable_borrow))
+        return &symbol;
+      for (const auto& target : symbol.borrow_targets)
+        if (target.allocation_id == allocation_id &&
+            target.paths.overlaps(requested_paths) &&
+            (requested_mutable || target.mutable_borrow))
+          return &symbol;
     }
   return nullptr;
 }
@@ -211,6 +236,7 @@ void SymbolTable::set_pointer_ownership(const string& name,
       found->second.borrow_conditional = false;
       found->second.borrow_conditional_absent_null = false;
       found->second.definitely_null = false;
+      found->second.borrow_targets.clear();
       found->second.shared_allocation = shared_allocation;
       found->second.cleanup_callee = std::move(cleanup_callee);
       found->second.borrow_owner = std::move(borrow_owner);
@@ -376,6 +402,12 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
       if (!then_symbol || !else_symbol) continue;
       const bool one_sided_borrow =
           then_symbol->borrowed != else_symbol->borrowed;
+      const bool both_borrowed =
+          then_symbol->borrowed && else_symbol->borrowed;
+      const bool branch_dependent_owners =
+          both_borrowed && then_symbol->allocation_id != 0 &&
+          else_symbol->allocation_id != 0 &&
+          then_symbol->allocation_id != else_symbol->allocation_id;
       // The incoming state may still have an untracked allocation id (for
       // example a nullable pointer before either branch assigns a borrow). If
       // both branches agree, their shared id is the merged identity. A
@@ -387,10 +419,10 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
         // or null binding on the other path. The borrow path is still a real
         // possibility, so retain it; ownership of an inactive owner cannot be
         // merged away silently.
-        if (!(one_sided_borrow && !inactive.borrowed &&
-              !inactive.owns_allocation && !inactive.shared_allocation)) {
-          // A single symbol cannot represent different owners selected by
-          // mutually exclusive branches. Keep it unusable after the merge.
+        if (!(branch_dependent_owners ||
+              (one_sided_borrow && !inactive.borrowed &&
+               !inactive.owns_allocation && !inactive.shared_allocation))) {
+          // Distinct owners cannot be represented safely after this merge.
           destination.moved = true;
           continue;
         }
@@ -405,13 +437,42 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
       destination.borrowed = then_symbol->borrowed || else_symbol->borrowed;
       destination.mutable_borrow = then_symbol->mutable_borrow ||
                                    else_symbol->mutable_borrow;
-      if (then_symbol->borrowed && else_symbol->borrowed) {
+      destination.borrow_targets.clear();
+      if (both_borrowed) {
         // Both paths are real possibilities after the merge. Conflict checks
-        // test every one, so disjoint fields stay usable while any overlap is
-        // rejected without falling back to the whole owner.
+        // test every owner/path pair, so disjoint fields stay usable while any
+        // overlap is rejected without falling back to one arbitrary owner.
         destination.borrow_owner = then_symbol->borrow_owner;
         destination.borrow_paths = then_symbol->borrow_paths;
-        destination.borrow_paths.merge(else_symbol->borrow_paths);
+        const auto add_target = [&](uint64_t allocation_id,
+                                    const std::string& owner,
+                                    const BorrowPathSet& paths,
+                                    bool mutable_borrow) {
+          if (allocation_id == 0) return;
+          if (allocation_id == destination.allocation_id) {
+            destination.borrow_paths.merge(paths);
+            destination.mutable_borrow =
+                destination.mutable_borrow || mutable_borrow;
+            return;
+          }
+          for (auto& target : destination.borrow_targets) {
+            if (target.allocation_id != allocation_id) continue;
+            target.paths.merge(paths);
+            target.mutable_borrow = target.mutable_borrow || mutable_borrow;
+            return;
+          }
+          destination.borrow_targets.push_back(
+              BorrowTarget{allocation_id, owner, paths, mutable_borrow});
+        };
+        const auto add_symbol = [&](const Symbol& symbol) {
+          add_target(symbol.allocation_id, symbol.borrow_owner,
+                     symbol.borrow_paths, symbol.mutable_borrow);
+          for (const auto& target : symbol.borrow_targets)
+            add_target(target.allocation_id, target.owner, target.paths,
+                       target.mutable_borrow);
+        };
+        add_symbol(*then_symbol);
+        add_symbol(*else_symbol);
         destination.borrow_conditional = then_symbol->borrow_conditional ||
                                          else_symbol->borrow_conditional;
         // A definite branch has no absent path; for conditional branches the
@@ -432,11 +493,13 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
                                                       : *then_symbol;
         destination.borrow_owner = active.borrow_owner;
         destination.borrow_paths = active.borrow_paths;
+        destination.borrow_targets = active.borrow_targets;
         destination.borrow_conditional = true;
         destination.borrow_conditional_absent_null = absent.definitely_null;
       } else {
         destination.borrow_owner.clear();
         destination.borrow_paths.set({});
+        destination.borrow_targets.clear();
         destination.borrow_conditional = false;
         destination.borrow_conditional_absent_null = false;
       }

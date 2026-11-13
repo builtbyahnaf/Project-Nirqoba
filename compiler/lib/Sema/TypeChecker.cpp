@@ -1127,6 +1127,12 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
                      contains_owned_array(source->type))) {
         symbol.allocation_id = source->allocation_id;
         if (source->borrowed) {
+          if (!source->borrow_targets.empty()) {
+            diagnostics_.error(diag::kTypeMismatch,
+                               declaration.initializer().location(),
+                               "borrow of '" + source->name +
+                                   "' selects between multiple owners");
+          }
           if (source->borrow_conditional) {
             diagnostics_.error(diag::kTypeMismatch,
                                declaration.initializer().location(),
@@ -1140,6 +1146,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
           symbol.mutable_borrow = source->mutable_borrow;
           symbol.borrow_owner = borrow_owner_name(*source);
           symbol.borrow_paths = source->borrow_paths;
+          symbol.borrow_targets = source->borrow_targets;
         }
         symbol.shared_allocation = source->shared_allocation;
         symbol.cleanup_callee = source->cleanup_callee;
@@ -1825,6 +1832,12 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                    (assignment.value().kind() == Expr::Kind::Name &&
                     origin->borrowed));
     if (value_is_borrow) {
+      if (!origin->borrow_targets.empty()) {
+        diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                           "borrow of '" + origin->name +
+                               "' selects between multiple owners");
+        return;
+      }
       if (origin->borrow_conditional) {
         diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
                            "borrow of '" + origin->name +
@@ -2409,7 +2422,11 @@ void TypeChecker::check_return(ReturnStmt& statement) {
   const bool returns_borrowed = !current_return_borrow_parameter_.empty();
   if (returns_borrowed) {
     const Symbol* source = find_borrow_origin(*statement.value());
-    if (source && source->borrow_conditional) {
+    if (source && !source->borrow_targets.empty()) {
+      diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                         "borrow of '" + source->name +
+                             "' selects between multiple owners");
+    } else if (source && source->borrow_conditional) {
       diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                          "borrow of '" + source->name +
                              "' may not be live on every branch");
@@ -2724,7 +2741,13 @@ Type TypeChecker::check_expression(Expr& expr) {
                       origin->allocation_id, false, paths,
                       origin->borrowed ? origin->name : std::string{})
                 : nullptr;
-            if (origin && origin->borrowed && origin->borrow_conditional) {
+            if (origin && origin->borrowed && !origin->borrow_targets.empty()) {
+              diagnostics_.error(
+                  diag::kTypeMismatch, unary.location(),
+                  "borrow of '" + origin->name +
+                      "' selects between multiple owners");
+              type = Type::error();
+            } else if (origin && origin->borrowed && origin->borrow_conditional) {
               diagnostics_.error(
                   diag::kTypeMismatch, unary.location(),
                   "borrow of '" + origin->name +
@@ -4854,6 +4877,12 @@ Type TypeChecker::check_call(CallExpr& call) {
         source->type != sig.parameter_types[i]) source = nullptr;
     if (source && direct_address_of && source->allocation_id == 0)
       symbols_.ensure_allocation_id(source->name, next_allocation_id_++);
+    if (source && !source->borrow_targets.empty()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                         "borrow of '" + source->name +
+                             "' selects between multiple owners");
+      continue;
+    }
     if (source && source->borrow_conditional) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "borrow of '" + source->name +
