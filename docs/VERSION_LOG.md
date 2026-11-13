@@ -12,6 +12,46 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.453-beta (working build)
+
+### Summary of Changes (since `0.451-beta`):
+
+*Final release of the interprocedural-summary and escape-safety checkpoint.*
+
+- **Effect summaries are complete for the checked bodies.** Every signature
+  carries one compact effect byte per parameter. Nested calls merge the callee's
+  read, write, alias, and escape effects into the caller's summary; recursive
+  calls reuse the declared summary, and unknown or incomplete callees contribute
+  the conservative fallback.
+- **Call sites use the summary.** A callee write effect is treated as a mutable
+  borrow claim at the call boundary, so conflicts with an existing live borrow
+  are detected even when the effect arrived through forwarding rather than a
+  direct declaration.
+- **Borrowed fields stay inside their lifetime.** Aggregate initializers record
+  the owner and path of every borrowed field, transitively through nested
+  aggregates. Declarations, assignments, calls, returns, and aggregate-field
+  storage reject escapes that would outlive the owner. Disjoint paths remain
+  usable.
+- **Owner mutation respects aggregate borrows.** Moving or replacing an owner
+  while an aggregate holds a borrowed field is rejected, and the field-borrow
+  metadata participates in the existing live-borrow queries.
+- **No runtime cost.** All summaries and escape metadata are compile-time-only.
+
+## Version 0.451-beta (working checkpoint)
+
+### Summary of Changes (since `0.449-beta`):
+
+*Opened for the two post-`0.449-beta` borrowing upgrades.*
+
+- **Interprocedural effect summaries.** Added compact read/write/alias/escape
+  bits per borrowed parameter and propagated them through nested and recursive
+  calls with conservative fallbacks for incomplete callees.
+- **Borrow escape safety.** Aggregate borrowed-field origins are tracked across
+  nested aggregates; returns, calls, outer-scope assignments, and aggregate
+  storage reject escapes while valid same-scope borrowing and disjoint field
+  paths remain accepted.
+- **No runtime borrow tracking.** The checkpoint adds only semantic state.
+
 ## Version 0.449-beta (working build)
 
 ### Summary of Changes (since `0.445-beta`):
