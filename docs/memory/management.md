@@ -517,3 +517,41 @@ Field-path exclusion is unchanged after refinement. A definite conditional
 borrow still blocks a later borrow or read of the same path, while disjoint
 fields remain available. The refinement adds two booleans to the existing symbol
 and no runtime state, counters, locks, allocations, or generated checks.
+
+## Short-circuit null paths (0.445-beta)
+
+The condition analyzer now derives null facts from `&&`, `||`, and logical
+negation. It follows the actual evaluation paths: for `A && B` true, both facts
+hold; for `A && B` false, a fact is kept only if it is implied by both the
+`A`-false path and the `A`-true-then-`B`-false path. `A || B` is dual. This
+intersection rule prevents the common mistake of treating the true side of
+`||` as though the right operand was always evaluated.
+
+`!` swaps the requested truth value, while nested logical expressions recurse.
+The resulting facts update both the nullable-dereference proof set and the
+conditional-borrow refinement. A null fact also clears a name from the non-null
+proof set, so contradictory nested checks do not grant an unsafe dereference.
+Only name-versus-null comparisons contribute facts; arbitrary predicates remain
+opaque. The analysis is syntax-local and allocates only small fact sets while
+checking branches.
+
+## Branch-dependent owner identity (0.445-beta)
+
+A conditional merge that leaves live borrows of different owners no longer marks
+the binding unusable. The primary owner, mutability, and path remain in the
+existing symbol fields. Secondary owners are stored as compact `BorrowTarget`
+records containing an allocation id, owner name, path set, and mutability. The
+vector is empty for ordinary single-owner borrows.
+
+Conflict, live-borrow, field-borrow, moved-allocation, and allocation-status
+queries inspect both the primary target and every secondary target. Thus a
+later access to either selected owner path is rejected when it overlaps, while
+fields disjoint from each owner's path remain available. Moving or releasing
+either possible owner conservatively invalidates the binding.
+
+A binding with multiple possible owners cannot be used where one definite owner
+must be named: aliasing, calls, address-taking, assignment, and returned
+borrows are rejected with `selects between multiple owners`. Direct reads and
+dereferences remain valid because every target is a live borrow of the same
+value type. The representation remains compile-time only and the ordinary
+single-path case adds no allocation.

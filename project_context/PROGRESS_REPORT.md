@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.441-beta` |
+| Current Working Version | `0.445-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-13 10:24:36` |
-| Report Entries | `14` |
+| Last Report Update | `2026-11-13 10:42:50` |
+| Report Entries | `15` |
 
 ---
 
@@ -1756,6 +1756,130 @@ compile-time number is claimed.
 ---
 
 **End of Entry #014**
+
+## Entry #015 — Release: 0.445-beta short-circuit refinement and branch owners
+
+**Version:** `0.445-beta`  
+**Date:** `2026-11-13 10:42:50`  
+**Scope:** `Release / Borrow checking / Logical paths / Owner identity`  
+**Status:** `Completed`
+
+### 1. Overview
+
+This checkpoint contains two meaningful upgrades. First, null facts now follow
+the true/false and short-circuit evaluation paths of `&&`, `||`, and logical
+negation. Second, conditional merges retain different owner allocations as a
+primary target plus compact secondary targets instead of making the binding
+unusable. Both preserve the existing field-path and conservative-use rules.
+
+### 2. Implementation Details
+
+- **Short-circuit facts:** `null_facts_for(expr, truth)` derives name/null facts,
+  intersects the paths of `&&` false and `||` true, and unions paths where both
+  operands must have been evaluated. `!` swaps truth; nested expressions recurse.
+- **Branch-dependent owners:** `Symbol::borrow_targets` stores secondary
+  `BorrowTarget` records only when the two branches leave borrows of different
+  non-zero allocation ids. The primary owner stays in the existing fields.
+- **Queries:** conflict, live-borrow, field-borrow, moved-allocation, and
+  allocation-status checks inspect every target. Moving any possible owner
+  conservatively invalidates the binding.
+- **Conservative use:** aliases, calls, address-taking, assignment from, and
+  returns through an ambiguous owner are rejected with `selects between multiple
+  owners`. Direct reads and dereferences remain valid.
+- **Where:** `compiler/include/nirqoba/Sema/TypeChecker.h`,
+  `compiler/include/nirqoba/Sema/SymbolTable.h`,
+  `compiler/lib/Sema/TypeChecker.cpp`, `compiler/lib/Sema/SymbolTable.cpp`.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `TypeChecker.h` / `.cpp` | Added logical branch fact analysis | Respect short-circuit execution paths |
+| `SymbolTable.h` / `.cpp` | Added secondary owner targets and all-target queries | Preserve branch-selected owners without losing conflicts |
+| `TypeChecker.cpp` | Rejected ambiguous-owner aliases/calls/returns | Avoid silently choosing one branch identity |
+| Logical and owner-identity cases | Six and five focused cases | Cover true/false paths and both selected owners |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Clean RelWithDebInfo build | PASS | `scripts/build.ps1 -Configuration RelWithDebInfo -Clean` |
+| Unit suite | PASS | 214/214 on the first post-clean run |
+| Integration suite | PASS | 399/399 |
+| `positive/conditional_borrow_logical_*` | PASS | `&&`, `||`, `!`, and nested refinement |
+| `negative/conditional_borrow_short_circuit_*` | PASS | Unsafe true/false paths rejected |
+| `positive/branch_owner_identity_*` | PASS | Primary/secondary disjoint and nested paths |
+| `negative/branch_owner_identity_*` | PASS | Ambiguous alias and both owner conflicts rejected |
+| Compiler check benchmark | PASS | Baseline median 22.344 ms / 15.955 MiB; current 22.078 ms / 15.916 MiB |
+
+- **Build Status:** Successful.
+- **Regression Status:** None detected in the full integration or unit suites.
+- **Test Environment:** Windows 11 x64, MSVC 14.51.36231, LLVM/MLIR 23.1.4,
+  RelWithDebInfo.
+
+### 5. Performance & Resource Impact
+
+No runtime code changed, so there is no runtime impact. Logical fact sets are
+branch-local and small. The secondary-owner vector allocates only when branches
+select different owners; ordinary single-owner borrows keep the existing inline
+state. A 20-run `nirqoba check` smoke benchmark on
+`allocator_strategies/main.nrqba` measured baseline `0.441-beta` at median
+22.344 ms and current at 22.078 ms, with median peak RSS 15.955 MiB vs
+15.916 MiB. This is a single-file measurement including process startup, not a
+full compiler benchmark.
+
+### 6. Issues & Limitations
+
+- Every owner/path combination is tracked, but a binding with multiple possible
+  owners cannot be named as one owner in aliases, calls, or returns.
+- Branch-dependent owners remain compile-time state; no runtime dispatch or
+  ownership metadata is emitted.
+- Only name-versus-null comparisons contribute logical facts; arbitrary
+  predicates remain opaque.
+- Callee effects, closure capture, and general escape analysis remain outside
+  this checkpoint.
+
+### 7. Outstanding Work
+
+- [x] Follow short-circuit logical paths for null refinement.
+- [x] Preserve branch-dependent owner identities.
+- [ ] Propagate interprocedural borrow effects.
+- [ ] Improve flow-sensitive expiration and reassignment.
+
+### 8. Dependencies & Compatibility
+
+- **New Dependencies:** None.
+- **Removed Dependencies:** None.
+- **Platform Compatibility:** No platform-specific change.
+- **Breaking Changes:** Programs with branch-selected owner borrows now keep
+  disjoint-field access instead of rejecting the merged binding; ambiguous use
+  still reports a dedicated error.
+
+### 9. Agent Assessment
+
+- **Implementation Completeness:** Complete for the checkpoint's logical-path
+  refinement and branch-dependent owner retention.
+- **Verification Confidence:** High — clean build, full suites, and measured
+  baseline comparison passed.
+- **Known Risks:** Ambiguous-owner use is intentionally conservative, and the
+  benchmark is a single-file smoke measurement.
+- **Recommended Next Step:** Implement interprocedural borrow-effect summaries,
+  then expiration/reassignment tracking for the `0.449-beta` checkpoint.
+
+### 10. Evidence & References
+
+- **Commits:** `77c05a9`, `6539655` (short-circuit), `17697c7`, `6251871`
+  (branch owners)
+- **Relevant Files:** `compiler/lib/Sema/TypeChecker.cpp`,
+  `compiler/lib/Sema/SymbolTable.cpp`,
+  `tests/integration/positive/branch_owner_identity_disjoint`,
+  `tests/integration/negative/conditional_borrow_short_circuit_or`.
+- **Documentation:** `docs/VERSION_LOG.md`, `reports/pre-mmm/phase-02.md`,
+  `project_context/Pre-MMM_ROADMAP.md`, `docs/memory/management.md`.
+
+---
+
+**End of Entry #015**
 
 <!-- REPORT ENTRIES END -->
 

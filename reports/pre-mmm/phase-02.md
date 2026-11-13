@@ -1,9 +1,9 @@
 # Pre-MMM Phase 2 - Lifetime propagation, borrowed returns, aggregate fields, and exclusivity
 
-**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, mutable-borrow exclusivity, branch-selected borrow paths, one-sided conditional borrows, and null-check refinement complete)
-**Version:** 0.441-beta
+**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, mutable-borrow exclusivity, branch-selected borrow paths, one-sided conditional borrows, null-check refinement, short-circuit null facts, and branch-dependent owner identity complete)
+**Version:** 0.445-beta
 **Date:** 2026-11-13
-**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`, `6f26f35`, `c06ef19`, `3959176`, `3e068c4`, `c4c684a`, `fef0d00`, `58124f3`, `734cad0`, `b809487`
+**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`, `6f26f35`, `c06ef19`, `3959176`, `3e068c4`, `c4c684a`, `fef0d00`, `58124f3`, `734cad0`, `b809487`, `77c05a9`, `6539655`, `17697c7`, `6251871`
 
 ## Implemented
 
@@ -190,6 +190,37 @@ path set are unchanged.
   later borrow or read of the same path is rejected; disjoint fields remain
   available. No runtime counters, locks, allocations, or generated checks exist.
 
+## Short-circuit null facts (0.445-beta)
+
+Condition facts now follow the actual true/false evaluation paths of `&&`, `||`,
+and logical negation. For `A && B` true, both operand facts hold. For `A && B`
+false, a fact is retained only if it is implied by both the lhs-false path and
+the lhs-true/rhs-false path. `A || B` is dual. The intersection prevents a
+short-circuited right operand from being treated as evaluated on every path.
+
+`!` swaps the requested truth value and nested logical expressions recurse. The
+result updates both nullable-dereference proofs and conditional-borrow
+refinement. A null fact also removes a name from the non-null proof set. Only
+name-versus-null comparisons contribute facts; arbitrary predicates remain
+opaque. The analysis uses small branch-local fact sets and allocates nothing on
+the ordinary simple-condition path.
+
+## Branch-dependent owner identity (0.445-beta)
+
+When both arms leave live borrows of different owners, the merge now retains
+both possibilities. The primary owner/path stays inline. Secondary owners are
+compact `BorrowTarget` records with an allocation id, owner name, path set, and
+mutability; the vector is empty for ordinary single-owner borrows.
+
+Conflict, liveness, field-borrow, moved-allocation, and allocation-status
+queries inspect every target. A later borrow or read overlapping either selected
+owner path is rejected, while disjoint fields on either owner remain usable.
+Moving or releasing any possible owner conservatively invalidates the binding.
+Aliases, calls, address-taking, assignment from, and returns through an
+ambiguous-owner binding are rejected with `selects between multiple owners`, so
+no branch's identity is silently chosen. Direct reads and dereferences remain
+available because all targets are live borrows of the same value type.
+
 ## Tests
 
 - `positive/branch_borrow_paths_disjoint`: branch-selected `.x`/`.y` paths leave
@@ -234,6 +265,28 @@ path set are unchanged.
   a new borrow of the same field.
 - `positive/conditional_borrow_join_refinement`: an unrelated join preserves the
   null-absence proof when every continuing path keeps it; output `9`.
+- `positive/conditional_borrow_logical_and`: `&&` true-path refinement; output
+  `9`.
+- `positive/conditional_borrow_logical_or`: `||` false-path refinement; output
+  `9`.
+- `positive/conditional_borrow_logical_not`: logical-negation refinement; output
+  `9`.
+- `positive/conditional_borrow_nested_logical`: nested logical refinement;
+  output `9`.
+- `negative/conditional_borrow_short_circuit_or`: an `||` true path does not
+  grant a definite borrow.
+- `negative/conditional_borrow_short_circuit_and`: an `&&` false path does not
+  grant a definite borrow.
+- `positive/branch_owner_identity_disjoint`: branch-selected owners leave
+  `p.y` and `q.z` available; output `5`, `6`.
+- `positive/branch_owner_identity_nested_disjoint`: branch-selected nested paths
+  leave `p.inner.b` and `q.z` available; output `8`, `9`.
+- `negative/branch_owner_identity_alias`: aliasing an ambiguous-owner binding is
+  rejected.
+- `negative/branch_owner_identity_secondary_conflict`: a later `q.x` borrow is
+  rejected through the secondary target.
+- `negative/branch_owner_identity_primary_conflict`: a later `p.x` borrow is
+  rejected through the primary target.
 - `positive/mutable_borrow_disjoint_fields`: mutable borrows of `p.x` and `p.y`
   coexist, and a call receives both disjoint field borrows; output `30`.
 - `positive/mutable_borrow_forwarding`: a mutable field borrow survives two
@@ -300,11 +353,15 @@ path set are unchanged.
 
 ## Verification
 
-- Clean `RelWithDebInfo` build at `0.441-beta`.
+- Clean `RelWithDebInfo` build at `0.445-beta`.
 - Unit suite: 214/214 passed on the first post-clean run.
-- Integration suite: 388/388 passed, including the eight branch-path cases, the
-  six one-sided cases, the seven null-refinement cases, and all previous
-  mutable-borrow and aggregate-field cases.
+- Integration suite: 399/399 passed, including the six logical-refinement cases,
+  the five branch-owner cases, all earlier branch-path/null cases, and the
+  previous mutable-borrow and aggregate-field cases.
+- Compiler check benchmark (`allocator_strategies`, 20 runs, warm process
+  startup): baseline `0.441-beta` median 22.344 ms, current median 22.078 ms;
+  median peak RSS 15.955 MiB vs 15.916 MiB. This is a single-file smoke
+  benchmark, not a full compiler benchmark.
 
 ## Limitations
 
@@ -323,7 +380,8 @@ path set are unchanged.
   definite only after a non-null guard when the absent path is provably null.
   The refinement is lost at a join that continues on a path without the same
   proof, and it is not available on the null path. Branches that select different
-  owner allocations still mark the binding unusable.
+  owner allocations retain both targets, but using the binding where one owner
+  must be named remains rejected.
 - Owning aggregates still use the existing broad live-borrow guard for owner
   mutation, so an independent field write may be rejected conservatively and the
   diagnostic retains array-view wording.

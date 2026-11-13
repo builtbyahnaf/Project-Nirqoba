@@ -12,6 +12,30 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.445-beta (working build)
+
+### Summary of Changes (since `0.441-beta`):
+
+*Opened after logical conditions and owner-selecting branches became precise borrow state.*
+
+- **Short-circuit conditions refine borrows.** Null facts follow `&&`, `||`, and
+  logical negation along their real true/false evaluation paths. A fact is kept
+  only when it holds on every path that reaches the selected branch, so the
+  false path of `&&` and the true path of `||` do not over-refine.
+- **Branches can retain several owner identities.** When both arms borrow
+  different owners, the primary owner remains inline and secondary owner/path
+  pairs are stored in a compact alternatives vector. Conflicts, liveness, and
+  field queries inspect every reachable owner/path combination.
+- **Ambiguous owner use stays conservative.** Aliasing, calls, address-taking,
+  and returns through a binding with multiple possible owners are rejected rather
+  than picking one branch's identity. Direct reads and disjoint field accesses
+  remain available.
+- **Fast paths remain allocation-free.** Ordinary single-owner borrows keep the
+  existing fields. The alternatives vector exists only after a branch merge that
+  selects genuinely different owners.
+- **No runtime cost.** All new state is compile-time semantic data. No runtime
+  counters, locks, descriptors, allocations, or generated checks were added.
+
 ## Version 0.441-beta (working build)
 
 ### Summary of Changes (since `0.437-beta`):
