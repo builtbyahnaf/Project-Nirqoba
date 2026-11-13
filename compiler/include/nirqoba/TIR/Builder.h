@@ -49,6 +49,26 @@ class TirBuilder {
   tir::Value lower_expression(const Expr& expr, tir::Function& function);
   tir::Value resolve_lvalue_ptr(const Expr& target, tir::Function& function);
 
+  // Removes an automatic cleanup once its owner is proven transferred or
+  // destroyed on every path reaching it. Conditional regions keep the cleanup:
+  // the runtime slot is nulled on the transferring path, so the fallback still
+  // destroys a value that remains live on the other path.
+  void suppress_automatic_cleanup(const tir::Value& slot);
+  // Restores or adds the automatic cleanup for a slot that receives a new owner
+  // after a move, explicit release, or an uninitialized declaration.
+  void track_assignment_cleanup(const tir::Value& slot, const std::string& callee,
+                                const SourceLocation& location);
+
+  struct ConditionalRegion {
+    explicit ConditionalRegion(std::size_t& depth) : depth_(depth) { ++depth_; }
+    ~ConditionalRegion() { --depth_; }
+    ConditionalRegion(const ConditionalRegion&) = delete;
+    ConditionalRegion& operator=(const ConditionalRegion&) = delete;
+
+   private:
+    std::size_t& depth_;
+  };
+
   // True when the block currently being built already ends in a terminator
   // (return, branch or conditional branch). Used to avoid emitting unreachable
   // operations after `return`, `break` or `continue`.
@@ -62,6 +82,9 @@ class TirBuilder {
   std::vector<std::unordered_map<std::string, tir::Value>> scopes_;
   std::vector<LoopContext> loop_stack_;
   std::vector<std::vector<DeferredCall>> deferred_expressions_;
+  // Number of enclosing branches, loop bodies, loop conditions and short-circuit
+  // right-hand sides. A transfer at depth zero dominates the owner's cleanup.
+  std::size_t conditional_depth_ = 0;
 };
 
 }  // namespace nirq
