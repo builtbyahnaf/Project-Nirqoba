@@ -1,0 +1,21 @@
+int function main() {
+    var index = 0;
+    var completed = 0;
+    while (index < 2000) {
+        let outer = memory.shared_allocate<byte>(8);
+        {
+            let inner = memory.shared_allocate<byte>(16);
+            if (index % 3 == 0) {
+                index += 1;
+                continue;
+            }
+            if (index % 7 == 0) {
+                break;
+            }
+        }
+        index += 1;
+        completed += 1;
+    }
+    print(completed);
+    return 0;
+}
