@@ -1,0 +1,8 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 0,
+  "expect_stdout_contains": ["1", "73", "0"],
+  "expect_ir_counts": {
+    "call ptr @nrq_memory_shared_allocate_rooted": 1
+  }
+}
