@@ -239,15 +239,34 @@
 
 ### Implementation
 
-- [ ] Profile and optimize the ordinary owned allocation fast path.
-- [ ] Reduce allocator registry overhead on common allocation/deallocation operations.
-- [ ] Reduce unnecessary synchronization in allocator operations.
-- [ ] Improve small-allocation throughput.
-- [ ] Improve bulk allocation and release.
-- [ ] Optimize allocator selection and ownership lookup.
-- [ ] Evaluate thread-local allocation caches only where measurements justify them.
-- [ ] Ensure reallocations preserve ownership records without unnecessary metadata allocation.
-- [ ] Keep allocator-specific behavior isolated from ownership semantics.
+- [x] Profile and optimize the ordinary owned allocation fast path. The global
+  registry mutex and per-pointer node allocation were identified as the
+  bottleneck, then removed from the process-default path (`0.465-beta`,
+  `reports/pre-mmm/phase-04.md`).
+- [x] Reduce allocator registry overhead on common allocation/deallocation
+  operations. Ownership records are now inline in eight sharded open-addressed
+  tables; the default path no longer allocates a hash node or takes
+  `allocator_mutex`.
+- [x] Reduce unnecessary synchronization in allocator operations. Shards lock
+  independently; default allocations/releases skip the global allocator mutex
+  and operation pin. Explicit per-allocation handles still need the pin.
+- [x] Improve small-allocation throughput. Allocation-heavy median fell from
+  182.83M to 131.79M cycles (-27.9%) in the Phase 4 workload.
+- [x] Improve bulk allocation and release. Twenty-thousand-block churn and
+  cross-thread bulk ownership are covered by unit tests; destruction-heavy fell
+  20.0% and mixed 19.2%.
+- [x] Optimize allocator selection and ownership lookup. Pointer-sharded lookup
+  and inline records replace one global map; reallocation moves records between
+  shards.
+- [x] Evaluate thread-local allocation caches only where measurements justify
+  them. The existing 64-entry / 1,024-byte default cache is retained; the node
+  and lock overhead around it was the measured cost, not the cache thresholds.
+- [x] Ensure reallocations preserve ownership records without unnecessary
+  metadata allocation. Reallocation now moves the inline record across shards
+  without a registry node allocation.
+- [x] Keep allocator-specific behavior isolated from ownership semantics. No
+  ownership, move, cleanup, or exactly-once rule changed; the work is confined
+  to the registry and default-allocation synchronization.
 
 ### Performance requirements
 
@@ -257,7 +276,13 @@
 - Preserve allocator identity and double-free protection.
 - Never trade correctness for benchmark improvements.
 
-**Completion:** The common owned allocation path is measured, optimized, and stable.
+**Completion:** Complete at `0.465-beta`. Two independent upgrades were measured
+against `0.461-beta`: sharded lock-free-on-the-default-path lookup, then inline
+open-addressed records. Allocation-heavy, destruction-heavy, and mixed workloads
+improved 27.9%, 20.0%, and 19.2% by median; peak working set stayed flat within
+16 KB. Exact checksums, 224 unit tests, 450 integration tests, cross-thread
+stress, and the migration-scale Phase 3 programs pass. Report:
+`reports/pre-mmm/phase-04.md`.
 
 ---
 
