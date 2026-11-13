@@ -97,6 +97,10 @@ class TypeChecker {
   void check_continue(ContinueStmt& statement);
   void check_return(ReturnStmt& statement);
   void check_deferred_cleanup(DeferredCleanupStmt& statement);
+  bool has_pending_deferred_release(uint64_t allocation_id) const;
+  bool reject_move_after_defer(const Symbol& source,
+                               const SourceLocation& location,
+                               const char* action);
 
   Type check_expression(Expr& expr);
   Type check_call(CallExpr& call);
