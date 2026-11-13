@@ -1,0 +1,9 @@
+int function main() {
+    var outer = 1;
+    var view = &outer;
+    {
+        var inner = 2;
+        view = &inner;
+    }
+    return 0;
+}
