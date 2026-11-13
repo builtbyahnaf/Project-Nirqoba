@@ -12,6 +12,37 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.449-beta (working build)
+
+### Summary of Changes (since `0.445-beta`):
+
+*Opened after borrowed returns kept their effects through nested calls and borrows could expire at reassignment.*
+
+- **Nested borrowed-return calls keep their origin.** Calling a function that
+  returns a borrow now preserves the original owner and field path through any
+  number of nested or chained calls. Passing such a result directly to another
+  call is validated like a direct borrow instead of being rejected as an
+  unknown lifetime.
+- **Return-source effects are cached in the signature.** The source parameter
+  of a declared borrowed return is resolved once when the signature is built.
+  Nested calls reuse that compact index rather than rescanning the parameter
+  list at every use, preserving modular compilation.
+- **Conflicts follow the propagated effect.** Two nested borrowed-return results
+  that reach the same owner/path are rejected; disjoint fields remain usable.
+  A stored borrowed return remains a live alias even after the binding that
+  produced it is rebound or cleared.
+- **Borrows expire and rebind with control flow.** A borrowed binding can now be
+  replaced by another validated borrow, or cleared with `nullptr`. The old
+  owner/path is released before the new borrow is checked, while replacement
+  origins must still be live and outlive the binding.
+- **Branches keep borrows that are still possible.** Null/rebind merges preserve
+  the active borrow's allocation identity. A path that clears a borrow no longer
+  hides a borrow still possible on the other path, while a path that releases
+  the old field on every arm leaves it available afterward.
+- **No runtime cost.** All propagation and expiration state is compile-time
+  semantic data. No runtime counters, locks, descriptors, allocations, or
+  generated checks were added.
+
 ## Version 0.445-beta (working build)
 
 ### Summary of Changes (since `0.441-beta`):
