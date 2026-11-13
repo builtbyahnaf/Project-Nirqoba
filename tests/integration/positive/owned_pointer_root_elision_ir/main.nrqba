@@ -1,0 +1,13 @@
+struct Child { int value; }
+struct Node { int value; managed<Child> child; }
+int function work(managed<Child> child) {
+    var holder = memory.allocate<Node>(64);
+    (*holder).child = child;
+    print((*holder).child[0].value);
+    return 0;
+}
+int function main() {
+    var child = array.allocate<Child>(1);
+    child[0].value = 73;
+    return work(child);
+}
