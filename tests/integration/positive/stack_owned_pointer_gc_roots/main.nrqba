@@ -1,0 +1,23 @@
+// The allocation is small and non-escaping, so the compiler places it on the
+// stack. Its managed field is still part of the current activation's root frame.
+struct Node {
+    int value;
+    managed<Node> child;
+}
+
+managed<Node> function make_child() {
+    var child = array.allocate<Node>(1);
+    child[0].value = 73;
+    return child;
+}
+
+int function main() {
+    var holder = memory.allocate<Node>(64);
+    (*holder).child = make_child();
+    gc.collect();
+    gc.collect();
+    var stats = gc.get_statistics();
+    print(stats.live_objects);
+    print((*holder).child[0].value);
+    return 0;
+}

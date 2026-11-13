@@ -1949,6 +1949,18 @@ class FunctionTranslator {
         mlir::ValueRange{slot, object_size, offsets_slot, reference_count});
   }
 
+  void emit_gc_root_unregistration(mlir::Value slot, const Type& value_type,
+                                   mlir::Location loc) {
+    std::vector<uint64_t> offsets;
+    collect_managed_reference_offsets(value_type, 0, offsets);
+    if (offsets.empty()) return;
+    auto unregister_fn = ensure_runtime_fn(
+        module_, builder_, "nrq_gc_root_unregister",
+        mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
+    builder_.create<mlir::LLVM::CallOp>(loc, unregister_fn,
+                                        mlir::ValueRange{slot});
+  }
+
   // The layout words of a frame descriptor and the derived per-root reference
   // counts, computed once. The emitter and the descriptor builder used to walk
   // the same types separately, so the words a frame publishes and the counts it
@@ -3320,6 +3332,10 @@ class FunctionTranslator {
             mlir::Value ptr = builder_.create<mlir::LLVM::GEPOp>(
                 loc, llvm_ptr_type(ctx_), storage_type, storage,
                 mlir::ValueRange{zero, zero}).getResult();
+            // A stack-placed raw allocation is still an explicitly owned object.
+            // If its pointee contains managed references, the current activation's
+            // root frame must describe those slots; the frame removes them at exit.
+            emit_gc_root_registration(ptr, op.result.type.element_type(), loc);
             set(op.result, ptr);
             return true;
           }
@@ -3360,6 +3376,10 @@ class FunctionTranslator {
             result = builder_.create<mlir::LLVM::CallOp>(
                 loc, fn, mlir::ValueRange{bytes, alignment}).getResult();
           }
+          // Explicitly owned storage is outside the collector's heap, but a
+          // managed field inside it still has to be visible to tracing. Register
+          // the object as a normal typed root; destruction unregisters it.
+          emit_gc_root_registration(result, op.result.type.element_type(), loc);
           set(op.result, result);
           return true;
         }
@@ -3719,6 +3739,13 @@ class FunctionTranslator {
               llvm_ptr_type(ctx_), {llvm_ptr_type(ctx_), builder_.getI64Type()});
           mlir::Value result = builder_.create<mlir::LLVM::CallOp>(
               loc, fn, mlir::ValueRange{pointer, bytes}).getResult();
+          // Reallocation moves the object, so the old address must stop being a
+          // root before the replacement becomes one. Keep the old registration
+          // when reallocation fails and the original block remains valid.
+          if (result) {
+            emit_gc_root_unregistration(pointer, op.result.type.element_type(), loc);
+            emit_gc_root_registration(result, op.result.type.element_type(), loc);
+          }
           set(op.result, result);
           return true;
         }
@@ -3737,6 +3764,10 @@ class FunctionTranslator {
               pointer = builder_.create<mlir::LLVM::IntToPtrOp>(
                   loc, llvm_ptr_type(ctx_), pointer).getResult();
             }
+            // The pointer owns collector-visible storage when its pointee has
+            // managed fields; remove that root before the block is freed.
+            emit_gc_root_unregistration(pointer,
+                                        op.arguments[0].type.element_type(), loc);
             builder_.create<mlir::LLVM::CallOp>(loc, fn, mlir::ValueRange{pointer});
           }
           return true;
