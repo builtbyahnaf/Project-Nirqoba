@@ -572,6 +572,98 @@ TEST(AllocatorTest, DefaultSmallAllocationCacheReusesAndKeepsProfilingAccurate) 
   nrq_memory_profiler_stop();
 }
 
+TEST(AllocatorTest, RegistryHandlesBulkChurnAndKeepsProfilingExact) {
+  constexpr int kBlocks = 20000;
+  nrq_memory_profiler_start();
+  std::vector<unsigned char*> blocks;
+  blocks.reserve(kBlocks);
+  for (int index = 0; index < kBlocks; ++index) {
+    const size_t bytes = 32 + static_cast<size_t>(index % 4) * 32;
+    auto* block = static_cast<unsigned char*>(nrq_memory_allocate(bytes, 16));
+    ASSERT_NE(block, nullptr);
+    block[0] = static_cast<unsigned char>(index);
+    block[bytes - 1] = static_cast<unsigned char>(index * 3);
+    blocks.push_back(block);
+  }
+  for (auto block = blocks.rbegin(); block != blocks.rend(); ++block)
+    nrq_memory_deallocate_checked(*block);
+  const NrqMemoryProfile profile = nrq_memory_profiler_capture();
+  ASSERT_EQ(profile.current_bytes, uint64_t{0});
+  ASSERT_EQ(profile.allocations, uint64_t{kBlocks});
+  ASSERT_EQ(profile.deallocations, uint64_t{kBlocks});
+  nrq_memory_profiler_stop();
+}
+
+TEST(AllocatorTest, RegistryMovesReallocationsAcrossShardsWithoutLosingOwnership) {
+  constexpr int kBlocks = 4096;
+  std::vector<unsigned char*> blocks;
+  blocks.reserve(kBlocks);
+  for (int index = 0; index < kBlocks; ++index) {
+    auto* block = static_cast<unsigned char*>(nrq_memory_allocate(64, 16));
+    ASSERT_NE(block, nullptr);
+    block[0] = static_cast<unsigned char>(index % 251);
+    blocks.push_back(block);
+  }
+  for (int index = 0; index < kBlocks; ++index) {
+    auto* grown = static_cast<unsigned char*>(
+        nrq_memory_reallocate(blocks[static_cast<size_t>(index)], 2048));
+    ASSERT_NE(grown, nullptr);
+    ASSERT_EQ(static_cast<int>(grown[0]), index % 251);
+    grown[2047] = static_cast<unsigned char>((index * 5) % 251);
+    blocks[static_cast<size_t>(index)] = grown;
+  }
+  for (auto block = blocks.rbegin(); block != blocks.rend(); ++block)
+    nrq_memory_deallocate_checked(*block);
+}
+
+TEST(AllocatorTest, DefaultRegistrySupportsCrossThreadBulkOwnership) {
+  constexpr int kWorkers = 8;
+  constexpr int kBlocksPerWorker = 2000;
+  std::vector<unsigned char*> blocks;
+  std::mutex blocks_mutex;
+  nrq_memory_profiler_start();
+  std::vector<std::thread> workers;
+  workers.reserve(kWorkers);
+  for (int worker = 0; worker < kWorkers; ++worker) {
+    workers.emplace_back([&, worker] {
+      for (int index = 0; index < kBlocksPerWorker; ++index) {
+        const size_t bytes = 48 + static_cast<size_t>(index % 4) * 16;
+        auto* block = static_cast<unsigned char*>(nrq_memory_allocate(bytes, 16));
+        if (!block) continue;
+        block[0] = static_cast<unsigned char>((worker + index) % 251);
+        std::lock_guard<std::mutex> lock(blocks_mutex);
+        blocks.push_back(block);
+      }
+    });
+  }
+  for (std::thread& worker : workers) worker.join();
+  ASSERT_EQ(blocks.size(), size_t{kWorkers * kBlocksPerWorker});
+
+  // Release on different threads than the allocating threads. The default
+  // allocator's thread-local cache and the shared shards must both accept it.
+  workers.clear();
+  for (int worker = 0; worker < kWorkers; ++worker) {
+    workers.emplace_back([&] {
+      for (;;) {
+        unsigned char* block = nullptr;
+        {
+          std::lock_guard<std::mutex> lock(blocks_mutex);
+          if (blocks.empty()) return;
+          block = blocks.back();
+          blocks.pop_back();
+        }
+        nrq_memory_deallocate_checked(block);
+      }
+    });
+  }
+  for (std::thread& worker : workers) worker.join();
+  const NrqMemoryProfile profile = nrq_memory_profiler_capture();
+  ASSERT_EQ(profile.current_bytes, uint64_t{0});
+  ASSERT_EQ(profile.allocations, uint64_t{kWorkers * kBlocksPerWorker});
+  ASSERT_EQ(profile.deallocations, uint64_t{kWorkers * kBlocksPerWorker});
+  nrq_memory_profiler_stop();
+}
+
 TEST(AllocatorTest, FileMappingsReportSizeAndUnmapDeterministically) {
   wchar_t directory[MAX_PATH]{};
   ASSERT_TRUE(GetTempPathW(MAX_PATH, directory) != 0);
@@ -881,6 +973,33 @@ TEST(AllocatorTest, BenchmarksSharedAllocatorContentionAcrossThreads) {
               << " allocate/free pairs in " << elapsed << " us" << std::endl;
   }
   ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
+}
+
+TEST(AllocatorTest, BenchmarksDefaultAllocationContentionAcrossThreads) {
+  constexpr int kIterationsPerThread = 10000;
+  for (int worker_count : {1, 2, 4}) {
+    std::atomic<int> failures{0};
+    std::vector<std::thread> workers;
+    workers.reserve(worker_count);
+    const auto start = std::chrono::steady_clock::now();
+    for (int worker = 0; worker < worker_count; ++worker) {
+      workers.emplace_back([&] {
+        for (int i = 0; i < kIterationsPerThread; ++i) {
+          auto* block = static_cast<unsigned char*>(nrq_memory_allocate(64, 16));
+          if (!block) { ++failures; continue; }
+          block[0] = static_cast<unsigned char>(i);
+          nrq_memory_deallocate_checked(block);
+        }
+      });
+    }
+    for (std::thread& worker : workers) worker.join();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    ASSERT_EQ(failures.load(), 0);
+    std::cout << "[benchmark] default allocator with " << worker_count
+              << " thread(s): " << worker_count * kIterationsPerThread
+              << " allocate/free pairs in " << elapsed << " us" << std::endl;
+  }
 }
 
 TEST(AllocatorTest, GeneralHeapSupportsConcurrentAllocateWriteAndRelease) {
