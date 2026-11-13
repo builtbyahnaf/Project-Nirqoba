@@ -836,6 +836,14 @@ static bool function_uses_gc(const tir::Function& function) {
   for (const tir::Function::Parameter& parameter : function.parameters())
     if (type_uses_gc(parameter.type)) return true;
   for (const tir::Op& op : function.operations()) {
+    // Explicit storage can sit outside the GC heap while containing managed
+    // references. Such a function still needs the mutator region: a callee can
+    // collect while the owned block is its only root.
+    if (op.kind == tir::OpKind::Call && op.result.is_valid() &&
+        op.result.type.is_pointer() &&
+        (op.callee == "memory.allocate" || op.callee == "memory.reallocate") &&
+        collect_has_managed_reference(op.result.type.element_type()))
+      return true;
     // Only managed values require mutator/root instrumentation. A function that
     // merely queries GC state (or calls gc.collect) without holding a managed
     // reference does not need a mutator frame or loop safepoints.
@@ -1207,6 +1215,7 @@ static GcRootPlan analyze_gc_root_plan(const tir::Function& function,
   bool has_managed_slots = false;
   bool has_managed_parameters = false;
   bool has_managed_call_results = false;
+  bool has_owned_storage_roots = false;
   GcRootPlan plan;
   for (const tir::Op& op : operations) {
     if (op.kind == tir::OpKind::Alloca && op.result.is_valid() &&
@@ -1220,12 +1229,19 @@ static GcRootPlan analyze_gc_root_plan(const tir::Function& function,
     if (op.kind == tir::OpKind::Call && op.callee == "array.allocate" &&
         op.result.is_valid() && op.result.type.is_managed_pointer())
       plan.has_rooted_allocation = true;
+    // Stack-placed owned storage is registered inside the activation frame,
+    // even when the function has no managed local of its own.
+    if (op.kind == tir::OpKind::Call && op.result.is_valid() &&
+        op.result.type.is_pointer() &&
+        (op.callee == "memory.allocate" || op.callee == "memory.reallocate") &&
+        collect_has_managed_reference(op.result.type.element_type()))
+      has_owned_storage_roots = true;
   }
   for (const tir::Function::Parameter& parameter : function.parameters())
     if (collect_has_managed_reference(parameter.type)) has_managed_parameters = true;
 
   if (!has_managed_slots && !has_managed_parameters && !has_managed_call_results) {
-    plan.needs_root_frame = plan.has_rooted_allocation;
+    plan.needs_root_frame = plan.has_rooted_allocation || has_owned_storage_roots;
     return plan;
   }
 
@@ -1339,7 +1355,7 @@ static GcRootPlan analyze_gc_root_plan(const tir::Function& function,
   plan.needs_root_frame = !plan.rooted_slots.empty() ||
                           !plan.rooted_values.empty() ||
                           !plan.rooted_call_results.empty() ||
-                          plan.has_rooted_allocation;
+                          plan.has_rooted_allocation || has_owned_storage_roots;
   return plan;
 }
 
@@ -1947,6 +1963,25 @@ class FunctionTranslator {
         builder_.getI64IntegerAttr(static_cast<int64_t>(offsets.size()))).getResult();
     builder_.create<mlir::LLVM::CallOp>(loc, register_fn,
         mlir::ValueRange{slot, object_size, offsets_slot, reference_count});
+  }
+
+  // Stack-placed explicit storage lives only for this activation. Its root must
+  // be published after the frame begins so the matching frame end removes it;
+  // registering at the current operation position would put it outside the
+  // frame and leave a stale slot after return.
+  void emit_frame_gc_root_registration(mlir::Value slot, const Type& value_type,
+                                       mlir::Location loc) {
+    mlir::Operation* slot_definition = slot.getDefiningOp();
+    if (!slot_definition) {
+      emit_gc_root_registration(slot, value_type, loc);
+      return;
+    }
+    // Publish immediately after the storage address exists. The activation root
+    // frame already begins before any operation in the body, so this is inside
+    // the frame, and the slot operand dominates the registration.
+    mlir::OpBuilder::InsertionGuard guard(builder_);
+    builder_.setInsertionPointAfter(slot_definition);
+    emit_gc_root_registration(slot, value_type, loc);
   }
 
   void emit_gc_root_unregistration(mlir::Value slot, const Type& value_type,
@@ -3333,9 +3368,9 @@ class FunctionTranslator {
                 loc, llvm_ptr_type(ctx_), storage_type, storage,
                 mlir::ValueRange{zero, zero}).getResult();
             // A stack-placed raw allocation is still an explicitly owned object.
-            // If its pointee contains managed references, the current activation's
-            // root frame must describe those slots; the frame removes them at exit.
-            emit_gc_root_registration(ptr, op.result.type.element_type(), loc);
+            // Publish its typed root inside this activation's root frame so the
+            // frame removes it when the function exits.
+            emit_frame_gc_root_registration(ptr, op.result.type.element_type(), loc);
             set(op.result, ptr);
             return true;
           }
