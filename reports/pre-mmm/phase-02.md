@@ -473,8 +473,8 @@ borrowable. The metadata is compile-time-only and adds no runtime tracking.
 
 ## Verification
 
-- Clean `RelWithDebInfo` build at `0.453-beta`; the `0.451-beta` working
-  checkpoint and final release use the same source.
+- Clean `RelWithDebInfo` build at `0.453-beta`; the `0.451-beta` released
+  checkpoint and `0.453-beta` working build use the same source.
 - Unit suite: 214/214 passed on the final post-clean run.
 - Integration suite: 421/421 passed, including the recursive effect case, the
   aggregate alias/escape cases, the five interprocedural cases, the seven
