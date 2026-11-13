@@ -1,0 +1,37 @@
+// A shared pointer field is an aggregate member, but its pointee still has a
+// layout. The compiler must resolve that layout before member access and keep
+// the pointee's managed child rooted until the shared field is released.
+struct Child {
+    int value;
+}
+
+struct Node {
+    managed<Child> child;
+}
+
+struct Holder {
+    shared ptr Node node;
+    int tag;
+}
+
+managed<Child> function make_child() {
+    var child = array.allocate<Child>(1);
+    child[0].value = 73;
+    return child;
+}
+
+int function main() {
+    {
+        var holder = Holder { node: memory.shared_allocate<Node>(16), tag: 9 };
+        (*holder.node).child = make_child();
+        gc.collect();
+        gc.collect();
+        var live = gc.get_statistics();
+        print(live.live_objects);
+        print((*holder.node).child[0].value);
+    }
+    gc.collect();
+    var reclaimed = gc.get_statistics();
+    print(reclaimed.live_objects);
+    return 0;
+}
