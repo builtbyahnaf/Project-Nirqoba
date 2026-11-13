@@ -1,9 +1,9 @@
 # Pre-MMM Phase 2 - Lifetime propagation, borrowed returns, aggregate fields, and exclusivity
 
-**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, mutable-borrow exclusivity, branch-selected borrow paths, one-sided conditional borrows, null-check refinement, short-circuit null facts, branch-dependent owner identity, interprocedural borrowed-return effects, flow-sensitive expiration/reassignment, compact function-effect summaries, and aggregate escape safety complete)
-**Version:** 0.453-beta
+**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, mutable-borrow exclusivity, branch-selected borrow paths, one-sided conditional borrows, null-check refinement, short-circuit null facts, branch-dependent owner identity, interprocedural borrowed-return effects, flow-sensitive expiration/reassignment, compact function-effect summaries, aggregate escape safety, and soundness-audit hardening complete)
+**Version:** 0.457-beta
 **Date:** 2026-11-13
-**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`, `6f26f35`, `c06ef19`, `3959176`, `3e068c4`, `c4c684a`, `fef0d00`, `58124f3`, `734cad0`, `b809487`, `77c05a9`, `6539655`, `17697c7`, `6251871`, `bc1bc16`, `6acc26a`, `5d348e6`, `7acbfec`, `1504f8d`, `b361992`, `7d185f9`, `19f1f5a`
+**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`, `6f26f35`, `c06ef19`, `3959176`, `3e068c4`, `c4c684a`, `fef0d00`, `58124f3`, `734cad0`, `b809487`, `77c05a9`, `6539655`, `17697c7`, `6251871`, `bc1bc16`, `6acc26a`, `5d348e6`, `7acbfec`, `1504f8d`, `b361992`, `7d185f9`, `19f1f5a`, `aa6f359`, `e98e748`, `1a9e335`, `a2a25c1`, `7bf4086`, `aa5a000`, `6b8714c`, `4a31b67`, `19a6588`, `c8df0e1`
 
 ## Implemented
 
@@ -471,20 +471,61 @@ borrowable. The metadata is compile-time-only and adds no runtime tracking.
 - `negative/borrow_field_aggregate_replacement`: replacing the whole aggregate
   with a live field borrow is rejected.
 
+## Soundness audit hardening (0.457-beta)
+
+The post-0.453 audit exercised aliases, nested calls, recursion, conditional
+branches, aggregate moves, partial initialization, destruction, GC references,
+and native-resource boundaries. The following defects were reproduced before
+being fixed:
+
+- A `borrow mut` field accepted `&x` when `x` was an immutable binding. The
+  resulting field could mutate storage that the source binding declared
+  read-only. Mutable field borrows now require a mutable owner, or an already
+  mutable borrowed source.
+- `*d.value` and `*borrow_parameter` writes bypassed the index-only immutable
+  field check. Assignment and compound-assignment targets now inspect both
+  dereference and index bases.
+- `&*d.value` re-exposed an immutable borrowed field as a fresh raw pointer.
+  Address-taking through an immutable borrow is now rejected.
+- `var p = d.value` and `escaped = d.value` extracted a borrowed field as an
+  untracked pointer. A borrowed field cannot be extracted independently of its
+  aggregate contract.
+- Copying an aggregate containing a `borrow mut` field duplicated the mutable
+  alias without a conflict check. Mutable borrowed aggregates can no longer be
+  copied; immutable borrowed aggregates remain copyable because they carry no
+  write permission.
+- One aggregate could hold both mutable and immutable borrows of the same
+  owner/path. Borrowed field origins are now checked against each other, using
+  path overlap and mutability, when the aggregate is constructed.
+- Branch-local partial initialization was lost at a merge. Overwriting a nested
+  aggregate that one branch had partially initialized could discard a branch
+  allocation without destruction. Merged uninitialized and partially
+  initialized paths are now conservative; initialized paths are retained only
+  when both branches agree.
+- Completing a nested aggregate left a stale partially-initialized marker. The
+  marker is now cleared when all children are initialized, so complete branches
+  remain readable without weakening overwrite checks.
+
+The audit also exercised deferred cleanup, owner transfers, array-view
+exclusivity, borrowed-return forwarding, GC root-liveness paths, and native
+resource domains. Those paths retained their existing guarantees; no additional
+semantic defect was reproduced there during this pass.
+
 ## Verification
 
-- Clean `RelWithDebInfo` build at `0.453-beta`; the `0.451-beta` released
-  checkpoint and `0.453-beta` working build use the same source.
+- Clean `RelWithDebInfo` build at `0.457-beta`; `0.453-beta` is the released
+  `n-1` checkpoint and `0.457-beta` is the working build.
 - Unit suite: 214/214 passed on the final post-clean run.
-- Integration suite: 421/421 passed, including the recursive effect case, the
-  aggregate alias/escape cases, the five interprocedural cases, the seven
-  flow-sensitive expiration/rebinding cases, and all earlier regression cases.
+- Integration suite: 433/433 passed, including the recursive effect case, the
+  aggregate alias/escape cases, the new immutable-write, extraction, copy,
+  conflicting-alias, and branch-initialization cases, and all earlier
+  regression cases.
 - Compiler check benchmark (`allocator_strategies`, three trials of 20 timed
-  runs after warmup): baseline `0.449-beta` trial medians were 20.838, 21.388,
-  and 20.510 ms; current `0.453-beta` medians were 20.955, 20.800, and 20.651 ms.
-  Median of trial medians: 20.838 ms baseline vs 20.800 ms current; mean was
-  20.855 ms vs 21.087 ms, p95 22.085 ms vs 23.025 ms, and median peak RSS
-  16.002 MiB vs 16.016 MiB. The difference is within run-to-run noise and this
+  runs after warmup): baseline `0.453-beta` trial medians were 20.600, 21.018,
+  and 22.084 ms; audit `0.457-beta` medians were 20.661, 21.003, and 20.343 ms.
+  Median of trial medians: 21.018 ms baseline vs 20.661 ms audit; mean was
+  21.142 ms vs 20.795 ms, p95 22.252 ms vs 21.696 ms, and median peak RSS
+  16.014 MiB vs 15.980 MiB. The difference is within run-to-run noise and this
   is a single-file smoke benchmark, not a full compiler benchmark.
 - One earlier full unit run during development segfaulted in an unrelated GC
   test; immediate full reruns passed, including the final post-clean run. The
@@ -530,5 +571,18 @@ borrowable. The metadata is compile-time-only and adds no runtime tracking.
 - Escape checking for borrowed-field aggregates is deliberately conservative:
   all calls and returns are rejected, even when a callee would only read the
   aggregate locally.
+- An aggregate holding a mutable borrowed field cannot be copied, and a borrowed
+  field cannot be extracted into an independent pointer or used as the source of
+  an address expression. These restrictions preserve exclusivity but reject some
+  otherwise convenient aliases.
+- Branch initialization merges are conservative: a field that is initialized on
+  only one continuing path remains unavailable as a whole value, and a nested
+  aggregate completed by branches cannot be replaced without the same move
+  proof required on straight-line code.
+- Raw pointers produced by `&` remain a lower-level escape hatch. The checker
+  tracks their owner lifetime and uses them for borrowed calls, but does not
+  treat every raw pointer write as proof that the pointed-to binding was
+  declared mutable. This is documented as an explicit raw-pointer boundary, not
+  as a fully safe reference type.
 - The work adds no runtime counters, locks, descriptors, heap allocation, or
   generated checks; borrowing remains compile-time only.
