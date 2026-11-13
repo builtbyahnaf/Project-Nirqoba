@@ -2313,7 +2313,7 @@ destruction action (the duplicate received a null slot, so it did not free twice
 | Check | Result |
 |---|---|
 | Clean `RelWithDebInfo` build | PASS |
-| Unit suite | 220/220 |
+| Unit suite | 220/220 on four of five final runs; one intermittent GC stress crash also reproduced at the pre-Phase-3 baseline |
 | Integration suite | 448/448 |
 | Deferred-owner move/return/call negatives | PASS |
 | Transfer cleanup IR counts | PASS |
@@ -2326,6 +2326,10 @@ destruction action (the duplicate received a null slot, so it did not free twice
 
 No ASan/UBSan run was available in the MSVC configuration. Verification used
 raw LLVM IR cleanup counts, runtime execution, full suites, and the stress case.
+The existing GC stress test
+`GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage` crashed intermittently
+in both builds (1 of 5 Phase 3 runs and 1 of 10 baseline runs, same test); it is
+recorded as a pre-existing flake separate from Phase 3 cleanup.
 
 ### 4. Benchmark
 
@@ -2356,6 +2360,9 @@ The benchmark harness and methodology are in `benchmarks/pre_mmm_phase3/` and
 - Error/unwind cleanup is not implemented. The future integration point is the
   active lexical cleanup stack; no landing pads or unwind tables are generated.
 - The benchmark is cleanup-focused, not a whole-compiler performance suite.
+- The pre-existing intermittent GC stress crash in
+  `GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage` remains separate GC
+  test-hardening work.
 
 ### 6. Commits
 
