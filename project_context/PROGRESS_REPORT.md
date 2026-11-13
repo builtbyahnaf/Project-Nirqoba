@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.453-beta` |
+| Current Working Version | `0.457-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-13 11:52:36` |
-| Report Entries | `17` |
+| Last Report Update | `2026-11-13 14:48:47` |
+| Report Entries | `18` |
 
 ---
 
@@ -2154,6 +2154,110 @@ smoke benchmark, not a full compiler benchmark.
 ---
 
 **End of Entry #017**
+
+## Entry #018 — Soundness Audit: Borrow Writes, Aliases, and Branch Initialization
+
+**Version:** `0.457-beta`  
+**Date:** `2026-11-13 14:48:47`  
+**Scope:** `Working build / Ownership / Borrowing / Lifetimes / Escape safety / Initialization`  
+**Status:** `Completed`
+
+### 1. Overview
+
+This entry records a Pre-MMM Phase 2 soundness audit starting from the released
+`0.453-beta` checkpoint. The audit exercised ownership, borrowing, lifetimes, and
+escape behavior across aliases, nested calls, recursion, branch joins, aggregate
+moves, partial initialization, destruction, GC references, and native resources.
+Six semantic defects and two initialization precision issues were reproduced and
+fixed. `0.453-beta` is now the released `n-1`; `0.457-beta` is the working build.
+
+### 2. Confirmed Defects Fixed
+
+| Defect | Reproduction | Fix |
+|---|---|---|
+| Immutable source accepted for `borrow mut` field | `let x`; `Doc { value: &x }` then mutation | Require mutable owner or mutable borrowed source |
+| Dereference write bypassed immutable field | `*d.value = 9` | Check dereference and index write targets through field metadata |
+| Immutable pointer write bypassed binding rule | `*borrow_parameter = 9`; `var view = alias(...)` then `view[0]` | Explicit borrows carry `explicit_borrow` and reject writes |
+| Address-of dereference re-exposed immutable field | `&*d.value` | Reject address-taking through immutable borrows |
+| Borrowed field extracted as untracked pointer | `var p = d.value`; `escaped = d.value` | Reject direct borrowed-field pointer extraction |
+| Mutable aggregate borrow copied | `var e = d`; `Outer { inner: d }` | Reject copies carrying `borrow mut` targets |
+| Conflicting aliases in one aggregate | immutable and mutable fields both `&x` | Check aggregate targets for path/mutability overlap |
+| Branch partial initialization overwritten | one branch allocates nested owned data, merge then whole-field assignment | Merge uninitialized/partial state conservatively |
+| Stale partial marker after completion | nested fields complete on both branches | Clear partial marker when all children complete |
+
+### 3. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Clean RelWithDebInfo build | PASS | Final `-Clean` build at `0.457-beta` |
+| Unit suite | PASS | 214/214 |
+| Integration suite | PASS | 433/433 |
+| New mutable-source regression | PASS | `negative/mutable_borrow_immutable_source` |
+| New immutable-write regressions | PASS | Dereference, index, address-of, and extraction cases |
+| New aggregate-copy/alias regressions | PASS | Self-conflict, direct copy, nested copy |
+| New branch-initialization regressions | PASS | Partial overwrite, complete reinit, complete read |
+| Existing deferred cleanup/resource/GC suites | PASS | Retained integration tests |
+
+- **Build Status:** Successful.
+- **Regression Status:** None in the final full suites.
+- **Test Environment:** Windows 11 x64, MSVC 14.51.36231, LLVM/MLIR 23.1.4,
+  RelWithDebInfo.
+
+### 4. Performance & Resource Impact
+
+No runtime path was changed; all audit checks are compile-time-only. Across
+three trials of 20 timed `nirqoba check` runs on
+`allocator_strategies/main.nrqba`, baseline `0.453-beta` trial medians were
+20.600, 21.018, and 22.084 ms; audit `0.457-beta` medians were 20.661, 21.003,
+and 20.343 ms. Median of trial medians was 21.018 ms vs 20.661 ms; mean 21.142
+ms vs 20.795 ms, p95 22.252 ms vs 21.696 ms, and median peak RSS 16.014 MiB vs
+15.980 MiB. The difference is within run-to-run noise. This is a single-file
+smoke benchmark, not a full compiler benchmark.
+
+### 5. Issues & Limitations
+
+- Mutable borrowed aggregates are not copyable, and borrowed fields cannot be
+  extracted as independent pointers. These are deliberate conservative
+  restrictions that preserve exclusivity.
+- Branch initialization merges retain a field as unavailable when only one
+  continuing path initialized it. Complete nested aggregates still require a
+  move proof before whole-field replacement.
+- Raw pointers produced by `&` remain a lower-level boundary: lifetime is
+  tracked, but the checker does not treat every raw pointer write as proof that
+  the pointee binding was declared mutable.
+- Borrowed-field aggregates remain rejected at all call and return boundaries,
+  even for read-only callees.
+- GC root lowering and native-resource cleanup retain their existing tests; this
+  audit did not add a new formal GC proof or a new resource domain.
+
+### 6. Commits
+
+- `aa6f359` `sema: enforce borrow write and alias boundaries`
+- `e98e748` `test: cover mutable borrow source ownership`
+- `1a9e335` `test: reject conflicting aggregate borrow aliases`
+- `a2a25c1` `test: expect aggregate mutable borrow copy rejection`
+- `7bf4086` `test: cover nested mutable borrow copies`
+- `aa5a000` `test: cover immutable field write and extraction boundaries`
+- `6b8714c` `test: cover immutable pointer write boundaries`
+- `4a31b67` `test: cover branch partial initialization overwrite`
+- `19a6588` `test: cover branch-complete aggregate initialization`
+- `c8df0e1` `test: cover immutable borrowed field reads`
+
+### 7. Agent Assessment
+
+- **Implementation Completeness:** Complete for the defects reproduced in this
+  audit pass.
+- **Verification Confidence:** High — clean build, 214/214 unit, 433/433
+  integration, and repeated baseline benchmarking passed.
+- **Migration-Readiness Verdict:** Ready for continued Phase 2 work and migration
+  rehearsal within the documented conservative restrictions; not a claim of
+  formal or exhaustive soundness.
+- **Recommended Next Step:** Exercise the hardened boundaries on migration-scale
+  programs and close the remaining closure/escape items before Phase 3.
+
+---
+
+**End of Entry #018**
 
 <!-- REPORT ENTRIES END -->
 
