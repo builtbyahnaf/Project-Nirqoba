@@ -1,0 +1,27 @@
+{
+  "benchmark": "pre_mmm_phase6/root_elision",
+  "baseline": "569a8ab",
+  "current": "0.473-beta",
+  "runtime_ms": {
+    "baseline_samples": [104.1, 100.8, 101.5, 102.8, 122.8, 104.4, 104.7],
+    "baseline_median": 104.13,
+    "current_samples": [35.1, 31.2, 16.2, 16.6, 16.1, 17.4, 16.5],
+    "current_median": 16.63
+  },
+  "compile_ms": {
+    "baseline_samples": [63.5, 57.7, 55.2, 56.9, 56.4],
+    "baseline_median": 56.9,
+    "current_samples": [47.5, 50.0, 49.0, 48.8, 47.2],
+    "current_median": 48.8
+  },
+  "compiler_peak_rss_mb": {
+    "baseline_samples": [29.7, 29.8, 29.8],
+    "baseline_median": 29.8,
+    "current_samples": [28.7, 28.7, 29.6],
+    "current_median": 28.7
+  },
+  "executable_bytes": {
+    "baseline": 94208,
+    "current": 90112
+  }
+}

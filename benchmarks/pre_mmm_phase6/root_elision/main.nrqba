@@ -1,0 +1,116 @@
+// Repeatedly creates stack-owned storage with a managed field. The callee has
+// no collection point, so its root and write barrier are unobservable.
+struct Child { int value; }
+struct Node { int value; managed<Child> child; }
+
+int function work(managed<Child> child) {
+    var total = 0;
+    var holder0 = memory.allocate<Node>(64);
+    (*holder0).child = child;
+    total = total + (*holder0).child[0].value;
+    var holder1 = memory.allocate<Node>(64);
+    (*holder1).child = child;
+    total = total + (*holder1).child[0].value;
+    var holder2 = memory.allocate<Node>(64);
+    (*holder2).child = child;
+    total = total + (*holder2).child[0].value;
+    var holder3 = memory.allocate<Node>(64);
+    (*holder3).child = child;
+    total = total + (*holder3).child[0].value;
+    var holder4 = memory.allocate<Node>(64);
+    (*holder4).child = child;
+    total = total + (*holder4).child[0].value;
+    var holder5 = memory.allocate<Node>(64);
+    (*holder5).child = child;
+    total = total + (*holder5).child[0].value;
+    var holder6 = memory.allocate<Node>(64);
+    (*holder6).child = child;
+    total = total + (*holder6).child[0].value;
+    var holder7 = memory.allocate<Node>(64);
+    (*holder7).child = child;
+    total = total + (*holder7).child[0].value;
+    var holder8 = memory.allocate<Node>(64);
+    (*holder8).child = child;
+    total = total + (*holder8).child[0].value;
+    var holder9 = memory.allocate<Node>(64);
+    (*holder9).child = child;
+    total = total + (*holder9).child[0].value;
+    var holder10 = memory.allocate<Node>(64);
+    (*holder10).child = child;
+    total = total + (*holder10).child[0].value;
+    var holder11 = memory.allocate<Node>(64);
+    (*holder11).child = child;
+    total = total + (*holder11).child[0].value;
+    var holder12 = memory.allocate<Node>(64);
+    (*holder12).child = child;
+    total = total + (*holder12).child[0].value;
+    var holder13 = memory.allocate<Node>(64);
+    (*holder13).child = child;
+    total = total + (*holder13).child[0].value;
+    var holder14 = memory.allocate<Node>(64);
+    (*holder14).child = child;
+    total = total + (*holder14).child[0].value;
+    var holder15 = memory.allocate<Node>(64);
+    (*holder15).child = child;
+    total = total + (*holder15).child[0].value;
+    var holder16 = memory.allocate<Node>(64);
+    (*holder16).child = child;
+    total = total + (*holder16).child[0].value;
+    var holder17 = memory.allocate<Node>(64);
+    (*holder17).child = child;
+    total = total + (*holder17).child[0].value;
+    var holder18 = memory.allocate<Node>(64);
+    (*holder18).child = child;
+    total = total + (*holder18).child[0].value;
+    var holder19 = memory.allocate<Node>(64);
+    (*holder19).child = child;
+    total = total + (*holder19).child[0].value;
+    var holder20 = memory.allocate<Node>(64);
+    (*holder20).child = child;
+    total = total + (*holder20).child[0].value;
+    var holder21 = memory.allocate<Node>(64);
+    (*holder21).child = child;
+    total = total + (*holder21).child[0].value;
+    var holder22 = memory.allocate<Node>(64);
+    (*holder22).child = child;
+    total = total + (*holder22).child[0].value;
+    var holder23 = memory.allocate<Node>(64);
+    (*holder23).child = child;
+    total = total + (*holder23).child[0].value;
+    var holder24 = memory.allocate<Node>(64);
+    (*holder24).child = child;
+    total = total + (*holder24).child[0].value;
+    var holder25 = memory.allocate<Node>(64);
+    (*holder25).child = child;
+    total = total + (*holder25).child[0].value;
+    var holder26 = memory.allocate<Node>(64);
+    (*holder26).child = child;
+    total = total + (*holder26).child[0].value;
+    var holder27 = memory.allocate<Node>(64);
+    (*holder27).child = child;
+    total = total + (*holder27).child[0].value;
+    var holder28 = memory.allocate<Node>(64);
+    (*holder28).child = child;
+    total = total + (*holder28).child[0].value;
+    var holder29 = memory.allocate<Node>(64);
+    (*holder29).child = child;
+    total = total + (*holder29).child[0].value;
+    var holder30 = memory.allocate<Node>(64);
+    (*holder30).child = child;
+    total = total + (*holder30).child[0].value;
+    var holder31 = memory.allocate<Node>(64);
+    (*holder31).child = child;
+    total = total + (*holder31).child[0].value;
+    return total;
+}
+
+int function main() {
+    var child = array.allocate<Child>(1);
+    child[0].value = 7;
+    var total = 0;
+    for (var i = 0; i < 100000; i += 1) {
+        total = total + work(child);
+    }
+    print(total);
+    return 0;
+}
