@@ -928,20 +928,82 @@ class TlsfAllocator final : public Allocator {
   std::unordered_map<FreeBlock*, BinList::iterator> free_positions_;
 };
 
-std::mutex allocator_mutex;
-std::condition_variable allocation_registry_changed;
-std::unordered_map<void*, std::unique_ptr<Allocator>> allocator_handles;
-std::unordered_map<Allocator*, size_t> selected_counts;
 struct AllocationOwner {
   Allocator* allocator;
   size_t bytes;
   size_t alignment;
   bool operation_in_flight = false;
+  bool shared = false;
 };
-std::unordered_map<void*, AllocationOwner> live_allocations;
+
+// The explicit-allocation registry is split by pointer. Every allocation and
+// release touches one shard, so independent threads no longer serialize on a
+// single map mutex. Shards are always locked in index order when a diagnostic
+// or allocator lifetime operation needs a consistent view of the whole
+// registry. No path holds a shard while acquiring `allocator_mutex`.
+constexpr size_t kAllocationShardCount = 8;
+
+// Sharded ownership table. Each entry is still a map node in this upgrade; the
+// next upgrade replaces the node with an inline open-addressed record.
+class AllocationTable {
+ public:
+  struct Entry {
+    void* key = nullptr;
+    AllocationOwner owner{};
+  };
+
+  Entry* find(void* key) {
+    auto found = entries_.find(key);
+    return found == entries_.end() ? nullptr : &found->second;
+  }
+
+  bool insert(void* key, const AllocationOwner& owner) {
+    return entries_.emplace(key, Entry{key, owner}).second;
+  }
+
+  bool erase(void* key) { return entries_.erase(key) != 0; }
+
+  template <typename Visitor>
+  void for_each(Visitor&& visitor) const {
+    for (const auto& entry : entries_) visitor(entry.second);
+  }
+
+ private:
+  std::unordered_map<void*, Entry> entries_;
+};
+
+struct alignas(128) AllocationShard {
+  std::mutex mutex;
+  std::condition_variable changed;
+  AllocationTable allocations;
+};
+
+std::array<AllocationShard, kAllocationShardCount> allocation_shards;
+
+AllocationShard& shard_for(const void* pointer) {
+  // Every allocator returns at least 16-byte-aligned storage, so the low four
+  // bits carry no information. Shifting them out gives a cheap spread without
+  // adding a multiply to every allocation and release.
+  const uintptr_t value = reinterpret_cast<uintptr_t>(pointer) >> 4;
+  return allocation_shards[value & (kAllocationShardCount - 1)];
+}
+
+template <typename Visitor>
+void visit_all_allocations_locked(Visitor&& visitor) {
+  std::array<std::unique_lock<std::mutex>, kAllocationShardCount> locks;
+  for (size_t index = 0; index < kAllocationShardCount; ++index)
+    locks[index] = std::unique_lock<std::mutex>(allocation_shards[index].mutex);
+  for (const AllocationShard& shard : allocation_shards)
+    shard.allocations.for_each(visitor);
+}
+
+std::mutex allocator_mutex;
+std::unordered_map<void*, std::unique_ptr<Allocator>> allocator_handles;
+std::unordered_map<Allocator*, size_t> selected_counts;
 std::unordered_map<void*, uint64_t> shared_reference_counts;
+std::mutex memory_profile_mutex;
 NrqMemoryProfile memory_profile{};
-bool memory_profiler_enabled = false;
+std::atomic<bool> memory_profiler_enabled{false};
 // The generated code loads the whole report as an aggregate, so every field must
 // stay a 64-bit integer and the order in `allocator.h` must match the field list
 // the type checker publishes for `memory.profiler.capture()`.
@@ -1030,7 +1092,9 @@ Allocator* resolve_allocator(uint64_t handle) {
 // Records the profiler counters shared by every successful allocation request.
 // The size histogram bins are fixed so the report layout stays stable.
 void record_allocation_profile(size_t bytes) {
-  if (!memory_profiler_enabled) return;
+  if (!memory_profiler_enabled.load(std::memory_order_relaxed)) return;
+  std::lock_guard<std::mutex> lock(memory_profile_mutex);
+  if (!memory_profiler_enabled.load(std::memory_order_relaxed)) return;
   memory_profile.current_bytes += bytes;
   memory_profile.total_bytes += bytes;
   memory_profile.peak_bytes = std::max(memory_profile.peak_bytes,
@@ -1047,7 +1111,9 @@ void record_allocation_profile(size_t bytes) {
 }
 
 void record_deallocation_profile(size_t bytes) {
-  if (!memory_profiler_enabled) return;
+  if (!memory_profiler_enabled.load(std::memory_order_relaxed)) return;
+  std::lock_guard<std::mutex> lock(memory_profile_mutex);
+  if (!memory_profiler_enabled.load(std::memory_order_relaxed)) return;
   memory_profile.current_bytes -= bytes;
   ++memory_profile.deallocations;
 }
@@ -1117,8 +1183,11 @@ int32_t nrq_allocator_destroy(void* handle) {
   if (allocator->in_flight_operations() != 0) return 0;
   auto selected = selected_counts.find(allocator);
   if (selected != selected_counts.end() && selected->second != 0) return 0;
-  for (const auto& allocation : live_allocations)
-    if (allocation.second.allocator == allocator) return 0;
+  bool owns_live_allocation = false;
+  visit_all_allocations_locked([&](const auto& allocation) {
+    if (allocation.owner.allocator == allocator) owns_live_allocation = true;
+  });
+  if (owns_live_allocation) return 0;
   allocator_handles.erase(found);
   return 1;
 }
@@ -1129,8 +1198,11 @@ int32_t nrq_allocator_reset(void* handle) {
   if (found == allocator_handles.end()) return 0;
   Allocator* allocator = found->second.get();
   if (allocator->in_flight_operations() != 0) return 0;
-  for (const auto& allocation : live_allocations)
-    if (allocation.second.allocator == allocator) return 0;
+  bool owns_live_allocation = false;
+  visit_all_allocations_locked([&](const auto& allocation) {
+    if (allocation.owner.allocator == allocator) owns_live_allocation = true;
+  });
+  if (owns_live_allocation) return 0;
   if (!allocator->reset_serialized()) return 0;
   return 1;
 }
@@ -1195,37 +1267,36 @@ static void release_operation_pin(Allocator* allocator) {
 }
 
 static void* allocate_with_allocator(Allocator* allocator, size_t bytes,
-                                     size_t alignment) {
+                                     size_t alignment, bool pinned = true) {
   void* pointer = nullptr;
   try {
     pointer = allocator->allocate_serialized(bytes, alignment);
   } catch (...) {
-    release_operation_pin(allocator);
+    if (pinned) release_operation_pin(allocator);
     return nullptr;
   }
   if (!pointer) {
-    release_operation_pin(allocator);
+    if (pinned) release_operation_pin(allocator);
     return nullptr;
   }
-  bool recorded = false;
+  AllocationShard& shard = shard_for(pointer);
   try {
-    std::unique_lock<std::mutex> lock(allocator_mutex);
-    auto existing = live_allocations.find(pointer);
-    while (existing != live_allocations.end() &&
-           existing->second.operation_in_flight) {
-      allocation_registry_changed.wait(lock);
-      existing = live_allocations.find(pointer);
+    std::unique_lock<std::mutex> lock(shard.mutex);
+    auto* existing = shard.allocations.find(pointer);
+    while (existing && existing->owner.operation_in_flight) {
+      shard.changed.wait(lock);
+      existing = shard.allocations.find(pointer);
     }
-    recorded = live_allocations.emplace(
-        pointer, AllocationOwner{allocator, bytes, alignment}).second;
-    if (recorded) record_allocation_profile(bytes);
-    else nrq_runtime_fatal("allocator returned an address that is already live");
+    if (!shard.allocations.insert(
+            pointer, AllocationOwner{allocator, bytes, alignment}))
+      nrq_runtime_fatal("allocator returned an address that is already live");
+    record_allocation_profile(bytes);
   } catch (...) {
     allocator->deallocate_serialized(pointer);
-    release_operation_pin(allocator);
+    if (pinned) release_operation_pin(allocator);
     return nullptr;
   }
-  release_operation_pin(allocator);
+  if (pinned) release_operation_pin(allocator);
   return pointer;
 }
 
@@ -1241,11 +1312,11 @@ void* nrq_memory_allocate(size_t bytes, size_t alignment) {
       default_general_cache_enabled.load(std::memory_order_acquire)) {
     if (void* cached =
             thread_default_allocation_cache.take(bytes, alignment)) {
+      AllocationShard& shard = shard_for(cached);
       try {
-        std::lock_guard<std::mutex> lock(allocator_mutex);
-        auto inserted = live_allocations.emplace(
-            cached, AllocationOwner{&default_allocator, bytes, alignment});
-        if (!inserted.second)
+        std::lock_guard<std::mutex> lock(shard.mutex);
+        if (!shard.allocations.insert(
+                cached, AllocationOwner{&default_allocator, bytes, alignment}))
           nrq_runtime_fatal("allocator cache returned an already-live address");
         record_allocation_profile(bytes);
         return cached;
@@ -1255,6 +1326,13 @@ void* nrq_memory_allocate(size_t bytes, size_t alignment) {
       }
     }
   }
+  // The process-default general allocator has static lifetime, so a normal
+  // allocation needs neither the registry mutex nor an operation pin. Large
+  // blocks bypass the cache but still take this lock-free path.
+  if (!thread_selection.allocator &&
+      default_general_cache_enabled.load(std::memory_order_acquire))
+    return allocate_with_allocator(&default_allocator, bytes, alignment, false);
+
   Allocator* allocator = nullptr;
   {
     std::lock_guard<std::mutex> lock(allocator_mutex);
@@ -1296,8 +1374,16 @@ void* nrq_memory_shared_allocate(size_t bytes, size_t alignment) {
   void* pointer = nrq_memory_allocate(bytes, alignment);
   if (!pointer) return nullptr;
   try {
-    std::lock_guard<std::mutex> lock(allocator_mutex);
-    shared_reference_counts.emplace(pointer, 1);
+    {
+      std::lock_guard<std::mutex> lock(allocator_mutex);
+      shared_reference_counts.emplace(pointer, 1);
+    }
+    AllocationShard& shard = shard_for(pointer);
+    std::lock_guard<std::mutex> lock(shard.mutex);
+    auto* owner = shard.allocations.find(pointer);
+    if (!owner)
+      nrq_runtime_fatal("shared allocation disappeared from the registry");
+    owner->owner.shared = true;
   } catch (...) {
     nrq_memory_deallocate_checked(pointer);
     return nullptr;
@@ -1321,6 +1407,7 @@ void* nrq_memory_shared_retain(void* pointer) {
 int32_t nrq_memory_shared_release(void* pointer) {
   if (!pointer) return 0;
   Allocator* allocator = nullptr;
+  AllocationShard* shard = nullptr;
   {
     std::lock_guard<std::mutex> lock(allocator_mutex);
     auto shared = shared_reference_counts.find(pointer);
@@ -1329,15 +1416,17 @@ int32_t nrq_memory_shared_release(void* pointer) {
       --shared->second;
       return 1;
     }
-    auto owner = live_allocations.find(pointer);
-    if (owner == live_allocations.end() || owner->second.operation_in_flight)
+    shard = &shard_for(pointer);
+    std::lock_guard<std::mutex> shard_lock(shard->mutex);
+    auto* owner = shard->allocations.find(pointer);
+    if (!owner || owner->owner.operation_in_flight)
       return 0;
-    allocator = owner->second.allocator;
+    allocator = owner->owner.allocator;
     if (!increment_operation_pin_locked(allocator)) return 0;
     // A zero count reserves this final release. Retain and competing releases
     // cannot claim the pointer while its allocator callback runs unlocked.
     shared->second = 0;
-    owner->second.operation_in_flight = true;
+    owner->owner.operation_in_flight = true;
   }
 
   bool released = false;
@@ -1351,18 +1440,20 @@ int32_t nrq_memory_shared_release(void* pointer) {
   {
     std::lock_guard<std::mutex> lock(allocator_mutex);
     auto shared = shared_reference_counts.find(pointer);
-    auto owner = live_allocations.find(pointer);
+    std::lock_guard<std::mutex> shard_lock(shard->mutex);
+    auto* owner = shard->allocations.find(pointer);
     if (shared == shared_reference_counts.end() || shared->second != 0 ||
-        owner == live_allocations.end() || !owner->second.operation_in_flight)
+        !owner || !owner->owner.operation_in_flight)
       nrq_runtime_fatal("allocator ownership changed during shared release");
     if (released) {
-      record_deallocation_profile(owner->second.bytes);
-      live_allocations.erase(owner);
+      record_deallocation_profile(owner->owner.bytes);
+      shard->allocations.erase(pointer);
       shared_reference_counts.erase(shared);
-      allocation_registry_changed.notify_all();
+      shard->changed.notify_all();
     } else {
-      owner->second.operation_in_flight = false;
+      owner->owner.operation_in_flight = false;
       shared->second = 1;
+      shard->changed.notify_all();
     }
     release_operation_pin_locked(allocator);
   }
@@ -1402,33 +1493,44 @@ void nrq_memory_deallocate_checked(void* pointer) {
   bool cached = false;
   size_t cached_bytes = 0;
   size_t cached_alignment = 0;
+  AllocationShard& shard = shard_for(pointer);
   {
-    std::lock_guard<std::mutex> lock(allocator_mutex);
-    if (shared_reference_counts.find(pointer) != shared_reference_counts.end())
-      nrq_runtime_fatal("shared allocations must be released with memory.shared_release");
-    auto found = live_allocations.find(pointer);
-    if (found == live_allocations.end() || found->second.operation_in_flight)
+    std::lock_guard<std::mutex> lock(shard.mutex);
+    auto* found = shard.allocations.find(pointer);
+    if (!found || found->owner.operation_in_flight)
       nrq_runtime_fatal("memory.deallocate received an invalid or already freed pointer");
-    if (found->second.allocator == &default_allocator &&
-        thread_default_allocation_cache.can_store(found->second.bytes,
-                                                  found->second.alignment)) {
+    if (found->owner.shared)
+      nrq_runtime_fatal("shared allocations must be released with memory.shared_release");
+    if (found->owner.allocator == &default_allocator &&
+        thread_default_allocation_cache.can_store(found->owner.bytes,
+                                                  found->owner.alignment)) {
       cached = true;
-      cached_bytes = found->second.bytes;
-      cached_alignment = found->second.alignment;
+      cached_bytes = found->owner.bytes;
+      cached_alignment = found->owner.alignment;
       record_deallocation_profile(cached_bytes);
-      live_allocations.erase(found);
-      allocation_registry_changed.notify_all();
+      shard.allocations.erase(pointer);
+      shard.changed.notify_all();
     } else {
-      allocator = found->second.allocator;
-      if (!increment_operation_pin_locked(allocator))
-        nrq_runtime_fatal("memory.deallocate could not pin the owning allocator");
-      found->second.operation_in_flight = true;
+      allocator = found->owner.allocator;
+      found->owner.operation_in_flight = true;
     }
   }
   if (cached) {
     thread_default_allocation_cache.store(pointer, cached_bytes,
                                           cached_alignment);
     return;
+  }
+
+  // The in-flight flag in the shard keeps a non-default allocator alive between
+  // the pointer lookup and the pin. The process-default general allocator is
+  // static, so its ordinary releases take no global lock at all. No shard lock
+  // is held while acquiring the allocator mutex, so registry scans and ordinary
+  // releases cannot deadlock.
+  const bool pinned = allocator != &default_allocator;
+  if (pinned) {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    if (!increment_operation_pin_locked(allocator))
+      nrq_runtime_fatal("memory.deallocate could not pin the owning allocator");
   }
 
   bool released = false;
@@ -1439,19 +1541,23 @@ void nrq_memory_deallocate_checked(void* pointer) {
     callback_failed = true;
   }
 
-  {
+  if (pinned) {
     std::lock_guard<std::mutex> lock(allocator_mutex);
-    auto found = live_allocations.find(pointer);
-    if (found == live_allocations.end() || !found->second.operation_in_flight)
+    release_operation_pin_locked(allocator);
+  }
+  {
+    std::lock_guard<std::mutex> lock(shard.mutex);
+    auto* found = shard.allocations.find(pointer);
+    if (!found || !found->owner.operation_in_flight)
       nrq_runtime_fatal("allocator ownership changed during deallocation");
     if (released) {
-      record_deallocation_profile(found->second.bytes);
-      live_allocations.erase(found);
-      allocation_registry_changed.notify_all();
+      record_deallocation_profile(found->owner.bytes);
+      shard.allocations.erase(pointer);
+      shard.changed.notify_all();
     } else {
-      found->second.operation_in_flight = false;
+      found->owner.operation_in_flight = false;
+      shard.changed.notify_all();
     }
-    release_operation_pin_locked(allocator);
   }
   if (callback_failed)
     nrq_runtime_fatal("allocator deallocation callback failed");
@@ -1476,33 +1582,45 @@ void* nrq_memory_reallocate(void* pointer, size_t bytes) {
     }
     return allocate_with_allocator(allocator, bytes, kDefaultAlignmentBytes);
   }
-  Allocator* allocator = nullptr;
-  size_t old_bytes = 0;
-  size_t alignment = 0;
-  {
-    std::lock_guard<std::mutex> lock(allocator_mutex);
-    if (shared_reference_counts.find(pointer) != shared_reference_counts.end())
-      nrq_runtime_fatal("shared allocations cannot be resized");
-    auto found = live_allocations.find(pointer);
-    if (found == live_allocations.end())
-      nrq_runtime_fatal(
-          "memory.reallocate received an invalid or already freed pointer");
-    if (found->second.operation_in_flight)
-      nrq_runtime_fatal("memory.reallocate raced with another operation on the same pointer");
-    allocator = found->second.allocator;
-    old_bytes = found->second.bytes;
-    alignment = found->second.alignment;
-    if (bytes != 0) {
-      if (!increment_operation_pin_locked(allocator)) return nullptr;
-      found->second.operation_in_flight = true;
-    }
-  }
   if (bytes == 0) {
     // Zero bytes releases the block, matching the C realloc convention; the
     // caller cannot distinguish this from failure, which is why the language
     // documentation states that a zero-byte reallocation frees the block.
     nrq_memory_deallocate_checked(pointer);
     return nullptr;
+  }
+
+  Allocator* allocator = nullptr;
+  size_t old_bytes = 0;
+  size_t alignment = 0;
+  AllocationShard& old_shard = shard_for(pointer);
+  {
+    std::lock_guard<std::mutex> shard_lock(old_shard.mutex);
+    auto* found = old_shard.allocations.find(pointer);
+    if (!found)
+      nrq_runtime_fatal(
+          "memory.reallocate received an invalid or already freed pointer");
+    if (found->owner.shared)
+      nrq_runtime_fatal("shared allocations cannot be resized");
+    if (found->owner.operation_in_flight)
+      nrq_runtime_fatal("memory.reallocate raced with another operation on the same pointer");
+    allocator = found->owner.allocator;
+    old_bytes = found->owner.bytes;
+    alignment = found->owner.alignment;
+    found->owner.operation_in_flight = true;
+  }
+  const bool pinned = allocator != &default_allocator;
+  if (pinned) {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    std::lock_guard<std::mutex> shard_lock(old_shard.mutex);
+    auto* found = old_shard.allocations.find(pointer);
+    if (!found || !found->owner.operation_in_flight)
+      nrq_runtime_fatal("allocator ownership changed during reallocation");
+    if (!increment_operation_pin_locked(allocator)) {
+      found->owner.operation_in_flight = false;
+      old_shard.changed.notify_all();
+      return nullptr;
+    }
   }
 
   void* replacement = nullptr;
@@ -1513,44 +1631,73 @@ void* nrq_memory_reallocate(void* pointer, size_t bytes) {
     replacement = nullptr;
   }
 
-  {
-    std::lock_guard<std::mutex> lock(allocator_mutex);
-    auto found = live_allocations.find(pointer);
-    if (found == live_allocations.end() || !found->second.operation_in_flight)
-      nrq_runtime_fatal("allocator ownership changed during reallocation");
-    if (!replacement) {
-      found->second.operation_in_flight = false;
+  if (!replacement) {
+    {
+      std::lock_guard<std::mutex> lock(old_shard.mutex);
+      auto* found = old_shard.allocations.find(pointer);
+      if (!found || !found->owner.operation_in_flight)
+        nrq_runtime_fatal("allocator ownership changed during reallocation");
+      found->owner.operation_in_flight = false;
+      old_shard.changed.notify_all();
+    }
+    if (pinned) {
+      std::lock_guard<std::mutex> lock(allocator_mutex);
       release_operation_pin_locked(allocator);
-      allocation_registry_changed.notify_all();
-      return nullptr;  // The original allocation is untouched.
     }
+    return nullptr;  // The original allocation is untouched.
+  }
 
-    auto allocation_node = live_allocations.extract(found);
-    allocation_node.key() = replacement;
-    allocation_node.mapped() = AllocationOwner{allocator, bytes, alignment};
-    auto inserted = live_allocations.insert(std::move(allocation_node));
-    if (!inserted.inserted)
+  AllocationShard& new_shard = shard_for(replacement);
+  std::unique_lock<std::mutex> first(old_shard.mutex, std::defer_lock);
+  std::unique_lock<std::mutex> second(new_shard.mutex, std::defer_lock);
+  if (&old_shard == &new_shard) {
+    first.lock();
+  } else if (&old_shard < &new_shard) {
+    first.lock();
+    second.lock();
+  } else {
+    second.lock();
+    first.lock();
+  }
+
+  auto* found = old_shard.allocations.find(pointer);
+  if (!found || !found->owner.operation_in_flight)
+    nrq_runtime_fatal("allocator ownership changed during reallocation");
+  if (replacement == pointer) {
+    found->owner = AllocationOwner{allocator, bytes, alignment};
+  } else {
+    old_shard.allocations.erase(pointer);
+    if (!new_shard.allocations.insert(
+            replacement, AllocationOwner{allocator, bytes, alignment}))
       nrq_runtime_fatal("allocator reallocation returned an already-live address");
-    if (memory_profiler_enabled) {
-      memory_profile.current_bytes = memory_profile.current_bytes - old_bytes + bytes;
-      memory_profile.peak_bytes = std::max(memory_profile.peak_bytes,
-                                           memory_profile.current_bytes);
-      // Only growth requests additional bytes; a shrink is not an allocation.
-      if (bytes > old_bytes) {
-        memory_profile.total_bytes += bytes - old_bytes;
-        ++memory_profile.allocations;
-        if (bytes <= 64) ++memory_profile.allocations_le_64;
-        else if (bytes <= 256) ++memory_profile.allocations_le_256;
-        else if (bytes <= 1024) ++memory_profile.allocations_le_1024;
-        else if (bytes <= 4096) ++memory_profile.allocations_le_4096;
-        else if (bytes <= 65536) ++memory_profile.allocations_le_65536;
-        else ++memory_profile.allocations_gt_65536;
-        memory_profile.largest_allocation = std::max(
-            memory_profile.largest_allocation, static_cast<uint64_t>(bytes));
-      }
+  }
+  if (memory_profiler_enabled.load(std::memory_order_relaxed)) {
+    std::lock_guard<std::mutex> profile_lock(memory_profile_mutex);
+    memory_profile.current_bytes = memory_profile.current_bytes - old_bytes + bytes;
+    memory_profile.peak_bytes = std::max(memory_profile.peak_bytes,
+                                         memory_profile.current_bytes);
+    // Only growth requests additional bytes; a shrink is not an allocation.
+    if (bytes > old_bytes) {
+      memory_profile.total_bytes += bytes - old_bytes;
+      ++memory_profile.allocations;
+      if (bytes <= 64) ++memory_profile.allocations_le_64;
+      else if (bytes <= 256) ++memory_profile.allocations_le_256;
+      else if (bytes <= 1024) ++memory_profile.allocations_le_1024;
+      else if (bytes <= 4096) ++memory_profile.allocations_le_4096;
+      else if (bytes <= 65536) ++memory_profile.allocations_le_65536;
+      else ++memory_profile.allocations_gt_65536;
+      memory_profile.largest_allocation = std::max(
+          memory_profile.largest_allocation, static_cast<uint64_t>(bytes));
     }
+  }
+  old_shard.changed.notify_all();
+  if (&old_shard != &new_shard) new_shard.changed.notify_all();
+  if (second.owns_lock()) second.unlock();
+  first.unlock();
+
+  if (pinned) {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
     release_operation_pin_locked(allocator);
-    allocation_registry_changed.notify_all();
   }
   return replacement;
 }
@@ -1591,17 +1738,27 @@ uint64_t nrq_memory_allocator_fragmentation_bytes(uint64_t allocator_handle) {
 }
 
 void nrq_memory_profiler_start(void) {
-  std::lock_guard<std::mutex> lock(allocator_mutex);
+  std::array<std::unique_lock<std::mutex>, kAllocationShardCount> shard_locks;
+  for (size_t index = 0; index < kAllocationShardCount; ++index)
+    shard_locks[index] =
+        std::unique_lock<std::mutex>(allocation_shards[index].mutex);
+  std::lock_guard<std::mutex> profile_lock(memory_profile_mutex);
   memory_profile = {};
-  for (const auto& allocation : live_allocations)
-    memory_profile.current_bytes += allocation.second.bytes;
+  for (const AllocationShard& shard : allocation_shards)
+    shard.allocations.for_each([&](const auto& allocation) {
+      memory_profile.current_bytes += allocation.owner.bytes;
+    });
   memory_profile.peak_bytes = memory_profile.current_bytes;
-  memory_profiler_enabled = true;
+  memory_profiler_enabled.store(true, std::memory_order_release);
 }
 
 void nrq_memory_profiler_stop(void) {
-  std::lock_guard<std::mutex> lock(allocator_mutex);
-  memory_profiler_enabled = false;
+  std::array<std::unique_lock<std::mutex>, kAllocationShardCount> shard_locks;
+  for (size_t index = 0; index < kAllocationShardCount; ++index)
+    shard_locks[index] =
+        std::unique_lock<std::mutex>(allocation_shards[index].mutex);
+  std::lock_guard<std::mutex> profile_lock(memory_profile_mutex);
+  memory_profiler_enabled.store(false, std::memory_order_release);
 }
 
 NrqMemoryProfile nrq_memory_profiler_capture(void) {
@@ -1610,24 +1767,6 @@ NrqMemoryProfile nrq_memory_profiler_capture(void) {
   bool sample_allocator_space = true;
   {
     std::lock_guard<std::mutex> lock(allocator_mutex);
-    profile = memory_profile;
-
-    // Live bytes per allocator kind describe the registry at this snapshot.
-    for (const auto& allocation : live_allocations) {
-      const uint64_t bytes = allocation.second.bytes;
-      switch (allocation.second.allocator->kind()) {
-        case NRQ_ALLOCATOR_GENERAL: profile.general_bytes += bytes; break;
-        case NRQ_ALLOCATOR_POOL: profile.pool_bytes += bytes; break;
-        case NRQ_ALLOCATOR_ARENA: profile.arena_bytes += bytes; break;
-        case NRQ_ALLOCATOR_STACK: profile.stack_bytes += bytes; break;
-        case NRQ_ALLOCATOR_SLAB: profile.slab_bytes += bytes; break;
-        case NRQ_ALLOCATOR_BUDDY: profile.buddy_bytes += bytes; break;
-        case NRQ_ALLOCATOR_FREE_LIST: profile.free_list_bytes += bytes; break;
-        case NRQ_ALLOCATOR_TLSF: profile.tlsf_bytes += bytes; break;
-        case NRQ_ALLOCATOR_CUSTOM: profile.custom_bytes += bytes; break;
-      }
-    }
-
     try {
       pinned_allocators.reserve(allocator_handles.size());
     } catch (...) {
@@ -1647,6 +1786,33 @@ NrqMemoryProfile nrq_memory_profiler_capture(void) {
       for (Allocator* allocator : pinned_allocators)
         release_operation_pin_locked(allocator);
       pinned_allocators.clear();
+    }
+  }
+
+  {
+    std::array<std::unique_lock<std::mutex>, kAllocationShardCount> shard_locks;
+    for (size_t index = 0; index < kAllocationShardCount; ++index)
+      shard_locks[index] =
+          std::unique_lock<std::mutex>(allocation_shards[index].mutex);
+    std::lock_guard<std::mutex> profile_lock(memory_profile_mutex);
+    profile = memory_profile;
+
+    // Live bytes per allocator kind describe the registry at this snapshot.
+    for (const AllocationShard& shard : allocation_shards) {
+      shard.allocations.for_each([&](const auto& allocation) {
+        const uint64_t bytes = allocation.owner.bytes;
+        switch (allocation.owner.allocator->kind()) {
+          case NRQ_ALLOCATOR_GENERAL: profile.general_bytes += bytes; break;
+          case NRQ_ALLOCATOR_POOL: profile.pool_bytes += bytes; break;
+          case NRQ_ALLOCATOR_ARENA: profile.arena_bytes += bytes; break;
+          case NRQ_ALLOCATOR_STACK: profile.stack_bytes += bytes; break;
+          case NRQ_ALLOCATOR_SLAB: profile.slab_bytes += bytes; break;
+          case NRQ_ALLOCATOR_BUDDY: profile.buddy_bytes += bytes; break;
+          case NRQ_ALLOCATOR_FREE_LIST: profile.free_list_bytes += bytes; break;
+          case NRQ_ALLOCATOR_TLSF: profile.tlsf_bytes += bytes; break;
+          case NRQ_ALLOCATOR_CUSTOM: profile.custom_bytes += bytes; break;
+        }
+      });
     }
   }
 
@@ -1735,20 +1901,22 @@ void nrq_memory_secure_release(void* pointer) {
   if (!pointer) return;
   Allocator* allocator = nullptr;
   size_t bytes = 0;
+  AllocationShard& shard = shard_for(pointer);
   {
     std::lock_guard<std::mutex> lock(allocator_mutex);
-    if (shared_reference_counts.find(pointer) != shared_reference_counts.end())
-      nrq_runtime_fatal("shared allocations must be released with memory.shared_release");
-    auto found = live_allocations.find(pointer);
-    if (found == live_allocations.end())
+    std::lock_guard<std::mutex> shard_lock(shard.mutex);
+    auto* found = shard.allocations.find(pointer);
+    if (!found)
       nrq_runtime_fatal("memory.secure_release received an invalid pointer");
-    if (found->second.operation_in_flight)
+    if (found->owner.shared)
+      nrq_runtime_fatal("shared allocations must be released with memory.shared_release");
+    if (found->owner.operation_in_flight)
       nrq_runtime_fatal("memory.secure_release raced with another operation on the same pointer");
-    allocator = found->second.allocator;
-    bytes = found->second.bytes;
+    allocator = found->owner.allocator;
+    bytes = found->owner.bytes;
     if (!increment_operation_pin_locked(allocator))
       nrq_runtime_fatal("memory.secure_release could not pin the owning allocator");
-    found->second.operation_in_flight = true;
+    found->owner.operation_in_flight = true;
   }
 
   SecureZeroMemory(pointer, bytes);
@@ -1762,17 +1930,21 @@ void nrq_memory_secure_release(void* pointer) {
 
   {
     std::lock_guard<std::mutex> lock(allocator_mutex);
-    auto found = live_allocations.find(pointer);
-    if (found == live_allocations.end() || !found->second.operation_in_flight)
+    release_operation_pin_locked(allocator);
+  }
+  {
+    std::lock_guard<std::mutex> lock(shard.mutex);
+    auto* found = shard.allocations.find(pointer);
+    if (!found || !found->owner.operation_in_flight)
       nrq_runtime_fatal("allocator ownership changed during secure release");
     if (released) {
-      record_deallocation_profile(found->second.bytes);
-      live_allocations.erase(found);
-      allocation_registry_changed.notify_all();
+      record_deallocation_profile(found->owner.bytes);
+      shard.allocations.erase(pointer);
+      shard.changed.notify_all();
     } else {
-      found->second.operation_in_flight = false;
+      found->owner.operation_in_flight = false;
+      shard.changed.notify_all();
     }
-    release_operation_pin_locked(allocator);
   }
   if (callback_failed)
     nrq_runtime_fatal("allocator deallocation callback failed during secure release");
