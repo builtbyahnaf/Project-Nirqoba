@@ -12,6 +12,29 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.465-beta (working build)
+
+### Summary of Changes (since `0.461-beta`):
+
+*Owned-allocator Phase 4 working build; `0.457-beta` remains the released `n-1` checkpoint.*
+
+- **The default allocation path no longer takes the global allocator mutex or an
+  operation pin.** The process-default general allocator cannot be destroyed or
+  reset, so ordinary allocations and releases lock only their ownership shard.
+- **The ownership registry is sharded.** Eight pointer-selected shards replace
+  one process-wide map, so unrelated threads no longer serialize on one mutex.
+- **Ownership records are stored inline.** Each shard uses a linear-probing table
+  with tombstone reuse and compaction; a live pointer no longer causes a separate
+  hash-node allocation and release.
+- **Reallocation moves the record between shards.** The replacement keeps the
+  allocator, alignment, size, and shared state without a metadata node.
+- **Profiling remains exact under concurrency.** An atomic enable flag and a
+  dedicated profile mutex protect a consistent capture.
+- **Measured result.** Against `0.461-beta`, allocation-heavy improved 27.9%,
+  destruction-heavy 20.0%, and mixed 19.2% by median; concurrent default
+  allocation improved about 3.1x at four workers, with peak working set flat.
+- No ownership, move, cleanup, or exactly-once destruction rule changed.
+
 ## Version 0.461-beta (working build)
 
 ### Summary of Changes (since `0.457-beta`):
