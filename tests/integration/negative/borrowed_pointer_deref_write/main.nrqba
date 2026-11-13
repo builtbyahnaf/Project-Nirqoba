@@ -1,0 +1,9 @@
+void function mutate(borrow ptr int source) {
+    *source = 9;
+}
+
+int function main() {
+    var x = 5;
+    mutate(&x);
+    return 0;
+}
