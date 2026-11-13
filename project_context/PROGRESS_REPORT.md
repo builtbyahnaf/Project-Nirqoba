@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.465-beta` |
+| Current Working Version | `0.469-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-14 00:38:13` |
-| Report Entries | `20` |
+| Last Report Update | `2026-11-14 01:40:00` |
+| Report Entries | `21` |
 
 ---
 
@@ -2541,6 +2541,119 @@ version, and the final measurements above show no retained regression.
 ---
 
 **End of Entry #020**
+
+## Entry #021 — Phase 5 GC/Ownership Boundary and Explicit Allocator Lifetime
+
+**Version:** `0.469-beta`  
+**Date:** `2026-11-14 01:40:00`  
+**Scope:** `Phase 5 / GC Roots / Owned and Shared Storage / Explicit Allocator Lifetime`  
+**Status:** `Completed`
+
+### 1. Overview
+
+Phase 5 made the GC and deterministic-ownership domains meet at explicit,
+verified boundaries. It also completed the Phase 4 follow-up experiment on
+explicit allocator handles: release, reallocation, and final shared release no
+longer take a redundant operation pin because the live ownership record already
+keeps the allocator alive against `destroy` and `reset`.
+
+Two implementation upgrades were required. Upgrade 1 registers managed fields in
+explicitly owned pointer storage as typed GC roots. Upgrade 2 keeps those roots
+alive across shared reference-counted storage until the final release.
+
+### 2. Implementation
+
+- **Explicit handle release lifetime.** Removed the global allocator mutex and
+  operation pin from `nrq_memory_deallocate_checked`, `nrq_memory_reallocate`, and
+  the final `nrq_memory_shared_release`. Allocation retains its pin because no
+  ownership record exists until the allocator returns a pointer. `destroy` and
+  `reset` scan shards and refuse while a record owned by that allocator is live or
+  in flight.
+- **Owned pointer roots.** Heap and stack-placed `memory.allocate<T>` publish a
+  typed root when `T` has managed offsets. `memory.reallocate<T>` unregisters the
+  old address and registers the new one only on success. `memory.deallocate`
+  unregisters before freeing. Null allocation registration is a no-op.
+- **Stack frame correction.** The cleanup-exit regression found that the first
+  stack implementation registered before the activation frame began, leaving a
+  root pointing at dead stack storage after return. Functions with managed fields
+  inside owned storage are now marked GC-using; the root is published immediately
+  after the stack address exists and is removed by frame end.
+- **Shared roots.** `nrq_memory_shared_allocate_rooted` registers managed offsets
+  for shared storage. Non-final releases leave the root; the final release
+  unregisters it before freeing and restores it if the allocator rejects the free.
+  Shared storage without managed fields keeps the unrooted path.
+
+### 3. Verification
+
+| Check | Result |
+|---|---|
+| Build (RelWithDebInfo) | PASS |
+| Unit suite | 228/228 |
+| Integration suite | 455/455 |
+| Owned heap pointer root probe | `1`, `73` |
+| Stack-owned pointer root probe | `1`, `73` |
+| Reallocated owned pointer probe | `1`, `73` |
+| Cleanup-exit owned pointer probe | `1`, `73`, `7`, `0` |
+| Shared allocation root probe | `1`, `73`, `0` |
+| Blocked-callback destroy/reset races | PASS |
+
+New integration tests: `owned_pointer_gc_roots`,
+`stack_owned_pointer_gc_roots`, `owned_pointer_gc_reallocation`,
+`owned_pointer_cleanup_gc_roots`, and `shared_pointer_gc_roots`. Existing
+negative tests continue to reject `memory.deallocate` on managed, borrowed,
+shared, and resource values.
+
+### 4. Benchmark
+
+Explicit-handle 10,000 allocate/write/free pairs per worker, five runs, median
+microseconds, Windows 11 x64 / MSVC 14.51 / `RelWithDebInfo`:
+
+| Workers | 0.465-beta | 0.469-beta | Change |
+|---:|---:|---:|---:|
+| 1 | 2,330 | 1,840 | **-21.0%** |
+| 2 | 5,005 | 3,650 | **-27.1%** |
+| 4 | 16,068 | 8,622 | **-46.3%** |
+
+The explicit path still resolves handles and takes the allocation-side pin
+through the global registry, so it remains slower than the default path. Raw
+samples: `benchmarks/pre_mmm_phase5/results.json`.
+
+### 5. Limitations
+
+- The ownership record is the lifetime reference; there is no separate allocator
+  refcount. Destroy/reset can transiently return 0 while an explicit allocation
+  is in flight, which is the intended safe outcome.
+- A pre-existing compiler crash remains for aggregate fields declared as
+  `shared ptr T` or `owned ptr T` when `T` contains a managed field. The crash
+  reproduces at `0.465-beta`; local owned and shared allocations are covered, but
+  that nested-field shape is not.
+- No ASan/UBSan run is available in the MSVC configuration. The known
+  `GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage` stress flake recorded
+  in Phase 4 remains separate work.
+
+### 6. Commits
+
+- `allocator: use live ownership records as the explicit release lifetime guard`
+- `benchmark: record explicit allocator-handle lifetime results`
+- `gc: register explicitly owned pointer storage as typed GC roots`
+- `gc: keep shared allocation roots alive until the final release`
+- `gc: scope stack-owned roots to the activation frame`
+- `test: cover owned pointer root removal on an early cleanup exit`
+
+### 7. Agent Assessment
+
+- **Implementation completeness:** Complete for the supported Phase 5 boundary.
+- **Verification confidence:** High for heap/stack owned storage, reallocation,
+  cleanup exits, shared final release, and allocator lifetime races. The nested
+  aggregate-field compiler crash is explicitly not a verified guarantee.
+- **Performance:** Explicit-handle contention improved 21.0%/27.1%/46.3% at
+  1/2/4 workers; the default path is unchanged.
+- **Recommended next step:** fix the aggregate-field lowering crash before
+  extending shared-root coverage to nested shared fields.
+
+---
+
+**End of Entry #021**
 
 <!-- REPORT ENTRIES END -->
 
