@@ -123,8 +123,8 @@
 - [x] Refine conditional borrows after an explicit null check.
   A non-null guard turns a conditional borrow into a definite borrow only when
   the absent path is provably null; the proof is branch-local, preserves field
-  paths, and is lost at joins or on the null path (pending `0.445-beta`
-  release, `reports/pre-mmm/phase-02.md`).
+  paths, and is lost at joins or on the null path (`0.441-beta`,
+  `reports/pre-mmm/phase-02.md`).
 - [ ] Add closure-capture ownership rules when closure support requires them.
 - [ ] Prevent borrowed references from escaping their owner's lifetime.
 - [ ] Implement the minimum escape analysis needed to reject invalid lifetime transfers.

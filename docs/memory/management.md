@@ -492,7 +492,7 @@ one. The flag is one boolean on the existing symbol and the path is the existing
 inline path, preserving the ordinary single-path fast path. No runtime counters,
 locks, descriptors, allocations, or generated checks were added.
 
-## Null-check refinement (pending 0.445-beta)
+## Null-check refinement (0.441-beta)
 
 A conditional borrow can be discharged on a path that explicitly proves the
 binding non-null. The merge records whether the path where the borrow is absent
@@ -509,8 +509,9 @@ Inside `if (view != nullptr)`, or the else path of `if (view == nullptr)`, the
 branch state clears `borrow_conditional` when the absent path is null. The
 binding keeps its owner, mutability, and field-path set, so nested calls, aliases,
 and dereferences are accepted only while that non-null proof holds. The proof is
-branch-local: a join where both paths continue restores the conditional flag, a
-null path keeps it, and an early-return guard carries the refined state forward.
+branch-local: a join restores the conditional flag unless every continuing path
+preserves the same null-absence proof, a null path keeps it, and an early-return
+guard carries the refined state forward.
 
 Field-path exclusion is unchanged after refinement. A definite conditional
 borrow still blocks a later borrow or read of the same path, while disjoint

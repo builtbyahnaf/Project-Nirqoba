@@ -1,9 +1,9 @@
 # Pre-MMM Phase 2 - Lifetime propagation, borrowed returns, aggregate fields, and exclusivity
 
-**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, mutable-borrow exclusivity, branch-selected borrow paths, one-sided conditional borrows, and null-check refinement complete; release pending `0.445-beta`)
-**Version:** 0.437-beta (unreleased `0.445-beta` work)
+**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, mutable-borrow exclusivity, branch-selected borrow paths, one-sided conditional borrows, and null-check refinement complete)
+**Version:** 0.441-beta
 **Date:** 2026-11-13
-**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`, `6f26f35`, `c06ef19`, `3959176`, `3e068c4`, `c4c684a`, `fef0d00`, `58124f3`
+**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`, `6f26f35`, `c06ef19`, `3959176`, `3e068c4`, `c4c684a`, `fef0d00`, `58124f3`, `734cad0`, `b809487`
 
 ## Implemented
 
@@ -166,7 +166,7 @@ possible but not present on every path.
   existing inline path. No runtime counters, locks, descriptors, allocations, or
   generated checks were added.
 
-## Flow-sensitive null refinement (pending 0.445-beta)
+## Flow-sensitive null refinement (0.441-beta)
 
 A conditional borrow is no longer permanently indefinite. When one branch
 proves the binding non-null and the path where the borrow is absent is known to
@@ -183,8 +183,9 @@ path set are unchanged.
 - `if (view != nullptr)` refines the then-branch; `if (view == nullptr)` refines
   the else path. If the null branch cannot fall through, the refined state
   continues after the statement.
-- The refinement is branch-local. A join where both paths continue restores the
-  conditional marker, the null path keeps it, and a later assignment replaces it.
+- The refinement is branch-local. A join restores the conditional marker unless
+  every continuing path preserves the same null-absence proof; the null path
+  keeps it, and a later assignment replaces it.
 - Confirmed conditional borrows still enforce their field-path exclusion. A
   later borrow or read of the same path is rejected; disjoint fields remain
   available. No runtime counters, locks, allocations, or generated checks exist.
@@ -231,6 +232,8 @@ path set are unchanged.
   where both paths continue; the later alias is rejected.
 - `negative/conditional_borrow_refined_overlap`: a refined borrow still rejects
   a new borrow of the same field.
+- `positive/conditional_borrow_join_refinement`: an unrelated join preserves the
+  null-absence proof when every continuing path keeps it; output `9`.
 - `positive/mutable_borrow_disjoint_fields`: mutable borrows of `p.x` and `p.y`
   coexist, and a call receives both disjoint field borrows; output `30`.
 - `positive/mutable_borrow_forwarding`: a mutable field borrow survives two
@@ -297,10 +300,10 @@ path set are unchanged.
 
 ## Verification
 
-- Clean `RelWithDebInfo` build at `0.437-beta` (unreleased `0.445-beta` work).
+- Clean `RelWithDebInfo` build at `0.441-beta`.
 - Unit suite: 214/214 passed on the first post-clean run.
-- Integration suite: 387/387 passed, including the eight branch-path cases, the
-  six one-sided cases, the six null-refinement cases, and all previous
+- Integration suite: 388/388 passed, including the eight branch-path cases, the
+  six one-sided cases, the seven null-refinement cases, and all previous
   mutable-borrow and aggregate-field cases.
 
 ## Limitations
@@ -318,9 +321,9 @@ path set are unchanged.
   remain unaddressable.
 - A one-sided borrow keeps its field path but is marked conditional. It becomes
   definite only after a non-null guard when the absent path is provably null.
-  The refinement is lost at a join where both paths continue, and it is not
-  available on the null path. Branches that select different owner allocations
-  still mark the binding unusable.
+  The refinement is lost at a join that continues on a path without the same
+  proof, and it is not available on the null path. Branches that select different
+  owner allocations still mark the binding unusable.
 - Owning aggregates still use the existing broad live-borrow guard for owner
   mutation, so an independent field write may be rejected conservatively and the
   diagnostic retains array-view wording.
