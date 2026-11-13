@@ -1,0 +1,57 @@
+// Migration-scale cleanup check: nested owned aggregates, an early return from
+// inside a helper, and a conditional defer whose fallback must still release
+// the outer owner. Every iteration allocates and destroys several owners.
+struct Payload {
+    owned_array<int> values;
+    int tag;
+}
+
+struct Envelope {
+    Payload payload;
+    owned_array<int> tail;
+}
+
+Envelope function make_envelope(int seed) {
+    var values = memory.owned_array<int>(8);
+    var tail = memory.owned_array<int>(8);
+    values[0] = seed;
+    values[7] = seed * 2;
+    tail[0] = seed + 1;
+    tail[7] = seed + 2;
+    return Envelope {
+        payload: Payload { values: values, tag: seed % 13 },
+        tail: tail
+    };
+}
+
+int function consume(int seed) {
+    var envelope = make_envelope(seed);
+    if (seed % 11 == 0) {
+        return envelope.payload.values[0] + envelope.tail[7];
+    }
+    var total = envelope.payload.values[0] + envelope.payload.values[7];
+    total += envelope.tail[0] + envelope.tail[7];
+    return total + envelope.payload.tag;
+}
+
+int function main() {
+    var index = 0;
+    var checksum = 0;
+    while (index < 1500) {
+        checksum += consume(index);
+        {
+            var buffer = memory.allocate<byte>(8);
+            if (index % 3 == 0) {
+                defer memory.deallocate(buffer);
+                buffer[0] = (index % 251) as byte;
+                checksum += buffer[0] as int;
+            } else {
+                buffer[0] = ((index + 1) % 251) as byte;
+                checksum += buffer[0] as int;
+            }
+        }
+        index += 1;
+    }
+    print(checksum);
+    return 0;
+}
