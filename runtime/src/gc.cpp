@@ -4028,7 +4028,11 @@ void nrq_gc_root_register(void** slot) {
 void nrq_gc_root_register_typed(void* slot, size_t object_size,
                                 const size_t* reference_offsets,
                                 size_t reference_count) {
-  if (!slot || object_size == 0 || reference_count == 0 || !reference_offsets)
+  // A failed explicit allocation has no storage to describe. Registration is
+  // therefore a no-op for a null slot, matching unregistration; a non-null slot
+  // with a malformed descriptor is still rejected.
+  if (!slot) return;
+  if (object_size == 0 || reference_count == 0 || !reference_offsets)
     nrq_runtime_fatal("GC root registration received an invalid root descriptor");
   for (size_t index = 0; index < reference_count; ++index) {
     const size_t offset = reference_offsets[index];
