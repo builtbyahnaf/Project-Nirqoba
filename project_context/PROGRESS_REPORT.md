@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.469-beta` |
+| Current Working Version | `0.473-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-14 01:40:00` |
-| Report Entries | `21` |
+| Last Report Update | `2026-11-14 03:10:00` |
+| Report Entries | `22` |
 
 ---
 
@@ -2654,6 +2654,105 @@ samples: `benchmarks/pre_mmm_phase5/results.json`.
 ---
 
 **End of Entry #021**
+
+## Entry #022 — Phase 6 Compiler Lowering and Optimization Integration
+
+**Version:** `0.473-beta`  
+**Date:** `2026-11-14 03:10:00`  
+**Scope:** `Phase 6 / Shared Pointer Lowering / GC Root and Barrier Elision / Optimization Preservation`  
+**Status:** `Completed`
+
+### 1. Overview
+
+Phase 6 fixed the known nested shared-field compiler crash and added an
+ownership-aware optimization that removes GC root and write-barrier work when no
+collection can observe an activation. The work stayed inside compiler lowering,
+sema type resolution, and optimization; the default memory policy and subsystem
+migration were not changed.
+
+### 2. Implementation
+
+- **Shared pointee resolution.** `resolve_aggregate_type` now resolves a shared
+  pointer's pointee with the existing active-name cycle guard. Before this, a
+  `shared ptr Node` field lowered through an opaque identified `Node`, causing an
+  out-of-bounds GEP or an `extractvalue` crash when the pointee contained managed
+  fields.
+- **Collection-point analysis.** Each lowered function detects calls that may
+  collect (transitively) and loop backedges, where the runtime safepoint can
+  snapshot the activation.
+- **Root/barrier elision.** Stack-placed raw owned storage records its address and
+  derived GEPs. With no collection point, the lowering omits the typed root and
+  emits a plain managed store instead of `nrq_gc_root_store`. With a collection
+  point, the Phase 5 root and barrier path is unchanged.
+- **Preserved information.** Ownership spelling, `noalias`, `readonly`,
+  `nocapture`, cleanup ordering, and exactly-once destruction remain on the
+  existing paths.
+
+### 3. Verification
+
+| Check | Result |
+|---|---|
+| Clean build (RelWithDebInfo) | PASS |
+| Compiler version | `0.473-beta` |
+| Unit suite | 228/228 |
+| Integration suite | 460/460 |
+| Shared field root, O2 | `1`, `73`, `0` |
+| Shared field root, O0 | `1`, `73`, `0` |
+| Root elision runtime, O2/O0 | PASS, 73 |
+| Root elision IR, O2 | no holder root or barrier; one caller root |
+| Observable stack root | `1`, `73` |
+
+New tests: `shared_field_gc_roots`, `shared_field_gc_roots_o0`,
+`owned_pointer_root_elision`, `owned_pointer_root_elision_o0`, and
+`owned_pointer_root_elision_ir`.
+
+### 4. Benchmark
+
+`benchmarks/pre_mmm_phase6/root_elision`, baseline `569a8ab`, Windows 11 x64 /
+MSVC 14.51 / `RelWithDebInfo`:
+
+| Measurement | 0.469-beta | 0.473-beta | Change |
+|---|---:|---:|---:|
+| Runtime median | 104.13 ms | 16.63 ms | **-84.0%** |
+| Compile median | 56.9 ms | 48.8 ms | **-14.2%** |
+| Compiler peak RSS | 29.8 MB | 28.7 MB | **-3.7%** |
+| Executable size | 94,208 B | 90,112 B | **-4.3%** |
+
+The runtime figure is an isolated synthetic workload; the gain comes from
+removing side effects that blocked SROA, not from removing an observable check.
+Raw samples are in `benchmarks/pre_mmm_phase6/results.json`.
+
+### 5. Limitations
+
+- Elision is limited to raw stack-owned storage. Owned arrays, shared storage,
+  heap-owned storage, and managed objects keep their established paths.
+- Calls with unknown effects are conservatively collection points; a broader
+  effect model for deterministic release routines is follow-up work.
+- No ASan/UBSan run is available in the MSVC configuration. The known Phase 4 GC
+  stress flake remains separate.
+- No full subsystem migration or default-policy change was attempted.
+
+### 6. Commits
+
+- `sema: resolve shared pointer aggregate fields`
+- `test: cover shared field roots at O0 and O2`
+- `gc: elide unobservable owned-storage roots and barriers`
+- `test: verify owned-storage root elision at O0 and O2`
+
+### 7. Agent Assessment
+
+- **Implementation completeness:** Complete for both Phase 6 upgrades and the
+  known crash.
+- **Verification confidence:** High for the new paths at `-O0` and `-O2`; the
+  conservative collection-point rule is the main residual restriction.
+- **Performance:** Large isolated runtime gain, modest compile-time/memory/size
+  improvements, with raw samples retained.
+- **Recommended next step:** add verified effect models for deterministic release
+  runtime calls, then extend elision only where collection summaries prove it.
+
+---
+
+**End of Entry #022**
 
 <!-- REPORT ENTRIES END -->
 
