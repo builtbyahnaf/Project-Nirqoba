@@ -2062,7 +2062,7 @@ compile-time-only and preserve the existing borrow fast paths.
 | `SymbolTable.h` / `.cpp` | Added aggregate `field_borrows` and live-borrow participation | Track borrowed fields across aggregate values |
 | `TypeChecker.cpp` | Added aggregate lifetime/escape diagnostics and storage rejection | Prevent borrowed references from escaping owners |
 | `TypeChecker.cpp` / `.h` | Returned aggregate metadata by const reference | Avoid per-query vector copies |
-| Tests | Nine focused aggregate/effect cases plus retained regression suite | Cover recursion, paths, storage, calls, returns, and scope boundaries |
+| Tests | Ten focused aggregate/effect cases plus retained regression suite | Cover recursion, aliasing, paths, storage, calls, returns, and scope boundaries |
 
 ### 4. Verification & Testing
 
@@ -2070,9 +2070,9 @@ compile-time-only and preserve the existing borrow fast paths.
 |---|---|---|
 | Clean RelWithDebInfo build | PASS | `scripts/build.ps1 -Configuration RelWithDebInfo -Clean` |
 | Unit suite | PASS | 214/214 |
-| Integration suite | PASS | 420/420 |
+| Integration suite | PASS | 421/421 |
 | Recursive effect case | PASS | `positive/recursive_borrow_effect` |
-| Aggregate positive cases | PASS | Same-scope nested aggregate and disjoint paths |
+| Aggregate positive cases | PASS | Same-scope nested aggregate, alias copy, and disjoint paths |
 | Aggregate negative cases | PASS | Call, field storage, inner escape, owner replacement, nested/direct return |
 | Benchmark | PASS | Three 20-run trials against `0.449-beta` |
 
@@ -2132,7 +2132,7 @@ smoke benchmark, not a full compiler benchmark.
 
 - **Implementation Completeness:** Complete for the requested effect-summary and
   aggregate escape-safety upgrades.
-- **Verification Confidence:** High — clean build, 214/214 unit, 420/420
+- **Verification Confidence:** High — clean build, 214/214 unit, 421/421
   integration, and repeated baseline benchmarking passed.
 - **Known Risks:** Conservative call/return rejection for borrowed-field
   aggregates and aggregate-only effect precision are intentional limits; the
