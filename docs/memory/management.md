@@ -595,3 +595,38 @@ field; sibling fields and any newly selected paths remain independently tracked.
 
 The expiration state is entirely compile-time. No runtime borrow counters,
 locks, descriptors, allocations, or generated checks are introduced.
+
+## Compact function borrow effects (0.453-beta)
+
+Each function signature carries one effect byte per parameter. Four bits record
+whether a borrowed parameter may be read, written, aliased, or escape through a
+borrowed return. Declared mutability and return-source information seed the
+bits before a body is checked. While checking a body, direct parameter uses and
+nested call effects merge into the current summary; after the body is checked,
+the signature is cached as complete. Recursive calls reuse the declared summary
+and incomplete or unknown callees contribute all four effects conservatively.
+
+At a call boundary, a write effect is treated as an exclusive mutable claim. This
+makes forwarded effects participate in the same conflict checks as direct
+borrows without receiving the caller's allocation id. Effects are aggregate
+per-parameter facts, not a path-sensitive interprocedural analysis, and add one
+byte per parameter plus no runtime state.
+
+## Aggregate borrow escape safety (0.453-beta)
+
+A struct initializer records every borrowed field as an owner, allocation id,
+path set, and mutability. Nested struct initializers contribute their field
+origins transitively. The containing symbol carries those origins as
+`field_borrows`, so they can be checked when the aggregate is declared, assigned,
+passed to a call, returned, or stored into another aggregate.
+
+A borrowed-field aggregate may be declared where its owner's scope is at least
+as deep as the binding's scope. Assigning an inner aggregate to an outer target
+is rejected. Returning a borrowed-field aggregate is rejected even when the
+borrow is derived from a parameter, and passing one through a call is rejected
+because the callee could retain or return it. Aggregate-field storage and
+owner replacement are rejected while the field borrow is live.
+
+The metadata is transitive and compile-time only; valid same-scope nested
+aggregates and disjoint field paths remain usable. No runtime borrow counters,
+locks, descriptors, heap allocations, or generated checks are added.

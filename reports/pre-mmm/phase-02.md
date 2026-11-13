@@ -1,9 +1,9 @@
 # Pre-MMM Phase 2 - Lifetime propagation, borrowed returns, aggregate fields, and exclusivity
 
-**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, mutable-borrow exclusivity, branch-selected borrow paths, one-sided conditional borrows, null-check refinement, short-circuit null facts, branch-dependent owner identity, interprocedural borrowed-return effects, and flow-sensitive expiration/reassignment complete)
-**Version:** 0.449-beta
+**Status:** In progress (lifetime propagation, source-bound borrowed returns, aggregate-field borrows, mutable-borrow exclusivity, branch-selected borrow paths, one-sided conditional borrows, null-check refinement, short-circuit null facts, branch-dependent owner identity, interprocedural borrowed-return effects, flow-sensitive expiration/reassignment, compact function-effect summaries, and aggregate escape safety complete)
+**Version:** 0.453-beta
 **Date:** 2026-11-13
-**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`, `6f26f35`, `c06ef19`, `3959176`, `3e068c4`, `c4c684a`, `fef0d00`, `58124f3`, `734cad0`, `b809487`, `77c05a9`, `6539655`, `17697c7`, `6251871`, `bc1bc16`, `6acc26a`, `5d348e6`, `7acbfec`
+**Commits:** `429f01d`, `994e8bd`, `4eba86a`, `9420e6b`, `b276ae6`, `cc595bf`, `3ef1e49`, `03505c8`, `6f26f35`, `c06ef19`, `3959176`, `3e068c4`, `c4c684a`, `fef0d00`, `58124f3`, `734cad0`, `b809487`, `77c05a9`, `6539655`, `17697c7`, `6251871`, `bc1bc16`, `6acc26a`, `5d348e6`, `7acbfec`, `1504f8d`, `b361992`, `7d185f9`, `19f1f5a`
 
 ## Implemented
 
@@ -258,6 +258,44 @@ conflict checks. Keeping the active id makes borrow-then-null merges sound while
 still allowing the old field once every continuing arm releases it. The
 remaining state is compile-time only.
 
+## Interprocedural borrow-effect summaries (0.453-beta)
+
+Each `FunctionSignature` now stores one compact effect byte per parameter. The
+bits describe reads, writes, aliases, and escapes of a borrowed parameter.
+Declared effects are available before a body is checked: a borrowed parameter
+starts as a read, a `borrow mut` parameter adds a write, and the declared return
+source adds escape. When a body is checked, direct uses and nested calls merge
+into the current function's summary. A checked signature is cached; recursive
+calls reuse the declared summary, and a callee without a completed summary gets
+all four effects conservatively. Effects are aggregate and compile-time only,
+never caller allocation ids.
+
+Call sites consume the summary when claiming a borrowed argument. A write effect
+makes the argument an exclusive mutable claim even if the effect came indirectly
+through forwarding, so an existing live borrow is rejected at the boundary. The
+summary is representation-light: one byte per parameter and no per-call walk of
+the callee body.
+
+## Aggregate borrow escape safety (0.453-beta)
+
+Struct initializers now record the origin of every borrowed field as owner,
+allocation id, path set, and mutability. Nested aggregates contribute their
+field origins transitively. A declaration validates every recorded owner against
+the target binding's scope; an assignment does the same against the existing
+target scope. This rejects an outer aggregate that would retain a borrow of an
+inner owner.
+
+Aggregates holding borrowed fields cannot escape through a return value, a call
+argument, or storage into another aggregate or allocated memory. Returning such
+an aggregate is rejected even when the borrow came from a parameter. The
+dedicated diagnostics name the lifetime or storage boundary instead of silently
+copying a dangling reference. Moving or replacing an owner while an aggregate
+field borrow is live is also rejected through the existing live-borrow queries.
+
+Valid borrowing remains available: a nested aggregate in the owner's scope can
+hold and mutate a borrowed field, and disjoint field paths remain independently
+borrowable. The metadata is compile-time-only and adds no runtime tracking.
+
 ## Tests
 
 - `positive/branch_borrow_paths_disjoint`: branch-selected `.x`/`.y` paths leave
@@ -349,6 +387,24 @@ remaining state is compile-time only.
   applies after null expiration.
 - `negative/flow_borrow_rebind_short_lived_owner`: rebinding to an inner-scope
   owner reports `borrow of 'inner' cannot outlive its owner`.
+- `positive/recursive_borrow_effect`: a recursive borrowed-return function keeps
+  its source identity and returns a mutable view; output `9`.
+- `positive/aggregate_borrow_same_scope`: a nested aggregate holds and mutates a
+  borrowed field in its owner's scope; output `9`.
+- `positive/aggregate_borrow_disjoint_path`: an aggregate field borrow of
+  `p.x` leaves `p.y` independently borrowable; output `9`.
+- `negative/aggregate_borrow_call`: passing an aggregate with a borrowed field
+  through a call is rejected.
+- `negative/aggregate_borrow_field_storage`: storing such an aggregate in
+  another aggregate field is rejected.
+- `negative/aggregate_borrow_inner_escape`: assigning an inner aggregate to an
+  outer target is rejected.
+- `negative/aggregate_borrow_nested_return`: returning a nested aggregate with
+  a borrowed field is rejected.
+- `negative/aggregate_borrow_owner_replacement`: replacing the owner while an
+  aggregate field borrow is live is rejected.
+- `negative/aggregate_borrow_return`: returning an aggregate with a borrowed
+  field is rejected.
 - `positive/mutable_borrow_disjoint_fields`: mutable borrows of `p.x` and `p.y`
   coexist, and a call receives both disjoint field borrows; output `30`.
 - `positive/mutable_borrow_forwarding`: a mutable field borrow survives two
@@ -415,20 +471,19 @@ remaining state is compile-time only.
 
 ## Verification
 
-- Clean `RelWithDebInfo` build at `0.449-beta`; the interrupted clean build was
-  resumed without re-cleaning and linked successfully.
+- Clean `RelWithDebInfo` build at `0.453-beta`; the `0.451-beta` working
+  checkpoint and final release use the same source.
 - Unit suite: 214/214 passed on the final post-clean run.
-- Integration suite: 411/411 passed, including the five interprocedural cases,
-  the seven flow-sensitive expiration/rebinding cases, all earlier
-  branch-path/null/owner cases, and the previous mutable-borrow and
-  aggregate-field cases.
+- Integration suite: 420/420 passed, including the recursive effect case, the
+  aggregate escape cases, the five interprocedural cases, the seven
+  flow-sensitive expiration/rebinding cases, and all earlier regression cases.
 - Compiler check benchmark (`allocator_strategies`, three trials of 20 timed
-  runs after warmup): trial medians for baseline `0.441-beta` were 20.323,
-  19.333, and 19.559 ms; current `0.449-beta` medians were 19.448, 19.488, and
-  19.575 ms. Median of trial medians: 19.559 ms baseline vs 19.488 ms current;
-  mean was 19.619 ms vs 19.746 ms, p95 20.592 ms vs 20.850 ms, and median peak
-  RSS 15.828 MiB vs 15.957 MiB. The difference is within run-to-run noise and
-  this is a single-file smoke benchmark, not a full compiler benchmark.
+  runs after warmup): baseline `0.449-beta` trial medians were 20.838, 21.388,
+  and 20.510 ms; current `0.453-beta` medians were 20.955, 20.800, and 20.651 ms.
+  Median of trial medians: 20.838 ms baseline vs 20.800 ms current; mean was
+  20.855 ms vs 21.087 ms, p95 22.085 ms vs 23.025 ms, and median peak RSS
+  16.002 MiB vs 16.016 MiB. The difference is within run-to-run noise and this
+  is a single-file smoke benchmark, not a full compiler benchmark.
 - One earlier full unit run during development segfaulted in an unrelated GC
   test; immediate full reruns passed, including the final post-clean run. The
   intermittent GC-test failure was not reproduced.
@@ -456,16 +511,22 @@ remaining state is compile-time only.
 - Owning aggregates still use the existing broad live-borrow guard for owner
   mutation, so an independent field write may be rejected conservatively and the
   diagnostic retains array-view wording.
-- Borrowed struct fields still do not carry an independently checked lifetime.
+- Borrowed struct fields are tracked through the containing aggregate value,
+  not as independent lexical bindings. Field storage is rejected, while direct
+  construction and same-scope nested aggregates remain supported.
 - Mutable-borrow exclusivity is enforced at borrow creation, reads, and call
-  boundaries. Borrowed-return sources now propagate through nested calls, but
-  the callee does not receive the caller's allocation id or live-borrow set, and
-  effects inside a callee are not inferred from a caller's active borrow.
+  boundaries. Effect summaries now carry reads, writes, aliases, and escapes
+  through nested calls, but the callee does not receive the caller's allocation
+  id or live-borrow set; a summary is aggregate, not path-sensitive per owner.
 - Reassignment supports another validated borrow or `nullptr`. Rebinding to a
   plain owned or raw pointer remains rejected, and assigning `nullptr` to an
   owner that still has a live borrow remains conservatively rejected rather than
   silently invalidating every alias.
 - Branch-sensitive owner selection for borrowed returns, closure capture, and
-  general escape analysis are not implemented.
+  general escape analysis beyond the supported aggregate paths are not
+  implemented.
+- Escape checking for borrowed-field aggregates is deliberately conservative:
+  all calls and returns are rejected, even when a callee would only read the
+  aggregate locally.
 - The work adds no runtime counters, locks, descriptors, heap allocation, or
   generated checks; borrowing remains compile-time only.

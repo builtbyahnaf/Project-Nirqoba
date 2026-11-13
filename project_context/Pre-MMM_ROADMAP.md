@@ -143,6 +143,15 @@
   the old path is released, replacement owners must outlive the binding, and
   branch merges retain any borrow still possible on a continuing path
   (`0.449-beta`, `reports/pre-mmm/phase-02.md`).
+- [x] Summarize interprocedural borrow effects.
+  Compact per-parameter read/write/alias/escape bits merge through nested and
+  recursive calls, with conservative fallbacks for incomplete callees and no
+  runtime tracking (`0.453-beta`, `reports/pre-mmm/phase-02.md`).
+- [x] Prevent borrow escape through aggregates and scope boundaries.
+  Borrowed-field origins travel with aggregate values; inner-to-outer
+  assignments, returns, calls, and aggregate-field storage are rejected while
+  same-scope nested aggregates and disjoint field paths remain valid
+  (`0.453-beta`, `reports/pre-mmm/phase-02.md`).
 - [ ] Add closure-capture ownership rules when closure support requires them.
 - [ ] Prevent borrowed references from escaping their owner's lifetime.
 - [ ] Implement the minimum escape analysis needed to reject invalid lifetime transfers.

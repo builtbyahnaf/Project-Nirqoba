@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.449-beta` |
+| Current Working Version | `0.453-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-13 11:06:20` |
-| Report Entries | `16` |
+| Last Report Update | `2026-11-13 11:52:36` |
+| Report Entries | `17` |
 
 ---
 
@@ -2018,6 +2018,142 @@ not a full compiler benchmark.
 ---
 
 **End of Entry #016**
+
+## Entry #017 — Release: 0.453-beta borrow effects and escape safety
+
+**Version:** `0.453-beta`  
+**Date:** `2026-11-13 11:52:36`  
+**Scope:** `Release / Borrow checking / Effect summaries / Escape analysis`  
+**Status:** `Completed`
+
+### 1. Overview
+
+This milestone splits the former `0.449-beta` follow-up work into a `0.451-beta`
+working checkpoint and the final `0.453-beta` release. It adds compact
+per-parameter function-effect summaries and uses them at call boundaries, then
+closes the aggregate escape path for borrowed fields. Both upgrades are
+compile-time-only and preserve the existing borrow fast paths.
+
+### 2. Implementation Details
+
+- **Effect bits:** `FunctionSignature` stores one `uint8_t` per parameter with
+  read, write, alias, and escape bits. Declared borrow mutability and the
+  returned-borrow source seed the summary before body checking.
+- **Propagation:** direct parameter uses and nested call effects merge into the
+  active function summary. Checked bodies publish a cached summary; recursive
+  calls use the declared summary; incomplete callees contribute all effects.
+- **Call-site use:** a write effect becomes an exclusive mutable claim, so
+  forwarded writes participate in existing live-borrow conflict checks.
+- **Aggregate origins:** struct initializers record borrowed-field owners,
+  allocation ids, paths, and mutability, including nested aggregates. Symbols
+  carry this metadata when declared or copied.
+- **Escape checks:** declarations and assignments validate owner scope; returns,
+  calls, aggregate-field storage, and owner replacement reject borrowed-field
+  escapes. Same-scope nested aggregates and disjoint paths remain valid.
+- **Where:** `compiler/include/nirqoba/Sema/TypeChecker.h`,
+  `compiler/include/nirqoba/Sema/SymbolTable.h`,
+  `compiler/lib/Sema/TypeChecker.cpp`, `compiler/lib/Sema/SymbolTable.cpp`.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `TypeChecker.h` / `.cpp` | Added compact effect bits, merging, publication, and call-site use | Propagate borrowed-parameter effects without body rescans |
+| `SymbolTable.h` / `.cpp` | Added aggregate `field_borrows` and live-borrow participation | Track borrowed fields across aggregate values |
+| `TypeChecker.cpp` | Added aggregate lifetime/escape diagnostics and storage rejection | Prevent borrowed references from escaping owners |
+| `TypeChecker.cpp` / `.h` | Returned aggregate metadata by const reference | Avoid per-query vector copies |
+| Tests | Nine focused aggregate/effect cases plus retained regression suite | Cover recursion, paths, storage, calls, returns, and scope boundaries |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Clean RelWithDebInfo build | PASS | `scripts/build.ps1 -Configuration RelWithDebInfo -Clean` |
+| Unit suite | PASS | 214/214 |
+| Integration suite | PASS | 420/420 |
+| Recursive effect case | PASS | `positive/recursive_borrow_effect` |
+| Aggregate positive cases | PASS | Same-scope nested aggregate and disjoint paths |
+| Aggregate negative cases | PASS | Call, field storage, inner escape, owner replacement, nested/direct return |
+| Benchmark | PASS | Three 20-run trials against `0.449-beta` |
+
+- **Build Status:** Successful.
+- **Regression Status:** None in the final full suites.
+- **Test Environment:** Windows 11 x64, MSVC 14.51.36231, LLVM/MLIR 23.1.4,
+  RelWithDebInfo.
+
+### 5. Performance & Resource Impact
+
+No runtime code changed, so runtime impact is zero. Effect summaries add one
+byte per parameter; aggregate field origins allocate only for values that
+contain borrowed fields. Across three trials of 20 timed `nirqoba check` runs on
+`allocator_strategies/main.nrqba`, baseline `0.449-beta` trial medians were
+20.838, 21.388, and 20.510 ms; current `0.453-beta` medians were 20.955, 20.800,
+and 20.651 ms. Median of trial medians was 20.838 ms vs 20.800 ms; mean 20.855
+ms vs 21.087 ms, p95 22.085 ms vs 23.025 ms, and median peak RSS 16.002 MiB vs
+16.016 MiB. The difference is within run-to-run noise. This is a single-file
+smoke benchmark, not a full compiler benchmark.
+
+### 6. Issues & Limitations
+
+- Effect summaries are aggregate per-parameter facts, not path-sensitive
+  interprocedural state. Conflicting field paths at a call boundary are handled
+  by the existing argument borrow checks, not by per-path summary bits.
+- Incomplete or external callees use all four effects conservatively, which can
+  reject a program that would be safe after full interprocedural knowledge.
+- Borrowed-field aggregates are deliberately rejected at every call and return,
+  even when a callee would only read them locally.
+- Borrowed fields are tracked through the containing aggregate value, not as
+  independent lexical bindings; aggregate-field storage remains unsupported.
+- Branch-sensitive borrowed-return owner selection, closure capture, and general
+  escape analysis remain outside this milestone.
+- One earlier unit run during development segfaulted in an unrelated GC test;
+  immediate full reruns passed, including the final post-clean run.
+
+### 7. Outstanding Work
+
+- [x] Implement compact interprocedural borrow-effect summaries.
+- [x] Prevent aggregate borrow escape across scope boundaries.
+- [ ] Add closure-capture ownership rules when closure support requires them.
+- [ ] Extend escape analysis beyond the supported aggregate paths if required by
+  future language features.
+
+### 8. Dependencies & Compatibility
+
+- **New Dependencies:** None.
+- **Removed Dependencies:** None.
+- **Platform Compatibility:** No platform-specific change.
+- **Breaking Changes:** Aggregates containing borrowed fields can no longer be
+  returned, passed through calls, stored in aggregate fields, or moved from an
+  inner owner scope to an outer binding. Same-scope construction and use remain
+  valid. Conservative effect fallbacks may also reject some incomplete-callee
+  programs that were previously accepted.
+
+### 9. Agent Assessment
+
+- **Implementation Completeness:** Complete for the requested effect-summary and
+  aggregate escape-safety upgrades.
+- **Verification Confidence:** High — clean build, 214/214 unit, 420/420
+  integration, and repeated baseline benchmarking passed.
+- **Known Risks:** Conservative call/return rejection for borrowed-field
+  aggregates and aggregate-only effect precision are intentional limits; the
+  benchmark is a single-file smoke measurement.
+- **Recommended Next Step:** Close the remaining Phase 2 escape/lifetime items or
+  document the conservative boundary before moving to Phase 3.
+
+### 10. Evidence & References
+
+- **Commits:** `1504f8d` (effect/escape implementation), `b361992` (focused
+  tests), `7d185f9` (metadata reuse), `19f1f5a` (`0.451-beta` checkpoint)
+- **Relevant Files:** `compiler/include/nirqoba/Sema/TypeChecker.h`,
+  `compiler/lib/Sema/TypeChecker.cpp`, `compiler/lib/Sema/SymbolTable.cpp`,
+  `tests/integration/positive/recursive_borrow_effect`,
+  `tests/integration/negative/aggregate_borrow_return`.
+- **Documentation:** `docs/VERSION_LOG.md`, `reports/pre-mmm/phase-02.md`,
+  `project_context/Pre-MMM_ROADMAP.md`, `docs/memory/management.md`.
+
+---
+
+**End of Entry #017**
 
 <!-- REPORT ENTRIES END -->
 
