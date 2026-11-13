@@ -152,6 +152,12 @@
   assignments, returns, calls, and aggregate-field storage are rejected while
   same-scope nested aggregates and disjoint field paths remain valid
   (`0.453-beta`, `reports/pre-mmm/phase-02.md`).
+- [x] Audit write, alias, extraction, and branch-initialization boundaries.
+  Immutable borrowed pointers and fields are read-only at dereference, index,
+  compound, and address-taking boundaries; mutable field borrows require mutable
+  storage; mutable aggregate borrow copies and conflicting in-aggregate aliases
+  are rejected; branch-initialized aggregate state survives joins without
+  leaking branch allocations (`0.457-beta`, `reports/pre-mmm/phase-02.md`).
 - [ ] Add closure-capture ownership rules when closure support requires them.
 - [ ] Prevent borrowed references from escaping their owner's lifetime.
 - [ ] Implement the minimum escape analysis needed to reject invalid lifetime transfers.
