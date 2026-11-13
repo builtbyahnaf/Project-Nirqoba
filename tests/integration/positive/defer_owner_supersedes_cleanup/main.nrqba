@@ -1,0 +1,5 @@
+int function main() {
+    let buffer = memory.shared_allocate<byte>(8);
+    defer memory.shared_release(buffer);
+    return 0;
+}
