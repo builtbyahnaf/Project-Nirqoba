@@ -594,6 +594,29 @@ TEST(AllocatorTest, RegistryHandlesBulkChurnAndKeepsProfilingExact) {
   nrq_memory_profiler_stop();
 }
 
+TEST(AllocatorTest, RegistryReusesBulkCapacityAfterCompleteRelease) {
+  constexpr int kBlocks = 8192;
+  nrq_memory_profiler_start();
+  for (int round = 0; round < 2; ++round) {
+    std::vector<unsigned char*> blocks;
+    blocks.reserve(kBlocks);
+    for (int index = 0; index < kBlocks; ++index) {
+      const size_t bytes = 64 + static_cast<size_t>(index % 8) * 64;
+      auto* block = static_cast<unsigned char*>(nrq_memory_allocate(bytes, 16));
+      ASSERT_NE(block, nullptr);
+      block[0] = static_cast<unsigned char>((round + index) % 251);
+      blocks.push_back(block);
+    }
+    for (auto block = blocks.rbegin(); block != blocks.rend(); ++block)
+      nrq_memory_deallocate_checked(*block);
+  }
+  const NrqMemoryProfile profile = nrq_memory_profiler_capture();
+  ASSERT_EQ(profile.current_bytes, uint64_t{0});
+  ASSERT_EQ(profile.allocations, uint64_t{2 * kBlocks});
+  ASSERT_EQ(profile.deallocations, uint64_t{2 * kBlocks});
+  nrq_memory_profiler_stop();
+}
+
 TEST(AllocatorTest, RegistryMovesReallocationsAcrossShardsWithoutLosingOwnership) {
   constexpr int kBlocks = 4096;
   std::vector<unsigned char*> blocks;
