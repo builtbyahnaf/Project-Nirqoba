@@ -123,6 +123,7 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
   scopes_.clear();
   loop_stack_.clear();
   deferred_expressions_.clear();
+  conditional_depth_ = 0;
   push_scope();
   deferred_expressions_.emplace_back();
 
@@ -286,6 +287,53 @@ void TirBuilder::emit_deferred_from(size_t scope_depth, tir::Function& function)
   }
 }
 
+void TirBuilder::suppress_automatic_cleanup(const tir::Value& slot) {
+  if (!slot.is_valid()) return;
+  for (auto& scope : deferred_expressions_)
+    for (auto& pending : scope)
+      if (pending.automatic && pending.active &&
+          pending.owner_slot.is_valid() && pending.owner_slot.id == slot.id)
+        pending.active = false;
+}
+
+void TirBuilder::track_assignment_cleanup(const tir::Value& slot,
+                                          const std::string& callee,
+                                          const SourceLocation& location) {
+  if (!slot.is_valid() || callee.empty()) return;
+  std::size_t owner_scope = scopes_.empty() ? 0 : scopes_.size() - 1;
+  for (std::size_t depth = scopes_.size(); depth > 0; --depth) {
+    bool found_slot = false;
+    for (const auto& binding : scopes_[depth - 1])
+      if (binding.second.id == slot.id) found_slot = true;
+    if (found_slot) {
+      owner_scope = depth - 1;
+      break;
+    }
+  }
+  if (owner_scope >= deferred_expressions_.size()) return;
+
+  DeferredCall* inactive = nullptr;
+  for (auto& pending : deferred_expressions_[owner_scope]) {
+    if (!pending.automatic || !pending.owner_slot.is_valid() ||
+        pending.owner_slot.id != slot.id || pending.callee != callee)
+      continue;
+    if (pending.active) return;
+    if (!inactive) inactive = &pending;
+  }
+  if (inactive) {
+    inactive->active = true;
+    inactive->location = location;
+    return;
+  }
+
+  DeferredCall cleanup;
+  cleanup.callee = callee;
+  cleanup.location = location;
+  cleanup.automatic = true;
+  cleanup.owner_slot = slot;
+  deferred_expressions_[owner_scope].push_back(std::move(cleanup));
+}
+
 void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function) {
   switch (statement.kind()) {
     case Stmt::Kind::Block:
@@ -425,29 +473,8 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
         retain.arguments.push_back(value);
         function.add_operation(std::move(retain));
       }
-      if (!assignment.cleanup_callee().empty()) {
-        std::size_t owner_scope = scopes_.empty() ? 0 : scopes_.size() - 1;
-        for (std::size_t depth = scopes_.size(); depth > 0; --depth) {
-          bool found_slot = false;
-          for (const auto& binding : scopes_[depth - 1])
-            if (binding.second.id == slot.id) found_slot = true;
-          if (found_slot) { owner_scope = depth - 1; break; }
-        }
-        bool already_tracked = false;
-        if (owner_scope < deferred_expressions_.size())
-          for (const auto& pending : deferred_expressions_[owner_scope])
-            if (pending.automatic && pending.owner_slot.id == slot.id &&
-                pending.callee == assignment.cleanup_callee())
-              already_tracked = true;
-        if (!already_tracked && owner_scope < deferred_expressions_.size()) {
-          DeferredCall cleanup;
-          cleanup.callee = assignment.cleanup_callee();
-          cleanup.location = assignment.location();
-          cleanup.automatic = true;
-          cleanup.owner_slot = slot;
-          deferred_expressions_[owner_scope].push_back(std::move(cleanup));
-        }
-      }
+      track_assignment_cleanup(slot, assignment.cleanup_callee(),
+                               assignment.location());
       return;
     }
     case Stmt::Kind::CompoundAssignment: {
@@ -506,7 +533,10 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       then_lbl.kind = tir::OpKind::Label;
       then_lbl.label_id = then_label;
       function.add_operation(std::move(then_lbl));
-      lower_block(if_stmt.then_branch(), function);
+      {
+        ConditionalRegion branch_region(conditional_depth_);
+        lower_block(if_stmt.then_branch(), function);
+      }
       if (!block_terminated(function)) {
         tir::Op br_then;
         br_then.kind = tir::OpKind::Branch;
@@ -520,7 +550,10 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
         else_lbl.kind = tir::OpKind::Label;
         else_lbl.label_id = else_label;
         function.add_operation(std::move(else_lbl));
-        lower_statement(*if_stmt.else_branch(), function);
+        {
+          ConditionalRegion branch_region(conditional_depth_);
+          lower_statement(*if_stmt.else_branch(), function);
+        }
         if (!block_terminated(function)) {
           tir::Op br_else;
           br_else.kind = tir::OpKind::Branch;
@@ -555,7 +588,11 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       head_lbl.kind = tir::OpKind::Label;
       head_lbl.label_id = header_label;
       function.add_operation(std::move(head_lbl));
-      tir::Value cond = lower_expression(while_stmt.condition(), function);
+      tir::Value cond;
+      {
+        ConditionalRegion condition_region(conditional_depth_);
+        cond = lower_expression(while_stmt.condition(), function);
+      }
       tir::Op br_cond;
       br_cond.kind = tir::OpKind::BranchCond;
       br_cond.location = while_stmt.location();
@@ -569,7 +606,10 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       body_lbl.kind = tir::OpKind::Label;
       body_lbl.label_id = body_label;
       function.add_operation(std::move(body_lbl));
-      lower_block(while_stmt.body(), function);
+      {
+        ConditionalRegion body_region(conditional_depth_);
+        lower_block(while_stmt.body(), function);
+      }
       if (!block_terminated(function)) {
         tir::Op br_loop;
         br_loop.kind = tir::OpKind::Branch;
@@ -588,7 +628,12 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
     }
     case Stmt::Kind::For: {
       const auto& for_stmt = static_cast<const ForStmt&>(statement);
+      // The initializer has its own scope: its owned values are destroyed when
+      // the loop exits, not when the enclosing block exits. Continue does not
+      // leave this scope; break, a false condition, and return do.
       push_scope();
+      deferred_expressions_.emplace_back();
+      const std::size_t for_cleanup_scope = deferred_expressions_.size() - 1;
       if (for_stmt.has_initializer()) {
         lower_statement(*for_stmt.initializer(), function);
       }
@@ -612,6 +657,7 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       head_lbl.label_id = header_label;
       function.add_operation(std::move(head_lbl));
       if (for_stmt.has_condition()) {
+        ConditionalRegion condition_region(conditional_depth_);
         tir::Value cond = lower_expression(*for_stmt.condition(), function);
         tir::Op br_cond;
         br_cond.kind = tir::OpKind::BranchCond;
@@ -632,7 +678,10 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       body_lbl.kind = tir::OpKind::Label;
       body_lbl.label_id = body_label;
       function.add_operation(std::move(body_lbl));
-      lower_block(for_stmt.body(), function);
+      {
+        ConditionalRegion body_region(conditional_depth_);
+        lower_block(for_stmt.body(), function);
+      }
       if (!block_terminated(function)) {
         tir::Op br_step;
         br_step.kind = tir::OpKind::Branch;
@@ -646,6 +695,7 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       step_lbl.label_id = step_label;
       function.add_operation(std::move(step_lbl));
       if (for_stmt.has_step()) {
+        ConditionalRegion step_region(conditional_depth_);
         lower_statement(*for_stmt.step(), function);
       }
       if (!block_terminated(function)) {
@@ -655,13 +705,16 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
         function.add_operation(std::move(br_next));
       }
 
-      // Exit block
+      // Exit block. Both break and a false condition arrive here, so the
+      // initializer scope is released exactly once on the loop's exit edge.
       tir::Op exit_lbl;
       exit_lbl.kind = tir::OpKind::Label;
       exit_lbl.label_id = exit_label;
       function.add_operation(std::move(exit_lbl));
+      emit_deferred_from(for_cleanup_scope, function);
 
       loop_stack_.pop_back();
+      deferred_expressions_.pop_back();
       pop_scope();
       return;
     }
@@ -707,14 +760,40 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
         if (argument->kind() == Expr::Kind::Name) {
           const tir::Value slot = lookup_slot(
               static_cast<const NameExpr&>(*argument).name());
-          for (auto& scope : deferred_expressions_)
-            for (auto& pending : scope)
-              if (pending.automatic && pending.active && slot.is_valid() &&
-                  pending.owner_slot.id == slot.id &&
-                  pending.callee == lowered.callee) {
-                lowered.owner_slot = slot;
-                lowered.clear_owner_slot_after_call = true;
+          if (slot.is_valid()) {
+            // An explicit defer in the owner's own lexical scope runs exactly
+            // when that scope's automatic cleanup would run, so it supersedes
+            // it. A defer outside any branch or loop is unconditional and may
+            // also supersede an outer scope's declaration cleanup. A defer in
+            // a conditional scope keeps outer automatic fallbacks; it still
+            // clears the slot when it does run.
+            auto suppress_matching = [&](std::vector<DeferredCall>& scope) {
+              for (auto& pending : scope) {
+                if (pending.automatic && pending.active &&
+                    pending.owner_slot.is_valid() &&
+                    pending.owner_slot.id == slot.id &&
+                    pending.callee == lowered.callee) {
+                  lowered.owner_slot = slot;
+                  lowered.clear_owner_slot_after_call = true;
+                  pending.active = false;
+                }
               }
+            };
+            suppress_matching(deferred_expressions_.back());
+            if (conditional_depth_ == 0)
+              for (auto& scope : deferred_expressions_) suppress_matching(scope);
+            if (!lowered.owner_slot.is_valid()) {
+              for (auto& scope : deferred_expressions_)
+                for (auto& pending : scope)
+                  if (pending.automatic && pending.active &&
+                      pending.owner_slot.is_valid() &&
+                      pending.owner_slot.id == slot.id &&
+                      pending.callee == lowered.callee) {
+                    lowered.owner_slot = slot;
+                    lowered.clear_owner_slot_after_call = true;
+                  }
+            }
+          }
         }
         lowered.arguments.push_back(lower_expression(*argument, function));
       }
@@ -820,6 +899,10 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         clear.operand = null_value;
         clear.result = slot;
         function.add_operation(std::move(clear));
+        // A transfer outside any branch, loop body, or conditional evaluation
+        // executes on every path that reaches the owner's scope exit, so the
+        // automatic cleanup can never observe a live value there.
+        if (conditional_depth_ == 0) suppress_automatic_cleanup(slot);
       }
       return result;
     }
@@ -954,7 +1037,11 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         rhs_lbl.label_id = rhs_label;
         function.add_operation(std::move(rhs_lbl));
 
-        tir::Value rhs = lower_expression(binary.rhs(), function);
+        tir::Value rhs;
+        {
+          ConditionalRegion rhs_region(conditional_depth_);
+          rhs = lower_expression(binary.rhs(), function);
+        }
         tir::Op store_rhs;
         store_rhs.kind = tir::OpKind::Store;
         store_rhs.location = binary.location();
