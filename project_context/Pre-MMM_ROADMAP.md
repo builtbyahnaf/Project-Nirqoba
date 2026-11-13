@@ -181,22 +181,53 @@
 
 ### Implementation
 
-- [ ] Consolidate compiler-generated destruction into a predictable cleanup mechanism.
-- [ ] Handle nested scopes and conditional initialization.
-- [ ] Handle early returns, loop exits, and moved values.
-- [ ] Ensure `defer` ordering is consistent with ownership destruction.
+- [x] Consolidate compiler-generated destruction into a predictable cleanup mechanism.
+  Automatic ownership destruction and `defer` share one lexical cleanup stack;
+  it is consumed innermost scope first and reverse declaration order within a
+  scope (`0.461-beta`, `reports/pre-mmm/phase-03.md`).
+- [x] Handle nested scopes and conditional initialization.
+  Nested blocks release before their enclosing blocks. A branch-local defer or
+  move keeps the automatic fallback for paths where it did not execute;
+  uninitialized and moved aggregate fields are zeroed before typed destruction.
+- [x] Handle early returns, loop exits, and moved values.
+  Return runs every active scope down to the function root. `break` and
+  `continue` release only the scopes they leave. `for` initializers have a loop
+  cleanup scope released at the exit edge. Proven transfers remove dead
+  automatic actions, and moving or returning an owner after `defer` captured it
+  is rejected.
+- [x] Ensure `defer` ordering is consistent with ownership destruction.
+  Explicit defers run in reverse encounter order with automatic cleanups. A
+  same-scope or unconditional defer supersedes the automatic action it replaces;
+  conditional defers retain the outer fallback.
 - [ ] Integrate cleanup with the language's future error/unwind model when that model is implemented.
-- [ ] Ensure GC root frames close on every corresponding control-flow exit.
-- [ ] Keep native-resource destruction separate from GC reclamation.
+  The error/unwind model does not exist yet. Its integration point is the active
+  lexical cleanup stack: a future unwind edge must consume entries down to the
+  handler scope depth in the same reverse order. No landing pads or unwind tables
+  are generated today.
+- [x] Ensure GC root frames close on every corresponding control-flow exit.
+  Cleanup precedes each `return`, then the activation's root frame closes.
+  Loop `break` and `continue` retain the activation frame because they do not
+  leave the function; early-return and nested-loop counts are covered by
+  regression tests.
+- [x] Keep native-resource destruction separate from GC reclamation.
+  File, socket, mutex, mapping, and secure resources use typed runtime
+  destructors. Owned collector storage separately unregisters its GC root.
 
 ### Performance requirements
 
-- Generate cleanup only for values that actually require destruction.
-- Eliminate redundant cleanup branches through compile-time ownership state.
-- Avoid generic runtime destructor dispatch for statically known types.
-- Keep cleanup order deterministic.
+- [x] Generate cleanup only for values that actually require destruction.
+  Trivial values and borrows have no cleanup entry. Transferred owners lose the
+  dead automatic action instead of retaining a call on a null slot.
+- [x] Eliminate redundant cleanup branches through compile-time ownership state.
+  Unconditional transfers and same-scope/unconditional defers suppress the
+  superseded action; conditional paths deliberately retain their fallback.
+- [x] Avoid generic runtime destructor dispatch for statically known types.
+  Each type lowers to its direct cleanup operation or recursive field walk.
+- [x] Keep cleanup order deterministic.
+  Reverse initialization/declaration order, with explicit defer ordering
+  documented in `docs/memory/management.md`.
 
-**Completion:** Every currently supported exit path has correct destruction semantics.
+**Completion:** Every currently supported exit path has correct destruction semantics within the documented limitations. Error/unwind cleanup remains future work because the error model itself is not implemented.
 
 ---
 
