@@ -393,6 +393,8 @@ borrowable. The metadata is compile-time-only and adds no runtime tracking.
   borrowed field in its owner's scope; output `9`.
 - `positive/aggregate_borrow_disjoint_path`: an aggregate field borrow of
   `p.x` leaves `p.y` independently borrowable; output `9`.
+- `positive/aggregate_borrow_alias_copy`: copying an aggregate aliases the same
+  borrowed field within the owner's scope; output `8`.
 - `negative/aggregate_borrow_call`: passing an aggregate with a borrowed field
   through a call is rejected.
 - `negative/aggregate_borrow_field_storage`: storing such an aggregate in
@@ -474,8 +476,8 @@ borrowable. The metadata is compile-time-only and adds no runtime tracking.
 - Clean `RelWithDebInfo` build at `0.453-beta`; the `0.451-beta` working
   checkpoint and final release use the same source.
 - Unit suite: 214/214 passed on the final post-clean run.
-- Integration suite: 420/420 passed, including the recursive effect case, the
-  aggregate escape cases, the five interprocedural cases, the seven
+- Integration suite: 421/421 passed, including the recursive effect case, the
+  aggregate alias/escape cases, the five interprocedural cases, the seven
   flow-sensitive expiration/rebinding cases, and all earlier regression cases.
 - Compiler check benchmark (`allocator_strategies`, three trials of 20 timed
   runs after warmup): baseline `0.449-beta` trial medians were 20.838, 21.388,
