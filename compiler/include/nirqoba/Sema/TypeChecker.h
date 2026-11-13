@@ -139,7 +139,7 @@ class TypeChecker {
   bool contains_borrowed_field(const Type& type) const;
   bool contains_borrowed_field(const Type& type,
                                std::unordered_set<std::string>& active) const;
-  std::vector<BorrowTarget> aggregate_borrows_for(const Expr& expr) const;
+  const std::vector<BorrowTarget>& aggregate_borrows_for(const Expr& expr) const;
   void validate_aggregate_borrow_lifetime(const std::vector<BorrowTarget>& borrows,
                                           size_t target_depth,
                                           const SourceLocation& location);
