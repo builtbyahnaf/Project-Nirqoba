@@ -2092,55 +2092,103 @@ void TypeChecker::check_compound_assignment(CompoundAssignmentStmt& assignment) 
   }
 }
 
+TypeChecker::NullFacts TypeChecker::null_facts_for(const Expr& expr,
+                                                    bool truth) const {
+  NullFacts facts;
+  if (expr.kind() == Expr::Kind::Unary) {
+    const auto& unary = static_cast<const UnaryExpr&>(expr);
+    if (unary.op() == UnaryOp::LogicalNot)
+      return null_facts_for(unary.operand(), !truth);
+    return facts;
+  }
+  if (expr.kind() != Expr::Kind::Binary) return facts;
+
+  const auto& binary = static_cast<const BinaryExpr&>(expr);
+  const auto unite = [](NullFacts result, const NullFacts& other) {
+    result.nonnull.insert(other.nonnull.begin(), other.nonnull.end());
+    result.null.insert(other.null.begin(), other.null.end());
+    return result;
+  };
+  const auto intersect = [](const NullFacts& lhs, const NullFacts& rhs) {
+    NullFacts result;
+    for (const auto& name : lhs.nonnull)
+      if (rhs.nonnull.count(name)) result.nonnull.insert(name);
+    for (const auto& name : lhs.null)
+      if (rhs.null.count(name)) result.null.insert(name);
+    return result;
+  };
+
+  if (binary.op() == BinaryOp::LogicalAnd) {
+    if (truth)
+      return unite(null_facts_for(binary.lhs(), true),
+                   null_facts_for(binary.rhs(), true));
+    // False means the lhs was false, or the lhs was true and the rhs was
+    // false. Only facts common to both execution paths are guaranteed.
+    const NullFacts lhs_false = null_facts_for(binary.lhs(), false);
+    const NullFacts rhs_path = unite(null_facts_for(binary.lhs(), true),
+                                     null_facts_for(binary.rhs(), false));
+    return intersect(lhs_false, rhs_path);
+  }
+  if (binary.op() == BinaryOp::LogicalOr) {
+    if (!truth)
+      return unite(null_facts_for(binary.lhs(), false),
+                   null_facts_for(binary.rhs(), false));
+    // True means the lhs was true, or the lhs was false and the rhs was true.
+    const NullFacts lhs_true = null_facts_for(binary.lhs(), true);
+    const NullFacts rhs_path = unite(null_facts_for(binary.lhs(), false),
+                                     null_facts_for(binary.rhs(), true));
+    return intersect(lhs_true, rhs_path);
+  }
+  if (binary.op() != BinaryOp::Equal && binary.op() != BinaryOp::NotEqual)
+    return facts;
+
+  const Expr* on_left = &binary.lhs();
+  const Expr* on_right = &binary.rhs();
+  if (is_null_pointer_literal(*on_left)) std::swap(on_left, on_right);
+  if (!is_null_pointer_literal(*on_right) ||
+      on_left->kind() != Expr::Kind::Name)
+    return facts;
+
+  const std::string& name = static_cast<const NameExpr&>(*on_left).name();
+  const bool nonnull =
+      binary.op() == BinaryOp::NotEqual ? truth : !truth;
+  if (nonnull) facts.nonnull.insert(name);
+  else facts.null.insert(name);
+  return facts;
+}
+
+void TypeChecker::apply_null_facts(const NullFacts& facts) {
+  for (const auto& name : facts.null) {
+    nonnull_proven_.erase(name);
+    symbols_.set_definitely_null(name, true);
+  }
+  for (const auto& name : facts.nonnull) {
+    nonnull_proven_.insert(name);
+    symbols_.set_definitely_null(name, false);
+    symbols_.refine_conditional_borrow(name);
+  }
+}
+
 void TypeChecker::check_if(IfStmt& statement) {
   const Type cond_type = check_expression(const_cast<Expr&>(statement.condition()));
   if (cond_type.is_valid() && !cond_type.is_bool()) {
     diagnostics_.error(diag::kTypeMismatch, statement.condition().location(),
                        "'if' condition must be 'bool', not '" + cond_type.to_string() + "'");
   }
-  // Flow-sensitive narrowing: `p is not nullptr` proves non-null in the
-  // then-branch; `p is nullptr` proves it in the else-branch and, when the
-  // then-branch cannot fall through, after the statement.
-  std::string narrowed_name;
-  bool then_nonnull = false;
-  bool else_nonnull = false;
-  {
-    const Expr& condition = statement.condition();
-    if (condition.kind() == Expr::Kind::Binary) {
-      const auto& binary = static_cast<const BinaryExpr&>(condition);
-      if (binary.op() == BinaryOp::Equal || binary.op() == BinaryOp::NotEqual) {
-        const Expr* other = nullptr;
-        const Expr* named = nullptr;
-        if (binary.lhs().kind() == Expr::Kind::Name) {
-          named = &binary.lhs();
-          other = &binary.rhs();
-        } else if (binary.rhs().kind() == Expr::Kind::Name) {
-          named = &binary.rhs();
-          other = &binary.lhs();
-        }
-        if (named && other && is_null_pointer_literal(*other)) {
-          narrowed_name = static_cast<const NameExpr&>(*named).name();
-          if (binary.op() == BinaryOp::NotEqual) then_nonnull = true;
-          else else_nonnull = true;
-        }
-      }
-    }
-  }
+  // Flow-sensitive narrowing follows the true/false and short-circuit paths of
+  // the whole condition. A fact is retained only if it holds on every execution
+  // path that reaches the selected branch.
+  const NullFacts then_facts = null_facts_for(statement.condition(), true);
+  const NullFacts else_facts = null_facts_for(statement.condition(), false);
   const std::unordered_set<std::string> incoming_proven = nonnull_proven_;
   const SymbolTable incoming = symbols_;
-  if (then_nonnull) {
-    nonnull_proven_.insert(narrowed_name);
-    symbols_.refine_conditional_borrow(narrowed_name);
-  }
+  apply_null_facts(then_facts);
   check_block(const_cast<BlockStmt&>(statement.then_branch()));
   const std::unordered_set<std::string> then_proven = nonnull_proven_;
   const SymbolTable then_state = symbols_;
   symbols_ = incoming;
   nonnull_proven_ = incoming_proven;
-  if (else_nonnull) {
-    nonnull_proven_.insert(narrowed_name);
-    symbols_.refine_conditional_borrow(narrowed_name);
-  }
+  apply_null_facts(else_facts);
   if (statement.has_else()) {
     check_statement(const_cast<Stmt&>(*statement.else_branch()));
   }

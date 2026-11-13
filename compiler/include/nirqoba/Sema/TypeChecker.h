@@ -162,6 +162,14 @@ class TypeChecker {
   // True while checking the base of a member access, which is not a whole-value
   // use of a partially initialized aggregate.
   bool checking_aggregate_base_ = false;
+  // Names proven null/non-null by a branch condition. Only facts that hold on
+  // every execution path reaching that branch are retained.
+  struct NullFacts {
+    std::unordered_set<std::string> nonnull;
+    std::unordered_set<std::string> null;
+  };
+  NullFacts null_facts_for(const Expr& expr, bool truth) const;
+  void apply_null_facts(const NullFacts& facts);
   // Names proven non-null in the current branch; branch-scoped, cleared on assignment.
   std::unordered_set<std::string> nonnull_proven_;
   std::vector<std::vector<DeferredCleanup>> deferred_calls_;
