@@ -943,8 +943,13 @@ struct AllocationOwner {
 // registry. No path holds a shard while acquiring `allocator_mutex`.
 constexpr size_t kAllocationShardCount = 8;
 
-// Sharded ownership table. Each entry is still a map node in this upgrade; the
-// next upgrade replaces the node with an inline open-addressed record.
+// Open-addressed ownership table. The registry used to allocate an
+// unordered_map node for every live pointer and free it again on release, so a
+// normal short-lived allocation paid the general heap allocator twice just to
+// describe itself. The table keeps ownership records inline and uses tombstones
+// for erased entries; it grows when live records exceed 70% of capacity and
+// compacts back down when a mostly empty table would otherwise keep probing a
+// large tombstone field.
 class AllocationTable {
  public:
   struct Entry {
@@ -953,23 +958,112 @@ class AllocationTable {
   };
 
   Entry* find(void* key) {
-    auto found = entries_.find(key);
-    return found == entries_.end() ? nullptr : &found->second;
+    if (capacity_ == 0) return nullptr;
+    size_t index = hash(key);
+    for (size_t probes = 0; probes < capacity_; ++probes) {
+      Entry& entry = entries_[index];
+      if (!entry.key) return nullptr;
+      if (entry.key == key) return &entry;
+      index = (index + 1) & (capacity_ - 1);
+    }
+    return nullptr;
   }
 
   bool insert(void* key, const AllocationOwner& owner) {
-    return entries_.emplace(key, Entry{key, owner}).second;
+    if (capacity_ != 0 && tombstones_ > capacity_ / 2 &&
+        size_ * 4 < capacity_) {
+      size_t target = 16;
+      while ((size_ + 1) * 10 > target * 7) target *= 2;
+      rehash(target);
+    }
+    if (capacity_ == 0 || (size_ + 1) * 10 > capacity_ * 7)
+      grow();
+
+    size_t index = hash(key);
+    size_t reusable = capacity_;
+    for (size_t probes = 0; probes < capacity_; ++probes) {
+      Entry& entry = entries_[index];
+      if (!entry.key) {
+        if (reusable == capacity_) reusable = index;
+        entries_[reusable] = Entry{key, owner};
+        ++size_;
+        return true;
+      }
+      if (entry.key == tombstone()) {
+        if (reusable == capacity_) reusable = index;
+      } else if (entry.key == key) {
+        return false;
+      }
+      index = (index + 1) & (capacity_ - 1);
+    }
+    if (reusable != capacity_) {
+      entries_[reusable] = Entry{key, owner};
+      ++size_;
+      return true;
+    }
+    // A table below the load threshold always has a reusable slot; growing once
+    // more also retires every tombstone, so this path is safe and bounded.
+    grow();
+    return insert(key, owner);
   }
 
-  bool erase(void* key) { return entries_.erase(key) != 0; }
+  bool erase(void* key) {
+    Entry* entry = find(key);
+    if (!entry) return false;
+    entry->key = tombstone();
+    entry->owner = AllocationOwner{};
+    --size_;
+    ++tombstones_;
+    return true;
+  }
 
   template <typename Visitor>
   void for_each(Visitor&& visitor) const {
-    for (const auto& entry : entries_) visitor(entry.second);
+    for (const Entry& entry : entries_) {
+      if (entry.key && entry.key != tombstone()) visitor(entry);
+    }
   }
 
  private:
-  std::unordered_map<void*, Entry> entries_;
+  static void* tombstone() {
+    return reinterpret_cast<void*>(static_cast<uintptr_t>(1));
+  }
+
+  size_t hash(void* key) const {
+    uintptr_t value = reinterpret_cast<uintptr_t>(key) >> 4;
+    value ^= value >> 16;
+    return static_cast<size_t>(value) & (capacity_ - 1);
+  }
+
+  void place(std::vector<Entry>& entries, size_t capacity, void* key,
+             const AllocationOwner& owner) {
+    uintptr_t value = reinterpret_cast<uintptr_t>(key) >> 4;
+    value ^= value >> 16;
+    size_t index = static_cast<size_t>(value) & (capacity - 1);
+    while (entries[index].key) index = (index + 1) & (capacity - 1);
+    entries[index] = Entry{key, owner};
+  }
+
+  void grow() {
+    const size_t capacity = capacity_ == 0 ? 16 : capacity_ * 2;
+    rehash(capacity);
+  }
+
+  void rehash(size_t capacity) {
+    std::vector<Entry> replacement(capacity);
+    for (const Entry& entry : entries_) {
+      if (entry.key && entry.key != tombstone())
+        place(replacement, capacity, entry.key, entry.owner);
+    }
+    entries_.swap(replacement);
+    capacity_ = capacity;
+    tombstones_ = 0;
+  }
+
+  std::vector<Entry> entries_;
+  size_t capacity_ = 0;
+  size_t size_ = 0;
+  size_t tombstones_ = 0;
 };
 
 struct alignas(128) AllocationShard {
