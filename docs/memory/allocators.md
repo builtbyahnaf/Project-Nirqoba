@@ -73,7 +73,7 @@ destroyed. Custom allocators cannot currently be reset or declared directly in
 Nirqoba source, and container integration is not supported;
 `memory.reallocate` reaches them through the generic allocate-copy-free path.
 
-## Owned allocation registry (0.465-beta)
+## Owned allocation registry (0.469-beta)
 
 Every live explicit allocation has an ownership record so invalid and repeated
 frees can be rejected. The registry is split into eight pointer-selected shards,
@@ -81,8 +81,11 @@ and each shard stores its records inline in a linear-probing table instead of an
 `unordered_map` node. Ordinary process-default allocations and releases skip the
 global allocator mutex and the operation pin because that allocator cannot be
 destroyed or reset; they take only the owning shard's mutex. Explicit
-per-allocation handles still take the global mutex and pin because their
-allocator can be reset or destroyed.
+per-allocation handles keep the global mutex and operation pin on allocation,
+where no record exists yet. Deallocation, reallocation, and final shared release
+use the live ownership record as their lifetime reference: `destroy` and `reset`
+scan the records and refuse while an owned record is live or in flight, so those
+paths do not take a redundant pin.
 
 `memory.reallocate` moves the ownership record to the shard selected by the new
 pointer. Shared releases look up the record's shared flag and update the
