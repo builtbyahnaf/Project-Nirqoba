@@ -630,3 +630,26 @@ owner replacement are rejected while the field borrow is live.
 The metadata is transitive and compile-time only; valid same-scope nested
 aggregates and disjoint field paths remain usable. No runtime borrow counters,
 locks, descriptors, heap allocations, or generated checks are added.
+
+## Audit hardening (0.457-beta)
+
+Explicitly immutable borrowed pointers and fields are read-only at every write
+boundary: direct assignment, indexed assignment, compound assignment, and
+address-taking through a dereference. A `borrow mut` field requires a mutable
+owner or an already mutable borrowed source. Raw `&` pointers remain distinct
+from explicit borrow contracts; their owner lifetime is tracked, but they are not
+retroactively treated as immutable references.
+
+A borrowed field cannot be extracted into an independent pointer, because the
+result would carry no owner or path metadata. Copying an aggregate that contains
+a `borrow mut` field is rejected, as is constructing one aggregate with
+conflicting mutable and immutable target paths. Immutable borrowed fields remain
+copyable because they carry no write permission.
+
+Branch joins merge initialization conservatively. Uninitialized and partially
+initialized paths are retained if either continuing branch could have them, so
+a branch-local allocation cannot be overwritten without destruction. Fields are
+marked initialized only when both branches agree, and completing a nested
+aggregate clears its stale partial marker.
+
+These checks are compile-time-only and add no runtime ownership state.
