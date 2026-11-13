@@ -1497,6 +1497,47 @@ class FunctionTranslator {
     for (std::size_t index = 0; index < operations.size(); ++index)
       if (operations[index].kind == tir::OpKind::Label)
         label_positions_.emplace(operations[index].label_id, index);
+    // A stack-owned root is observable only at a collection point. Calls that
+    // may allocate or collect are points; a loop back edge is one too, because
+    // the runtime safepoint there can publish this activation's roots.
+    // Addresses inside stack-placed owned storage need no write barrier when
+    // this activation has no collection point. Track the allocation result and
+    // every address derived from it so the Store lowering can emit a plain store.
+    for (const tir::Op& op : operations) {
+      if (!op.result.is_valid()) continue;
+      const auto allocation = stack_allocations_.find(op.result.id);
+      if (allocation != stack_allocations_.end() &&
+          allocation->second.kind == StackAllocationLayout::Kind::RawPointer) {
+        unobserved_stack_owned_addresses_.insert(op.result.id);
+        continue;
+      }
+      if (op.kind == tir::OpKind::GetElementPtr &&
+          unobserved_stack_owned_addresses_.count(op.lhs.id) != 0)
+        unobserved_stack_owned_addresses_.insert(op.result.id);
+    }
+    for (std::size_t index = 0; index < operations.size(); ++index) {
+      const tir::Op& op = operations[index];
+      if (op.kind == tir::OpKind::Call && collections.call_may_collect(op.callee)) {
+        has_collection_point_ = true;
+        break;
+      }
+      if (op.kind == tir::OpKind::Branch) {
+        const auto target = label_positions_.find(op.label_id);
+        if (target != label_positions_.end() && target->second < index) {
+          has_collection_point_ = true;
+          break;
+        }
+      }
+      if (op.kind == tir::OpKind::BranchCond) {
+        const auto true_target = label_positions_.find(op.true_label);
+        const auto false_target = label_positions_.find(op.false_label);
+        if ((true_target != label_positions_.end() && true_target->second < index) ||
+            (false_target != label_positions_.end() && false_target->second < index)) {
+          has_collection_point_ = true;
+          break;
+        }
+      }
+    }
     entry_block_ = func_op.addEntryBlock();
     builder_.setInsertionPointToStart(entry_block_);
     values_.resize(tir_fn.value_count());
@@ -2502,7 +2543,9 @@ class FunctionTranslator {
         // nor a root copy. Keeping the store plain also leaves the slot free for
         // SSA promotion instead of making every access a runtime call.
         const bool unobserved =
-            gc_roots_.unobserved_addresses.count(op.lhs.id) != 0;
+            gc_roots_.unobserved_addresses.count(op.lhs.id) != 0 ||
+            (!has_collection_point_ &&
+             unobserved_stack_owned_addresses_.count(op.lhs.id) != 0);
         if (op.operand.type.is_managed_pointer()) {
           if (unobserved) {
             apply_access_alignment(
@@ -3368,9 +3411,11 @@ class FunctionTranslator {
                 loc, llvm_ptr_type(ctx_), storage_type, storage,
                 mlir::ValueRange{zero, zero}).getResult();
             // A stack-placed raw allocation is still an explicitly owned object.
-            // Publish its typed root inside this activation's root frame so the
-            // frame removes it when the function exits.
-            emit_frame_gc_root_registration(ptr, op.result.type.element_type(), loc);
+            // Publish its typed root inside this activation's root frame only when
+            // this function has a point where collection can observe it; otherwise
+            // the storage dies before any snapshot and registration is pure cost.
+            if (has_collection_point_)
+              emit_frame_gc_root_registration(ptr, op.result.type.element_type(), loc);
             set(op.result, ptr);
             return true;
           }
@@ -4377,6 +4422,7 @@ class FunctionTranslator {
         if (op.operand.type.is_struct() || op.operand.type.is_tuple()) {
           idx = aggregate_physical_index(op.operand.type, idx);
         }
+
         mlir::Value extracted = builder_.create<mlir::LLVM::ExtractValueOp>(
             loc, agg,
             builder_.getDenseI64ArrayAttr({static_cast<int64_t>(idx)})).getResult();
@@ -4503,6 +4549,8 @@ class FunctionTranslator {
   GcRootPlan gc_roots_;
   bool uses_gc_mutator_ = false;
   bool needs_gc_root_frame_ = false;
+  bool has_collection_point_ = false;
+  std::unordered_set<int> unobserved_stack_owned_addresses_;
   std::unordered_map<int, std::size_t> label_positions_;
   mlir::Block* entry_block_;
   std::vector<PendingGcRoot> pending_gc_roots_;
