@@ -1,0 +1,13 @@
+void function run(bool move_owner) {
+    let buffer = memory.shared_allocate<byte>(8);
+    if (move_owner) {
+        let owner = buffer;
+    }
+}
+
+int function main() {
+    run(true);
+    run(false);
+    print("conditional move");
+    return 0;
+}
