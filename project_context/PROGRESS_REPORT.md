@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.437-beta` |
+| Current Working Version | `0.441-beta` |
 | Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-13 01:28:14` |
-| Report Entries | `13` |
+| Last Report Update | `2026-11-13 10:24:36` |
+| Report Entries | `14` |
 
 ---
 
@@ -1521,7 +1521,7 @@ claimed.
 
 ## Entry #013 — Pre-MMM Phase 2: Flow-sensitive conditional-borrow refinement
 
-**Version:** `0.437-beta` (unreleased `0.445-beta` work)  
+**Version:** `0.437-beta` (pre-release)  
 **Date:** `2026-11-13 01:28:14`  
 **Scope:** `Pre-MMM Phase 2 / Borrow checking / Null refinement`  
 **Status:** `Completed`
@@ -1546,8 +1546,8 @@ overlapping accesses are still rejected while disjoint fields stay available.
 - **What:** Declarations and assignments update definite nullness; other pointer
   assignments clear it; branch merges combine it with logical AND.
 - **What:** Early-return guards carry the refined state forward because the
-  non-falling-through branch selects the else state. Normal joins restore the
-  conditional marker.
+  non-falling-through branch selects the else state. At this stage normal joins
+  restored the conditional marker; entry #014 adds proof-preserving joins.
 - **Why:** A non-null check alone does not prove the borrow is present if the
   other path may hold a non-null pointer to another object. Requiring the absent
   path to be null keeps the refinement sound; keeping the path set preserves
@@ -1622,7 +1622,7 @@ compile-time number is claimed.
 - **Verification Confidence:** High — clean build and both full suites passed.
 - **Known Risks:** Refinement is deliberately limited to a provably null absent
   path and does not survive a two-path join.
-- **Recommended Next Step:** Release `0.445-beta` after the second meaningful
+- **Recommended Next Step:** Release `0.441-beta` after the second meaningful
   upgrade, or benchmark the added compile-time checks first.
 
 ### 10. Evidence & References
@@ -1638,6 +1638,124 @@ compile-time number is claimed.
 ---
 
 **End of Entry #013**
+
+## Entry #014 — Release: 0.441-beta conditional-borrow null refinement
+
+**Version:** `0.441-beta`  
+**Date:** `2026-11-13 10:24:36`  
+**Scope:** `Release / Borrow checking / Null refinement`  
+**Status:** `Completed`
+
+### 1. Overview
+
+This release promotes the null-check refinement work to `0.441-beta`. A
+conditional borrow can now become definite inside a proven non-null branch, and
+the absent-null proof survives an unrelated join when every continuing path
+preserves it. The final semantic change also avoids discarding the proof at a
+no-op merge.
+
+### 2. Implementation Details
+
+- **What:** The one-sided merge carries `borrow_conditional_absent_null` only
+  when the absent branch is definitely null.
+- **What:** A non-null guard clears the conditional marker in that branch; the
+  null path keeps it, and an early return carries the refined state forward.
+- **What:** When both branches remain borrowed, the merged absence proof is the
+  AND of each continuing path's proof, treating a definite branch as having no
+  absent path. This preserves refinement across an unrelated join without
+  weakening the null-path restriction.
+- **What:** Field-path exclusion is unchanged after refinement; the owner,
+  mutability, and path set remain exact.
+- **Where:** `compiler/include/nirqoba/Sema/SymbolTable.h`,
+  `compiler/lib/Sema/SymbolTable.cpp`, `compiler/lib/Sema/TypeChecker.cpp`.
+
+### 3. Changes Made
+
+| File / Component | Change | Reason |
+|---|---|---|
+| `SymbolTable.h` / `.cpp` | Added null-absence state, branch-local refinement, and join preservation | Make a proven conditional borrow definite without losing soundness |
+| `TypeChecker.cpp` | Refined then/else null-check branches and tracked definite nullness | Apply the proof only where it holds |
+| `conditional_borrow_*` cases | Four positives and three negatives | Cover guards, calls, null paths, joins, and field exclusion |
+| `CMakeLists.txt` | Version label advanced from `0.437-beta` to `0.441-beta` | Release the two upgrades after `0.437` |
+
+### 4. Verification & Testing
+
+| Test / Verification | Result | Evidence |
+|---|---|---|
+| Clean RelWithDebInfo build | PASS | `scripts/build.ps1 -Configuration RelWithDebInfo -Clean` |
+| Unit suite | PASS | 214/214 on the first post-clean run |
+| Integration suite | PASS | 388/388 |
+| Compiler version | PASS | `nirqoba compiler version 0.441-beta (Phase 6)` |
+| `positive/conditional_borrow_null_refinement` | PASS | Refined alias and disjoint field; output `9`, `4` |
+| `positive/conditional_borrow_guard_refinement` | PASS | Early-return guard carries refinement; output `9` |
+| `positive/conditional_borrow_call_refinement` | PASS | Refined immutable borrow passed to a nested call; output `7` |
+| `positive/conditional_borrow_join_refinement` | PASS | Unrelated join preserves the proof; output `9` |
+| `negative/conditional_borrow_null_path` | PASS | Null path still rejects an alias |
+| `negative/conditional_borrow_fallthrough` | PASS | A join without the proof restores the conditional marker |
+| `negative/conditional_borrow_refined_overlap` | PASS | Refined borrow still excludes `p.x` |
+
+- **Build Status:** Successful.
+- **Regression Status:** None detected in the full integration or unit suites.
+- **Test Environment:** Windows 11 x64, MSVC 14.51.36231, LLVM/MLIR 23.1.4,
+  RelWithDebInfo.
+
+### 5. Performance & Resource Impact
+
+No runtime code changed, so there is no runtime impact. The semantic state adds
+two booleans to `Symbol` and branch-local lookups; ordinary single-path borrows
+keep the existing inline representation. No benchmark was run, so no measured
+compile-time number is claimed.
+
+### 6. Issues & Limitations
+
+- Refinement requires the absent path to be provably null; a conditional borrow
+  mixed with another possible non-null pointer remains indefinite.
+- The proof is lost at a join that continues on a path without the same absent-null
+  proof and is never available on the null path.
+- Branch-selected owner identity, callee effects, closure capture, and general
+  escape analysis remain outside this release.
+
+### 7. Outstanding Work
+
+- [x] Refine a conditional borrow after an explicit null check.
+- [x] Preserve the proof across a join when every continuing path keeps it.
+- [ ] Measure compile-time cost on representative programs.
+- [ ] Add closure-capture ownership rules when closures require them.
+- [ ] Implement the minimum escape analysis needed to reject invalid lifetime transfers.
+
+### 8. Dependencies & Compatibility
+
+- **New Dependencies:** None.
+- **Removed Dependencies:** None.
+- **Platform Compatibility:** No platform-specific change.
+- **Breaking Changes:** A guarded conditional borrow is now accepted as definite
+  inside the proven branch. Unguarded, null-path, and unproven-join behavior is
+  unchanged.
+
+### 9. Agent Assessment
+
+- **Implementation Completeness:** Complete for null-check refinement and
+  branch-local proof retention across joins.
+- **Verification Confidence:** High — clean build and both full suites passed.
+- **Known Risks:** Refinement remains intentionally conservative for mixed
+  non-null inactive paths and unproven joins.
+- **Recommended Next Step:** Benchmark the added semantic work, then continue with
+  closure-capture ownership or general escape analysis.
+
+### 10. Evidence & References
+
+- **Commits:** `fef0d00`, `58124f3` (initial refinement), `734cad0`, `b809487`
+  (join preservation), `a9bd968` (progress documentation)
+- **Relevant Files:** `compiler/lib/Sema/SymbolTable.cpp`,
+  `compiler/lib/Sema/TypeChecker.cpp`,
+  `tests/integration/positive/conditional_borrow_join_refinement`,
+  `tests/integration/negative/conditional_borrow_fallthrough`.
+- **Documentation:** `docs/VERSION_LOG.md`, `reports/pre-mmm/phase-02.md`,
+  `project_context/Pre-MMM_ROADMAP.md`, `docs/memory/management.md`.
+
+---
+
+**End of Entry #014**
 
 <!-- REPORT ENTRIES END -->
 

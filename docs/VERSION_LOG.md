@@ -12,6 +12,30 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.441-beta (working build)
+
+### Summary of Changes (since `0.437-beta`):
+
+*Opened after null checks became able to discharge a conditional borrow.*
+
+- **A non-null guard can make a conditional borrow definite.** When the path
+  where the borrow is absent is known to be null, `view != nullptr` clears the
+  conditional marker inside that branch. The else path of `view == nullptr` and
+  an early-return guard refine in the same way.
+- **The proof is sound and branch-local.** Definite nullness is tracked through
+  declarations, assignments, and merges. A non-null check refines only when the
+  absent path is provably null; a possible non-null pointer on that path cannot
+  be mistaken for the borrow.
+- **Refinement is lost where it should be.** A join where both paths continue
+  restores the conditional marker unless every continuing path preserves the
+  same null-absence proof. The null path never refines.
+- **Field paths remain exact.** A refined borrow keeps its owner, mutability,
+  and field-path set. Overlapping reads and borrows are still rejected while
+  disjoint fields remain available.
+- **No runtime cost.** The refinement adds two compile-time booleans and only
+  branch-local symbol-table queries. No runtime counters, locks, descriptors,
+  allocations, or generated checks were added.
+
 ## Version 0.437-beta (working build)
 
 ### Summary of Changes (since `0.431-beta`):
