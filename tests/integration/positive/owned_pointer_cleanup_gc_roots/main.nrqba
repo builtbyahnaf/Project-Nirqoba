@@ -1,0 +1,31 @@
+// Returning from a lexical scope releases the owned pointer. The typed root
+// registered for its managed field must be removed before the next collection.
+struct Node {
+    int value;
+    managed<Node> child;
+}
+
+managed<Node> function make_child() {
+    var child = array.allocate<Node>(1);
+    child[0].value = 73;
+    return child;
+}
+
+int function drop_early() {
+    var holder = memory.allocate<Node>(64);
+    (*holder).child = make_child();
+    gc.collect();
+    gc.collect();
+    var live = gc.get_statistics();
+    print(live.live_objects);
+    print((*holder).child[0].value);
+    return 7;
+}
+
+int function main() {
+    print(drop_early());
+    gc.collect();
+    var reclaimed = gc.get_statistics();
+    print(reclaimed.live_objects);
+    return 0;
+}
