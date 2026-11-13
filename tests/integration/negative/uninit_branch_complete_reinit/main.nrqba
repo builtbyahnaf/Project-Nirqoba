@@ -1,0 +1,15 @@
+struct Inner { owned ptr int data; int tag; }
+struct Outer { Inner inner; int extra; }
+
+int function main() {
+    var o: Outer = uninit;
+    if (1 == 1) {
+        o.inner.data = memory.allocate<int>(1);
+        o.inner.tag = 1;
+    } else {
+        o.inner.data = memory.allocate<int>(1);
+        o.inner.tag = 2;
+    }
+    o.inner = Inner { data: memory.allocate<int>(1), tag: 3 };
+    return 0;
+}
