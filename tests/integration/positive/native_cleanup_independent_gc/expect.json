@@ -1,0 +1,8 @@
+{
+  "expect_exit": 0,
+  "expect_stdout": "3\n",
+  "expect_ir_counts": {
+    "call i32 @nrq_file_close_handle": 1,
+    "call void @nrq_gc_root_frame_end": 2
+  }
+}

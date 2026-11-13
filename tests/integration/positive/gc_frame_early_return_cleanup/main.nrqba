@@ -1,0 +1,16 @@
+managed<int> function choose(bool early) {
+    let owned = memory.shared_allocate<byte>(8);
+    var cell = array.allocate<int>(1);
+    cell[0] = 7;
+    if (early) {
+        return cell;
+    }
+    return cell;
+}
+
+int function main() {
+    let value = choose(true);
+    gc.collect();
+    print(value[0]);
+    return 0;
+}
