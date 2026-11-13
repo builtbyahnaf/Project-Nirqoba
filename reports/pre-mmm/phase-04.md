@@ -158,7 +158,7 @@ The regression is not present in the committed version.
 
 | Check | Result |
 |---|---|
-| Unit suite | 224/224 |
+| Unit suite | 225/225 |
 | Integration suite | 450/450 |
 | Migration-scale Phase 3 programs | PASS (`5513361`, `252200`) |
 | Cross-thread bulk ownership | PASS |
@@ -193,7 +193,7 @@ tests extend the same checks to the default registry and shard transitions.
 - **The known pre-existing GC stress flake remains.** During final clean
   verification, `GcTest.MinorReclaimsOnlyYoungGarbageAndKeepsOldGarbage`
   segfaulted in 2 of 4 direct full-suite runs. The final direct run passed
-  224/224, the test passes in isolation, and five full runs under gdb passed. It
+  225/225, the test passes in isolation, and five full runs under gdb passed. It
   is the same test recorded in Phase 3 and predates this work; no allocator test
   or ownership path is involved. It is not fixed here and remains separate GC
   test-hardening work.

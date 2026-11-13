@@ -280,7 +280,7 @@
 against `0.461-beta`: sharded lock-free-on-the-default-path lookup, then inline
 open-addressed records. Allocation-heavy, destruction-heavy, and mixed workloads
 improved 27.9%, 20.0%, and 19.2% by median; peak working set stayed flat within
-16 KB. Exact checksums, 224 unit tests, 450 integration tests, cross-thread
+16 KB. Exact checksums, 225 unit tests, 450 integration tests, cross-thread
 stress, and the migration-scale Phase 3 programs pass. Report:
 `reports/pre-mmm/phase-04.md`.
 

@@ -48,7 +48,7 @@ isolation. No production code was changed for this validation.
 | Loop-scope output | PASS (`252200`) |
 | Repeated runs produce identical output | PASS |
 | Full integration suite after adding both programs | 450/450 |
-| Unit suite | 224/224 |
+| Unit suite | 225/225 after the Phase 4 registry tests |
 | Deferred-owner negatives remain rejected | PASS |
 | Transfer/defer cleanup IR counts remain stable | PASS |
 | Full Phase 3 cleanup/GC/native suites | PASS |
