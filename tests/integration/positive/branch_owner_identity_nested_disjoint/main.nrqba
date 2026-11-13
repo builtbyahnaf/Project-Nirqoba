@@ -1,0 +1,27 @@
+struct Inner { int a; int b; }
+
+struct Outer { Inner inner; int z; }
+
+borrow mut source int* function writable(borrow mut int* source) {
+    return source;
+}
+
+int function main() {
+    var p = Outer { inner: Inner { a: 1, b: 2 }, z: 3 };
+    var q = Outer { inner: Inner { a: 4, b: 5 }, z: 6 };
+    { let seed_p = &p.inner.a; }
+    { let seed_q = &q.inner.a; }
+    @Nullable var ptr int view = nullptr;
+    if (p.inner.a == 1) {
+        view = writable(&p.inner.a);
+    } else {
+        view = writable(&q.inner.a);
+    }
+    var pb = writable(&p.inner.b);
+    var qz = writable(&q.z);
+    *pb = 8;
+    *qz = 9;
+    print(*pb);
+    print(*qz);
+    return 0;
+}
