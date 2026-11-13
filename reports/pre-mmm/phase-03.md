@@ -174,6 +174,14 @@ result is one fewer `nrq_memory_shared_release` call site per benchmark loop
 iteration: four in the baseline, three in Phase 3, with identical output
 (`2999997`).
 
+## Migration-scale validation
+
+The supported cleanup paths were composed into two larger programs: nested
+aggregates with early return and conditional defer, and a loop-scope owner with
+`continue`/`break`. Both pass with exact outputs and are part of the integration
+suite. Details and the residual gap list are in
+`reports/pre-mmm/phase-03-migration-validation.md`.
+
 ## Limitations
 
 - The checker rejects transfers after a pending defer rather than providing a
