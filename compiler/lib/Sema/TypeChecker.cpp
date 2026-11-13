@@ -36,6 +36,14 @@ static std::string field_display(const std::string& path) {
   return !path.empty() && path.front() == '.' ? path.substr(1) : path;
 }
 
+static bool has_mutable_borrow_target(
+    const std::vector<BorrowTarget>& borrows) {
+  return std::any_of(borrows.begin(), borrows.end(),
+                     [](const BorrowTarget& target) {
+                       return target.mutable_borrow;
+                     });
+}
+
 namespace {
 
 constexpr const char* kPrintBuiltin = "print";
@@ -890,6 +898,7 @@ void TypeChecker::check_function(FunctionDecl& function) {
       symbol.allocation_id = next_allocation_id_++;
       symbol.borrowed = parameter.borrowed || parameter.type.is_array_view();
       symbol.mutable_borrow = parameter.mutable_borrow;
+      symbol.explicit_borrow = parameter.borrowed;
       if (parameter.borrowed) symbol.borrow_owner = parameter.name;
     symbol.cleanup_callee = cleanup_for_borrow_domain(parameter.resource_domain);
       symbol.owns_allocation = !symbol.borrowed;
@@ -1053,6 +1062,16 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
     binding_type = annotation;
   }
 
+  bool extracted_mutable_borrow = false;
+  if (binding_type.is_pointer() &&
+      borrowed_field_pointer(declaration.initializer(),
+                             extracted_mutable_borrow)) {
+    diagnostics_.error(
+        diag::kTypeMismatch, declaration.initializer().location(),
+        "a borrowed field cannot be extracted as an independent pointer; "
+        "use the aggregate's borrow contract");
+  }
+
   consume_field_move(const_cast<Expr&>(declaration.initializer()), binding_type);
 
   Symbol symbol{declaration.name(), binding_type, declaration.binding(),
@@ -1074,6 +1093,13 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
     }
     validate_aggregate_borrow_lifetime(borrows, symbols_.scope_depth(),
                                        declaration.initializer().location());
+    if (has_mutable_borrow_target(borrows) &&
+        declaration.initializer().kind() == Expr::Kind::Name) {
+      diagnostics_.error(
+          diag::kTypeMismatch, declaration.initializer().location(),
+          "an aggregate with a mutable borrowed field cannot be copied; "
+          "construct a fresh borrow instead");
+    }
     symbol.field_borrows = std::move(borrows);
   }
   if (binding_type.is_pointer() || binding_type.is_owned_array() ||
@@ -1153,6 +1179,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
           } else {
             symbol.borrowed = true;
             symbol.mutable_borrow = signature->returns_mutable_borrow;
+            symbol.explicit_borrow = true;
             symbol.owns_allocation = false;
             symbol.allocation_id = source->allocation_id;
             symbol.borrow_owner = borrow_owner_name(*source);
@@ -1200,6 +1227,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
                                    "' may not be live on every branch");
           }
           symbol.borrowed = true;
+          symbol.explicit_borrow = source->explicit_borrow;
           symbol.borrow_conditional = source->borrow_conditional;
           symbol.borrow_conditional_absent_null =
               source->borrow_conditional_absent_null;
@@ -1425,6 +1453,70 @@ bool TypeChecker::field_path(const Expr& expression, string& root,
   return true;
 }
 
+bool TypeChecker::write_through_immutable_borrow(const Expr& target,
+                                                 string& subject,
+                                                 bool& is_field) const {
+  const Expr* pointer = nullptr;
+  if (target.kind() == Expr::Kind::Unary) {
+    const auto& unary = static_cast<const UnaryExpr&>(target);
+    if (unary.op() == UnaryOp::Dereference) pointer = &unary.operand();
+  } else if (target.kind() == Expr::Kind::Index) {
+    pointer = &static_cast<const IndexExpr&>(target).base();
+  }
+  if (pointer == nullptr) return false;
+
+  std::function<bool(const Expr&)> inspect = [&](const Expr& expr) -> bool {
+    if (expr.kind() == Expr::Kind::Name) {
+      const Symbol* symbol =
+          symbols_.lookup(static_cast<const NameExpr&>(expr).name());
+      if (symbol && symbol->explicit_borrow && !symbol->mutable_borrow) {
+        subject = symbol->name;
+        is_field = false;
+        return true;
+      }
+      return false;
+    }
+    if (expr.kind() == Expr::Kind::Unary) {
+      const auto& unary = static_cast<const UnaryExpr&>(expr);
+      if (unary.op() == UnaryOp::Dereference) return inspect(unary.operand());
+      return false;
+    }
+    if (expr.kind() != Expr::Kind::MemberAccess) return false;
+    const auto& member = static_cast<const MemberAccessExpr&>(expr);
+    const Type base_type = member.base().type();
+    if (!base_type.is_struct()) return false;
+    const StructInfo* info = find_struct(base_type.struct_name());
+    if (info == nullptr) return false;
+    for (const Parameter& field : info->fields) {
+      if (field.name != member.member()) continue;
+      if (field.borrowed && !field.mutable_borrow) {
+        subject = field.name;
+        is_field = true;
+        return true;
+      }
+      return false;
+    }
+    return false;
+  };
+  return inspect(*pointer);
+}
+
+bool TypeChecker::borrowed_field_pointer(const Expr& expression,
+                                         bool& mutable_borrow) const {
+  if (expression.kind() != Expr::Kind::MemberAccess) return false;
+  const auto& member = static_cast<const MemberAccessExpr&>(expression);
+  const Type base_type = member.base().type();
+  if (!base_type.is_struct()) return false;
+  const StructInfo* info = find_struct(base_type.struct_name());
+  if (info == nullptr) return false;
+  for (const Parameter& field : info->fields) {
+    if (field.name != member.member()) continue;
+    mutable_borrow = field.mutable_borrow;
+    return field.borrowed;
+  }
+  return false;
+}
+
 Type TypeChecker::type_at_field_path(const Type& type, const string& path) {
   Type current = resolve_aggregate_type(type);
   size_t pos = 0;
@@ -1483,6 +1575,7 @@ void TypeChecker::mark_field_initialized(const string& root, const string& path)
     }
     if (!complete) break;
     symbols_.clear_field_uninitialized(root, parent);
+    symbols_.clear_partially_initialized(root, parent);
     const string grandparent = enclosing_aggregate_path(parent);
     if (!grandparent.empty())
       symbols_.mark_partially_initialized(root, grandparent);
@@ -1752,29 +1845,22 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       : check_expression(const_cast<Expr&>(assignment.target()));
   checking_lvalue_ = was_checking_lvalue;
 
-  // 17.1: a write through an immutable borrowed field is a mutation of the borrowed
-  // owner, so only `borrow mut` fields allow it.
-  if (assignment.target().kind() == Expr::Kind::Index) {
-    const Expr& index_base =
-        static_cast<const IndexExpr&>(assignment.target()).base();
-    if (index_base.kind() == Expr::Kind::MemberAccess) {
-      const auto& member = static_cast<const MemberAccessExpr&>(index_base);
-      if (member.base().type().is_struct()) {
-        const StructInfo* info =
-            find_struct(member.base().type().struct_name());
-        if (info != nullptr) {
-          for (const Parameter& candidate : info->fields) {
-            if (candidate.name != member.member()) continue;
-            if (candidate.borrowed && !candidate.mutable_borrow) {
-              diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
-                                 "cannot write through borrowed field '" +
-                                     candidate.name + "'; declare it 'borrow mut'");
-              return;
-            }
-          }
-        }
-      }
-    }
+  // 17.1: a write through an explicitly immutable borrowed pointer or field
+  // is a mutation of the borrowed owner, so only `borrow mut` contracts allow
+  // it. Check both indexing and dereference targets (`d.value[0]`, `*d.value`,
+  // `*view`, and nested dereferences).
+  string immutable_subject;
+  bool immutable_is_field = false;
+  if (write_through_immutable_borrow(assignment.target(), immutable_subject,
+                                     immutable_is_field)) {
+    diagnostics_.error(
+        diag::kTypeMismatch, assignment.target().location(),
+        immutable_is_field
+            ? "cannot write through borrowed field '" + immutable_subject +
+                  "'; declare it 'borrow mut'"
+            : "cannot write through immutable borrowed pointer '" +
+                  immutable_subject + "'");
+    return;
   }
 
   if (assignment.target().kind() == Expr::Kind::MemberAccess) {
@@ -1836,6 +1922,15 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       mark_field_initialized(field_root, field_target);
   }
   const Symbol* symbol = find_root_symbol(assignment.target(), symbols_);
+  bool extracted_mutable_borrow = false;
+  if (symbol && assignment.is_simple_name() && target_type.is_pointer() &&
+      borrowed_field_pointer(assignment.value(), extracted_mutable_borrow)) {
+    diagnostics_.error(
+        diag::kTypeMismatch, assignment.value().location(),
+        "a borrowed field cannot be extracted as an independent pointer; "
+        "use the aggregate's borrow contract");
+    return;
+  }
   if (assignment.target().kind() == Expr::Kind::Index &&
       static_cast<const IndexExpr&>(assignment.target()).base().type().is_array_view()) {
     const Expr& view_expr =
@@ -1892,6 +1987,13 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
         aggregate_borrows_for(assignment.value());
     validate_aggregate_borrow_lifetime(borrows, symbol->scope_depth,
                                        assignment.value().location());
+    if (has_mutable_borrow_target(borrows) &&
+        assignment.value().kind() == Expr::Kind::Name) {
+      diagnostics_.error(
+          diag::kTypeMismatch, assignment.value().location(),
+          "an aggregate with a mutable borrowed field cannot be copied; "
+          "construct a fresh borrow instead");
+    }
     symbols_.set_field_borrows(assignment.name(), std::move(borrows));
   }
   if (assignment.is_simple_name() && symbol && target_type.is_struct() &&
@@ -2194,9 +2296,15 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     }
     if (owns_allocation) symbols_.mark_allocation_moved(allocation_id);
     symbols_.rebind_pointer(assignment.name(), allocation_id);
+    bool explicit_borrow = symbol->explicit_borrow;
+    if (assignment.value().kind() == Expr::Kind::Call) {
+      const FunctionSignature* signature = find_function(
+          static_cast<const CallExpr&>(assignment.value()).callee());
+      explicit_borrow = signature && signature->returns_borrowed;
+    }
     symbols_.set_pointer_ownership(assignment.name(), owns_allocation, borrowed,
                                    mutable_borrow, shared_allocation, cleanup_callee,
-                                   borrow_owner, borrow_paths);
+                                   borrow_owner, borrow_paths, explicit_borrow);
     symbols_.set_definitely_null(
         assignment.name(), is_null_pointer_literal(assignment.value()));
     assignment.set_cleanup_callee(cleanup_callee);
@@ -2206,6 +2314,20 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
 void TypeChecker::check_compound_assignment(CompoundAssignmentStmt& assignment) {
   const Type value_type = check_expression(const_cast<Expr&>(assignment.value()));
   const Type target_type = check_expression(const_cast<Expr&>(assignment.target()));
+
+  string immutable_subject;
+  bool immutable_is_field = false;
+  if (write_through_immutable_borrow(assignment.target(), immutable_subject,
+                                     immutable_is_field)) {
+    diagnostics_.error(
+        diag::kTypeMismatch, assignment.target().location(),
+        immutable_is_field
+            ? "cannot write through borrowed field '" + immutable_subject +
+                  "'; declare it 'borrow mut'"
+            : "cannot write through immutable borrowed pointer '" +
+                  immutable_subject + "'");
+    return;
+  }
 
   const Symbol* symbol = find_root_symbol(assignment.target(), symbols_);
   if (symbol == nullptr && assignment.is_simple_name()) {
@@ -2916,6 +3038,24 @@ Type TypeChecker::check_expression(Expr& expr) {
                                    "' is not supported yet");
             type = Type::error();
           } else {
+            string immutable_subject;
+            bool immutable_is_field = false;
+            if (operand_kind == Expr::Kind::Unary &&
+                static_cast<const UnaryExpr&>(unary.operand()).op() ==
+                    UnaryOp::Dereference &&
+                write_through_immutable_borrow(unary.operand(),
+                                               immutable_subject,
+                                               immutable_is_field)) {
+              diagnostics_.error(
+                  diag::kTypeMismatch, unary.location(),
+                  immutable_is_field
+                      ? "cannot take an address through immutable borrowed field '" +
+                            immutable_subject + "'"
+                      : "cannot take an address through immutable borrowed pointer '" +
+                            immutable_subject + "'");
+              type = Type::error();
+              break;
+            }
             const Symbol* origin = find_borrow_origin(unary.operand());
             const BorrowPathSet paths = find_borrow_paths(unary);
             const Symbol* conflict = origin && origin->allocation_id != 0
@@ -3509,7 +3649,11 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
                              "read of uninitialized aggregate field '" +
                                  field_display + "'");
         }
-        if (contains_owned_array(field_type))
+        if (field.borrowed)
+          expr.set_ownership(field.mutable_borrow
+                                 ? ValueOwnership::MutableBorrowed
+                                 : ValueOwnership::Borrowed);
+        else if (contains_owned_array(field_type))
           expr.set_ownership(ValueOwnership::Owned);
         else if (contains_shared_pointer(field_type))
           expr.set_ownership(ValueOwnership::Shared);
@@ -3567,6 +3711,15 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
   aggregate_borrows_[&expr].clear();
   const auto record_field_borrow = [&](const Parameter& field,
                                        const Expr& value) {
+    const auto conflicts_with_existing = [&](const BorrowTarget& candidate) {
+      for (const BorrowTarget& existing : aggregate_borrows_[&expr]) {
+        if (existing.allocation_id == candidate.allocation_id &&
+            existing.paths.overlaps(candidate.paths) &&
+            (existing.mutable_borrow || candidate.mutable_borrow))
+          return true;
+      }
+      return false;
+    };
     if (field.borrowed) {
       record_parameter_use(value, BorrowEffectRead | BorrowEffectAlias);
       const Symbol* origin = find_borrow_origin(value);
@@ -3582,17 +3735,47 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
         diagnostics_.error(diag::kTypeMismatch, value.location(),
                            "borrowed field '" + field.name +
                                "' must be live on every branch");
+      } else if (field.mutable_borrow &&
+                 !(origin->borrowed ? origin->mutable_borrow
+                                     : origin->is_mutable())) {
+        diagnostics_.error(
+            diag::kTypeMismatch, value.location(),
+            "mutable borrowed field '" + field.name +
+                "' requires a mutable source");
       } else {
         uint64_t allocation_id = origin->allocation_id;
         if (allocation_id == 0)
           allocation_id = symbols_.ensure_allocation_id(
               origin->name, next_allocation_id_++);
-        aggregate_borrows_[&expr].push_back(BorrowTarget{
+        const BorrowTarget candidate{
             allocation_id, borrow_owner_name(*origin),
-            find_borrow_paths(value), field.mutable_borrow});
+            find_borrow_paths(value), field.mutable_borrow};
+        if (conflicts_with_existing(candidate)) {
+          diagnostics_.error(
+              diag::kTypeMismatch, value.location(),
+              "borrowed fields in one aggregate cannot create conflicting aliases");
+        } else {
+          aggregate_borrows_[&expr].push_back(candidate);
+        }
       }
     }
-    for (const BorrowTarget& nested : aggregate_borrows_for(value)) {
+    const std::vector<BorrowTarget> nested_borrows =
+        aggregate_borrows_for(value);
+    if (value.kind() == Expr::Kind::Name &&
+        has_mutable_borrow_target(nested_borrows)) {
+      diagnostics_.error(
+          diag::kTypeMismatch, value.location(),
+          "an aggregate with a mutable borrowed field cannot be copied; "
+          "construct a fresh borrow instead");
+    }
+    if (value.kind() == Expr::Kind::MemberAccess &&
+        contains_borrowed_field(resolve_aggregate_type(field.type))) {
+      diagnostics_.error(
+          diag::kTypeMismatch, value.location(),
+          "an aggregate holding borrowed references cannot be copied through "
+          "a field projection");
+    }
+    for (const BorrowTarget& nested : nested_borrows) {
       const auto duplicate = std::find_if(
           aggregate_borrows_[&expr].begin(), aggregate_borrows_[&expr].end(),
           [&](const BorrowTarget& existing) {
@@ -3601,8 +3784,15 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
                    existing.paths.path == nested.paths.path &&
                    existing.paths.alternatives == nested.paths.alternatives;
           });
-      if (duplicate == aggregate_borrows_[&expr].end())
-        aggregate_borrows_[&expr].push_back(nested);
+      if (duplicate == aggregate_borrows_[&expr].end()) {
+        if (conflicts_with_existing(nested)) {
+          diagnostics_.error(
+              diag::kTypeMismatch, value.location(),
+              "borrowed fields in one aggregate cannot create conflicting aliases");
+        } else {
+          aggregate_borrows_[&expr].push_back(nested);
+        }
+      }
     }
   };
 
