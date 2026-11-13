@@ -1033,6 +1033,32 @@ void TypeChecker::check_deferred_cleanup(DeferredCleanupStmt& statement) {
   deferred_calls_.back().push_back(DeferredCleanup{call, allocation_id});
 }
 
+bool TypeChecker::has_pending_deferred_release(uint64_t allocation_id) const {
+  if (allocation_id == 0) return false;
+  for (const auto& scope : deferred_calls_)
+    for (const DeferredCleanup& cleanup : scope) {
+      if (cleanup.allocation_id != allocation_id || !cleanup.call) continue;
+      const std::string& callee = cleanup.call->callee();
+      if (callee == "memory.deallocate" || callee == "memory.shared_release" ||
+          callee == "array.owned_release" || callee == "file.close" ||
+          callee == "mutex.destroy" || callee == "memory.secure_release" ||
+          callee == "memory.unmap_file" || callee == "socket.close")
+        return true;
+    }
+  return false;
+}
+
+bool TypeChecker::reject_move_after_defer(const Symbol& source,
+                                          const SourceLocation& location,
+                                          const char* action) {
+  if (!has_pending_deferred_release(source.allocation_id)) return false;
+  diagnostics_.error(
+      diag::kUseAfterFree, location,
+      std::string("cannot ") + action + " owner '" + source.name +
+          "' after a defer scheduled its cleanup");
+  return true;
+}
+
 void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaration) {
   const Type initializer_type =
       check_expression(const_cast<Expr&>(declaration.initializer()));
@@ -1239,7 +1265,9 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
         symbol.shared_allocation = source->shared_allocation;
         symbol.cleanup_callee = source->cleanup_callee;
         if (source->owns_allocation && !source->moved) {
-          if (symbols_.has_live_borrow(source->allocation_id)) {
+          if (reject_move_after_defer(*source, declaration.initializer().location(),
+                                      "move")) {
+          } else if (symbols_.has_live_borrow(source->allocation_id)) {
             diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
                                "cannot move an owner while an array view is live");
           } else {
@@ -2049,6 +2077,10 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                          "owned field reinitialization requires a live owned source value");
       return;
     }
+    if (source && source->owns_allocation && !source->moved &&
+        reject_move_after_defer(*source, assignment.value().location(), "move")) {
+      return;
+    }
     if (source && source->owns_allocation &&
         symbols_.has_live_borrow(source->allocation_id)) {
       diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
@@ -2245,7 +2277,8 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       owns_allocation = true;
       cleanup_callee = cleanup_for_type(target_type);
     } else if (source && source->owns_allocation && !source->moved) {
-      if (symbols_.has_live_borrow(source->allocation_id)) {
+      if (reject_move_after_defer(*source, assignment.value().location(), "move")) {
+      } else if (symbols_.has_live_borrow(source->allocation_id)) {
         diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
                            "cannot move an owner while an array view is live");
       } else {
@@ -2814,6 +2847,9 @@ void TypeChecker::check_return(ReturnStmt& statement) {
     } else if (source && source->borrowed) {
       diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                          "a borrowed pointer cannot escape through a return value");
+    } else if (source && source->owns_allocation && !source->moved &&
+               reject_move_after_defer(*source, statement.value()->location(),
+                                       "return")) {
     } else if (source && source->owns_allocation && !source->moved &&
                symbols_.has_live_borrow(source->allocation_id)) {
       diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
@@ -3396,7 +3432,8 @@ Type TypeChecker::check_array_literal(ArrayLiteralExpr& expr) {
       const Symbol* source = value.kind() == Expr::Kind::Name
                                  ? find_root_symbol(value, symbols_) : nullptr;
       if (source && source->owns_allocation && !source->moved) {
-        if (symbols_.has_live_borrow(source->allocation_id))
+        if (reject_move_after_defer(*source, value.location(), "move")) {
+        } else if (symbols_.has_live_borrow(source->allocation_id))
           diagnostics_.error(diag::kTypeMismatch, value.location(),
                              "cannot move an owner while an array view is live");
         else {
@@ -3432,7 +3469,8 @@ Type TypeChecker::check_tuple_literal(TupleLiteralExpr& expr) {
       const Symbol* source = value.kind() == Expr::Kind::Name
                                  ? find_root_symbol(value, symbols_) : nullptr;
       if (source && source->owns_allocation && !source->moved) {
-        if (symbols_.has_live_borrow(source->allocation_id))
+        if (reject_move_after_defer(*source, value.location(), "move")) {
+        } else if (symbols_.has_live_borrow(source->allocation_id))
           diagnostics_.error(diag::kTypeMismatch, value.location(),
                              "cannot move an owner while an array view is live");
         else {
@@ -5278,7 +5316,9 @@ Type TypeChecker::check_call(CallExpr& call) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                            "owning parameter requires an owned resource value");
       } else if (source && source->owns_allocation && !source->moved) {
-        if (symbols_.has_live_borrow(source->allocation_id)) {
+        if (reject_move_after_defer(*source, call.arguments()[i]->location(),
+                                    "transfer")) {
+        } else if (symbols_.has_live_borrow(source->allocation_id)) {
           diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                              "cannot transfer an owner while an array view is live");
         } else {
@@ -5474,7 +5514,9 @@ Type TypeChecker::check_call(CallExpr& call) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "owning parameter requires an owned pointer; use a borrow parameter for non-owning access");
     } else if (source && source->owns_allocation && !source->moved) {
-      if (symbols_.has_live_borrow(source->allocation_id)) {
+      if (reject_move_after_defer(*source, call.arguments()[i]->location(),
+                                  "transfer")) {
+      } else if (symbols_.has_live_borrow(source->allocation_id)) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                            "cannot transfer an owner while a borrow is live");
       } else {
