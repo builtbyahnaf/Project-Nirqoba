@@ -1,0 +1,6 @@
+int function main() {
+    let source = memory.shared_allocate<byte>(8);
+    let owner = source;
+    memory.shared_release(owner);
+    return 0;
+}

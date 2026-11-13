@@ -1,0 +1,7 @@
+{
+  "expect_exit": 0,
+  "expect_stdout": "",
+  "expect_ir_counts": {
+    "call void @nrq_memory_deallocate_checked": 1
+  }
+}
