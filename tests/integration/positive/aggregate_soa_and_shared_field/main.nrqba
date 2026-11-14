@@ -1,0 +1,33 @@
+// SoA and shared fields share one aggregate destruction walk. The SoA column
+// keeps a managed reference alive while the shared field keeps its own count;
+// both must be released in reverse declaration order.
+struct Node {
+    int value;
+}
+
+struct Row {
+    int tag;
+    managed<Node> node;
+}
+
+struct Mixed {
+    shared ptr int counter;
+    soa<Row> rows;
+}
+
+int function main() {
+    var node = array.allocate<Node>(1);
+    node[0].value = 11;
+
+    var mixed = Mixed {
+        counter: memory.shared_allocate<int>(1),
+        rows: memory.owned_soa<Row>(2)
+    };
+    *mixed.counter = 5;
+    mixed.rows[1].node = node;
+
+    gc.collect();
+    print(*mixed.counter);
+    print(mixed.rows[1].node[0].value);
+    return 0;
+}
