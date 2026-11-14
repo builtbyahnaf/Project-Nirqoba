@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.473-beta` |
-| Development Stage | `Phase 6` |
-| Last Report Update | `2026-11-14 03:10:00` |
-| Report Entries | `22` |
+| Current Working Version | `0.477-beta` |
+| Development Stage | `Phase 7` |
+| Last Report Update | `2026-11-14 05:40:00` |
+| Report Entries | `23` |
 
 ---
 
@@ -2753,6 +2753,110 @@ Raw samples are in `benchmarks/pre_mmm_phase6/results.json`.
 ---
 
 **End of Entry #022**
+
+## Entry #023 — Phase 7 Compiler-Owned Temporary Resources
+
+**Version:** `0.477-beta`  
+**Date:** `2026-11-14 05:40:00`  
+**Scope:** `Phase 7 / Compiler Temporary Resources / Artifact Leases / Atomic Project Scaffolding`  
+**Status:** `Completed for the first subsystem`
+
+### 1. Overview
+
+Phase 7's first eligible subsystem is compiler-owned temporary resources. The
+compiler already uses RAII for AST, TIR, MLIR and LLVM values; the remaining
+resources were output artifacts written directly to final paths and a project
+scaffold written directly into its target. Both now use move-only staging owners
+and publish only after success.
+
+### 2. Implementation
+
+- **Artifact leases.** `TemporaryArtifact` owns a unique sibling staging file,
+  transfers cleanup on move, and publishes with one replacement rename. Build
+  object and executable outputs are staged; failed builds leave earlier
+  artifacts untouched and clean staging with `NRQ5010` on publication failure.
+- **Ephemeral run products.** `nirqoba run` executes the staged executable and
+  removes the executable and object after every program exit. `--keep-artifacts`
+  is the compatibility fallback that publishes both at their normal paths.
+- **Atomic scaffolds.** `TemporaryDirectory` writes the complete `nirqoba new`
+  project beside the target and renames it into place; a non-empty target is
+  refused and a write failure leaves no partial project.
+- **No runtime change.** No collector, allocator, language rule, lowering rule or
+  optimizer changed. Runtime file-read strings remain on their existing lifetime
+  path because they escape into the language as `string`.
+
+### 3. Verification
+
+| Check | Result |
+|---|---|
+| Build | PASS (`0.477-beta`, Phase 7) |
+| Unit suite | 237/237 |
+| Integration suite | 462/462 |
+| `run` artifact removal | PASS, 0 files |
+| Build publication | PASS, `.obj` and `.exe` |
+| `--keep-artifacts` | PASS |
+| `new` missing/empty/non-empty target | PASS / PASS / rejected |
+| Executable hash vs 0.473 | identical |
+
+New tests: five artifact-lease cases, three directory-lease cases, CLI parsing,
+`run_artifact_cleanup`, `build_artifact_publication`, and the retained COFF check
+through `hello --keep-artifacts`. Each integration case now gets its own artifact
+directory so presence checks cannot see a previous case's files.
+
+### 4. Benchmark
+
+41 interleaved samples, baseline `ae26bc1` (`0.473-beta`), current `0.477-beta`:
+
+| Measurement | Baseline | Current | Change |
+|---|---:|---:|---:|
+| Build median | 99.298 ms | 102.779 ms | **+3.51%** |
+| Run median | 157.214 ms | 155.831 ms | **-0.88%** |
+| `new` median | 33.933 ms | 36.325 ms | **+7.05%** |
+| Compiler peak RSS | 30,298,112 B | 30,371,840 B | **+0.24%** |
+| `run` artifacts | 2 files / 10,300 B | 0 files / 0 B | eliminated |
+| Executable | 9,728 B | 9,728 B | identical SHA-256 |
+
+The build cost fell to parity after removing a synchronous disk flush from
+publication. The `new` cost is roughly 2 ms of staging/rename per project. No
+runtime or generated-code speedup is claimed.
+
+### 5. Limitations
+
+- Object and executable publication is two sequential renames, not one
+  filesystem transaction. A failure between them can leave a new object beside
+  an older executable; this is documented and reported.
+- `--keep-artifacts` deliberately restores the old run-output behavior.
+- Runtime file-read buffers are not migrated; they are an escaping `string` with
+  no ownership contract and keep the existing fallback.
+- No ASan/UBSan run is available in the MSVC configuration; the Phase 4 GC stress
+  flake remains separate.
+- Later Phase 7 subsystems (runtime buffers, native resources, containers,
+  async, tensor/device) are not started.
+
+### 6. Commits
+
+- `driver: give compiler artifacts deterministic ownership`
+- `test: cover compiler artifact leases and run cleanup`
+- `driver: publish project scaffolds atomically`
+- `test: cover atomic project-directory publication`
+- `driver: publish artifacts without a synchronous disk flush`
+- `benchmark: measure Phase 7 artifact lifetime and publication cost`
+
+### 7. Agent Assessment
+
+- **Implementation completeness:** Complete for compiler-generated files and
+  project scaffolds.
+- **Verification confidence:** High for lifetime and early-exit behavior; the
+  two-file publication window is an explicit limitation.
+- **Performance:** Build/run parity within noise; `new` has a small measured
+  publication cost; `run` no longer leaks 10.3 KB per invocation.
+- **Next step:** migrate runtime-owned buffers only after defining an ownership
+  contract for escaping strings; do not force deterministic release on the
+  current borrowed/leaked representation.
+
+---
+
+**End of Entry #023**
 
 <!-- REPORT ENTRIES END -->
 
