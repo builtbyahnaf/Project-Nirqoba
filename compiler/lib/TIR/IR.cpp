@@ -8,6 +8,7 @@ Value Function::allocate_value(Type type, ValueOwnership ownership) {
   value.type = type;
   value.ownership = ownership;
   types_.push_back(type);
+  ownerships_.push_back(ownership);
   return value;
 }
 

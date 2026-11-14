@@ -178,6 +178,9 @@ class Function {
 
   std::size_t value_count() const { return types_.size(); }
   Type value_type(int id) const { return types_[static_cast<std::size_t>(id)]; }
+  ValueOwnership value_ownership(int id) const {
+    return ownerships_[static_cast<std::size_t>(id)];
+  }
 
  private:
   std::string name_;
@@ -188,6 +191,7 @@ class Function {
   std::vector<Parameter> parameters_;
   std::vector<Op> operations_;
   std::vector<Type> types_;
+  std::vector<ValueOwnership> ownerships_;
   int next_label_id_ = 0;
 };
 
