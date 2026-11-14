@@ -1,0 +1,5 @@
+int function main() {
+    let pointer = nrq_memory_allocate(16, 8);
+    nrq_memory_deallocate(pointer, 16, 8);
+    return 0;
+}

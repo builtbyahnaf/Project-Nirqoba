@@ -1,5 +1,5 @@
 int function main() {
-    let p = nrq_memory_allocate(16, 8);
-    nrq_memory_deallocate(p, 16, 8);
+    let pointer = memory.allocate<byte>(16);
+    memory.deallocate(pointer);
     return 42;
 }

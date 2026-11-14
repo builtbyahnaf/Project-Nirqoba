@@ -751,8 +751,7 @@ static std::unordered_map<int, StackAllocationLayout> analyze_stack_allocations(
           continue;
         }
         if (op.kind == tir::OpKind::Call) {
-          if ((op.callee == "memory.deallocate" ||
-               op.callee == "nrq_memory_deallocate") &&
+          if (op.callee == "memory.deallocate" &&
               !op.arguments.empty() && descriptors.count(op.arguments[0].id))
             continue;
           if (op.callee == "print" || op.callee == "nrq_print_int" ||
@@ -930,8 +929,8 @@ static bool callee_is_collection_free(llvm::StringRef callee) {
       // and socket APIs never enter the collector: only nrq_gc_allocate* runs
       // maybe_collect_automatically, and only gc.collect* runs a cycle.
       "memory.owned_array", "memory.owned_array_aligned", "memory.allocate",
-      "nrq_memory_allocate", "memory.deallocate", "nrq_memory_deallocate",
-      "memory.reallocate", "memory.shared_allocate", "memory.shared_retain",
+      "memory.deallocate", "memory.reallocate", "memory.shared_allocate",
+      "memory.shared_retain",
       "memory.shared_release", "memory.shared_count", "memory.secure_allocate",
       "memory.secure_release", "memory.secure_zero", "memory.start_ref_count",
       "memory.stop_ref_count", "memory.pin", "memory.unpin", "memory.map_file",
@@ -3906,7 +3905,7 @@ class FunctionTranslator {
           }
           return true;
         }
-        if (op.callee == "nrq_memory_allocate" || op.callee == "memory.allocate") {
+        if (op.callee == "memory.allocate") {
           auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_allocate",
                                      llvm_ptr_type(ctx_),
                                      {builder_.getI64Type(), builder_.getI64Type()});
@@ -3915,35 +3914,6 @@ class FunctionTranslator {
             mlir::Value result = builder_.create<mlir::LLVM::PtrToIntOp>(
                 loc, builder_.getI64Type(), call_op.getResult()).getResult();
             set(op.result, result);
-          }
-          return true;
-        }
-        if (op.callee == "nrq_memory_deallocate") {
-          if (!op.arguments.empty() &&
-              stack_allocations_.find(op.arguments[0].id) !=
-                  stack_allocations_.end()) {
-            return true;
-          }
-          if (args.size() >= 3) {
-            mlir::Value pointer = args[0];
-            if (!mlir::isa<mlir::LLVM::LLVMPointerType>(pointer.getType())) {
-              pointer = builder_.create<mlir::LLVM::IntToPtrOp>(
-                  loc, llvm_ptr_type(ctx_), pointer).getResult();
-            }
-            auto coerce_i64 = [&](mlir::Value val) -> mlir::Value {
-              if (val.getType() == builder_.getI64Type()) return val;
-              const unsigned bits = val.getType().getIntOrFloatBitWidth();
-              return bits < 64
-                  ? builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), val).getResult()
-                  : builder_.create<mlir::LLVM::TruncOp>(loc, builder_.getI64Type(), val).getResult();
-            };
-            mlir::Value bytes = coerce_i64(args[1]);
-            mlir::Value align = coerce_i64(args[2]);
-            auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_deallocate",
-                                       mlir::LLVM::LLVMVoidType::get(ctx_),
-                                       {llvm_ptr_type(ctx_), builder_.getI64Type(),
-                                        builder_.getI64Type()});
-            builder_.create<mlir::LLVM::CallOp>(loc, fn, mlir::ValueRange{pointer, bytes, align});
           }
           return true;
         }

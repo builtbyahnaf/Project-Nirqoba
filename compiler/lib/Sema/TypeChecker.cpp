@@ -5094,51 +5094,6 @@ Type TypeChecker::check_call(CallExpr& call) {
     return Type::void_type();
   }
 
-  if (call.callee() == "nrq_memory_allocate" || call.callee() == "memory.allocate") {
-    if (call.arguments().size() != 2) {
-      diagnostics_.error(diag::kPrintArity, call.location(),
-                         "'nrq_memory_allocate' takes exactly two arguments (bytes, alignment), but " +
-                             to_string(call.arguments().size()) + " were given");
-      return Type::u64_type();
-    }
-    const Type arg1_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
-    const Type arg2_type = check_expression(const_cast<Expr&>(*call.arguments()[1]));
-    if (arg1_type.is_valid() && !arg1_type.is_integer()) {
-      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
-                         "'nrq_memory_allocate' first argument must be an integer (bytes), not '" + arg1_type.to_string() + "'");
-    }
-    if (arg2_type.is_valid() && !arg2_type.is_integer()) {
-      diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
-                         "'nrq_memory_allocate' second argument must be an integer (alignment), not '" + arg2_type.to_string() + "'");
-    }
-    return Type::u64_type();
-  }
-
-  // Builtin 'nrq_memory_deallocate'
-  if (call.callee() == "nrq_memory_deallocate" || call.callee() == "memory.deallocate") {
-    if (call.arguments().size() != 3) {
-      diagnostics_.error(diag::kPrintArity, call.location(),
-                         "'nrq_memory_deallocate' takes exactly three arguments (ptr, bytes, alignment), but " +
-                             to_string(call.arguments().size()) + " were given");
-      return Type::void_type();
-    }
-    const Type arg1_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
-    const Type arg2_type = check_expression(const_cast<Expr&>(*call.arguments()[1]));
-    const Type arg3_type = check_expression(const_cast<Expr&>(*call.arguments()[2]));
-    if (arg1_type.is_valid()) {
-      // Pointer type check - accept any non-error type
-    }
-    if (arg2_type.is_valid() && !arg2_type.is_integer()) {
-      diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
-                         "'nrq_memory_deallocate' second argument must be an integer (bytes), not '" + arg2_type.to_string() + "'");
-    }
-    if (arg3_type.is_valid() && !arg3_type.is_integer()) {
-      diagnostics_.error(diag::kTypeMismatch, call.arguments()[2]->location(),
-                         "'nrq_memory_deallocate' third argument must be an integer (alignment), not '" + arg3_type.to_string() + "'");
-    }
-    return Type::void_type();
-  }
-
   // Math builtins: sqrt, sin, cos, abs, floor, ceil (and math.<name>)
   string fn_name = call.callee();
   if (fn_name.rfind("math.", 0) == 0) fn_name = fn_name.substr(5);
