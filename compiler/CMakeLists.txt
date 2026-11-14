@@ -98,6 +98,7 @@ add_library(nirqoba_compiler_lib STATIC
   lib/Driver/ProcessRunner.cpp
   lib/Driver/CompilationPipeline.cpp
   lib/Driver/ModuleResolver.cpp
+  lib/Driver/TemporaryArtifact.cpp
 
   # CLI
   lib/CLI/Driver.cpp

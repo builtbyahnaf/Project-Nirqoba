@@ -3,11 +3,13 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string_view>
 
 #include "nirqoba/Diagnostics/Diagnostic.h"
 #include "nirqoba/Diagnostics/DiagnosticRenderer.h"
 #include "nirqoba/Driver/ProcessRunner.h"
+#include "nirqoba/Driver/TemporaryArtifact.h"
 #include "nirqoba/Version.h"
 
 namespace nirq {
@@ -74,6 +76,8 @@ static void print_command_help(string_view cmd) {
   } else if (cmd == "run") {
     cout << "Usage: nirqoba run <file.nrqba>... [options] [-- <args>...]\n\n"
               << "Options:\n"
+              << "  --keep-artifacts     Keep the generated executable and object\n"
+              << "                       (the default removes them after the run)\n"
               << "  --out-dir <dir>      Directory for temporary build artifacts\n"
               << "  --module-path <dir>  Extra directory searched for imported modules\n"
               << "  -O<level>            Optimization level (default: -O2)\n"
@@ -542,6 +546,10 @@ bool parse_command_line(int argc, const char* const* argv,
       options.debug_enabled = true;
       continue;
     }
+    if (arg == "--keep-artifacts") {
+      options.keep_artifacts = true;
+      continue;
+    }
     if (arg.rfind("--remarks=", 0) == 0) {
       string_view mode = string_view(arg).substr(10);
       options.emit_remarks = true;
@@ -702,11 +710,35 @@ int run_driver(int argc, const char* const* argv) {
 
   string obj_file = (out_directory / (stem + ".obj")).string();
 
+  // `run` owns its executable and object only for the duration of the run.
+  // `build` owns them as outputs, but stages each one so a failed compile or
+  // link cannot leave a partial artifact at the final path. Both cases use the
+  // same move-only lease; only publication differs.
+  const EmitKind effective_emit =
+      options.command == CommandKind::Run ? EmitKind::Exe : options.emit;
+  const bool writes_artifacts =
+      (options.command == CommandKind::Run ||
+       options.command == CommandKind::Build) &&
+      (effective_emit == EmitKind::Exe || effective_emit == EmitKind::Obj);
+
+  optional<TemporaryArtifact> output_lease;
+  optional<TemporaryArtifact> object_lease;
+  if (writes_artifacts) {
+    output_lease.emplace(TemporaryArtifact::make_staged_path(output_file),
+                         output_file);
+    if (effective_emit == EmitKind::Exe) {
+      object_lease.emplace(TemporaryArtifact::make_staged_path(obj_file),
+                           obj_file);
+    }
+  }
+
   PipelineOptions pipe_opts;
   pipe_opts.source_paths = options.source_paths;
   pipe_opts.module_search_paths = options.module_paths;
-  pipe_opts.output_path = output_file;
-  pipe_opts.obj_path = obj_file;
+  pipe_opts.output_path =
+      output_lease ? output_lease->staged_path().string() : output_file;
+  pipe_opts.obj_path = object_lease ? object_lease->staged_path().string()
+                                    : pipe_opts.output_path;
   pipe_opts.verbose = options.verbose;
   pipe_opts.optimization_level = options.optimization_level;
   pipe_opts.ipo_mode = options.ipo_mode;
@@ -737,7 +769,23 @@ int run_driver(int argc, const char* const* argv) {
     pipe_opts.emit = options.emit;
     DiagnosticEngine diag;
     int ret = run_pipeline(pipe_opts, diag);
-    return ret;
+    if (ret != 0) return ret;
+
+    if (object_lease && !object_lease->publish()) {
+      diag.error(diag::kArtifactPublishFailed, SourceLocation{},
+                 "could not publish object file '" +
+                     object_lease->final_path().string() + "'");
+      render_diagnostics(diag, nullptr);
+      return 1;
+    }
+    if (output_lease && !output_lease->publish()) {
+      diag.error(diag::kArtifactPublishFailed, SourceLocation{},
+                 "could not publish output file '" +
+                     output_lease->final_path().string() + "'");
+      render_diagnostics(diag, nullptr);
+      return 1;
+    }
+    return 0;
   }
 
   if (options.command == CommandKind::Run) {
@@ -746,17 +794,29 @@ int run_driver(int argc, const char* const* argv) {
     int ret = run_pipeline(pipe_opts, diag);
     if (ret != 0) return ret;
 
-    // Run the generated executable.
-    ProcessResult run_res = run_process(output_file, options.trailing_args);
+    // The executable is still owned by its lease while it runs. A crash or a
+    // non-zero program exit therefore reaches the same cleanup as success.
+    const string executable = pipe_opts.output_path;
+    ProcessResult run_res = run_process(executable, options.trailing_args);
     if (!run_res.launched) {
       diag.error(diag::kProgramFailedToStart, SourceLocation{},
-                 "failed to execute '" + output_file + "': " + run_res.output);
+                 "failed to execute '" + executable + "': " + run_res.output);
       render_diagnostics(diag, nullptr);
       return 1;
     }
 
     if (!run_res.output.empty()) {
       cout << run_res.output;
+    }
+
+    if (options.keep_artifacts) {
+      if ((object_lease && !object_lease->publish()) ||
+          (output_lease && !output_lease->publish())) {
+        diag.error(diag::kArtifactPublishFailed, SourceLocation{},
+                   "could not keep the generated artifacts");
+        render_diagnostics(diag, nullptr);
+        return 1;
+      }
     }
     return run_res.exit_code;
   }
