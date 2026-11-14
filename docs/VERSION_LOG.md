@@ -12,61 +12,120 @@ recorded below is made under that authority.
 
 ---
 
-## Version 0.495-beta (working build)
+## Version 0.499-beta (working build)
+
+### Summary of Changes (since `0.495-beta`):
+
+*Pre-MMM Phase 7 Part 4; `0.457-beta` remains the released `n-1` checkpoint.*
+
+- **SoA fields participate in aggregate rooting.** A `soa<T>` created as a
+  struct or tuple initializer now forces an entry root frame. Previously the
+  root slot existed but was never registered, so the rooted allocation aborted
+  with "rooted GC allocation requires a registered pointer root slot".
+- **Aggregate destruction releases SoA fields.** `aggregate.owned_drop` now
+  unregisters the container root for every SoA leaf, including fields reached
+  through arrays, tuples and nested structs. It does not free the collector
+  object; the sweep reclaims it after the root is gone.
+- **Aggregate traversal is allocation-free in the compiler.**
+  `aggregate.owned_drop` and `aggregate.shared_retain` use direct recursive
+  helpers instead of a per-site `std::function`. The `SmallVector<int64_t, 8>`
+  path from Part 3 is retained for the field path.
+- **Container audit completed.** Owned arrays own explicit storage and register
+  typed roots only when an element needs tracing; array views are borrowed
+  stack descriptors with no heap lifetime; SoA is a single collector object
+  whose reference columns use strided `(offset, stride)` tracing; shared
+  storage keeps its reference count and inline root metadata. No speculative
+  redesign was made.
+- **Benchmark:** 5,000 aggregate drop sites, 15 alternating builds:
+  7,454.763 -> 7,507.598 ms (**+0.71%** wall) and 417,304,576 ->
+  417,480,704 B (+0.04% peak RSS). The difference is neutral; no speedup is
+  claimed for the traversal refactor. The SoA correctness cases cannot run on
+  the baseline because it aborts on them.
+- **Validation:** 258 unit tests and 470 integration tests pass. No ASan/UBSan
+  run is available in the MSVC configuration.
+- **Still deferred:** publication crash journal; bounded release of
+  process-lifetime `file.read_text` buffers; safe cleanup of busy registries
+  during termination; collector-owned SoA storage is reclaimed by the sweep,
+  not by `soa.owned_release` itself.
+
+## Version 0.495-beta
+
+### Summary of Changes (since `0.491-beta`):
+
+*Pre-MMM Phase 7 Part 3 close-out; `0.457-beta` remains the released `n-1` checkpoint.*
+
+- **Termination cleanup is best-effort.** Normal return waits for the file,
+  mapping and mutex registry locks and retires every entry. `system.exit` uses
+  try-lock and terminates without waiting for a blocked I/O thread; a busy
+  registry is reclaimed by the operating system.
+- **Validation:** 258 unit tests and 466 integration tests pass. No ASan/UBSan
+  run is available in the MSVC configuration; the pre-existing Phase 4 GC stress
+  flake remains separate.
+- **Release note:** this checkpoint contains one implementation upgrade. The
+  label was bumped with the Part 3 validation close-out rather than waiting for
+  a second upgrade; the history records that fact rather than inventing one.
+
+## Version 0.491-beta
+
+### Summary of Changes (since `0.487-beta`):
+
+*Pre-MMM Phase 7 Part 3 checkpoint.*
+
+- **Aggregate drop/retain paths use inline field paths.** The recursive walk
+  uses `llvm::SmallVector<int64_t, 8>` for the path instead of a heap vector.
+  Part 4 later replaced the recursive `std::function` wrapper as well.
+- **Mutex handles use a generation-checked slot table.** A token carries a slot
+  index and generation; destroying a handle clears the slot and a later reuse
+  increments the generation, so a stale token cannot name a new mutex.
+- **Benchmark:** 100,000 mutex round trips 47.396 -> 42.319 ms (**-10.71%**).
+  The aggregate traversal change was measured separately in Part 4; the Part 3
+  record does not claim it as a runtime speedup.
+- **Validation:** 258 unit tests and 466 integration tests pass.
+
+## Version 0.487-beta (retrospective milestone)
+
+### Summary of Changes (since `0.484-beta`):
+
+*Pre-MMM Phase 7 Part 3 work. No release commit was made at this label; the
+changes shipped together in `0.491-beta`.*
+
+- **`system.exit` runs deterministic cleanup.** The termination path retires
+  uncontended file, mapping and mutex registries before exiting; blocked
+  resources remain the documented fallback.
+- **Shared aggregate roots are inline.** `SharedRootMetadata` stores up to eight
+  managed-reference offsets inline, with the vector fallback only for deeper
+  layouts. Aggregate root registration therefore avoids one vector allocation
+  for the common shape.
+- **Validation:** covered by the `0.491-beta` and `0.495-beta` suites; no
+  separate build was published at this label.
+
+## Version 0.484-beta (retrospective milestone)
 
 ### Summary of Changes (since `0.483-beta`):
 
-*Pre-MMM Phase 7 Part 3; `0.457-beta` remains the released `n-1` checkpoint.*
+*Pre-MMM Phase 7 Part 3 work. No release commit was made at this label; the
+changes shipped together in `0.491-beta`.*
 
-- **Paired artifact publication is a rollback transaction.** Object and
-  executable keep hard-link backups; a failed second rename restores both
-  finals. Handled failures can no longer leave a new object beside an old
-  executable. A process crash between renames is still documented as an
-  unresolved window.
+- **Artifact publication is a rollback transaction.** Object and executable
+  keep hard-link backups; a failed second rename restores both finals, so a
+  handled failure cannot leave a new object beside an old executable. A crash
+  between renames remains an explicit limitation.
 - **Read strings are process-lifetime values.** `file.read_text` buffers are
   immutable and valid through deferred cleanup and static destructors; the OS
   reclaims the arena at termination. This removes the unsound entry-return
-  invalidation rule; process-lifetime memory growth remains a limitation.
-- **`system.exit` cleans up best-effort.** Uncontended file, mapping and mutex
-  registries are retired; busy registries are reclaimed by the OS so a blocked
-  I/O thread cannot prevent termination.
-- **Shared aggregate roots are inline.** Up to eight managed-reference offsets
-  live in the root metadata; deeper layouts use the vector fallback. Aggregate
-  drop/retain paths use `SmallVector` instead of heap paths.
-- **Mutex handles use a generation-checked slot table**, removing one map node
-  per create/destroy and rejecting stale tokens.
-- **Benchmark:** build publication 108.433 -> 111.931 ms (**+3.23%**, safety
-  cost); 100k mutex round trips 47.396 -> 42.319 ms (**-10.71%**); 20k reads
-  +0.12% wall / +1.10% peak RSS (noise). Executable size 21,504 -> 19,968 B
-  (-7.14%) for the benchmark program.
-- **Validation:** 258 unit tests and 466 integration tests pass. No ASan/UBSan
-  run is available in the MSVC configuration.
-- **Release history:** `0.491-beta` records the first four Part 3 upgrades and
-  `0.495-beta` the next two. The intended `0.487-beta` intermediate label was
-  not committed and is not fabricated retroactively; the earlier `0.480-beta`
-  gap remains as previously documented.
-- **Still deferred:** container-internals audit; publication crash journal;
-  bounded string release; async/task and tensor/device subsystems (absent from
-  this tree).
+  invalidation rule, at the cost of process-lifetime memory growth.
+- **Validation:** covered by the `0.491-beta` suite; no separate build was
+  published at this label.
 
-## Version 0.483-beta (working build)
+## Version 0.483-beta
 
-### Summary of Changes (since `0.477-beta`):
+### Summary of Changes (since `0.480-beta`):
 
-*Pre-MMM Phase 7 runtime-buffer and native-resource migrations; `0.457-beta`
+*Pre-MMM Phase 7 runtime-buffer and native-resource migration; `0.457-beta`
 remains the released `n-1` checkpoint.*
 
-- **Runtime strings have one owner.** `file.read_text` allocates escaping
-  strings from a process-lifetime arena; `nrq_runtime_shutdown` releases every
-  block after the entry function returns. The language still has no per-string
-  destruction contract, so buffers remain valid until that boundary.
-- **The argument bridge no longer allocates.** The CRT argv pointers are already
-  process-lifetime, so the runtime refreshes one static `NrqStringArray` instead
-  of a heap descriptor per program.
 - **Shutdown is emitted for every `main` return.** Early returns and the
-  argument wrapper's callee are covered, not only the wrapper. `system.exit`
-  remains process-teardown-only and is documented as such.
-- **Pipe output no longer deadlocks.** Shutdown stopped calling
+  argument wrapper's callee are covered. Shutdown stopped calling
   `FlushFileBuffers` on stdout: output is unbuffered, and flushing an anonymous
   pipe blocks until the parent drains it.
 - **Live native resources are released at shutdown.** File, mapping and mutex
@@ -77,16 +136,28 @@ remains the released `n-1` checkpoint.*
   tokens after slot reuse.
 - **Benchmark:** repeated 4 KiB reads (20,000): wall -1.35%, peak RSS -2.22%.
   File open/close (100,000): wall -2.04%, peak RSS +0.21% (one page, noise).
-  Argument allocation removal and shutdown cleanup are correctness changes and
-  are not claimed as speedups.
-- **Validation:** 249 unit tests and 464 integration tests pass. No ASan/UBSan
+- **Validation:** 252 unit tests and 464 integration tests pass. No ASan/UBSan
   run is available in the MSVC configuration; the pre-existing Phase 4 GC stress
   flake remains separate.
-- **Still deferred:** container/aggregate internals; async/task resources (no
-  runtime); tensor/device buffers (no subsystem); collector pages and allocator
-  shards.
 
-## Version 0.477-beta (working build)
+## Version 0.480-beta (retrospective milestone)
+
+### Summary of Changes (since `0.477-beta`):
+
+*Pre-MMM Phase 7 runtime-buffer work. No release commit was made at this label;
+the work shipped in `0.483-beta`.*
+
+- **The argument bridge no longer allocates.** The CRT argv pointers are already
+  process-lifetime, so the runtime refreshes one static `NrqStringArray`
+  instead of allocating a heap descriptor per program.
+- **`file.read_text` has one process-lifetime arena owner.** Escaping strings
+  are allocated from 1 MiB blocks; an oversized allocation gets its own block,
+  and release is idempotent. This removed the first 64 KiB layout after it
+  measured +3.4% wall and +3.4% RSS.
+- **Validation:** covered by the `0.483-beta` suite; no separate build was
+  published at this label.
+
+## Version 0.477-beta
 
 ### Summary of Changes (since `0.473-beta`):
 
@@ -116,11 +187,11 @@ released `n-1` checkpoint.*
   run is available in the MSVC configuration; the pre-existing Phase 4 GC stress
   flake remains separate.
 
-## Version 0.473-beta (working build)
+## Version 0.473-beta
 
 ### Summary of Changes (since `0.469-beta`):
 
-*Pre-MMM Phase 6 compiler-lowering and optimization working build; `0.457-beta` remains the released `n-1` checkpoint.*
+*Pre-MMM Phase 6 compiler-lowering and optimization checkpoint; `0.457-beta` remains the released `n-1` checkpoint.*
 
 - **Shared pointer aggregate fields resolve their pointee layout.** The Phase 5
   crash and out-of-bounds GEP for `shared ptr T` fields when `T` contains managed
@@ -144,11 +215,11 @@ released `n-1` checkpoint.*
   run is available in the MSVC configuration; the Phase 4 GC stress flake remains
   separate.
 
-## Version 0.469-beta (working build)
+## Version 0.469-beta
 
 ### Summary of Changes (since `0.465-beta`):
 
-*Pre-MMM Phase 5 GC/ownership-boundary working build; `0.457-beta` remains the released `n-1` checkpoint.*
+*Pre-MMM Phase 5 GC/ownership-boundary checkpoint; `0.457-beta` remains the released `n-1` checkpoint.*
 
 - **Explicitly owned pointer storage can now contain managed fields safely.**
   Heap and stack-placed `memory.allocate<T>` publish typed GC roots for the
@@ -173,11 +244,11 @@ released `n-1` checkpoint.*
   `shared ptr T`/`owned ptr T` when `T` contains managed fields remains a known
   limitation.
 
-## Version 0.465-beta (working build)
+## Version 0.465-beta
 
 ### Summary of Changes (since `0.461-beta`):
 
-*Owned-allocator Phase 4 working build; `0.457-beta` remains the released `n-1` checkpoint.*
+*Owned-allocator Phase 4 checkpoint; `0.457-beta` remains the released `n-1` checkpoint.*
 
 - **The default allocation path no longer takes the global allocator mutex or an
   operation pin.** The process-default general allocator cannot be destroyed or
@@ -196,11 +267,11 @@ released `n-1` checkpoint.*
   allocation improved about 3.1x at four workers, with peak working set flat.
 - No ownership, move, cleanup, or exactly-once destruction rule changed.
 
-## Version 0.461-beta (working build)
+## Version 0.461-beta
 
 ### Summary of Changes (since `0.457-beta`):
 
-*Deterministic-destruction Phase 3 working build; `0.457-beta` remains the released `n-1` checkpoint.*
+*Deterministic-destruction Phase 3 checkpoint; `0.457-beta` remains the released `n-1` checkpoint.*
 
 - **A deferred owner cannot be transferred afterwards.** A move, return, field
   extraction, aggregate pack, or owning call transfer after `defer` captured the
@@ -242,7 +313,7 @@ released `n-1` checkpoint.*
 
 ### Summary of Changes (since `0.451-beta`):
 
-*Working build after the interprocedural-summary and escape-safety checkpoint.*
+*Checkpoint after the interprocedural-summary and escape-safety checkpoint.*
 
 - **Effect summaries are complete for the checked bodies.** Every signature
   carries one compact effect byte per parameter. Nested calls merge the callee's
@@ -1571,7 +1642,7 @@ call could read and write any memory, including the caller's locals.
 
 ### Summary of Changes (since `0.266-beta`):
 
-*Working build; superseded by 0.271-beta, which changes no code.* The 0.266
+*Checkpoint; superseded by 0.271-beta, which changes no code.* The 0.266
 collector regression is removed and the
 collector optimisation roadmap (`project_context/ColO_ROADMAP_2.md`) is
 implemented:
