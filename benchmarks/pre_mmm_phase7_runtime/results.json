@@ -1,0 +1,134 @@
+{
+  "source": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\pre_mmm_phase7_runtime\\read_text.nrqba",
+  "repeats": 9,
+  "baseline_compiler": "D:\\Actual Project Files\\Project Nirqoba\\.phase7-runtime-baseline\\build\\msvc-dev\\bin\\nirqoba.exe",
+  "current_compiler": "D:\\Actual Project Files\\Project Nirqoba\\build\\msvc-dev\\bin\\nirqoba.exe",
+  "build": {
+    "baseline": {
+      "wall_ms": 116.9411000000764,
+      "peak_rss_bytes": 35004416
+    },
+    "current": {
+      "wall_ms": 227.73200000028737,
+      "peak_rss_bytes": 34934784
+    }
+  },
+  "runs": {
+    "baseline": [
+      {
+        "wall_ms": 2131.507299999612,
+        "peak_rss_bytes": 93585408,
+        "stdout": "81920000"
+      },
+      {
+        "wall_ms": 1579.3128999994224,
+        "peak_rss_bytes": 93106176,
+        "stdout": "81920000"
+      },
+      {
+        "wall_ms": 1064.4115999994028,
+        "peak_rss_bytes": 93110272,
+        "stdout": "81920000"
+      },
+      {
+        "wall_ms": 1059.5895999995264,
+        "peak_rss_bytes": 93093888,
+        "stdout": "81920000"
+      },
+      {
+        "wall_ms": 1063.5519999996177,
+        "peak_rss_bytes": 93106176,
+        "stdout": "81920000"
+      },
+      {
+        "wall_ms": 1049.5774000000893,
+        "peak_rss_bytes": 93097984,
+        "stdout": "81920000"
+      },
+      {
+        "wall_ms": 1045.0395999996545,
+        "peak_rss_bytes": 93097984,
+        "stdout": "81920000"
+      },
+      {
+        "wall_ms": 1036.9696000007025,
+        "peak_rss_bytes": 93138944,
+        "stdout": "81920000"
+      },
+      {
+        "wall_ms": 1029.7798000001421,
+        "peak_rss_bytes": 93097984,
+        "stdout": "81920000"
+      }
+    ],
+    "current": [
+      {
+        "wall_ms": 2101.072899999963,
+        "peak_rss_bytes": 91598848,
+        "stdout": "81920000"
+      },
+      {
+        "wall_ms": 1548.131999999896,
+        "peak_rss_bytes": 91070464,
+        "stdout": "81920000"
+      },
+      {
+        "wall_ms": 1027.6647999999113,
+        "peak_rss_bytes": 91029504,
+        "stdout": "81920000"
+      },
+      {
+        "wall_ms": 1045.3289999995832,
+        "peak_rss_bytes": 91058176,
+        "stdout": "81920000"
+      },
+      {
+        "wall_ms": 1046.8062999998438,
+        "peak_rss_bytes": 90980352,
+        "stdout": "81920000"
+      },
+      {
+        "wall_ms": 1030.518900000061,
+        "peak_rss_bytes": 91041792,
+        "stdout": "81920000"
+      },
+      {
+        "wall_ms": 1024.509599999874,
+        "peak_rss_bytes": 91066368,
+        "stdout": "81920000"
+      },
+      {
+        "wall_ms": 1095.3251000000819,
+        "peak_rss_bytes": 90959872,
+        "stdout": "81920000"
+      },
+      {
+        "wall_ms": 1007.5077999999849,
+        "peak_rss_bytes": 91025408,
+        "stdout": "81920000"
+      }
+    ]
+  },
+  "summary": {
+    "baseline": {
+      "median_wall_ms": 1059.59,
+      "median_peak_rss_bytes": 93106176,
+      "stdout": [
+        "81920000"
+      ]
+    },
+    "current": {
+      "median_wall_ms": 1045.329,
+      "median_peak_rss_bytes": 91041792,
+      "stdout": [
+        "81920000"
+      ]
+    }
+  },
+  "comparison": {
+    "wall_change_percent": -1.35,
+    "peak_rss_change_bytes": -2064384,
+    "peak_rss_change_percent": -2.22,
+    "same_stdout": true
+  }
+}
