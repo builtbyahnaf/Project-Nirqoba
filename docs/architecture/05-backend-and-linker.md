@@ -16,3 +16,27 @@
 - Discovers the Windows 10/11 SDK library directories (`ucrt\x64` and `um\x64`).
 - Links against `nirqoba_runtime.lib` and CRT runtime libraries (`msvcrt.lib`, `ucrt.lib`, `vcruntime.lib`, `kernel32.lib`).
 - Invokes the linker through `ProcessRunner` using Windows `CreateProcessW` with standard MSVC argument quoting rules for paths containing spaces.
+
+## 3. Artifact Lifetime
+
+Object and executable outputs are compiler-owned temporary resources until they
+are published. `TemporaryArtifact` stages each file at a unique sibling path and
+renames it onto the final path only after the producing stage succeeds. Its
+destructor removes an unpublished staging file, so a compile or link failure
+cannot leave a partial artifact and cannot overwrite the previous successful
+one. A failed publication is reported as `NRQ5010`.
+
+`nirqoba run` treats the executable and object as ephemeral: it executes the
+staged executable and removes both files after every program exit.
+`--keep-artifacts` publishes them instead, preserving the pre-Phase-7 behavior
+for inspection or tooling.
+
+`nirqoba new` uses the directory analogue, `TemporaryDirectory`. The scaffold is
+written beside the target and renamed into place as one tree; a non-empty target
+is refused. The build publishes its two files sequentially, so the object and
+executable are not a single filesystem transaction.
+
+This ownership is C++ process resource ownership, not the Nirqoba GC. Runtime
+values that escape the compiler, such as the buffer returned by
+`file.read_text`, remain on the runtime's existing lifetime path and are not
+part of this boundary.
