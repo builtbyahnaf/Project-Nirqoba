@@ -4540,7 +4540,14 @@ Type TypeChecker::check_call(CallExpr& call) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                            "secure allocation size must be an integer");
     }
-    return Type::pointer_type(resolve_generic_type(call.generic_argument()));
+    const Type payload_type =
+        resolve_aggregate_type(resolve_generic_type(call.generic_argument()));
+    if (requires_deterministic_cleanup(payload_type))
+      diagnostics_.error(
+          diag::kTypeMismatch, call.location(),
+          "secure allocations cannot contain '" + payload_type.to_string() +
+              "': secure release frees the storage without running field destruction");
+    return Type::pointer_type(payload_type);
   }
   if ((call.callee() == "memory.mapped_read" ||
        call.callee() == "memory.mapped_write") && call.has_generic_argument()) {
@@ -4894,7 +4901,14 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (size_type.is_valid() && !size_type.is_integer())
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
                          "'memory.reallocate<T>' requires an integer byte count");
-    return Type::pointer_type(resolve_generic_type(call.generic_argument()));
+    const Type payload_type =
+        resolve_aggregate_type(resolve_generic_type(call.generic_argument()));
+    if (requires_deterministic_cleanup(payload_type))
+      diagnostics_.error(
+          diag::kTypeMismatch, call.location(),
+          "reallocated storage cannot contain '" + payload_type.to_string() +
+              "': resizing frees the old storage without running field destruction");
+    return Type::pointer_type(payload_type);
   }
 
   if (call.callee() == "memory.shared_allocate" && call.has_generic_argument()) {
@@ -4975,7 +4989,14 @@ Type TypeChecker::check_call(CallExpr& call) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
                            "allocator handle must be an integer");
     }
-    return Type::pointer_type(resolve_generic_type(call.generic_argument()));
+    const Type payload_type =
+        resolve_aggregate_type(resolve_generic_type(call.generic_argument()));
+    if (requires_deterministic_cleanup(payload_type))
+      diagnostics_.error(
+          diag::kTypeMismatch, call.location(),
+          "explicit allocations cannot contain '" + payload_type.to_string() +
+              "': deallocation frees the storage without running field destruction");
+    return Type::pointer_type(payload_type);
   }
 
   if (call.callee() == "array.allocate" && call.has_generic_argument()) {

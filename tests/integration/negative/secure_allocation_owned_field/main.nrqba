@@ -1,0 +1,8 @@
+struct Holder {
+    owned ptr int data;
+}
+
+int function main() {
+    var holder = memory.secure_allocate<Holder>(64);
+    return 0;
+}

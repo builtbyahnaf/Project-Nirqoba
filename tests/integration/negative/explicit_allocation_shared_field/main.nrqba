@@ -1,0 +1,9 @@
+struct Holder {
+    shared ptr int data;
+}
+
+int function main() {
+    var holder = memory.allocate<Holder>(64);
+    (*holder).data = memory.shared_allocate<int>(4);
+    return 0;
+}

@@ -1,0 +1,9 @@
+struct Holder {
+    shared ptr int data;
+}
+
+int function main() {
+    var pointer = memory.allocate<byte>(8);
+    var resized = memory.reallocate<Holder>(pointer, 64);
+    return 0;
+}
