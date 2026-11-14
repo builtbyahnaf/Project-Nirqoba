@@ -50,10 +50,14 @@ nirqoba run main.nrqba --keep-artifacts --out-dir build/debug
 complete tree into place. It refuses a non-empty target, and a failed write
 leaves no partial project.
 
-The build publishes the object and executable as two sequential renames, not as
-one filesystem transaction. A publication failure is reported as `NRQ5010`; the
-staged file is removed. Runtime-owned strings returned by builtins such as
-`file.read_text` are not part of this boundary and keep their existing lifetime.
+The build publishes the object and executable through an `ArtifactTransaction`:
+existing finals are preserved as hard-link backups, both staged files replace
+their finals, and a failed replacement restores both previous finals. A returned
+publication failure is therefore reported as `NRQ5010` without leaving a new
+object beside an old executable. A process crash between the two renames can
+still leave a partial pair; there is no crash journal yet. Runtime-owned strings
+returned by builtins such as `file.read_text` are process-lifetime values and
+are not invalidated by entry shutdown or `system.exit`.
 
 ### Aggregate layout
 

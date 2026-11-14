@@ -33,10 +33,11 @@ for inspection or tooling.
 
 `nirqoba new` uses the directory analogue, `TemporaryDirectory`. The scaffold is
 written beside the target and renamed into place as one tree; a non-empty target
-is refused. The build publishes its two files sequentially, so the object and
-executable are not a single filesystem transaction.
+is refused. The build publishes its two files through a rollback transaction: previous
+finals are hard-link backups and both are restored if either replacement fails.
+A process crash between renames is not covered by a journal.
 
 This ownership is C++ process resource ownership, not the Nirqoba GC. Runtime
 values that escape the compiler, such as the buffer returned by
-`file.read_text`, remain on the runtime's existing lifetime path and are not
-part of this boundary.
+`file.read_text`, are process-lifetime runtime values; they are not part of the
+compiler boundary and are reclaimed by the OS at termination.
