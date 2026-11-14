@@ -16,7 +16,6 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
-#include <unordered_map>
 #include <vector>
 
 static const char kEmptyString[] = "";
@@ -27,14 +26,38 @@ struct FileResource {
     std::mutex operation_mutex;
 };
 
+// A token carries a slot index in its low half and a generation in its high
+// half. Closing a handle clears the slot; reusing that slot increments the
+// generation, so a stale token from before the close can never name the new
+// resource. A node-based map allocated and freed once per open/close just to
+// hold this pair; the slot table stores it inline and keeps lookup O(1).
+struct FileSlot {
+    std::shared_ptr<FileResource> resource;
+    uint32_t generation = 0;
+};
+
 std::mutex file_resource_mutex;
-std::unordered_map<void*, std::shared_ptr<FileResource>> file_resources;
-uintptr_t next_file_resource = 1;
+std::vector<FileSlot> file_slots;
+uint32_t next_file_generation = 1;
+
+bool decode_file_token(void* token, uint32_t& index, uint32_t& generation) {
+    const uintptr_t raw = reinterpret_cast<uintptr_t>(token);
+    const uint32_t encoded_index = static_cast<uint32_t>(raw & 0xffffffffu);
+    generation = static_cast<uint32_t>(raw >> 32);
+    if (encoded_index == 0 || generation == 0) return false;
+    index = encoded_index - 1;
+    return true;
+}
 
 std::shared_ptr<FileResource> find_file_resource(void* token) {
+    uint32_t index = 0;
+    uint32_t generation = 0;
+    if (!decode_file_token(token, index, generation)) return nullptr;
     std::lock_guard<std::mutex> lock(file_resource_mutex);
-    auto found = file_resources.find(token);
-    return found == file_resources.end() ? nullptr : found->second;
+    if (index >= file_slots.size()) return nullptr;
+    FileSlot& slot = file_slots[index];
+    if (slot.generation != generation) return nullptr;
+    return slot.resource;
 }
 }
 
@@ -44,9 +67,10 @@ void release_file_resources() noexcept {
     std::vector<std::shared_ptr<FileResource>> doomed;
     {
         std::lock_guard<std::mutex> lock(file_resource_mutex);
-        doomed.reserve(file_resources.size());
-        for (auto& entry : file_resources) doomed.push_back(std::move(entry.second));
-        file_resources.clear();
+        doomed.reserve(file_slots.size());
+        for (auto& slot : file_slots)
+            if (slot.resource) doomed.push_back(std::move(slot.resource));
+        file_slots.clear();
     }
     for (auto& resource : doomed) {
         std::lock_guard<std::mutex> operation_lock(resource->operation_mutex);
@@ -174,16 +198,16 @@ void* nrq_file_open_handle(const char* path, int32_t writable) {
     try {
         auto resource = std::make_shared<FileResource>(handle);
         std::lock_guard<std::mutex> lock(file_resource_mutex);
-        if (next_file_resource == 0 || next_file_resource == UINTPTR_MAX) {
-            CloseHandle(handle);
-            return nullptr;
-        }
-        void* token = reinterpret_cast<void*>(next_file_resource++);
-        if (!file_resources.emplace(token, std::move(resource)).second) {
-            CloseHandle(handle);
-            return nullptr;
-        }
-        return token;
+        size_t index = 0;
+        while (index < file_slots.size() && file_slots[index].resource) ++index;
+        if (index == file_slots.size()) file_slots.emplace_back();
+        if (next_file_generation == 0) next_file_generation = 1;
+        FileSlot& slot = file_slots[index];
+        slot.generation = next_file_generation++;
+        slot.resource = std::move(resource);
+        const uint64_t raw = (static_cast<uint64_t>(slot.generation) << 32) |
+                             (static_cast<uint64_t>(index) + 1);
+        return reinterpret_cast<void*>(static_cast<uintptr_t>(raw));
     } catch (...) {
         CloseHandle(handle);
         return nullptr;
@@ -192,13 +216,16 @@ void* nrq_file_open_handle(const char* path, int32_t writable) {
 
 int32_t nrq_file_close_handle(void* opaque) {
     if (!opaque) return 0;
+    uint32_t index = 0;
+    uint32_t generation = 0;
+    if (!decode_file_token(opaque, index, generation)) return ERROR_INVALID_HANDLE;
     std::shared_ptr<FileResource> resource;
     {
         std::lock_guard<std::mutex> lock(file_resource_mutex);
-        auto found = file_resources.find(opaque);
-        if (found == file_resources.end()) return ERROR_INVALID_HANDLE;
-        resource = std::move(found->second);
-        file_resources.erase(found);
+        if (index >= file_slots.size()) return ERROR_INVALID_HANDLE;
+        FileSlot& slot = file_slots[index];
+        if (slot.generation != generation || !slot.resource) return ERROR_INVALID_HANDLE;
+        resource = std::move(slot.resource);
     }
     std::lock_guard<std::mutex> operation_lock(resource->operation_mutex);
     if (resource->handle == INVALID_HANDLE_VALUE) return ERROR_INVALID_HANDLE;
