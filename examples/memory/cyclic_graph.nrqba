@@ -1,0 +1,31 @@
+// A cycle has no static release order, so it is a collector graph.
+struct Node {
+    int value;
+    managed<Node> next;
+}
+
+managed<Node> function make_cycle() {
+    var first = array.allocate<Node>(1);
+    var second = array.allocate<Node>(1);
+    first[0].value = 11;
+    second[0].value = 22;
+    first[0].next = second;
+    second[0].next = first;
+    return first;
+}
+
+int function main() {
+    var head = make_cycle();
+
+    // Explicit collection always works, even while automatic collection is off.
+    gc.collect();
+    print(head[0].next[0].value);
+
+    // Automatic collection is opt-in; this cycle stays rooted through `head`.
+    gc.set_threshold(1);
+    gc.enable();
+    gc.collect();
+    gc.disable();
+    print(head[0].value);
+    return 0;
+}
