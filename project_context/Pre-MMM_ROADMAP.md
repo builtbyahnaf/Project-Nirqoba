@@ -445,6 +445,26 @@ Complete at `0.511-beta` (`reports/pre-mmm/phase-08.md`):
 
 ---
 
+## Phase 9 — Ownership hardening
+
+**Priority: Critical**
+
+**Goal:** Close the three critical Phase 0 findings without starting the dedicated
+migration's Phase 1.
+
+Complete at `0.515-beta` (`reports/pre-mmm/phase-09-hardening.md`):
+
+- [x] Remove the collector from owned-only release. Aggregate drop and owned-array release emit `nrq_gc_root_unregister` only when the payload contains a managed reference; owned pointers, arrays, views and stack-promoted arrays emit none at `-O0` and `-O2`, while managed payloads keep their pair.
+- [x] Reject managed fields in `memory.secure_allocate` until a rooted secure allocation path exists. Direct, aggregate and nested spellings report `NRQ3015`; the plain secure path remains supported and GC-free.
+- [x] Enforce ownership, release and borrowing invariants in `verify_tir_module`. Type/ownership compatibility, parameter contracts, return sources, release families, single consumption and result-record consistency are checked before lowering.
+- [x] Add focused regressions and inspect generated IR. Owned aggregate/array/pointer/view/stack isolation, managed-root retention, secure rejection and malformed TIR modules are covered; final suites are 270 unit / 500 integration.
+- [x] Update migration documentation. The audit, target architecture, management policy, Phase 9 report, migration notes, progress report and version log reflect the new contracts.
+
+**Completion:** Complete at `0.515-beta`: the three Phase 0 prerequisites are closed,
+no syntax changed, and the dedicated migration's Phase 1 has not started.
+
+---
+
 ## Minimal validation policy
 
 Do not build a massive test matrix for every small change.
