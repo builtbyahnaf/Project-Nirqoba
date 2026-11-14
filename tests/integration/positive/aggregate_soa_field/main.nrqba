@@ -1,0 +1,42 @@
+// A container stored as an aggregate field must be published through the
+// aggregate's own root frame. The SoA column keeps a managed reference alive
+// across a collection and the aggregate is destroyed at scope exit.
+struct Node {
+    int value;
+}
+
+struct Row {
+    int tag;
+    managed<Node> node;
+}
+
+struct Holder {
+    soa<Row> rows;
+    int marker;
+}
+
+struct Envelope {
+    Holder holder;
+}
+
+int function main() {
+    var node = array.allocate<Node>(1);
+    node[0].value = 42;
+
+    var holder = Holder {
+        rows: memory.owned_soa<Row>(2),
+        marker: 7
+    };
+    holder.rows[1].tag = 9;
+    holder.rows[1].node = node;
+
+    var envelope = Envelope { holder: holder };
+
+    gc.collect();
+    gc.collect();
+
+    print(envelope.holder.marker);
+    print(envelope.holder.rows[1].tag);
+    print(envelope.holder.rows[1].node[0].value);
+    return 0;
+}

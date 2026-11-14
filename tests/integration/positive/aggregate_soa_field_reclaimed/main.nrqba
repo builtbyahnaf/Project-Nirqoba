@@ -1,0 +1,43 @@
+// Destroying an aggregate must drop the root of every SoA field, otherwise the
+// collector keeps the container and its referenced column payload alive.
+struct Node {
+    int value;
+}
+
+struct Row {
+    int tag;
+    managed<Node> node;
+}
+
+struct Holder {
+    soa<Row> rows;
+    int marker;
+}
+
+u64 function build_and_drop() {
+    var node = array.allocate<Node>(1);
+    node[0].value = 5;
+
+    var holder = Holder {
+        rows: memory.owned_soa<Row>(4),
+        marker: 1
+    };
+    holder.rows[0].node = node;
+
+    var stats = gc.get_statistics();
+    return stats.live_objects;
+}
+
+int function main() {
+    var peak = build_and_drop();
+    gc.collect();
+    gc.collect();
+
+    var after_stats = gc.get_statistics();
+    if (after_stats.live_objects < peak) {
+        print(1);
+    } else {
+        print(0);
+    }
+    return 0;
+}
