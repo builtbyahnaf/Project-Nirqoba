@@ -65,7 +65,7 @@ implicit temporary borrow.
   now compile-time errors.
 - The collector remains opt-in and is still available for supported cyclic/dynamic
   object graphs.
-- Full verification at this label: 269 unit tests and 500 integration tests pass on
+- Full verification at this label: 270 unit tests and 500 integration tests pass on
   Windows x64/MSVC (RelWithDebInfo).
 
 ## 5. What Phase 9 does not do

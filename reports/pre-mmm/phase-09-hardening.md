@@ -170,7 +170,7 @@ owned parameters, invalid returns and borrow sources, release-family mismatches,
 borrowed release, double consumption, call-boundary mismatches, and forged result
 ownership.
 
-**Final suites:** 269/269 unit tests and 500/500 integration tests pass on Windows
+**Final suites:** 270/270 unit tests and 500/500 integration tests pass on Windows
 x64/MSVC, RelWithDebInfo.
 
 ---

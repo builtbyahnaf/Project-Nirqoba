@@ -702,7 +702,7 @@ design decisions of this audit unchanged.
 |---|---|---|
 | Owned-only release calls the collector | Lowering unregisters only when the released payload contains a managed reference. | Owned aggregate, owned array, owned pointer, borrowed view and stack array fixtures emit zero unregisters at `-O0` and `-O2`; managed arrays still emit one. `llvm-nm -u` confirms the owned aggregate object no longer references `nrq_gc_root_unregister`. |
 | Secure managed payloads are unrooted | `memory.secure_allocate<T>` rejects managed fields at any depth until a rooted secure allocation path exists. | Direct, aggregate and nested negative fixtures report `NRQ3015`; the plain secure path remains supported and GC-free. |
-| TIR ownership is unverified | `verify_tir_module` enforces type/ownership compatibility, return source and ownership, release families, single consumption, parameter contracts and result-record consistency. | 269 unit tests, including malformed modules for each invariant, and 500 integration tests pass. |
+| TIR ownership is unverified | `verify_tir_module` enforces type/ownership compatibility, return source and ownership, release families, single consumption, parameter contracts and result-record consistency. | 270 unit tests, including malformed modules for each invariant, and 500 integration tests pass. |
 
 The remaining Phase 1 prerequisites are unchanged: first-class move/drop operations,
 path-sensitive destruction proofs, arena object semantics, secure managed rooting if

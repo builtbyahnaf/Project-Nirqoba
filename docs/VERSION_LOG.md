@@ -38,7 +38,7 @@ recorded below is made under that authority.
   compatibility, valid release families, single consumption, return and borrow
   sources, callee parameter contracts and result-record consistency. Ownership is
   still structural metadata; no move/drop syntax or new language syntax was added.
-- **Tests:** 269 unit tests and 500 integration tests pass. New fixtures cover
+- **Tests:** 270 unit tests and 500 integration tests pass. New fixtures cover
   owned aggregate/array/pointer/view/stack GC isolation at `-O0` and `-O2`,
   managed-root retention, direct and nested secure managed rejection, and malformed
   TIR ownership states.
