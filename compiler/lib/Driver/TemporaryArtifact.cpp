@@ -158,8 +158,12 @@ bool TemporaryArtifact::publish() {
   if (!fs::exists(staged_path_, error)) return false;
 
 #ifdef _WIN32
+  // MOVEFILE_WRITE_THROUGH would flush the new directory entry to disk before
+  // returning. Publication is an in-process atomicity boundary, not a crash
+  // durability promise, and the synchronous flush cost several milliseconds on
+  // every build, so only replacement is requested.
   if (!MoveFileExW(staged_path_.c_str(), final_path_.c_str(),
-                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+                   MOVEFILE_REPLACE_EXISTING)) {
     return false;
   }
 #else
