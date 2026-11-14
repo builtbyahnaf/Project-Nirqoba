@@ -1,0 +1,13 @@
+int function main() {
+    var iteration = 0;
+    while (iteration < 100000) {
+        let handle = file.open("NUL", true);
+        if (handle is nullptr) {
+            return 1;
+        }
+        file.close(handle);
+        iteration += 1;
+    }
+    print(iteration);
+    return 0;
+}
