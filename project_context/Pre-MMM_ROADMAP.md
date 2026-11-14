@@ -378,34 +378,46 @@ Completed at `0.477-beta`, retained through `0.483-beta` (`reports/pre-mmm/phase
 
 ### Runtime-owned buffers and internal allocations — roadmap 2
 
-Completed at `0.483-beta` (`reports/pre-mmm/phase-07.md`):
+Completed at `0.483-beta`, contract revised at `0.495-beta` (`reports/pre-mmm/phase-07-part-3.md`):
 
-- [x] Move its internal resource management onto the established ownership path. The process argument descriptor is static storage, and every escaping `file.read_text` string is allocated from a process-lifetime arena released by `nrq_runtime_shutdown`.
-- [x] Preserve existing external behavior. Repeated reads return the same bytes and length; strings remain borrowed and valid until entry return.
+- [x] Move its internal resource management onto the established ownership path. The process argument descriptor is static storage; `file.read_text` uses a process-owned arena.
+- [x] Preserve existing external behavior. Repeated reads return the same bytes and length; string values are immutable after the call.
 - [x] Remove obsolete internal GC dependencies only when no longer needed. None existed on this path; the runtime owns the arena directly.
-- [x] Benchmark the migrated subsystem. 20,000 repeated 4 KiB reads: -1.35% wall, -2.22% peak RSS; the change is directional, not a guaranteed speedup.
-- [x] Keep a rollback point. `30a6ae6` (`0.477-beta`) was built as a disposable worktree for measurement and removed after verification.
-- [x] Emit shutdown at every `main` return. Early returns and the argument-wrapper callee are covered; `system.exit` remains process-teardown-only.
+- [x] Benchmark the migrated subsystem. Part 3 rerun: 20,000 reads +0.12% wall and +1.10% peak RSS, neutral within noise.
+- [x] Keep a rollback point. `30a6ae6` and `70126a6` were built as disposable worktrees for measurement.
+- [x] Define a sound string lifetime. Because `string` is a raw borrowed pointer with no release point, read strings are valid for the whole process, including deferred cleanup and static destructors; the OS reclaims them at termination. Entry-return invalidation was removed.
 
 ### File, mapping, mutex and other native resources — roadmap 3
 
-Completed at `0.483-beta` (`reports/pre-mmm/phase-07.md`):
+Completed at `0.483-beta`, extended at `0.495-beta` (`reports/pre-mmm/phase-07-part-3.md`):
 
 - [x] Move its internal resource management onto the established ownership path. Live file, mapping and mutex registries are cleared and their OS handles released at shutdown; explicit close remains the normal path.
 - [x] Preserve existing external behavior. Handle operations, mapping sizes and mutex semantics are unchanged; stale tokens are rejected after close or shutdown.
 - [x] Remove obsolete internal GC dependencies only when no longer needed. These registries never depended on the collector.
-- [x] Benchmark the migrated subsystem. 100,000 open/close round trips: -2.04% wall, peak RSS parity within one page.
-- [x] Keep a rollback point. The same `0.477-beta` baseline worktree covered this comparison.
-- [x] Replace per-open map nodes. File handles now use a generation-checked inline slot table.
+- [x] Benchmark the migrated subsystem. File open/close -2.04%; mutex create/destroy -10.71% after the slot-table migration.
+- [x] Keep a rollback point. The `0.477-beta` and `0.483-beta` worktrees covered these comparisons.
+- [x] Replace per-open map nodes. File and mutex handles use generation-checked inline slot tables.
+- [x] Complete termination cleanup. `system.exit` retires uncontended registries with try-lock; busy registries are reclaimed by the OS instead of blocking termination.
+- [x] Use a rollback transaction for paired outputs. Object and executable are published with hard-link backups and restored together on failure.
 
-Remaining Phase 7 subsystems are **not started**: container/aggregate internals
-(roadmap 4). Async/task resources (roadmap 5) and tensor/device buffers
-(roadmap 6) have no subsystem in this tree, so they are not applicable yet.
-Collector pages and allocator shards remain outside this phase.
+### Container and aggregate internals — roadmap 4
 
-**Completion:** Partially complete at `0.483-beta`: roadmap steps 1–3 are
-migrated and documented; containers and aggregates retain their existing
-behavior, and steps 5–6 have no implementation to migrate.
+Partially complete at `0.495-beta` (`reports/pre-mmm/phase-07-part-3.md`):
+
+- [x] Migrate shared aggregate root metadata. Up to eight managed-reference offsets are inline; deeper layouts retain the vector fallback.
+- [x] Remove per-drop aggregate path allocations. Owned-drop and shared-retain traversal uses `SmallVector<int64_t, 8>`.
+- [x] Preserve aggregate destruction and alias behavior. Existing owned-aggregate, shared-field and cleanup cases pass unchanged.
+- [x] Benchmark or account for the change. No separate container allocator exists; the allocation removal is structural and covered by aggregate tests, not a claimed speedup.
+- [ ] Complete a container-internals audit. Owned arrays, views and SoA already use deterministic ownership/GC roots; no redesign was attempted.
+
+Remaining Phase 7 work is the container-internals audit in roadmap 4. Async/task
+resources (roadmap 5) and tensor/device buffers (roadmap 6) have no subsystem in
+this tree, so they are not applicable. Collector pages and allocator shards remain
+outside this phase.
+
+**Completion:** Partially complete at `0.495-beta`: roadmap steps 1–3 are
+migrated, aggregate internals are migrated, and the container audit remains.
+Steps 5–6 have no implementation to migrate.
 
 ---
 
