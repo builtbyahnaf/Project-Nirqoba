@@ -34,6 +34,7 @@ std::string_view op_name(OpKind kind) {
     case OpKind::ArrayAlloca: return "array_alloca";
     case OpKind::GetElementPtr: return "gep";
     case OpKind::AddressOf: return "address_of";
+    case OpKind::SoaColumnPtr: return "soa_column_ptr";
     case OpKind::AggregatePack: return "aggregate_pack";
     case OpKind::AggregateExtract: return "aggregate_extract";
     case OpKind::Length: return "length";
