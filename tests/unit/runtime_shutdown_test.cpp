@@ -47,6 +47,22 @@ TEST(RuntimeShutdownTest, LiveFileHandleIsClosedAndInvalidated) {
             static_cast<int32_t>(ERROR_INVALID_HANDLE));
 }
 
+TEST(RuntimeShutdownTest, ReusedFileSlotDoesNotReactivateAStaleToken) {
+  TemporaryFile first("first");
+  TemporaryFile second("second");
+  void* first_handle = nrq_file_open_handle(first.path().string().c_str(), 0);
+  ASSERT_NE(first_handle, nullptr);
+  ASSERT_EQ(nrq_file_close_handle(first_handle), int32_t{0});
+
+  // The next open takes the freed slot and a fresh generation.
+  void* second_handle = nrq_file_open_handle(second.path().string().c_str(), 0);
+  ASSERT_NE(second_handle, nullptr);
+  ASSERT_NE(first_handle, second_handle);
+  ASSERT_EQ(nrq_file_close_handle(first_handle),
+            static_cast<int32_t>(ERROR_INVALID_HANDLE));
+  ASSERT_EQ(nrq_file_close_handle(second_handle), int32_t{0});
+}
+
 TEST(RuntimeShutdownTest, LiveMappingIsUnmappedAndRegistryCleared) {
   TemporaryFile file("shutdown mapping");
   void* address = nrq_memory_map_file(file.path().string().c_str(), 0);
