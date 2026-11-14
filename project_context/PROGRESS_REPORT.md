@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.511-beta` |
-| Development Stage | `Memory Model Migration — Phase 0` |
-| Last Report Update | `2026-11-15 06:30:00` |
-| Report Entries | `28` |
+| Current Working Version | `0.515-beta` |
+| Development Stage | `Pre-MMM Phase 9 — Ownership Hardening` |
+| Last Report Update | `2026-11-15 08:00:00` |
+| Report Entries | `29` |
 
 ---
 
@@ -3385,6 +3385,120 @@ Phase 1 starts only after:
 ---
 
 **End of Entry #028**
+
+## Entry #029 — Pre-MMM Phase 9: Ownership Hardening
+
+**Version:** `0.515-beta`  
+**Date:** `2026-11-15 08:00:00`  
+**Scope:** `Pre-MMM Phase 9 / GC isolation / Secure storage / TIR ownership verification`  
+**Status:** `Completed`
+
+### 1. Overview
+
+Phase 9 closed the three critical findings from the Phase 0 migration audit
+without starting the dedicated migration's Phase 1:
+
+1. owned-only destruction no longer calls the collector;
+2. `memory.secure_allocate<T>` rejects managed payloads until a rooted secure
+   allocation path exists;
+3. `verify_tir_module` enforces ownership, release, borrowing and call-boundary
+   invariants.
+
+No syntax, runtime API, collector design or storage-boundary policy beyond the
+secure-managed rejection was changed. The 78 dirty files under
+`benchmarks/stress_test_2/*` were left untouched; nothing was pushed or published.
+
+### 2. GC isolation
+
+Lowering now checks whether the released aggregate or array payload contains a
+managed reference. Owned aggregate drop and owned-array release emit
+`nrq_gc_root_unregister` only when that answer is yes. The same rule covers owned
+pointer deallocation and borrowed views; stack promotion removes the release path
+entirely.
+
+IR evidence (`--emit=llvm-raw`):
+
+| Program | `-O0` unregisters | `-O2` unregisters |
+|---|---:|---:|
+| `owned_aggregate` | 0 | 0 |
+| `owned_array<int>` | 0 | 0 |
+| non-promotable owned pointer | 0 | 0 |
+| borrowed `array_view<int>` | 0 | — |
+| stack-promoted owned array | 0 | — |
+| `owned_array<managed<int>>` | 1 | 1 |
+| managed pointer aggregate | 1 | 1 |
+
+`llvm-nm -u` on the `-O2` owned-aggregate object shows
+`nrq_memory_deallocate_checked` and no `nrq_gc_root_unregister`; the managed-array
+object still references the unregister. The owned-aggregate executable is 62,976
+bytes versus the audit's 64,512-byte baseline; the scalar baseline remains 20,480
+bytes. No runtime benchmark was run, so this entry makes no throughput claim.
+
+### 3. Secure storage
+
+`TypeChecker` rejects a secure allocation whose payload contains a managed
+reference at any depth:
+
+```
+error[NRQ3015]: secure allocations cannot contain a managed field in '<type>':
+secure release has no rooted managed-reference contract
+```
+
+The previously positive direct managed fixture is now negative; new aggregate and
+nested negatives cover the same rule. The plain secure aggregate remains positive
+and asserts one `nrq_memory_secure_release` with no collector call.
+
+### 4. TIR verification
+
+`tir::Function` stores ownership for every value. `verify_tir_module` checks:
+
+- ownership/type compatibility for pointers, owned arrays and owned aggregates;
+- owned and mutable parameter types;
+- owning returns versus borrowed/shared ownership;
+- borrowed return source existence, parameter status and pointee type;
+- release family versus ownership and managed kind;
+- borrowed release;
+- double consumption;
+- result-handle ownership versus the stored value record;
+- call arguments: borrowed/shared to owned and immutable borrow to mutable are
+  rejected, while owned to borrowed remains a valid implicit temporary borrow.
+
+The verifier is structural and flow-insensitive. It does not prove release on all
+paths and does not replace Sema's path-sensitive borrow analysis; those remain
+Phase 1 work.
+
+### 5. Verification
+
+| Check | Result |
+|---|---|
+| Serial RelWithDebInfo build | PASS |
+| Unit suite | 270/270 PASS |
+| Integration suite | 500/500 PASS |
+| IR inspection at `-O0` and `-O2` | PASS for owned, pointer, array, view, stack and managed cases |
+| Object undefined-symbol inspection | PASS; owned aggregate is GC-free, managed array retains unregister |
+| Release configuration | Not run to completion: pre-existing `gc_test.cpp` C4189 under `/WX` |
+| Sanitizers | Not available on this MSVC toolchain |
+
+### 6. Compatibility and limits
+
+No source syntax changed. Managed fields in secure storage were previously
+accepted but not rooted; they are now compile-time errors. Valid owned, borrowed,
+shared, managed, SoA and allocator programs remain valid.
+
+### 7. Agent Assessment
+
+- **Phase 9 completeness:** Complete for the three scoped findings.
+- **Migration readiness:** The three Phase 0 prerequisites are closed; the
+dedicated Phase 1 has not started.
+- **Remaining blockers:** first-class TIR move/drop operations, path-sensitive
+destruction proofs, arena object semantics, secure managed rooting, exception
+cleanup, owned strings, weak references, FFI and thread ownership.
+- **Next step:** begin the dedicated migration's Phase 1 ownership representation
+only under a new explicit instruction.
+
+---
+
+**End of Entry #029**
 
 <!-- REPORT ENTRIES END -->
 
