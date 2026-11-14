@@ -4536,11 +4536,13 @@ Type TypeChecker::check_call(CallExpr& call) {
     }
     const Type payload_type =
         resolve_aggregate_type(resolve_generic_type(call.generic_argument()));
-    if (requires_deterministic_cleanup(payload_type))
+    if (requires_deterministic_cleanup(payload_type)) {
       diagnostics_.error(
           diag::kTypeMismatch, call.location(),
           "secure allocations cannot contain '" + payload_type.to_string() +
               "': secure release frees the storage without running field destruction");
+      return Type::error();
+    }
     return Type::pointer_type(payload_type);
   }
   if ((call.callee() == "memory.mapped_read" ||
@@ -4897,11 +4899,13 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "'memory.reallocate<T>' requires an integer byte count");
     const Type payload_type =
         resolve_aggregate_type(resolve_generic_type(call.generic_argument()));
-    if (requires_deterministic_cleanup(payload_type))
+    if (requires_deterministic_cleanup(payload_type)) {
       diagnostics_.error(
           diag::kTypeMismatch, call.location(),
           "reallocated storage cannot contain '" + payload_type.to_string() +
               "': resizing frees the old storage without running field destruction");
+      return Type::error();
+    }
     return Type::pointer_type(payload_type);
   }
 
@@ -4919,11 +4923,13 @@ Type TypeChecker::check_call(CallExpr& call) {
     }
     const Type payload_type =
         resolve_aggregate_type(resolve_generic_type(call.generic_argument()));
-    if (requires_deterministic_cleanup(payload_type))
+    if (requires_deterministic_cleanup(payload_type)) {
       diagnostics_.error(
           diag::kTypeMismatch, call.location(),
           "shared allocations cannot contain '" + payload_type.to_string() +
               "': the final release frees storage without running field destruction");
+      return Type::error();
+    }
     return Type::pointer_type(payload_type);
   }
   if (call.callee() == "memory.shared_retain") {
@@ -4992,11 +4998,13 @@ Type TypeChecker::check_call(CallExpr& call) {
     }
     const Type payload_type =
         resolve_aggregate_type(resolve_generic_type(call.generic_argument()));
-    if (requires_deterministic_cleanup(payload_type))
+    if (requires_deterministic_cleanup(payload_type)) {
       diagnostics_.error(
           diag::kTypeMismatch, call.location(),
           "explicit allocations cannot contain '" + payload_type.to_string() +
               "': deallocation frees the storage without running field destruction");
+      return Type::error();
+    }
     return Type::pointer_type(payload_type);
   }
 
@@ -5018,11 +5026,13 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (contains_array_view(element_type))
       diagnostics_.error(diag::kTypeMismatch, call.location(),
                          "borrowed array views cannot be stored in GC-managed arrays");
-    else if (requires_deterministic_cleanup(element_type))
+    else if (requires_deterministic_cleanup(element_type)) {
       diagnostics_.error(
           diag::kTypeMismatch, call.location(),
           "GC-managed arrays cannot contain '" + element_type.to_string() +
               "': collector storage has no finalizer for an owned, shared, or borrowed field");
+      return Type::error();
+    }
     return Type::managed_pointer_type(element_type);
   }
 
