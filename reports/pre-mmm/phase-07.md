@@ -10,6 +10,14 @@ separate `0.480-beta` release commit exists)
 strings, and file/mapping/mutex registries. Publication only after a producing
 stage succeeds; shutdown only after the entry function returns.
 
+> **Part 3 update (`0.495-beta`):** `reports/pre-mmm/phase-07-part-3.md`
+> supersedes the limitations below. Object/executable publication is now a
+> rollback transaction; read strings are process-lifetime values rather than
+> entry-return-limited; `system.exit` performs best-effort cleanup; aggregate
+> root metadata and lowering paths are migrated. The two-file crash window,
+> process-lifetime string memory, and partial container step 4 remain.
+> Section 2's note that read buffers are unmigrated describes Part 1 only.
+
 ## 1. Verdict
 
 Three roadmap subsystems are migrated:
