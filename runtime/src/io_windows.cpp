@@ -8,6 +8,8 @@
 #include "nirqoba/runtime/io.h"
 #include "nirqoba/runtime/fatal.h"
 
+#include "runtime_buffers.h"
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <cstdio>
@@ -169,10 +171,15 @@ void nrq_runtime_init(void) {
 }
 
 void nrq_runtime_shutdown(void) {
-    HANDLE h = get_stdout_handle();
-    if (h != INVALID_HANDLE_VALUE && h != nullptr) {
-        FlushFileBuffers(h);
-    }
+    // Output uses unbuffered WriteFile calls, so there is nothing to flush.
+    // FlushFileBuffers on an anonymous pipe blocks until the reader drains it,
+    // which deadlocked any parent that waited for this process before reading
+    // its stdout. Shutdown now retires runtime-owned buffers only.
+    // The language cannot free borrowed strings individually, so the runtime
+    // owns every escaping string buffer for the process and releases the arena
+    // here. This is the deterministic end of their lifetime; pointers are not
+    // valid after this call.
+    nirq::runtime::release_process_strings();
 }
 
 // Console input: reads one line from stdin using Win32 ReadFile.
