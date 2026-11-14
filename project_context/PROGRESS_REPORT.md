@@ -2840,6 +2840,7 @@ runtime or generated-code speedup is claimed.
 - `driver: publish project scaffolds atomically`
 - `test: cover atomic project-directory publication`
 - `driver: publish artifacts without a synchronous disk flush`
+- `driver: restore an empty scaffold target when publication fails`
 - `benchmark: measure Phase 7 artifact lifetime and publication cost`
 
 ### 7. Agent Assessment
