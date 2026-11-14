@@ -218,3 +218,158 @@ TEST(TirTest, VerifierRejectsMissingReturn) {
   ASSERT_FALSE(ok);
   ASSERT_TRUE(diag.has_errors());
 }
+
+TEST(TirTest, VerifierRejectsBorrowedScalarParameter) {
+  DiagnosticEngine diag;
+  tir::Module mod;
+  auto fn = std::make_unique<tir::Function>("bad_borrow", Type::void_type());
+  tir::Value parameter =
+      fn->allocate_value(Type::int_type(), ValueOwnership::Borrowed);
+  fn->add_parameter("value", parameter.type, parameter, ValueOwnership::Borrowed);
+  tir::Op ret;
+  ret.kind = tir::OpKind::Return;
+  fn->add_operation(ret);
+  mod.add_function(std::move(fn));
+
+  ASSERT_FALSE(verify_tir_module(mod, diag));
+  ASSERT_TRUE(diag.has_errors());
+}
+
+TEST(TirTest, VerifierRejectsReleasingBorrowedValue) {
+  DiagnosticEngine diag;
+  tir::Module mod;
+  auto fn = std::make_unique<tir::Function>("release_borrow", Type::void_type());
+  const Type pointer = Type::pointer_type(Type::int_type());
+  tir::Value parameter = fn->allocate_value(pointer, ValueOwnership::Borrowed);
+  fn->add_parameter("value", pointer, parameter, ValueOwnership::Borrowed);
+  tir::Op release;
+  release.kind = tir::OpKind::Call;
+  release.callee = "memory.deallocate";
+  release.arguments.push_back(parameter);
+  fn->add_operation(release);
+  tir::Op ret;
+  ret.kind = tir::OpKind::Return;
+  fn->add_operation(ret);
+  mod.add_function(std::move(fn));
+
+  ASSERT_FALSE(verify_tir_module(mod, diag));
+  ASSERT_TRUE(diag.has_errors());
+}
+
+TEST(TirTest, VerifierRejectsReleaseAfterConsumption) {
+  DiagnosticEngine diag;
+  tir::Module mod;
+  auto fn = std::make_unique<tir::Function>("double_release", Type::void_type());
+  const Type pointer = Type::pointer_type(Type::int_type());
+  tir::Value parameter = fn->allocate_value(pointer, ValueOwnership::Owned);
+  fn->add_parameter("value", pointer, parameter, ValueOwnership::Owned);
+  for (int i = 0; i < 2; ++i) {
+    tir::Op release;
+    release.kind = tir::OpKind::Call;
+    release.callee = "memory.deallocate";
+    release.arguments.push_back(parameter);
+    fn->add_operation(release);
+  }
+  tir::Op ret;
+  ret.kind = tir::OpKind::Return;
+  fn->add_operation(ret);
+  mod.add_function(std::move(fn));
+
+  ASSERT_FALSE(verify_tir_module(mod, diag));
+  ASSERT_TRUE(diag.has_errors());
+}
+
+TEST(TirTest, VerifierRejectsWrongReleaseKind) {
+  DiagnosticEngine diag;
+  tir::Module mod;
+  auto fn = std::make_unique<tir::Function>("wrong_release", Type::void_type());
+  const Type shared = Type::shared_pointer_type(Type::int_type());
+  tir::Value parameter = fn->allocate_value(shared, ValueOwnership::Shared);
+  fn->add_parameter("value", shared, parameter, ValueOwnership::Shared);
+  tir::Op release;
+  release.kind = tir::OpKind::Call;
+  release.callee = "array.owned_release";
+  release.arguments.push_back(parameter);
+  fn->add_operation(release);
+  tir::Op ret;
+  ret.kind = tir::OpKind::Return;
+  fn->add_operation(ret);
+  mod.add_function(std::move(fn));
+
+  ASSERT_FALSE(verify_tir_module(mod, diag));
+  ASSERT_TRUE(diag.has_errors());
+}
+
+TEST(TirTest, VerifierRejectsBorrowedReturnWithoutSource) {
+  DiagnosticEngine diag;
+  tir::Module mod;
+  const Type pointer = Type::pointer_type(Type::int_type());
+  auto fn = std::make_unique<tir::Function>("borrow_return", pointer);
+  fn->set_return_ownership(ValueOwnership::Borrowed);
+  tir::Value value = fn->allocate_value(pointer, ValueOwnership::Borrowed);
+  tir::Op ret;
+  ret.kind = tir::OpKind::Return;
+  ret.operand = value;
+  fn->add_operation(ret);
+  mod.add_function(std::move(fn));
+
+  ASSERT_FALSE(verify_tir_module(mod, diag));
+  ASSERT_TRUE(diag.has_errors());
+}
+
+TEST(TirTest, VerifierAcceptsBorrowedReturnWithSource) {
+  DiagnosticEngine diag;
+  tir::Module mod;
+  const Type pointer = Type::pointer_type(Type::int_type());
+  auto fn = std::make_unique<tir::Function>("borrow_return", pointer);
+  fn->set_return_ownership(ValueOwnership::Borrowed);
+  fn->set_return_borrow_parameter("source");
+  tir::Value parameter = fn->allocate_value(pointer, ValueOwnership::Borrowed);
+  fn->add_parameter("source", pointer, parameter, ValueOwnership::Borrowed);
+  tir::Op ret;
+  ret.kind = tir::OpKind::Return;
+  ret.operand = parameter;
+  fn->add_operation(ret);
+  mod.add_function(std::move(fn));
+
+  ASSERT_TRUE(verify_tir_module(mod, diag));
+  ASSERT_FALSE(diag.has_errors());
+}
+
+TEST(TirTest, VerifierRejectsReturnOwnershipMismatch) {
+  DiagnosticEngine diag;
+  tir::Module mod;
+  const Type shared = Type::shared_pointer_type(Type::int_type());
+  auto fn = std::make_unique<tir::Function>("bad_return", shared);
+  fn->set_return_ownership(ValueOwnership::Shared);
+  tir::Value value = fn->allocate_value(shared, ValueOwnership::Owned);
+  tir::Op ret;
+  ret.kind = tir::OpKind::Return;
+  ret.operand = value;
+  fn->add_operation(ret);
+  mod.add_function(std::move(fn));
+
+  ASSERT_FALSE(verify_tir_module(mod, diag));
+  ASSERT_TRUE(diag.has_errors());
+}
+
+TEST(TirTest, VerifierAcceptsOwnedRelease) {
+  DiagnosticEngine diag;
+  tir::Module mod;
+  auto fn = std::make_unique<tir::Function>("release_owned", Type::void_type());
+  const Type pointer = Type::pointer_type(Type::int_type());
+  tir::Value parameter = fn->allocate_value(pointer, ValueOwnership::Owned);
+  fn->add_parameter("value", pointer, parameter, ValueOwnership::Owned);
+  tir::Op release;
+  release.kind = tir::OpKind::Call;
+  release.callee = "memory.deallocate";
+  release.arguments.push_back(parameter);
+  fn->add_operation(release);
+  tir::Op ret;
+  ret.kind = tir::OpKind::Return;
+  fn->add_operation(ret);
+  mod.add_function(std::move(fn));
+
+  ASSERT_TRUE(verify_tir_module(mod, diag));
+  ASSERT_FALSE(diag.has_errors());
+}
