@@ -106,6 +106,71 @@ TEST(TemporaryArtifactTest, PublishWithoutStagedFileLeavesTheOldArtifact) {
   ASSERT_EQ(read_text(final_path), std::string("old"));
 }
 
+TEST(ArtifactTransactionTest, PublishesBothArtifactsTogether) {
+  TestDirectory directory;
+  const fs::path object_final = directory.path() / "program.obj";
+  const fs::path exe_final = directory.path() / "program.exe";
+  write_text(object_final, "old object");
+  write_text(exe_final, "old exe");
+  const fs::path staged_object =
+      TemporaryArtifact::make_staged_path(object_final);
+  const fs::path staged_exe = TemporaryArtifact::make_staged_path(exe_final);
+  write_text(staged_object, "new object");
+  write_text(staged_exe, "new exe");
+
+  ArtifactTransaction transaction;
+  transaction.add(TemporaryArtifact(staged_object, object_final));
+  transaction.add(TemporaryArtifact(staged_exe, exe_final));
+  ASSERT_TRUE(transaction.publish());
+  ASSERT_EQ(read_text(object_final), std::string("new object"));
+  ASSERT_EQ(read_text(exe_final), std::string("new exe"));
+  ASSERT_FALSE(fs::exists(staged_object));
+  ASSERT_FALSE(fs::exists(staged_exe));
+}
+
+TEST(ArtifactTransactionTest, FailedSecondPublishRestoresTheFirstFinal) {
+  TestDirectory directory;
+  const fs::path object_final = directory.path() / "program.obj";
+  write_text(object_final, "old object");
+
+  // The executable's parent is a regular file, so its rename must fail after
+  // the object has already been published. The transaction has to restore the
+  // old object instead of leaving a new object beside the missing executable.
+  const fs::path blocker = directory.path() / "blocked";
+  write_text(blocker, "not a directory");
+  const fs::path exe_final = blocker / "program.exe";
+  const fs::path staged_object =
+      TemporaryArtifact::make_staged_path(object_final);
+  const fs::path staged_exe = directory.path() / ".staged-program.exe";
+  write_text(staged_object, "new object");
+  write_text(staged_exe, "new exe");
+
+  ArtifactTransaction transaction;
+  transaction.add(TemporaryArtifact(staged_object, object_final));
+  transaction.add(TemporaryArtifact(staged_exe, exe_final));
+  ASSERT_FALSE(transaction.publish());
+  ASSERT_EQ(read_text(object_final), std::string("old object"));
+}
+
+TEST(ArtifactTransactionTest, FailedPublishRemovesAFirstFinalThatDidNotExist) {
+  TestDirectory directory;
+  const fs::path object_final = directory.path() / "program.obj";
+  const fs::path blocker = directory.path() / "blocked";
+  write_text(blocker, "not a directory");
+  const fs::path exe_final = blocker / "program.exe";
+  const fs::path staged_object =
+      TemporaryArtifact::make_staged_path(object_final);
+  const fs::path staged_exe = directory.path() / ".staged-program.exe";
+  write_text(staged_object, "new object");
+  write_text(staged_exe, "new exe");
+
+  ArtifactTransaction transaction;
+  transaction.add(TemporaryArtifact(staged_object, object_final));
+  transaction.add(TemporaryArtifact(staged_exe, exe_final));
+  ASSERT_FALSE(transaction.publish());
+  ASSERT_FALSE(fs::exists(object_final));
+}
+
 TEST(TemporaryDirectoryTest, PublishesACompleteTreeOverAnEmptyTarget) {
   TestDirectory directory;
   const fs::path final_path = directory.path() / "project";
