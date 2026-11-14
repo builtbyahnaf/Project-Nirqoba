@@ -4044,8 +4044,9 @@ Type TypeChecker::check_call(CallExpr& call) {
     return Type::array_view_type(element_type);
   }
   // `memory.owned_soa<T>(n)` is the only way to create a container, so the
-  // restrictions here are what keep the runtime safe: no reference columns until
-  // the strided trace callback exists, and a struct element only.
+  // restrictions here are what keep the runtime safe: a struct element only, and
+  // no column that owns an array or view. Managed reference columns are allowed;
+  // the runtime traces them through the strided descriptor.
   if (call.callee() == "memory.owned_soa" && call.has_generic_argument()) {
     Type element = resolve_aggregate_type(call.generic_argument());
     if (!element.is_struct()) {
