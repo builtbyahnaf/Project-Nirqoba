@@ -157,7 +157,7 @@ representation gap.
 Status meanings: **Complete** = implemented and directly evidenced; **Partial** =
 some implementation exists but the migration requirement is unmet; **Missing** = not
 implemented; **Blocked** = depends on an absent subsystem or unresolved decision;
-**N/A** = the relevant subsystem does not exist in this tree.
+**Not applicable** = the relevant subsystem does not exist in this tree.
 
 ### 5.1 Deterministic ownership
 
@@ -192,7 +192,7 @@ implemented; **Blocked** = depends on an absent subsystem or unresolved decision
 | B8 | Array views and subviews | Complete | `array_view`/`array_view_mut`; `owned_array_view`, `borrowed_array_view_subview_return`, `mutable_owned_array_view` |
 | B9 | Borrows inside aggregates and containers | **Partial** | aggregate borrow fields work; array views cannot be stored in aggregates (`array_view_aggregate_escape`), and bulk containers reject borrowed fields |
 | B10 | Borrow-only execution has no GC behavior | **Partial** | borrow tracking itself emits no GC, but releasing the borrowed owned array emits `nrq_gc_root_unregister` |
-| B11 | Borrows across threads or FFI | **N/A** | no language thread spawn or FFI calling convention in this tree |
+| B11 | Borrows across threads or FFI | **Not applicable** | no language thread spawn or FFI calling convention in this tree |
 
 ### 5.3 Arena and pool allocation
 
@@ -268,8 +268,8 @@ implemented; **Blocked** = depends on an absent subsystem or unresolved decision
 | X6 | Optimization preserves roots, barriers and cleanup | Complete | `owned_pointer_root_elision*`, `gc_root_at_O0`, `opt_vectorize_managed_blocked` |
 | X7 | Root liveness and unobservable-root elision | Complete | `PassPipeline` root plan; `gc_root_elision_owned`, `owned_pointer_root_elision_ir` |
 | X8 | Exception/panic cleanup | **Missing** | no exception model; fatal paths call `ExitProcess` |
-| X9 | Async/await runtime | **N/A** | tokens are reserved for Phase 10; parser rejects them |
-| X10 | Thread spawn/scheduling | **N/A** | no language thread subsystem; mutex exists as a native handle only |
+| X9 | Async/await runtime | **Not applicable** | tokens are reserved for Phase 10; parser rejects them |
+| X10 | Thread spawn/scheduling | **Not applicable** | no language thread subsystem; mutex exists as a native handle only |
 | X11 | FFI boundary | **Missing** | no FFI implementation |
 | X12 | Sanitizer coverage | **Missing** | MSVC configuration has no ASan/UBSan run |
 | X13 | Architecture documentation matches implementation | **Partial** | `docs/architecture/02-typed-ir.md`, `06-runtime.md`, `07-models.md` still describe Phase 1/Phase 6-era behavior |
@@ -558,19 +558,19 @@ Phase 0 (this audit)
   +--> Phase 9: optimization, documentation and stabilization
 ```
 
-### Risks
+### Risks, ranked by severity
 
-| Risk | Impact | Mitigation |
-|---|---|---|
-| Ownership stays Sema-only | A new pass can violate moves/drops while TIR verifies | Make TIR ownership first-class before new lowering work |
-| GC unregister remains in owned release | Gate C fails; hidden lock in ordinary destruction | Gate emission on managed-reference presence; add IR regression first |
-| Secure managed payloads remain unrooted | Use-after-free in a future escape path | Reject managed fields in secure storage until rooted path exists |
-| Bulk containers need shared/owned fields | Standard-library pressure leads to unsafe exceptions | Keep reject-by-default; add a deliberate container design later |
-| Arenas treated as complete | Lifetime escapes and missing destructors | Implement scoped arena semantics before exposing as default |
-| String exception forgotten | Users assume deterministic string cleanup | Document as explicit exception; design owned string later |
-| Exception model added late | Cleanup guarantee retrofitted | Decide policy before claiming Gate A |
-| FFI/threads/async designed ad hoc | Ownership rules become inconsistent | Freeze boundary rules before implementing those phases |
-| Docs drift | Migration decisions based on stale Phase 1 docs | Target architecture is authoritative; refresh docs in Phase 9 |
+| Severity | Risk | Impact | Mitigation |
+|---|---|---|---|
+| **Critical** | Ownership stays Sema-only | A new pass can violate moves/drops while TIR verifies | Make TIR ownership first-class before new lowering work |
+| **Critical** | GC unregister remains in owned release | Gate C fails; hidden lock in ordinary destruction | Gate emission on managed-reference presence; add IR regression first |
+| **Critical** | Secure managed payloads remain unrooted | Use-after-free in a future escape path | Reject managed fields in secure storage until rooted path exists |
+| **High** | Bulk containers need shared/owned fields | Standard-library pressure leads to unsafe exceptions | Keep reject-by-default; add a deliberate container design later |
+| **High** | Arenas treated as complete | Lifetime escapes and missing destructors | Implement scoped arena semantics before exposing as default |
+| **High** | String exception forgotten | Users assume deterministic string cleanup | Document as explicit exception; design owned string later |
+| **High** | Exception model added late | Cleanup guarantee retrofitted | Decide policy before claiming Gate A |
+| **Medium** | FFI/threads/async designed ad hoc | Ownership rules become inconsistent | Freeze boundary rules before implementing those phases |
+| **Medium** | Docs drift | Migration decisions based on stale Phase 1 docs | Target architecture is authoritative; refresh docs in Phase 9 |
 
 ---
 
