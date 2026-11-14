@@ -14,8 +14,14 @@ stage succeeds; shutdown only after the entry function returns.
 > supersedes the limitations below. Object/executable publication is now a
 > rollback transaction; read strings are process-lifetime values rather than
 > entry-return-limited; `system.exit` performs best-effort cleanup; aggregate
-> root metadata and lowering paths are migrated. The two-file crash window,
-> process-lifetime string memory, and partial container step 4 remain.
+> root metadata and lowering paths are migrated.
+>
+> **Part 4 update (`0.499-beta`):** `reports/pre-mmm/phase-07-part-4.md`
+> completes roadmap step 4. SoA fields are now rooted during aggregate
+> construction and released during aggregate destruction; the container audit
+> found no further ownership gaps. Phase 7 is complete for steps 1-4. The
+> two-file crash window, process-lifetime string memory, and busy-registry exit
+> fallback remain documented hardening work.
 > Section 2's note that read buffers are unmigrated describes Part 1 only.
 
 ## 1. Verdict
