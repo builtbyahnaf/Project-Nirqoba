@@ -12,6 +12,36 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.477-beta (working build)
+
+### Summary of Changes (since `0.473-beta`):
+
+*Pre-MMM Phase 7 first incremental subsystem migration; `0.457-beta` remains the
+released `n-1` checkpoint.*
+
+- **Compiler-generated artifacts are deterministically owned.** `build` stages
+  the object and executable at unique sibling paths and publishes each only
+  after its producing stage succeeds. A failed build cleans its staging files
+  and leaves the previous successful artifacts untouched. Publication failure is
+  `NRQ5010`.
+- **`run` no longer leaks build products.** The staged executable and object are
+  removed after every program exit. `--keep-artifacts` restores the old behavior
+  by publishing both at their normal paths.
+- **`nirqoba new` publishes atomically.** The complete scaffold is written to a
+  sibling `TemporaryDirectory` and renamed into place; a failed write leaves no
+  partial project, and a non-empty target is refused.
+- **Language/runtime behavior is unchanged.** No runtime source, allocator,
+  collector, lowering rule, or optimizer changed. The `hello` executable is
+  byte-identical to `0.473-beta` (`6d4d6ff0...e8d7a9`, 9,728 B).
+- **Benchmark (41 interleaved samples):** build 99.298 -> 102.779 ms (+3.51%),
+  run 157.214 -> 155.831 ms (-0.88%), `new` 33.933 -> 36.325 ms (+7.05%),
+  compiler peak RSS +0.24%, `run` artifacts 2 files / 10,300 B -> 0 files / 0 B.
+  The build/scaffold publication cost is small in absolute terms and is reported
+  as a regression, not hidden.
+- **Validation:** 237 unit tests and 462 integration tests pass. No ASan/UBSan
+  run is available in the MSVC configuration; the pre-existing Phase 4 GC stress
+  flake remains separate.
+
 ## Version 0.473-beta (working build)
 
 ### Summary of Changes (since `0.469-beta`):
