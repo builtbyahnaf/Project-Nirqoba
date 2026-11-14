@@ -135,13 +135,15 @@ Use `borrow T* name` for an immutable pointer borrow and `borrow mut T* name` fo
 
 `defer call(...)` captures call arguments when registered and runs calls in LIFO order on lexical block exit, including return, break, and continue. It can release explicit allocations, unpin GC objects, unlock mutexes, close files, and restore allocator selection. An explicit deferred cleanup overrides the inferred cleanup for that owner. Cleanup during exception unwinding is unavailable because the language has no exception model.
 
-Struct fields declare their ownership contract: `owned`, `owned <resource>`, `shared`, `borrow` and `borrow mut`. GC-managed and unqualified raw pointer fields remain non-owning.
+Struct fields declare their ownership contract: `owned`, `owned <resource>`, `shared`, `borrow` and `borrow mut`. An unqualified raw pointer field is rejected because it has no release contract; state the contract explicitly. A `managed<T>` field is a non-owning collector reference. A lexical aggregate roots its managed fields while the value is live and removes those roots when the aggregate is destroyed or moved.
 
 ## Shared references
 
 `memory.shared_allocate<T>(bytes)` creates a reference-counted allocation. `memory.shared_retain(pointer)` creates another release token, `memory.shared_release(pointer)` consumes one token, and `memory.shared_count(pointer)` reports the current count. Use `defer memory.shared_release(reference)` for explicit lexical cleanup; shared parameters are released automatically when the callee exits.
 
-A function parameter may declare `shared T* name`, and a function returning a shared pointer declares `shared T* function create()`. Calls transfer one token into or out of the function. Shared pointers cannot be passed to unique-owner parameters or released with unique deallocation APIs. Reference-count updates are synchronized; access to the pointed-to data is not made thread-safe. Shared references in aggregates are not supported.
+A function parameter may declare `shared T* name`, and a function returning a shared pointer declares `shared T* function create()`. Calls transfer one token into or out of the function. Shared pointers cannot be passed to unique-owner parameters or released with unique deallocation APIs. Reference-count updates are synchronized; access to the pointed-to data is not made thread-safe.
+
+A lexical struct may hold `shared` fields. Construction and aggregate-to-aggregate copies retain the token, destruction releases it, and managed fields inside the shared pointee are registered as typed roots while the containing value is live. Tuples still reject owned, shared and borrowed pointer elements. Bulk containers do not run per-field reference-count cleanup and therefore reject shared fields, as described in the storage-boundary policy below.
 
 ## Native mutex resources
 
@@ -255,8 +257,9 @@ only legal on a moved path. `aggregate.owned_drop` walks fields in reverse decla
 order and, for an owned pointer field, releases the GC root registration and calls
 `nrq_memory_deallocate_checked` on the stored pointer. No reference counts, no metadata
 and no per-operation checks are added; destruction is statically generated from the
-field types. `shared` fields and resource-domain owned fields remain rejected until
-their destruction paths exist, and `uninit` is still absent.
+field types. This early implementation rejected shared fields and resource-domain owned
+fields; both are supported now, with retain/release and domain-specific destructors
+respectively, and `uninit` is still absent.
 
 ## Owned field reinitialization (0.390-beta)
 
@@ -365,12 +368,37 @@ in reverse declaration order, recursing through arrays, tuples and nested struct
 It does not free the collector payload. `soa.owned_release` has the same contract:
 the collector reclaims the object in a later sweep. `soa<T>` columns may contain
 managed references, which are traced through the strided `(offset, stride)` pairs;
-they may not contain owned arrays or array views. Array views cannot be stored in
-aggregates at all.
+they may not contain owned arrays, array views, shared tokens or borrowed fields,
+because `soa.owned_release` does not walk column destructors.
 
 The regression cases cover direct fields, tuple fields, a returned aggregate, a
 mixed SoA/shared aggregate, move and field reinitialization, and reclamation after
 the aggregate leaves scope.
+
+## Storage-boundary ownership policy (0.501-beta to 0.511-beta)
+
+The hybrid model is now enforced at every storage boundary: a container that cannot
+run a field's release path rejects that field instead of silently dropping it. This is
+the default-policy transition for the completed type surface, not a new container
+design.
+
+| Storage | Supported payloads | Rejected payloads | Why |
+|---|---|---|---|
+| Lexical struct value | trivial, `managed<T>`, `owned`, `owned <resource>`, `shared`, `borrow` | unqualified raw pointer field | Generated `aggregate.owned_drop`/retain walks every declared field contract. |
+| Tuple | trivial and `managed<T>` elements | owned, shared or borrowed pointer elements | A tuple has no field-level drop/retain contract for pointer ownership. |
+| `owned_array<T>` / `owned_array_aligned<T>` | trivial and managed-reference elements | elements holding owned pointers, owned arrays, SoA, shared tokens, borrowed fields or views | `array.owned_release` frees the element block, not per-element fields. |
+| `soa<T>` | trivial and managed-reference columns | owned arrays, array views, shared columns, borrowed columns | `soa.owned_release` unregisters the container root; it does not walk column destructors. |
+| `array.allocate<T>` (collector-managed) | trivial and managed-reference fields | owned, shared or borrowed fields and array views | Collector storage is reclaimed by sweep and has no finalizer. |
+| `memory.allocate<T>`, `memory.reallocate<T>`, `memory.secure_allocate<T>` | trivial and managed-reference fields | owned, shared or borrowed fields and array views | These paths release raw bytes without running field destruction. |
+| `memory.shared_allocate<T>` | trivial and managed-reference fields | owned, shared or borrowed fields and array views | The final reference-count release frees storage without walking fields. |
+
+Managed references are the deliberate exception: they need no field destructor, and
+the compiler registers their root metadata at the same storage boundaries where it
+rejects deterministic owners. `array.allocate<T>` remains the explicit opt-in to
+collector storage; using it does not enable automatic collection. Automatic collection
+starts disabled, `gc.enable()` turns it on, `gc.disable()` turns it off, and
+`gc.collect()` performs an explicit full cycle regardless of that setting. There is no
+fallback from a rejected ownership payload to the collector.
 
 ## Borrow lifetime propagation (0.415-beta)
 
