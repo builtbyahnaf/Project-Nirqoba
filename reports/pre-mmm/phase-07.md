@@ -192,9 +192,11 @@ flake remains a separate pre-existing issue.
 The build and scaffold costs are small in absolute terms but are real
 publication overhead; they are reported rather than hidden. The first
 benchmark run measured a larger build regression because publication used a
-synchronous disk flush. Removing that flush restored build-time parity within
-the noise band. The `new` command still pays roughly 2 ms for creating a
-staging directory and renaming it, a one-time cost per project.
+synchronous disk flush. Removing that flush reduced the overhead; a 21-sample
+run measured build at -0.68%, while the final 41-sample run measured +3.51%, so
+run-to-run variation is of the same order as the effect. The `new` command still
+pays roughly 2 ms for creating a staging directory and renaming it, a one-time
+cost per project.
 
 ## 8. Commits
 
