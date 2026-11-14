@@ -2816,9 +2816,10 @@ directory so presence checks cannot see a previous case's files.
 | `run` artifacts | 2 files / 10,300 B | 0 files / 0 B | eliminated |
 | Executable | 9,728 B | 9,728 B | identical SHA-256 |
 
-The build cost fell to parity after removing a synchronous disk flush from
-publication. The `new` cost is roughly 2 ms of staging/rename per project. No
-runtime or generated-code speedup is claimed.
+Removing a synchronous disk flush from publication reduced the build overhead;
+repeated runs still straddle zero, so the exact build percentage is within
+measurement noise. The `new` cost is roughly 2 ms of staging/rename per project.
+No runtime or generated-code speedup is claimed.
 
 ### 5. Limitations
 
