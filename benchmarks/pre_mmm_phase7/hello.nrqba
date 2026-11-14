@@ -1,0 +1,4 @@
+int function main() {
+    print("phase7 artifact benchmark");
+    return 0;
+}
