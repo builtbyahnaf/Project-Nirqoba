@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.483-beta` |
+| Current Working Version | `0.495-beta` |
 | Development Stage | `Phase 7` |
-| Last Report Update | `2026-11-14 20:30:00` |
-| Report Entries | `24` |
+| Last Report Update | `2026-11-15 01:20:00` |
+| Report Entries | `25` |
 
 ---
 
@@ -2970,6 +2970,89 @@ in `reports/pre-mmm/phase-07.md` and `reports/pre-mmm/phase-07-validation.md`.
 ---
 
 **End of Entry #024**
+
+## Entry #025 — Phase 7 Part 3: publication, string lifetime, termination, aggregates
+
+**Version:** `0.495-beta`  
+**Date:** `2026-11-15 01:20:00`  
+**Scope:** `Phase 7 Part 3 / Artifact Publication / String Lifetime / system.exit / Aggregate and Mutex Internals`  
+**Status:** `Completed with documented limitations`
+
+### 1. Overview
+
+Part 3 resolved the Part 2 limitations that could be fixed without changing the
+language's ownership model. Six implementation upgrades were made: a rollback
+transaction for paired build outputs, a process-lifetime contract for read
+strings, deterministic cleanup from `system.exit`, inline shared-aggregate root
+metadata, a mutex slot table, and best-effort termination cleanup. Roadmap step 4
+was partially completed: aggregate internals were migrated; the language
+container surface was audited but not redesigned.
+
+### 2. Implementation
+
+- **Artifact transaction.** `ArtifactTransaction` backs up existing finals with
+  hard links (copy fallback), publishes object and executable, and restores both
+  if any replacement fails. Handled failures cannot leave a mismatched pair.
+- **Process-lifetime strings.** `file.read_text` strings remain immutable and
+  valid for the whole process; entry shutdown no longer frees the arena. This
+  accounts for copies, returns, struct fields and shared aliases.
+- **Termination cleanup.** Normal return waits for registry locks;
+  `system.exit` uses try-lock and terminates without waiting for a blocked I/O
+  thread. Busy registries are left to the OS.
+- **Aggregate internals.** Shared-root metadata stores up to eight offsets
+  inline; aggregate drop/retain paths use `SmallVector<int64_t, 8>`.
+- **Mutex registry.** Generation-checked slot table replaces the map; stale
+  tokens cannot resolve after reuse.
+- **Publication benchmark.** Build publication costs 3.23% wall for backup and
+  rollback safety. Mutex round trips improve 10.71%. Read workload is neutral
+  (+0.12% wall, +1.10% RSS).
+
+### 3. Verification
+
+| Check | Result |
+|---|---|
+| Build | PASS (`0.495-beta`) |
+| Unit suite | 258/258 |
+| Integration suite | 466/466 |
+| Artifact rollback | PASS |
+| String copies/returns/aggregates | PASS |
+| `system.exit` path | PASS, exit 7, tail unreachable |
+| Exit cleanup | PASS, uncontended registries retired |
+| Shared-root inline/overflow | PASS |
+| Mutex reuse | PASS |
+
+### 4. Version history
+
+`0.491-beta` records the first four upgrades; `0.495-beta` records the next two.
+The intended `0.487-beta` milestone was not committed. It is not retroactively
+fabricated, and the earlier missing `0.480-beta` is still recorded as a process
+gap.
+
+### 5. Remaining limitations
+
+1. No crash journal for publication; a crash between renames can leave a partial
+   pair and backups.
+2. Read-string memory is process-lifetime and not returned before termination.
+3. `system.exit` skips busy registries.
+4. Container-internals audit remains incomplete; only aggregate internals were
+   migrated.
+5. Sockets are deliberately unlinked; async/task and tensor/device subsystems
+   do not exist in this tree.
+6. No ASan/UBSan run is available in the MSVC configuration.
+
+### 6. Agent Assessment
+
+- **Implementation completeness:** Part 3 resolves handled publication failure,
+  string aliasing, aggregate metadata and mutex registry overhead. It does not
+  claim a crash-safe publication transaction or a completed container audit.
+- **Verification confidence:** High for rollback, string aliasing, slot
+  generations and exit codes; medium for crash behavior and busy-registry exit.
+- **Performance:** One real regression (+3.23% build) and one real improvement
+  (-10.71% mutex round trips); read performance is neutral.
+
+---
+
+**End of Entry #025**
 
 <!-- REPORT ENTRIES END -->
 
