@@ -1,0 +1,37 @@
+// Moving an aggregate moves the SoA container with it; replacing a moved-out
+// field must release the old container root and keep the new one intact.
+struct Point {
+    int x;
+    int y;
+}
+
+struct Holder {
+    soa<Point> rows;
+    int tag;
+}
+
+int function main() {
+    var first = Holder {
+        rows: memory.owned_soa<Point>(2),
+        tag: 4
+    };
+    first.rows[0].x = 6;
+
+    var moved = first;
+    print(moved.rows[0].x + moved.tag);
+
+    var target = Holder {
+        rows: memory.owned_soa<Point>(1),
+        tag: 1
+    };
+    var replacement = Holder {
+        rows: memory.owned_soa<Point>(1),
+        tag: 2
+    };
+    replacement.rows[0].x = 9;
+
+    let old = target.rows;
+    target.rows = replacement.rows;
+    print(target.rows[0].x + old[0].x);
+    return 0;
+}

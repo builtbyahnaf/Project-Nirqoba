@@ -1,0 +1,21 @@
+// Tuples take the same aggregate path as structs. The container field must be
+// rooted during construction and released when the tuple is destroyed.
+struct Point {
+    int x;
+    int y;
+}
+
+struct Holder {
+    (soa<Point>, int) pair;
+}
+
+int function main() {
+    var holder = Holder {
+        pair: (memory.owned_soa<Point>(2), 5)
+    };
+    holder.pair.0[0].x = 3;
+
+    print(holder.pair.0[0].x);
+    print(holder.pair.1);
+    return 0;
+}
