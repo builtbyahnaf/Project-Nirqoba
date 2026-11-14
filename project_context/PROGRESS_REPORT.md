@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.495-beta` |
+| Current Working Version | `0.499-beta` |
 | Development Stage | `Phase 7` |
-| Last Report Update | `2026-11-15 01:20:00` |
-| Report Entries | `25` |
+| Last Report Update | `2026-11-15 04:30:00` |
+| Report Entries | `26` |
 
 ---
 
@@ -3053,6 +3053,116 @@ gap.
 ---
 
 **End of Entry #025**
+
+## Entry #026 — Phase 7 Part 4: container audit and aggregate SoA fields
+
+**Version:** `0.499-beta`  
+**Date:** `2026-11-15 04:30:00`  
+**Scope:** `Phase 7 Part 4 / Container Internals / SoA Aggregate Fields / Aggregate Traversal`  
+**Status:** `Completed`
+
+### 1. Overview
+
+Part 4 completed the container-internals audit that Part 3 left open. The audit
+covered owned arrays, immutable and mutable array views, structure-of-arrays
+storage, shared storage, and aggregate destruction/retention. It found two real
+ownership gaps, both involving `soa<T>` as an aggregate field: the allocation
+was not rooted when the container was consumed immediately by an aggregate
+initializer, and aggregate destruction never released the container root. Both
+are fixed. The per-site `std::function` in aggregate drop/retain was also
+replaced with direct recursion.
+
+Phase 7 is complete for roadmap steps 1-4. Steps 5 and 6 have no subsystem in
+this tree. The publication crash window, process-lifetime read strings, and
+busy-registry termination fallback remain documented hardening items.
+
+### 2. Implementation
+
+- **Rooted SoA initializers.** `analyze_gc_root_plan` now marks
+  `memory.owned_soa` as a rooted allocation. An aggregate field initializer
+  therefore emits the entry frame and slot registration before the runtime
+  validates the root slot.
+- **SoA in aggregate destruction.** `aggregate.owned_drop` recognises a SoA
+  leaf, extracts the container pointer and calls `nrq_gc_root_unregister`. It
+  does not deallocate the collector object.
+- **No heap callable per traversal.** `drop_aggregate_fields` and
+  `retain_aggregate_fields` are direct recursive member helpers using
+  `llvm::SmallVectorImpl<int64_t>`. Aggregate traversal no longer constructs a
+  `std::function` for each drop or retain site.
+- **Audit result.** Owned arrays own explicit storage and typed roots; views are
+  borrowed stack descriptors; SoA is collector-owned with strided reference
+  tracing; shared values retain/release through aggregate copy and destruction.
+  No representation or borrow rule was redesigned.
+
+### 3. Verification
+
+| Check | Result |
+|---|---|
+| RelWithDebInfo build | PASS (`0.499-beta`) |
+| Unit suite | 259/259 |
+| Integration suite | 472/472 |
+| SoA field rooted and traced | PASS |
+| SoA root released on aggregate drop | PASS |
+| SoA field in tuple | PASS |
+| SoA field moved/reinitialized | PASS |
+| SoA field in returned aggregate | PASS |
+| SoA and shared fields in one drop | PASS |
+| Existing owned-array, view, shared and cleanup suites | PASS |
+
+No ASan/UBSan run is available in the MSVC configuration. The pre-existing
+Phase 4 GC stress flake reproduced once during an intermediate unit run and
+then passed on the clean run; it remains separate from Part 4.
+
+### 4. Benchmark
+
+`benchmarks/pre_mmm_phase7_part4/`, baseline `bb99ffd` (`0.495-beta`), 15
+alternating builds of 5,000 aggregate drop sites:
+
+| Measurement | Baseline | Part 4 | Change |
+|---|---:|---:|---:|
+| Compiler wall | 7,454.763 ms | 7,507.598 ms | **+0.71%** |
+| Compiler peak RSS | 417,304,576 B | 417,480,704 B | +0.04% |
+| Object size | 1,362,995 B | 1,362,995 B | identical |
+| Executable size | 622,592 B | 622,592 B | identical |
+
+The difference is neutral. No speedup is claimed for the traversal refactor.
+The SoA correctness cases cannot run on the baseline because it aborts on them.
+
+### 5. Version history
+
+The version log now gives each Phase 7 intermediate label its own entry:
+`0.480-beta` (argument bridge and string arena), `0.483-beta` (shutdown,
+native registries and file slots), `0.484-beta` (artifact transaction and
+process-lifetime strings), `0.487-beta` (exit cleanup and inline shared roots),
+`0.491-beta` (aggregate paths and mutex slots), `0.495-beta` (best-effort
+termination), and `0.499-beta` (Part 4). The 0.480, 0.484 and 0.487 entries are
+marked retrospective milestones because no release commit was made at those
+labels. Only `0.499-beta` has the working-build label.
+
+### 6. Remaining limitations
+
+1. No crash journal for multi-artifact publication.
+2. `file.read_text` buffers remain process-lifetime.
+3. `system.exit` abandons busy registries to OS teardown.
+4. `soa.owned_release` unregisters the root but does not free collector storage
+   synchronously; the sweep reclaims it.
+5. No sanitizer run is available with the MSVC toolchain.
+6. The Phase 4 GC stress flake remains separate.
+
+### 7. Agent Assessment
+
+- **Implementation completeness:** Complete for the audited container and
+  aggregate ownership surface.
+- **Verification confidence:** High for rooting, destruction, moves, tuple
+  fields and reclamation; medium only for the pre-existing GC stress flake.
+- **Performance:** Neutral; the traversal change removes a compiler allocation
+  but does not produce a measurable speedup.
+- **Next step:** Phase 8 policy work, with the four hardening items above
+  scheduled separately.
+
+---
+
+**End of Entry #026**
 
 <!-- REPORT ENTRIES END -->
 
