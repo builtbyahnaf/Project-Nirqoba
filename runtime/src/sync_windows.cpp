@@ -57,10 +57,12 @@ std::shared_ptr<MutexResource> find_mutex(void* handle) {
 
 namespace nirq::runtime {
 
-void release_mutex_resources() noexcept {
+void release_mutex_resources(bool wait) noexcept {
   std::vector<std::shared_ptr<MutexResource>> doomed;
   {
-    std::lock_guard<std::mutex> lock(registry_mutex);
+    std::unique_lock<std::mutex> lock(registry_mutex, std::defer_lock);
+    if (wait) lock.lock();
+    else if (!lock.try_lock()) return;
     doomed.reserve(mutex_slots.size());
     for (MutexSlot& slot : mutex_slots)
       if (slot.resource) doomed.push_back(std::move(slot.resource));

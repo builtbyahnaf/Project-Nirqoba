@@ -54,10 +54,12 @@ std::wstring utf8_to_wide(const char* path) {
 
 namespace nirq::runtime {
 
-void release_mapping_resources() noexcept {
+void release_mapping_resources(bool wait) noexcept {
   std::vector<std::shared_ptr<Mapping>> doomed;
   {
-    std::lock_guard<std::mutex> lock(mapping_mutex);
+    std::unique_lock<std::mutex> lock(mapping_mutex, std::defer_lock);
+    if (wait) lock.lock();
+    else if (!lock.try_lock()) return;
     doomed.reserve(mappings.size());
     for (auto& entry : mappings) doomed.push_back(std::move(entry.second));
     mappings.clear();

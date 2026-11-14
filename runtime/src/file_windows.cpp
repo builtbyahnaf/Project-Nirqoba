@@ -63,10 +63,12 @@ std::shared_ptr<FileResource> find_file_resource(void* token) {
 
 namespace nirq::runtime {
 
-void release_file_resources() noexcept {
+void release_file_resources(bool wait) noexcept {
     std::vector<std::shared_ptr<FileResource>> doomed;
     {
-        std::lock_guard<std::mutex> lock(file_resource_mutex);
+        std::unique_lock<std::mutex> lock(file_resource_mutex, std::defer_lock);
+        if (wait) lock.lock();
+        else if (!lock.try_lock()) return;
         doomed.reserve(file_slots.size());
         for (auto& slot : file_slots)
             if (slot.resource) doomed.push_back(std::move(slot.resource));

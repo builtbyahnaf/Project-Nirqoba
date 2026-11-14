@@ -187,9 +187,9 @@ void nrq_runtime_shutdown(void) {
     // still owned at return is nevertheless released here, so process exit is
     // not the owner of last resort. Registries are cleared before their handles
     // are closed, making a stale token invalid rather than race-prone.
-    nirq::runtime::release_file_resources();
-    nirq::runtime::release_mapping_resources();
-    nirq::runtime::release_mutex_resources();
+    nirq::runtime::release_file_resources(true);
+    nirq::runtime::release_mapping_resources(true);
+    nirq::runtime::release_mutex_resources(true);
 
     // `file.read_text` strings are process-lifetime values. They are not
     // released here: the language can copy, return, aggregate and share the
@@ -198,6 +198,16 @@ void nrq_runtime_shutdown(void) {
     // process termination, after deferred cleanup and static destructors.
     // `release_process_strings()` remains an internal test/forced-teardown hook
     // and must only be used when no string can still be observed.
+}
+
+// Termination path for system.exit. It must not wait for an operation lock held
+// by another thread: ExitProcess is already stopping the process, and a blocked
+// read/recv may never release its lock. Registries that can be acquired are
+// retired; the rest are reclaimed by the OS.
+extern "C" void nrq_runtime_shutdown_for_exit(void) {
+    nirq::runtime::release_file_resources(false);
+    nirq::runtime::release_mapping_resources(false);
+    nirq::runtime::release_mutex_resources(false);
 }
 
 // Console input: reads one line from stdin using Win32 ReadFile.
