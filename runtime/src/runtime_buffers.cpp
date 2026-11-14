@@ -2,8 +2,12 @@
 // language as borrowed `string` values.
 //
 // A block is a fixed-size bump region; a large string gets its own block. The
-// arena never frees an individual string because generated code cannot prove
-// when the last alias dies. It frees every block at runtime shutdown instead.
+// language represents `string` as a raw borrowed char pointer and has no
+// per-string destruction contract, so the only sound lifetime is the process.
+// Copies, returns, aggregate fields and sharing all copy the pointer; none of
+// them is observable as a release point. The arena is deliberately process-owned
+// and is not released by entry shutdown: strings stay valid through deferred
+// cleanup and static destructors, and the OS reclaims the blocks at termination.
 
 #ifndef _WIN32
 #  error "runtime_buffers.cpp is the Windows-only runtime buffer arena."
@@ -93,8 +97,11 @@ class BufferArena {
 };
 
 BufferArena& arena() {
-  static BufferArena instance;
-  return instance;
+  // Intentionally never destroyed: a static destructor would run before some
+  // later-constructed statics and could invalidate a string still reachable
+  // from their destructors. Process termination is the release point.
+  static BufferArena* instance = new BufferArena();
+  return *instance;
 }
 
 }  // namespace

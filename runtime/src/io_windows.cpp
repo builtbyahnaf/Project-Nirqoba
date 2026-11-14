@@ -14,6 +14,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <cstdio>
+#include <mutex>
 
 static HANDLE get_stdout_handle() {
     static HANDLE h = INVALID_HANDLE_VALUE;
@@ -172,6 +173,12 @@ void nrq_runtime_init(void) {
 }
 
 void nrq_runtime_shutdown(void) {
+    // `system.exit` reaches shutdown from an arbitrary language call site, and
+    // the normal entry return reaches it too. Serialise them so a terminating
+    // thread cannot close a registry while another thread is walking it.
+    static std::mutex shutdown_mutex;
+    std::lock_guard<std::mutex> shutdown_lock(shutdown_mutex);
+
     // Output uses unbuffered WriteFile calls, so there is nothing to flush.
     // FlushFileBuffers on an anonymous pipe blocks until the reader drains it,
     // which deadlocked any parent that waited for this process before reading
@@ -184,11 +191,13 @@ void nrq_runtime_shutdown(void) {
     nirq::runtime::release_mapping_resources();
     nirq::runtime::release_mutex_resources();
 
-    // The language cannot free borrowed strings individually, so the runtime
-    // owns every escaping string buffer for the process and releases the arena
-    // here. This is the deterministic end of their lifetime; pointers are not
-    // valid after this call.
-    nirq::runtime::release_process_strings();
+    // `file.read_text` strings are process-lifetime values. They are not
+    // released here: the language can copy, return, aggregate and share the
+    // pointer without a release point, so freeing the arena at entry return
+    // would make a still-reachable alias dangle. The OS reclaims the arena at
+    // process termination, after deferred cleanup and static destructors.
+    // `release_process_strings()` remains an internal test/forced-teardown hook
+    // and must only be used when no string can still be observed.
 }
 
 // Console input: reads one line from stdin using Win32 ReadFile.
