@@ -1721,6 +1721,53 @@ bool TypeChecker::contains_borrowed_field(
   return false;
 }
 
+bool TypeChecker::requires_deterministic_cleanup(const Type& type) const {
+  std::unordered_set<std::string> active;
+  return requires_deterministic_cleanup(type, active);
+}
+
+bool TypeChecker::requires_deterministic_cleanup(
+    const Type& type, std::unordered_set<std::string>& active) const {
+  if (!type.is_valid()) return false;
+  // Owned pointers, owned arrays, SoA containers, shared tokens and borrowed
+  // views all need their explicit release or lifetime to travel with the value.
+  // Plain raw pointers carry no release contract, and managed pointers are
+  // traced by the collector, so neither is included here.
+  if (type.is_owned_pointer() || type.is_owned_array() || type.is_soa() ||
+      type.is_shared_pointer() || type.is_array_view())
+    return true;
+  if (type.is_array() || type.is_dynamic_array())
+    return requires_deterministic_cleanup(type.element_type(), active);
+  if (type.is_tuple()) {
+    for (const Type& element : type.tuple_elements())
+      if (requires_deterministic_cleanup(element, active)) return true;
+  }
+  if (type.is_struct()) {
+    const std::string& name = type.struct_name();
+    if (!active.insert(name).second) return false;
+    const StructInfo* info = find_struct(name);
+    if (info) {
+      bool found = false;
+      for (const Parameter& field : info->fields) {
+        if (field.borrowed || field.shared ||
+            requires_deterministic_cleanup(field.type, active)) {
+          found = true;
+          break;
+        }
+      }
+      active.erase(name);
+      return found;
+    }
+    for (const auto& field : type.struct_fields())
+      if (requires_deterministic_cleanup(field.second, active)) {
+        active.erase(name);
+        return true;
+      }
+    active.erase(name);
+  }
+  return false;
+}
+
 const std::vector<BorrowTarget>& TypeChecker::aggregate_borrows_for(
     const Expr& expr) const {
   static const std::vector<BorrowTarget> empty;
@@ -4944,10 +4991,16 @@ Type TypeChecker::check_call(CallExpr& call) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "'array.allocate<T>' requires an integer element count");
     }
-    const Type element_type = resolve_generic_type(call.generic_argument());
+    const Type element_type =
+        resolve_aggregate_type(resolve_generic_type(call.generic_argument()));
     if (contains_array_view(element_type))
       diagnostics_.error(diag::kTypeMismatch, call.location(),
                          "borrowed array views cannot be stored in GC-managed arrays");
+    else if (requires_deterministic_cleanup(element_type))
+      diagnostics_.error(
+          diag::kTypeMismatch, call.location(),
+          "GC-managed arrays cannot contain '" + element_type.to_string() +
+              "': collector storage has no finalizer for an owned, shared, or borrowed field");
     return Type::managed_pointer_type(element_type);
   }
 

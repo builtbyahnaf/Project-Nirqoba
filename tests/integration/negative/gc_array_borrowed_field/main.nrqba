@@ -1,0 +1,8 @@
+struct Holder {
+    borrow ptr int data;
+}
+
+int function main() {
+    var objects = array.allocate<Holder>(1);
+    return 0;
+}

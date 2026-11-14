@@ -154,6 +154,12 @@ class TypeChecker {
   bool contains_borrowed_field(const Type& type) const;
   bool contains_borrowed_field(const Type& type,
                                std::unordered_set<std::string>& active) const;
+  // True when a value owns or borrows something whose release cannot be left to
+  // the collector or to a bulk-storage free. Such values are only supported in
+  // lexical aggregates whose generated destruction walks their fields.
+  bool requires_deterministic_cleanup(const Type& type) const;
+  bool requires_deterministic_cleanup(
+      const Type& type, std::unordered_set<std::string>& active) const;
   const std::vector<BorrowTarget>& aggregate_borrows_for(const Expr& expr) const;
   void validate_aggregate_borrow_lifetime(const std::vector<BorrowTarget>& borrows,
                                           size_t target_depth,

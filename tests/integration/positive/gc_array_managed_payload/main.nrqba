@@ -1,0 +1,23 @@
+// A collector-managed array may contain a struct with managed references. The
+// collector storage has no finalizer, but managed fields are traced, so this is
+// a supported payload.
+struct Node {
+    int value;
+}
+
+struct Cell {
+    int tag;
+    managed<Node> node;
+}
+
+int function main() {
+    var cells = array.allocate<Cell>(2);
+    cells[0].tag = 1;
+    cells[0].node = array.allocate<Node>(1);
+    cells[0].node[0].value = 42;
+    gc.collect();
+    gc.collect();
+    print(cells[0].tag);
+    print(cells[0].node[0].value);
+    return 0;
+}
