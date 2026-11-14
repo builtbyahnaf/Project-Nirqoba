@@ -57,6 +57,8 @@ In contrast to pure garbage-collected languages or strictly borrow-checked syste
 3. **Liveness-Aware Shadow Roots:** The compiler performs backward liveness analysis over managed references so GC root frames and write barriers are emitted exclusively across safepoints where values are live.
 4. **Pluggable Explicit Allocators:** Applications can construct and bind custom allocators per-thread or per-operation (`general`, `arena`, `pool`, `slab`, `stack`, `region`, `buddy`, `tlsf`) with fine-grained alignment and profiling options.
 
+A storage boundary that cannot run a field's release path now rejects that field instead of falling back to the collector. Lexical structs support owned, shared, borrowed and managed fields; owned arrays, SoA columns, collector arrays, explicit allocations and shared allocations accept only trivial or managed-reference payloads. See the [Phase 8 migration notes](docs/migration/phase-8.md) for the supported and rejected combinations.
+
 ### 2. Predictable, High-Performance Code Generation
 
 Nirqoba compiles directly to machine code through LLVM and MLIR:
@@ -147,7 +149,7 @@ Nirqoba uses a multi-tier compilation pipeline designed to preserve semantic and
 
 ## Development Status & Roadmap
 
-The language is actively progressing through its architectural milestones. Current active version: **`0.266-beta`** (Phase 6 / Compiler Optimization and Hardening).
+The language is actively progressing through its architectural milestones. Current active version: **`0.511-beta`** (Pre-MMM Phase 8 / Migration Readiness and Default-Policy Transition).
 
 | Phase | Description | Status |
 |---|---|---|
@@ -159,6 +161,8 @@ The language is actively progressing through its architectural milestones. Curre
 | **Phase 6** | Allocator-aware owned arrays, mutable views, and stabilization | Completed |
 | **PO 3.1–3.6** | PassBuilder pipeline, alias analysis, escape analysis, root liveness, SIMD vectorization | Completed |
 | **Phase 6.5–6.9** | Generational incremental GC, explicit allocators, memory profiling | Completed |
+| **Pre-MMM Phase 7** | Container internals and aggregate ownership migration | Completed |
+| **Pre-MMM Phase 8** | Ownership-by-default policy across the supported storage surface | Completed |
 | **Phase 7–9** | Generics, algebraic data types, advanced pattern matching | Planned |
 | **Phase 10–12** | Structured concurrency, async/await, task scheduling | Planned |
 | **Phase 13–15** | C/C++ FFI interoperability and graphics ecosystem | Planned |
