@@ -115,7 +115,9 @@ Recognized owned pointers and resources are cleaned automatically at lexical exi
 
 memory.cpu_features() returns a bit mask of CPU features the Windows operating system reports usable by this process: bit 0 is SSE2, bit 1 is AVX, and bit 2 is AVX2. A set bit means the runtime reports support; callers should still use an appropriate target-specific code path and retain a fallback.
 
-`file.open(path, writable)` creates an owned Windows file resource or returns null. The wrapper supports text and byte reads and writes. Use `defer file.close(resource)` when explicit close timing is needed; otherwise the compiler closes an owned file at lexical exit. Ownership moves invalidate the source binding. Use after move or close is rejected.
+`file.open(path, writable)` creates an owned Windows file resource or returns null. The wrapper supports text and byte reads and writes. Use `defer file.close(resource)` when explicit close timing is needed; otherwise the compiler closes an owned file at lexical exit. Ownership moves invalidate the source binding. Use after move or close is rejected. A live file, mapping or mutex still held when `main` returns is closed by runtime shutdown; explicit close remains the normal ownership path.
+
+`file.read_text(path)` returns a borrowed `string` owned by the runtime, not by the caller. The language has no per-string destruction contract, so the buffer stays valid until the entry function returns. Runtime shutdown releases every read buffer after `main`'s last statement, including early returns. Do not retain such a string past that boundary; `system.exit` does not return and relies on process teardown. Reusing or freeing these buffers individually is not supported.
 
 `memory.thread_count()` returns a Windows process-thread snapshot count. Because threads can start or exit during enumeration, treat it as an estimate rather than a synchronization guarantee.
 `memory.device_memory_total_bytes()` and `memory.device_memory_used_bytes()`
