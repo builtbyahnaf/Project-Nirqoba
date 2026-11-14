@@ -4158,6 +4158,18 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "owned arrays cannot contain elements that own nested allocations yet");
       return Type::error();
     }
+    if (contains_array_view(element_type)) {
+      diagnostics_.error(diag::kTypeMismatch, call.location(),
+                         "owned arrays cannot contain borrowed array views");
+      return Type::error();
+    }
+    if (requires_deterministic_cleanup(element_type)) {
+      diagnostics_.error(
+          diag::kTypeMismatch, call.location(),
+          "owned arrays cannot contain '" + element_type.to_string() +
+              "': bulk release does not run reference-counted or borrowed field destruction yet");
+      return Type::error();
+    }
     return Type::owned_array_type(element_type);
   }
   if (call.callee() == "array.owned_release") {

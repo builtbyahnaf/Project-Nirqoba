@@ -1,0 +1,8 @@
+struct Holder {
+    borrow ptr int data;
+}
+
+int function main() {
+    var values = memory.owned_array<Holder>(2);
+    return 0;
+}
