@@ -1,0 +1,8 @@
+int function main() {
+    var values = memory.owned_array<int>(4);
+    values[0] = 5;
+    values[1] = 7;
+    values[2] = 11;
+    values[3] = 19;
+    return values[0] + values[1] + values[2] + values[3];
+}
