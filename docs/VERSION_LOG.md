@@ -19,7 +19,28 @@ recorded below is made under that authority.
 > `0.495-beta`. Only the newest entry carries the working-build label; older
 > `(released)` entries are actual published checkpoints.
 
-## Version 0.508-beta (working build)
+## Version 0.511-beta (working build)
+
+### Summary of Changes (since `0.508-beta`):
+
+- **Legacy GC language builtins removed.** `nrq_gc_init`, `nrq_gc_shutdown` and
+  `nrq_gc_collect` are no longer declared in source. Use `gc.enable()`,
+  `gc.disable()` and `gc.collect()`; process startup and shutdown own the
+  runtime lifecycle. The C entry points remain for embedders.
+- **Legacy memory builtins removed.** Untyped `nrq_memory_allocate` and
+  `nrq_memory_deallocate` are undeclared. Use `memory.allocate<T>` and
+  `memory.deallocate`, which participate in the typed ownership and cleanup
+  contract.
+- **Tests:** 258 unit tests and 488 integration tests pass after the removals.
+  The unit count drops by one because the two GC control tests were merged into
+  one namespaced test.
+- **Phase 8 implementation is complete;** documentation, migration notes and the
+  phase report follow this label.
+- **Still deferred:** bounded release of process-lifetime `file.read_text`
+  buffers; crash-safe publication; busy-registry termination cleanup;
+  synchronous reclamation of collector-owned SoA storage.
+
+## Version 0.508-beta
 
 ### Summary of Changes (since `0.505-beta`):
 
