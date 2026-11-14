@@ -1,0 +1,8 @@
+int function main() {
+    let first = file.read_text("tests/integration/positive/file_read_repeated/data.txt");
+    let second = file.read_text("tests/integration/positive/file_read_repeated/data.txt");
+    print(first);
+    print(second);
+    print(first.length);
+    return 0;
+}
