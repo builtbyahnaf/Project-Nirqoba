@@ -7,6 +7,8 @@
 
 #include "nirqoba/runtime/file.h"
 
+#include "runtime_buffers.h"
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <cstdint>
@@ -51,14 +53,15 @@ const char* nrq_file_read_text(const char* path) {
         return kEmptyString;
     }
 
-    // Allocate buffer on process heap (+1 for null terminator).
+    // The returned string is borrowed by the language, so its lifetime is the
+    // process. Allocate it from the runtime-owned arena; shutdown releases it.
     size_t bytes_to_read = static_cast<size_t>(file_size.QuadPart);
-    char* buffer = static_cast<char*>(
-        HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes_to_read + 1));
+    char* buffer = nirq::runtime::allocate_process_string(bytes_to_read + 1);
     if (!buffer) {
         CloseHandle(h);
         return kEmptyString;
     }
+    buffer[bytes_to_read] = '\0';
 
     DWORD total_read = 0;
     while (total_read < bytes_to_read) {
