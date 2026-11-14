@@ -375,7 +375,7 @@ The regression cases cover direct fields, tuple fields, a returned aggregate, a
 mixed SoA/shared aggregate, move and field reinitialization, and reclamation after
 the aggregate leaves scope.
 
-## Storage-boundary ownership policy (0.501-beta to 0.511-beta)
+## Storage-boundary ownership policy (0.501-beta to 0.515-beta)
 
 The hybrid model is now enforced at every storage boundary: a container that cannot
 run a field's release path rejects that field instead of silently dropping it. This is
@@ -389,16 +389,25 @@ design.
 | `owned_array<T>` / `owned_array_aligned<T>` | trivial and managed-reference elements | elements holding owned pointers, owned arrays, SoA, shared tokens, borrowed fields or views | `array.owned_release` frees the element block, not per-element fields. |
 | `soa<T>` | trivial and managed-reference columns | owned arrays, array views, shared columns, borrowed columns | `soa.owned_release` unregisters the container root; it does not walk column destructors. |
 | `array.allocate<T>` (collector-managed) | trivial and managed-reference fields | owned, shared or borrowed fields and array views | Collector storage is reclaimed by sweep and has no finalizer. |
-| `memory.allocate<T>`, `memory.reallocate<T>`, `memory.secure_allocate<T>` | trivial and managed-reference fields | owned, shared or borrowed fields and array views | These paths release raw bytes without running field destruction. |
+| `memory.allocate<T>`, `memory.reallocate<T>` | trivial and managed-reference fields | owned, shared or borrowed fields and array views | These paths release raw bytes without running field destruction. |
+| `memory.secure_allocate<T>` | trivial fields | managed-reference fields, owned, shared or borrowed fields and array views | Secure release zeroes raw bytes and has no rooted registration; managed payloads are rejected until a rooted secure allocation path exists (`0.515-beta`). |
 | `memory.shared_allocate<T>` | trivial and managed-reference fields | owned, shared or borrowed fields and array views | The final reference-count release frees storage without walking fields. |
 
 Managed references are the deliberate exception: they need no field destructor, and
 the compiler registers their root metadata at the same storage boundaries where it
-rejects deterministic owners. `array.allocate<T>` remains the explicit opt-in to
-collector storage; using it does not enable automatic collection. Automatic collection
-starts disabled, `gc.enable()` turns it on, `gc.disable()` turns it off, and
-`gc.collect()` performs an explicit full cycle regardless of that setting. There is no
-fallback from a rejected ownership payload to the collector.
+rejects deterministic owners. Secure storage is not one of those boundaries: it
+zeroes and releases raw bytes without a rooted path, so a managed field there is a
+compile-time error rather than an unrooted payload. `array.allocate<T>` remains the
+explicit opt-in to collector storage; using it does not enable automatic collection.
+Automatic collection starts disabled, `gc.enable()` turns it on, `gc.disable()` turns
+it off, and `gc.collect()` performs an explicit full cycle regardless of that setting.
+There is no fallback from a rejected ownership payload to the collector.
+
+Owned-only release does not touch the collector. Aggregate destruction and owned-array
+release call `nrq_gc_root_unregister` only when the released payload actually contains
+a managed reference; scalar aggregates, owned pointer releases, borrowed views and
+stack-promoted arrays emit no collector calls. This is enforced by lowering rather
+than by a source-level rule, so no program spelling changes.
 
 ## Borrow lifetime propagation (0.415-beta)
 
