@@ -1226,8 +1226,13 @@ static GcRootPlan analyze_gc_root_plan(const tir::Function& function,
         op.callee != "memory.array_view" &&
         op.callee != "memory.array_view_mut")
       has_managed_call_results = true;
-    if (op.kind == tir::OpKind::Call && op.callee == "array.allocate" &&
-        op.result.is_valid() && op.result.type.is_managed_pointer())
+    // Both heap containers publish their result through an entry root slot. The
+    // collector entry reads that slot while the allocation is still in flight, so
+    // the frame must exist before the call even when the result is consumed
+    // immediately (for example as an aggregate field initializer).
+    if (op.kind == tir::OpKind::Call && op.result.is_valid() &&
+        ((op.callee == "array.allocate" && op.result.type.is_managed_pointer()) ||
+         (op.callee == "memory.owned_soa" && op.result.type.is_soa())))
       plan.has_rooted_allocation = true;
     // Stack-placed owned storage is registered inside the activation frame,
     // even when the function has no managed local of its own.
@@ -1863,9 +1868,159 @@ class FunctionTranslator {
   }
 
   // Root registration is likewise a per-activation action: the same slot must
-  // be registered once, not once per loop iteration. Registrations are queued
-  // until all managed slots are known, then emitted after the frame begins and
-  // before any body operation can trigger collection.
+  // Destroying an aggregate walks its physical fields in reverse declaration
+  // order. The recursion carries a path of aggregate indices, so one extract per
+  // leaf is enough; no per-traversal callable is built, which keeps destruction
+  // allocation-free even for deeply nested aggregates.
+  void drop_aggregate_fields(const Type& type, mlir::Value aggregate,
+                             llvm::SmallVectorImpl<int64_t>& path,
+                             mlir::Location loc) {
+    auto extract = [&](mlir::Value value, llvm::ArrayRef<int64_t> indices) {
+      return builder_
+          .create<mlir::LLVM::ExtractValueOp>(
+              loc, value, builder_.getDenseI64ArrayAttr(indices))
+          .getResult();
+    };
+    auto unregister_root = [&](mlir::Value data) {
+      auto unregister = ensure_runtime_fn(
+          module_, builder_, "nrq_gc_root_unregister",
+          mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
+      builder_.create<mlir::LLVM::CallOp>(loc, unregister,
+                                           mlir::ValueRange{data});
+    };
+
+    if (type.is_soa()) {
+      // A structure-of-arrays container is one collector object. Releasing the
+      // aggregate drops its root; the collector reclaims the storage later.
+      unregister_root(extract(aggregate, path));
+      return;
+    }
+    if (type.is_shared_pointer()) {
+      mlir::Value data = extract(aggregate, path);
+      auto release = ensure_runtime_fn(
+          module_, builder_, "nrq_memory_shared_release",
+          builder_.getI32Type(), {llvm_ptr_type(ctx_)});
+      builder_.create<mlir::LLVM::CallOp>(loc, release,
+                                           mlir::ValueRange{data});
+      return;
+    }
+    if (type.is_owned_pointer()) {
+      mlir::Value data = extract(aggregate, path);
+      if (type.is_resource_pointer()) {
+        // A domain handle is not collector storage: release it with its runtime
+        // destructor. Every one of these accepts null, which is what an
+        // uninitialized or moved-out field holds.
+        const std::string& domain = type.resource_domain();
+        std::string symbol;
+        mlir::Type result = mlir::LLVM::LLVMVoidType::get(ctx_);
+        if (domain == "file") {
+          symbol = "nrq_file_close_handle";
+          result = builder_.getI32Type();
+        } else if (domain == "socket") {
+          symbol = "nrq_socket_close_handle";
+          result = builder_.getI32Type();
+        } else if (domain == "mutex") {
+          symbol = "nrq_mutex_destroy";
+        } else if (domain == "mapping") {
+          symbol = "nrq_memory_unmap_file";
+          result = builder_.getI32Type();
+        } else if (domain == "secure") {
+          symbol = "nrq_memory_secure_release";
+        }
+        if (!symbol.empty()) {
+          auto release = ensure_runtime_fn(
+              module_, builder_, symbol, result, {llvm_ptr_type(ctx_)});
+          builder_.create<mlir::LLVM::CallOp>(loc, release,
+                                               mlir::ValueRange{data});
+          return;
+        }
+      }
+      unregister_root(data);
+      auto release = ensure_runtime_fn(
+          module_, builder_, "nrq_memory_deallocate_checked",
+          mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
+      builder_.create<mlir::LLVM::CallOp>(loc, release,
+                                           mlir::ValueRange{data});
+      return;
+    }
+    if (type.is_owned_array()) {
+      mlir::Value descriptor = extract(aggregate, path);
+      mlir::Value data = extract(descriptor, {0});
+      unregister_root(data);
+      auto release = ensure_runtime_fn(
+          module_, builder_, "nrq_memory_deallocate_checked",
+          mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
+      builder_.create<mlir::LLVM::CallOp>(loc, release,
+                                           mlir::ValueRange{data});
+      return;
+    }
+
+    auto visit = [&](const Type& field_type, int64_t index) {
+      path.push_back(index);
+      if (field_type.is_soa() || field_type.is_owned_array() ||
+          field_type.is_owned_pointer() || field_type.is_shared_pointer() ||
+          field_type.is_array() || field_type.is_struct() ||
+          field_type.is_tuple())
+        drop_aggregate_fields(field_type, aggregate, path, loc);
+      path.pop_back();
+    };
+    // Fields are destroyed in reverse declaration order, matching the LIFO
+    // discipline used for scopes and parameters.
+    if (type.is_array()) {
+      for (std::size_t index = type.array_length(); index-- > 0;)
+        visit(type.element_type(), static_cast<int64_t>(index));
+    } else if (type.is_struct()) {
+      for (std::size_t index = type.struct_fields().size(); index-- > 0;)
+        visit(type.struct_fields()[index].second, static_cast<int64_t>(index));
+    } else if (type.is_tuple()) {
+      for (std::size_t index = type.tuple_elements().size(); index-- > 0;)
+        visit(type.tuple_elements()[index], static_cast<int64_t>(index));
+    }
+  }
+
+  // Copying an aggregate retains every shared pointer field it carries, in
+  // declaration order. Like destruction this is a plain recursion, not a
+  // heap-allocated callable.
+  void retain_aggregate_fields(const Type& type, mlir::Value aggregate,
+                               llvm::SmallVectorImpl<int64_t>& path,
+                               mlir::Location loc) {
+    auto extract = [&](mlir::Value value, llvm::ArrayRef<int64_t> indices) {
+      return builder_
+          .create<mlir::LLVM::ExtractValueOp>(
+              loc, value, builder_.getDenseI64ArrayAttr(indices))
+          .getResult();
+    };
+    if (type.is_shared_pointer()) {
+      mlir::Value data = extract(aggregate, path);
+      auto retain = ensure_runtime_fn(
+          module_, builder_, "nrq_memory_shared_retain",
+          llvm_ptr_type(ctx_), {llvm_ptr_type(ctx_)});
+      builder_.create<mlir::LLVM::CallOp>(loc, retain,
+                                           mlir::ValueRange{data});
+      return;
+    }
+    auto visit = [&](const Type& field_type, int64_t index) {
+      path.push_back(index);
+      if (field_type.is_shared_pointer() || field_type.is_array() ||
+          field_type.is_struct() || field_type.is_tuple())
+        retain_aggregate_fields(field_type, aggregate, path, loc);
+      path.pop_back();
+    };
+    if (type.is_array()) {
+      for (std::size_t index = 0; index < type.array_length(); ++index)
+        visit(type.element_type(), static_cast<int64_t>(index));
+    } else if (type.is_struct()) {
+      for (std::size_t index = 0; index < type.struct_fields().size(); ++index)
+        visit(type.struct_fields()[index].second, static_cast<int64_t>(index));
+    } else if (type.is_tuple()) {
+      for (std::size_t index = 0; index < type.tuple_elements().size(); ++index)
+        visit(type.tuple_elements()[index], static_cast<int64_t>(index));
+    }
+  }
+
+  // Every root slot in the activation is described once, before the body runs.
+  // Registrations are queued until all managed slots are known, then emitted
+  // after the frame begins and before any body operation can trigger collection.
   void register_gc_root(mlir::Value slot, const Type& value_type,
                         mlir::Location loc,
                         mlir::Value initial_value = {}) {
@@ -3180,143 +3335,15 @@ class FunctionTranslator {
         }
 
         if (op.callee == "aggregate.owned_drop" && args.size() == 1) {
-          std::function<void(const Type&, mlir::Value,
-                             llvm::SmallVector<int64_t, 8>&)> drop_fields;
-          drop_fields = [&](const Type& type, mlir::Value aggregate,
-                            llvm::SmallVector<int64_t, 8>& path) {
-            if (type.is_shared_pointer()) {
-              mlir::Value data = builder_.create<mlir::LLVM::ExtractValueOp>(
-                  loc, aggregate, builder_.getDenseI64ArrayAttr(path)).getResult();
-              auto release = ensure_runtime_fn(
-                  module_, builder_, "nrq_memory_shared_release",
-                  builder_.getI32Type(), {llvm_ptr_type(ctx_)});
-              builder_.create<mlir::LLVM::CallOp>(loc, release,
-                                                   mlir::ValueRange{data});
-              return;
-            }
-            if (type.is_owned_pointer()) {
-              mlir::Value data = builder_.create<mlir::LLVM::ExtractValueOp>(
-                  loc, aggregate, builder_.getDenseI64ArrayAttr(path)).getResult();
-              if (type.is_resource_pointer()) {
-                // A domain handle is not collector storage: release it with its
-                // runtime destructor. Every one of these accepts null, which is
-                // what an uninitialized or moved-out field holds.
-                const std::string& domain = type.resource_domain();
-                std::string symbol;
-                mlir::Type result = mlir::LLVM::LLVMVoidType::get(ctx_);
-                if (domain == "file") {
-                  symbol = "nrq_file_close_handle";
-                  result = builder_.getI32Type();
-                } else if (domain == "socket") {
-                  symbol = "nrq_socket_close_handle";
-                  result = builder_.getI32Type();
-                } else if (domain == "mutex") {
-                  symbol = "nrq_mutex_destroy";
-                } else if (domain == "mapping") {
-                  symbol = "nrq_memory_unmap_file";
-                  result = builder_.getI32Type();
-                } else if (domain == "secure") {
-                  symbol = "nrq_memory_secure_release";
-                }
-                if (!symbol.empty()) {
-                  auto release = ensure_runtime_fn(
-                      module_, builder_, symbol, result, {llvm_ptr_type(ctx_)});
-                  builder_.create<mlir::LLVM::CallOp>(
-                      loc, release, mlir::ValueRange{data});
-                  return;
-                }
-              }
-              auto unregister = ensure_runtime_fn(
-                  module_, builder_, "nrq_gc_root_unregister",
-                  mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
-              builder_.create<mlir::LLVM::CallOp>(loc, unregister,
-                                                   mlir::ValueRange{data});
-              auto release = ensure_runtime_fn(
-                  module_, builder_, "nrq_memory_deallocate_checked",
-                  mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
-              builder_.create<mlir::LLVM::CallOp>(loc, release,
-                                                   mlir::ValueRange{data});
-              return;
-            }
-            if (type.is_owned_array()) {
-              mlir::Value descriptor = builder_.create<mlir::LLVM::ExtractValueOp>(
-                  loc, aggregate, builder_.getDenseI64ArrayAttr(path)).getResult();
-              mlir::Value data = builder_.create<mlir::LLVM::ExtractValueOp>(
-                  loc, descriptor, builder_.getDenseI64ArrayAttr({0})).getResult();
-              auto unregister = ensure_runtime_fn(
-                  module_, builder_, "nrq_gc_root_unregister",
-                  mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
-              builder_.create<mlir::LLVM::CallOp>(
-                  loc, unregister, mlir::ValueRange{data});
-              auto release = ensure_runtime_fn(
-                  module_, builder_, "nrq_memory_deallocate_checked",
-                  mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
-              builder_.create<mlir::LLVM::CallOp>(loc, release,
-                                                   mlir::ValueRange{data});
-              return;
-            }
-            auto visit = [&](const Type& field_type, int64_t index) {
-              path.push_back(index);
-              if (field_type.is_owned_array() || field_type.is_owned_pointer() ||
-                  field_type.is_shared_pointer() || field_type.is_array() ||
-                  field_type.is_struct() || field_type.is_tuple())
-                drop_fields(field_type, aggregate, path);
-              path.pop_back();
-            };
-            // Fields are destroyed in reverse declaration order, matching the LIFO
-            // discipline used for scopes and parameters.
-            if (type.is_array()) {
-              for (std::size_t index = type.array_length(); index-- > 0;)
-                visit(type.element_type(), static_cast<int64_t>(index));
-            } else if (type.is_struct()) {
-              for (std::size_t index = type.struct_fields().size(); index-- > 0;)
-                visit(type.struct_fields()[index].second, static_cast<int64_t>(index));
-            } else if (type.is_tuple()) {
-              for (std::size_t index = type.tuple_elements().size(); index-- > 0;)
-                visit(type.tuple_elements()[index], static_cast<int64_t>(index));
-            }
-          };
           llvm::SmallVector<int64_t, 8> path;
-          drop_fields(op.arguments[0].type, args[0], path);
+          drop_aggregate_fields(op.arguments[0].type, args[0], path, loc);
           return true;
         }
 
         // Copying an aggregate retains every shared pointer field it carries.
         if (op.callee == "aggregate.shared_retain" && args.size() == 1) {
-          std::function<void(const Type&, mlir::Value,
-                             llvm::SmallVector<int64_t, 8>&)> retain_fields;
-          retain_fields = [&](const Type& type, mlir::Value aggregate,
-                              llvm::SmallVector<int64_t, 8>& path) {
-            if (type.is_shared_pointer()) {
-              mlir::Value data = builder_.create<mlir::LLVM::ExtractValueOp>(
-                  loc, aggregate, builder_.getDenseI64ArrayAttr(path)).getResult();
-              auto retain = ensure_runtime_fn(
-                  module_, builder_, "nrq_memory_shared_retain",
-                  llvm_ptr_type(ctx_), {llvm_ptr_type(ctx_)});
-              builder_.create<mlir::LLVM::CallOp>(loc, retain,
-                                                   mlir::ValueRange{data});
-              return;
-            }
-            auto visit = [&](const Type& field_type, int64_t index) {
-              path.push_back(index);
-              if (field_type.is_shared_pointer() || field_type.is_array() ||
-                  field_type.is_struct() || field_type.is_tuple())
-                retain_fields(field_type, aggregate, path);
-              path.pop_back();
-            };
-            if (type.is_array()) {
-              for (std::size_t index = 0; index < type.array_length(); ++index)
-                visit(type.element_type(), static_cast<int64_t>(index));
-            } else if (type.is_struct()) {
-              for (std::size_t index = 0; index < type.struct_fields().size(); ++index)
-                visit(type.struct_fields()[index].second, static_cast<int64_t>(index));
-            } else if (type.is_tuple()) {
-              for (std::size_t index = 0; index < type.tuple_elements().size(); ++index)
-                visit(type.tuple_elements()[index], static_cast<int64_t>(index));
-            }
-          };
           llvm::SmallVector<int64_t, 8> path;
-          retain_fields(op.arguments[0].type, args[0], path);
+          retain_aggregate_fields(op.arguments[0].type, args[0], path, loc);
           return true;
         }
 
