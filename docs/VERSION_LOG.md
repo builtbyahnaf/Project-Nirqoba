@@ -19,7 +19,27 @@ recorded below is made under that authority.
 > `0.495-beta`. Only the newest entry carries the working-build label; older
 > `(released)` entries are actual published checkpoints.
 
-## Version 0.499-beta (working build)
+## Version 0.501-beta (working build)
+
+### Summary of Changes (since `0.499-beta`):
+
+*Pre-MMM Phase 8; `0.457-beta` remains the released `n-1` checkpoint.*
+
+- **Collector arrays reject deterministic owners.** `array.allocate<T>` now
+  rejects a payload containing an owned pointer, owned array, SoA, shared token,
+  borrowed field or array view. Collector storage has no finalizer, so those
+  contracts cannot be honoured; managed references remain supported and traced.
+- **Explicit storage rejects deterministic owners.** `memory.allocate<T>`,
+  `memory.reallocate<T>` and `memory.secure_allocate<T>` reject the same
+  payloads because their release paths free raw bytes without field
+  destruction. Managed-only payloads remain available.
+- **Tests:** 259 unit tests and 485 integration tests pass, including the new
+  positive managed-payload case and the rejected shared/borrowed/owned cases.
+- **Still deferred:** bounded release of process-lifetime `file.read_text`
+  buffers; crash-safe publication; busy-registry termination cleanup;
+  synchronous reclamation of collector-owned SoA storage.
+
+## Version 0.499-beta
 
 ### Summary of Changes (since `0.495-beta`):
 
