@@ -12,9 +12,9 @@
 |---|---|
 | Project | Nirqoba |
 | Current Working Version | `0.511-beta` |
-| Development Stage | `Phase 8` |
-| Last Report Update | `2026-11-15 05:30:00` |
-| Report Entries | `27` |
+| Development Stage | `Memory Model Migration — Phase 0` |
+| Last Report Update | `2026-11-15 06:30:00` |
+| Report Entries | `28` |
 
 ---
 
@@ -3264,6 +3264,127 @@ benchmark do not count as implementation upgrades.
 ---
 
 **End of Entry #027**
+
+---
+
+## Entry #028 — Memory Model Migration Phase 0: Architecture Audit and Design Freeze
+
+**Version:** `0.511-beta` (no bump; audit/design only)  
+**Date:** `2026-11-15 06:30:00`  
+**Scope:** `Memory Model Migration / Phase 0 / Architecture audit / Traceability / Design freeze`  
+**Status:** `Completed`
+
+### 1. Overview
+
+Phase 0 of the dedicated Memory Model Migration Plan audited the actual compiler,
+runtime, tests, documentation and generated artifacts against the six target memory
+strategies. The audit confirms that Pre-MMM completed a large part of the model and
+identifies what is genuinely missing before Phase 1.
+
+The working tree was `0.511-beta` at `d4292aa`; the unit suite passed 258/258 and the
+integration suite 489/489. The 78 pre-existing dirty files under
+`benchmarks/stress_test_2/*` were left untouched. No version bump, release or push
+was made.
+
+### 2. Traceability result
+
+The audit classifies 81 requirements:
+
+| Status | Count |
+|---|---:|
+| Complete | 50 |
+| Partial | 13 |
+| Missing | 13 |
+| Blocked | 2 |
+| Not applicable | 3 |
+
+Complete areas include deterministic owned pointers/arrays, aggregate moves and
+destruction, partial initialization, early-exit cleanup, path-sensitive borrowing,
+shared reference counting, typed GC roots/barriers/safepoints and allocator
+strategies. Missing or partial areas are concentrated in GC isolation, TIR
+verification, arena object semantics, secure managed rooting, strings, weak
+references, FFI, threads and exception cleanup.
+
+### 3. Critical findings
+
+1. **Owned-only release calls the collector.** Owned aggregate drop and owned-array
+   release emit `nrq_gc_root_unregister` even when the released type has no managed
+   references. The runtime takes the GC heap lock for the unknown slot. Generated
+   LLVM and object relocations confirm the call; a scalar-only executable is 20,480
+   bytes versus 64,512 bytes for the owned-aggregate program. This violates the
+   migration's non-GC hot-path requirement and Gate C.
+2. **TIR ownership is unverified.** `ValueOwnership` is attached to TIR values and
+   parameters, but `verify_tir_module` checks only structure and types. Destruction
+   is represented as string-named generic calls, not first-class ownership
+   operations. Sema currently supplies the safety; a new pass could violate it.
+3. **Secure managed payloads are not generally rooted.** `memory.secure_allocate`
+   has no rooted allocation path. The Phase 8 positive test survives because the
+   managed allocation result remains in a local root slot, not because the secure
+   payload is registered. Phase 1 should reject managed fields in secure storage
+   until a rooted path exists.
+4. **Arena semantics are allocator-only.** Reset/destroy refuse while live
+   allocations exist; there is no scoped arena type, bulk object destruction or
+   escape validation.
+5. **No exception/panic cleanup.** `nrq_runtime_fatal` terminates the process
+   without unwinding; no phase may claim exception-safe destruction yet.
+6. **Strings remain process-lifetime borrowed storage.** The deterministic model
+   has an explicit string exception until an owned string is designed.
+
+### 4. Design freeze
+
+The new `reports/memory-model/target-architecture.md` freezes 15 invariants,
+including:
+
+- deterministic ownership is the default and owns exactly one release obligation;
+- borrowing is non-owning and source-bound;
+- a storage boundary rejects release it cannot run;
+- GC is precise, opt-in and never an ownership fallback;
+- owned-only execution contains no GC roots, frames, safepoints, barriers, locks or
+  allocation;
+- TIR must represent and verify ownership transfer, destruction and borrows;
+- arenas, shared ownership, manual memory and failure paths have explicit limits.
+
+It also resolves the immediate ambiguities: secure managed payloads are rejected
+until rooted; strings keep their process-lifetime contract as documented debt; SoA
+reclamation stays asynchronous; bulk containers keep the Phase 8 rejection policy;
+weak references wait for a concrete need; FFI/threads/async are out of Phase 1.
+
+### 5. Phase 1 entry criteria
+
+Phase 1 starts only after:
+
+1. the frozen architecture is accepted;
+2. an owned-only IR regression asserts no `nrq_gc_*` calls at `-O0` and `-O2`,
+   including aggregate/array release, and the unconditional unregister is fixed or
+   explicitly tracked as a failing prerequisite;
+3. secure managed payloads are rejected (or a rooted secure path is implemented);
+4. the TIR ownership/destruction/borrow contract and verifier rules are specified;
+5. the exception/panic policy is documented without claiming unwind cleanup;
+6. the 258/489 baseline is recorded for compatibility;
+7. no new syntax is introduced.
+
+### 6. Verification
+
+- Full unit suite: 258/258 PASS.
+- Full integration suite: 489/489 PASS.
+- Generated LLVM/object inspection for scalar, owned pointer, owned array,
+  borrowed view, shared scalar, owned aggregate and secure managed programs.
+- No sanitizer run; MSVC toolchain limitation remains.
+- No language thread/FFI/async tests; those subsystems do not exist.
+
+### 7. Agent Assessment
+
+- **Phase 0 completeness:** Complete; audit and design freeze are evidence-backed.
+- **Migration readiness:** Ready for Phase 1 only after the GC-isolation gate and
+  secure-payload decision; otherwise the ownership IR would encode a false
+  non-GC contract.
+- **Implementation:** None in this entry; no version bump.
+- **Next step:** Phase 1 ownership representation, preceded by the owned-only GC
+  regression/fix.
+
+---
+
+**End of Entry #028**
 
 <!-- REPORT ENTRIES END -->
 

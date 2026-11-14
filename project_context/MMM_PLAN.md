@@ -4,7 +4,9 @@
 **Project:** Nirqoba  
 **Milestone:** Pre-PO-28 — Memory Model Migration  
 **Priority:** Critical architectural migration  
-**Status:** Implementation specification  
+**Status:** Phase 0 complete at `0.511-beta`; target architecture frozen in  
+`reports/memory-model/target-architecture.md` and audited in  
+`reports/memory-model/migration-audit.md`. Phase 1 has not started.  
 **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
 **Primary objective:** Establish deterministic ownership as Nirqoba's default memory-management model, with borrowing, arenas, explicit shared ownership, selective garbage collection, and advanced manual memory management as complementary mechanisms.
 
