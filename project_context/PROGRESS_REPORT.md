@@ -12,9 +12,9 @@
 |---|---|
 | Project | Nirqoba |
 | Current Working Version | `0.511-beta` |
-| Development Stage | `Phase 7` |
-| Last Report Update | `2026-11-15 04:30:00` |
-| Report Entries | `26` |
+| Development Stage | `Phase 8` |
+| Last Report Update | `2026-11-15 05:30:00` |
+| Report Entries | `27` |
 
 ---
 
@@ -3163,6 +3163,107 @@ labels. Only `0.499-beta` has the working-build label.
 ---
 
 **End of Entry #026**
+
+---
+
+## Entry #027 — Phase 8 Migration Readiness and Default-Policy Transition
+
+**Version:** `0.511-beta`  
+**Date:** `2026-11-15 05:30:00`  
+**Scope:** `Phase 8 / Default ownership policy / Storage boundaries / Legacy removal / Migration notes`  
+**Status:** `Completed`
+
+### 1. Overview
+
+Phase 8 audited the completed ownership surface and made the hybrid memory model
+consistent. The baseline `0.499-beta` accepted deterministic payloads in storage
+whose release path could not run their field destructors: collector arrays, explicit
+and resized allocations, secure storage, shared allocations, owned arrays and SoA
+columns. Those combinations now fail at compile time. Managed references remain
+supported and traced, and the collector remains opt-in.
+
+The audit also found a parser gap for nested generic closers and two legacy source
+builtins that bypassed the typed/namespaced policy. Both were resolved. No correct
+subsystem was redesigned, and no new language feature was added.
+
+### 2. Implementation
+
+- `TypeChecker::requires_deterministic_cleanup` recursively classifies owned
+  pointers, owned arrays, SoA, shared tokens, array views, borrowed fields and
+  managed-containing payloads.
+- Collector arrays now reject payloads with deterministic fields.
+- `memory.allocate`, `memory.reallocate` and `memory.secure_allocate` reject
+  deterministic owners; managed-only payloads remain available.
+- `memory.shared_allocate` rejects deterministic owners.
+- `memory.owned_array` and `memory.owned_array_aligned` reject shared/borrowed
+  elements.
+- `memory.owned_soa` rejects shared/borrowed columns.
+- The parser splits `>>` in type context so `owned_array<managed<T>>` works.
+- `nrq_memory_allocate`, `nrq_memory_deallocate`, `nrq_gc_init`,
+  `nrq_gc_shutdown` and `nrq_gc_collect` are no longer declared as source builtins.
+
+### 3. Validation
+
+Final clean `RelWithDebInfo` build: 177/177 targets, runtime parity 104 checks.
+
+| Suite | Result |
+|---|---|
+| Unit | 258/258 PASS |
+| Integration | 489/489 PASS |
+| `examples/memory/hybrid_memory.nrqba` | outputs 5, 2, 7, 3 |
+| `examples/memory/cyclic_graph.nrqba` | outputs 22, 11 |
+
+Integration grew from 474 to 489: three positive cases (GC managed payload,
+nested generic managed payload, secure managed payload) and twelve negative cases.
+The unit count is one lower because the two legacy GC control tests were merged
+into the namespaced control test. The pre-existing Phase 4 GC stress flake
+reproduced once in an intermediate run and passed on the clean run; it remains
+separate from Phase 8.
+
+### 4. Benchmark
+
+`benchmarks/pre_mmm_phase8/`, baseline `c0ddcfd` (`0.499-beta`), seven alternating
+builds of 400 allocation sites with managed-bearing payloads:
+
+| Measurement | Baseline | Phase 8 | Change |
+|---|---:|---:|---:|
+| Compiler wall | 287.989 ms | 287.472 ms | **-0.18%** |
+| Compiler peak RSS | 53,813,248 B | 53,653,504 B | -0.30% |
+| Object size | 32,319 B | 32,319 B | identical |
+| Executable size | 146,944 B | 146,944 B | identical |
+
+The result is neutral and within spread; no speedup is claimed. The checks are
+compile-time only and add no runtime metadata.
+
+### 5. Version history
+
+`0.501-beta` covers collector and explicit storage; `0.505-beta` covers shared
+allocations and owned arrays; `0.508-beta` covers SoA and nested generics; and
+`0.511-beta` covers the two legacy removals. Documentation, migration notes and the
+benchmark do not count as implementation upgrades.
+
+### 6. Remaining limitations
+
+1. `file.read_text` buffers remain process-lifetime.
+2. No crash journal for multi-artifact publication.
+3. `system.exit` abandons busy registries to OS teardown.
+4. SoA storage is reclaimed asynchronously by sweep, not synchronously.
+5. Bulk containers have no per-element finalizers; arrays of shared or owned-field
+   aggregates remain an explicit rejected pattern.
+6. No sanitizer run is available with the MSVC toolchain.
+7. The Phase 4 GC stress flake remains separate.
+
+### 7. Agent Assessment
+
+- **Implementation completeness:** Complete for the audited supported surface.
+- **Verification confidence:** High; full clean suites and focused positive/negative
+  cases cover every new rejection boundary.
+- **Performance:** Neutral.
+- **Next step:** Phase 9, with the four hardening items above scheduled separately.
+
+---
+
+**End of Entry #027**
 
 <!-- REPORT ENTRIES END -->
 
