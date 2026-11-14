@@ -12,6 +12,43 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.483-beta (working build)
+
+### Summary of Changes (since `0.477-beta`):
+
+*Pre-MMM Phase 7 runtime-buffer and native-resource migrations; `0.457-beta`
+remains the released `n-1` checkpoint.*
+
+- **Runtime strings have one owner.** `file.read_text` allocates escaping
+  strings from a process-lifetime arena; `nrq_runtime_shutdown` releases every
+  block after the entry function returns. The language still has no per-string
+  destruction contract, so buffers remain valid until that boundary.
+- **The argument bridge no longer allocates.** The CRT argv pointers are already
+  process-lifetime, so the runtime refreshes one static `NrqStringArray` instead
+  of a heap descriptor per program.
+- **Shutdown is emitted for every `main` return.** Early returns and the
+  argument wrapper's callee are covered, not only the wrapper. `system.exit`
+  remains process-teardown-only and is documented as such.
+- **Pipe output no longer deadlocks.** Shutdown stopped calling
+  `FlushFileBuffers` on stdout: output is unbuffered, and flushing an anonymous
+  pipe blocks until the parent drains it.
+- **Live native resources are released at shutdown.** File, mapping and mutex
+  registries are cleared and their handles closed; stale tokens no longer
+  resolve after the registry is cleared.
+- **File handles use a slot table.** A token carries a slot index and
+  generation, removing one map-node allocation per open and rejecting stale
+  tokens after slot reuse.
+- **Benchmark:** repeated 4 KiB reads (20,000): wall -1.35%, peak RSS -2.22%.
+  File open/close (100,000): wall -2.04%, peak RSS +0.21% (one page, noise).
+  Argument allocation removal and shutdown cleanup are correctness changes and
+  are not claimed as speedups.
+- **Validation:** 249 unit tests and 464 integration tests pass. No ASan/UBSan
+  run is available in the MSVC configuration; the pre-existing Phase 4 GC stress
+  flake remains separate.
+- **Still deferred:** container/aggregate internals; async/task resources (no
+  runtime); tensor/device buffers (no subsystem); collector pages and allocator
+  shards.
+
 ## Version 0.477-beta (working build)
 
 ### Summary of Changes (since `0.473-beta`):
