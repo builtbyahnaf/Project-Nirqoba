@@ -1,0 +1,26 @@
+struct Node {
+    int value;
+}
+
+struct Payload {
+    int tag;
+    managed<Node> node;
+}
+
+int function main() {
+    var payload = memory.secure_allocate<Payload>(64);
+    (*payload).tag = 1;
+    (*payload).node = array.allocate<Node>(1);
+    (*payload).node[0].value = 42;
+
+    var i = 0;
+    while (i < 2000) {
+        var junk = array.allocate<Node>(16);
+        junk[0].value = i;
+        i += 1;
+    }
+
+    gc.collect();
+    print((*payload).node[0].value);
+    return 0;
+}
