@@ -607,6 +607,64 @@ int function main(string[] args) {
   ASSERT_EQ(mask_operations, 0u);
   ASSERT_EQ(guarded_poll_blocks, 1u);
 }
+
+// A SoA value used as an aggregate initializer still performs a rooted
+// allocation. The root frame and slot registration must be emitted even though
+// the container is immediately packed into another value and no collection
+// follows, because the runtime validates the slot at allocation time. Aggregate
+// destruction must unregister that same field root.
+TEST(MlirPipelineTest, RootsSoaAggregateFieldAndReleasesItOnDrop) {
+  constexpr const char* source = R"nrqba(
+struct Point {
+    int x;
+    int y;
+}
+
+struct Holder {
+    soa<Point> rows;
+    int tag;
+}
+
+int function main() {
+    var holder = Holder { rows: memory.owned_soa<Point>(2), tag: 1 };
+    holder.rows[0].x = 3;
+    print(holder.rows[0].x + holder.tag);
+    return 0;
+}
+)nrqba";
+
+  mlir::DialectRegistry registry;
+  nirq::register_all_dialects(registry);
+  mlir::MLIRContext context(registry);
+  context.loadAllAvailableDialects();
+  nirq::DiagnosticEngine diagnostics;
+
+  auto module = lower_source_to_mlir(source, context, diagnostics);
+  ASSERT_FALSE(diagnostics.has_errors());
+  ASSERT_TRUE(static_cast<bool>(module));
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*module)));
+
+  unsigned frame_begins = 0;
+  unsigned registrations = 0;
+  unsigned allocations = 0;
+  unsigned unregistrations = 0;
+  module->walk([&](mlir::func::FuncOp function) {
+    function.walk([&](mlir::LLVM::CallOp call) {
+      const auto callee = call.getCallee();
+      if (!callee) return;
+      if (callee->str() == "nrq_gc_root_frame_begin") ++frame_begins;
+      if (callee->str() == "nrq_gc_root_register_typed") ++registrations;
+      if (callee->str() == "nrq_gc_allocate_array_typed_rooted") ++allocations;
+      if (callee->str() == "nrq_gc_root_unregister") ++unregistrations;
+    });
+  });
+
+  ASSERT_EQ(frame_begins, 1u);
+  ASSERT_EQ(registrations, 1u);
+  ASSERT_EQ(allocations, 1u);
+  ASSERT_TRUE(unregistrations >= 1u);
+}
+
 constexpr const char* kConfigurationProbe = R"nrqba(
 int function main() {
     print(1);
