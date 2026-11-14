@@ -106,6 +106,58 @@ TEST(TemporaryArtifactTest, PublishWithoutStagedFileLeavesTheOldArtifact) {
   ASSERT_EQ(read_text(final_path), std::string("old"));
 }
 
+TEST(TemporaryDirectoryTest, PublishesACompleteTreeOverAnEmptyTarget) {
+  TestDirectory directory;
+  const fs::path final_path = directory.path() / "project";
+  fs::create_directories(final_path);
+
+  TemporaryDirectory staging(
+      TemporaryDirectory::make_staged_path(final_path), final_path);
+  ASSERT_TRUE(staging.create());
+  fs::create_directories(staging.staged_path() / "src");
+  write_text(staging.staged_path() / "src" / "main.nrqba", "main");
+  const fs::path staged = staging.staged_path();
+
+  ASSERT_TRUE(staging.publish());
+  ASSERT_FALSE(staging.owns_staged_directory());
+  ASSERT_FALSE(fs::exists(staged));
+  ASSERT_EQ(read_text(final_path / "src" / "main.nrqba"), std::string("main"));
+}
+
+TEST(TemporaryDirectoryTest, RefusesANonEmptyTargetAndRemovesStaging) {
+  TestDirectory directory;
+  const fs::path final_path = directory.path() / "project";
+  write_text(final_path, "existing");
+
+  TemporaryDirectory staging(
+      TemporaryDirectory::make_staged_path(final_path), final_path);
+  ASSERT_TRUE(staging.create());
+  write_text(staging.staged_path() / "README.md", "new");
+  const fs::path staged = staging.staged_path();
+
+  ASSERT_FALSE(staging.publish());
+  ASSERT_TRUE(staging.owns_staged_directory());
+  staging.discard();
+  ASSERT_FALSE(fs::exists(staged));
+  ASSERT_EQ(read_text(final_path), std::string("existing"));
+}
+
+TEST(TemporaryDirectoryTest, MoveTransfersDirectoryCleanup) {
+  TestDirectory directory;
+  const fs::path final_path = directory.path() / "project";
+  TemporaryDirectory source(
+      TemporaryDirectory::make_staged_path(final_path), final_path);
+  ASSERT_TRUE(source.create());
+  const fs::path staged = source.staged_path();
+
+  TemporaryDirectory moved(std::move(source));
+  ASSERT_FALSE(source.owns_staged_directory());
+  ASSERT_TRUE(moved.owns_staged_directory());
+  ASSERT_TRUE(fs::exists(staged));
+  moved.discard();
+  ASSERT_FALSE(fs::exists(staged));
+}
+
 TEST(TemporaryArtifactTest, StagedNamesAreUniqueSiblings) {
   TestDirectory directory;
   const fs::path final_path = directory.path() / "program.exe";
