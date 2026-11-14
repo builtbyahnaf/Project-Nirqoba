@@ -365,9 +365,9 @@ For each subsystem:
 - [ ] Benchmark the migrated subsystem.
 - [ ] Keep a rollback point until the new implementation is stable.
 
-### Compiler-owned temporary resources — first eligible subsystem
+### Compiler-owned temporary resources — roadmap 1
 
-Completed at `0.477-beta` (`reports/pre-mmm/phase-07.md`):
+Completed at `0.477-beta`, retained through `0.483-beta` (`reports/pre-mmm/phase-07.md`):
 
 - [x] Move compiler-generated artifacts onto the deterministic ownership path. Build objects and executables are staged through move-only `TemporaryArtifact` leases and published only after success; `run` removes its executable and object unless `--keep-artifacts` is given.
 - [x] Preserve external build behavior. A successful `build` still produces the same object and executable paths; the `hello` executable is byte-identical to `0.473-beta`.
@@ -376,14 +376,36 @@ Completed at `0.477-beta` (`reports/pre-mmm/phase-07.md`):
 - [x] Keep a rollback point. Commit `ae26bc1` is the `0.473-beta` baseline; it was checked out as a disposable worktree for measurement and removed after verification. `--keep-artifacts` restores the old `run` artifact behavior.
 - [x] Publish project scaffolds atomically. `TemporaryDirectory` writes the complete tree beside the target and renames it into place; failures leave no partial project.
 
-Remaining Phase 7 subsystems are **not started**: runtime-owned buffers and
-internal allocations, native-resource handling, container/aggregate internals,
-async resources, and tensor/device buffers. Runtime file-read strings remain on
-the documented GC/runtime fallback because they escape into the language as
-`string` and have no ownership contract yet.
+### Runtime-owned buffers and internal allocations — roadmap 2
 
-**Completion:** Partially complete at `0.477-beta`: the first subsystem boundary
-is migrated and documented; later subsystems retain their existing behavior.
+Completed at `0.483-beta` (`reports/pre-mmm/phase-07.md`):
+
+- [x] Move its internal resource management onto the established ownership path. The process argument descriptor is static storage, and every escaping `file.read_text` string is allocated from a process-lifetime arena released by `nrq_runtime_shutdown`.
+- [x] Preserve existing external behavior. Repeated reads return the same bytes and length; strings remain borrowed and valid until entry return.
+- [x] Remove obsolete internal GC dependencies only when no longer needed. None existed on this path; the runtime owns the arena directly.
+- [x] Benchmark the migrated subsystem. 20,000 repeated 4 KiB reads: -1.35% wall, -2.22% peak RSS; the change is directional, not a guaranteed speedup.
+- [x] Keep a rollback point. `30a6ae6` (`0.477-beta`) was built as a disposable worktree for measurement and removed after verification.
+- [x] Emit shutdown at every `main` return. Early returns and the argument-wrapper callee are covered; `system.exit` remains process-teardown-only.
+
+### File, mapping, mutex and other native resources — roadmap 3
+
+Completed at `0.483-beta` (`reports/pre-mmm/phase-07.md`):
+
+- [x] Move its internal resource management onto the established ownership path. Live file, mapping and mutex registries are cleared and their OS handles released at shutdown; explicit close remains the normal path.
+- [x] Preserve existing external behavior. Handle operations, mapping sizes and mutex semantics are unchanged; stale tokens are rejected after close or shutdown.
+- [x] Remove obsolete internal GC dependencies only when no longer needed. These registries never depended on the collector.
+- [x] Benchmark the migrated subsystem. 100,000 open/close round trips: -2.04% wall, peak RSS parity within one page.
+- [x] Keep a rollback point. The same `0.477-beta` baseline worktree covered this comparison.
+- [x] Replace per-open map nodes. File handles now use a generation-checked inline slot table.
+
+Remaining Phase 7 subsystems are **not started**: container/aggregate internals
+(roadmap 4). Async/task resources (roadmap 5) and tensor/device buffers
+(roadmap 6) have no subsystem in this tree, so they are not applicable yet.
+Collector pages and allocator shards remain outside this phase.
+
+**Completion:** Partially complete at `0.483-beta`: roadmap steps 1–3 are
+migrated and documented; containers and aggregates retain their existing
+behavior, and steps 5–6 have no implementation to migrate.
 
 ---
 
