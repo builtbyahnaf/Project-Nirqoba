@@ -29,16 +29,16 @@ the benchmark runner, not by the test suite.
 
 ## Commit accounting
 
-Part 3 adds **25 commits** after `70126a6`:
+Part 3 adds **26 commits** after `70126a6`, including this accounting correction:
 
-- 4 artifact-transaction implementation/test commits;
+- 2 artifact-transaction implementation/test commits;
 - 4 string-lifetime and `system.exit` implementation/test commits;
 - 3 aggregate-internal and shared-root commits;
 - 2 mutex registry commits;
 - 2 termination-cleanup commits;
 - 2 benchmark commits;
 - 2 release-version commits;
-- 6 documentation/validation commits.
+- 9 documentation/validation commits.
 
 No commit is pushed. `0.457-beta` remains the released `n-1` checkpoint.
 
