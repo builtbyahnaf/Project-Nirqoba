@@ -3180,9 +3180,10 @@ class FunctionTranslator {
         }
 
         if (op.callee == "aggregate.owned_drop" && args.size() == 1) {
-          std::function<void(const Type&, mlir::Value, std::vector<int64_t>&)> drop_fields;
+          std::function<void(const Type&, mlir::Value,
+                             llvm::SmallVector<int64_t, 8>&)> drop_fields;
           drop_fields = [&](const Type& type, mlir::Value aggregate,
-                            std::vector<int64_t>& path) {
+                            llvm::SmallVector<int64_t, 8>& path) {
             if (type.is_shared_pointer()) {
               mlir::Value data = builder_.create<mlir::LLVM::ExtractValueOp>(
                   loc, aggregate, builder_.getDenseI64ArrayAttr(path)).getResult();
@@ -3275,16 +3276,17 @@ class FunctionTranslator {
                 visit(type.tuple_elements()[index], static_cast<int64_t>(index));
             }
           };
-          std::vector<int64_t> path;
+          llvm::SmallVector<int64_t, 8> path;
           drop_fields(op.arguments[0].type, args[0], path);
           return true;
         }
 
         // Copying an aggregate retains every shared pointer field it carries.
         if (op.callee == "aggregate.shared_retain" && args.size() == 1) {
-          std::function<void(const Type&, mlir::Value, std::vector<int64_t>&)> retain_fields;
+          std::function<void(const Type&, mlir::Value,
+                             llvm::SmallVector<int64_t, 8>&)> retain_fields;
           retain_fields = [&](const Type& type, mlir::Value aggregate,
-                              std::vector<int64_t>& path) {
+                              llvm::SmallVector<int64_t, 8>& path) {
             if (type.is_shared_pointer()) {
               mlir::Value data = builder_.create<mlir::LLVM::ExtractValueOp>(
                   loc, aggregate, builder_.getDenseI64ArrayAttr(path)).getResult();
@@ -3313,7 +3315,7 @@ class FunctionTranslator {
                 visit(type.tuple_elements()[index], static_cast<int64_t>(index));
             }
           };
-          std::vector<int64_t> path;
+          llvm::SmallVector<int64_t, 8> path;
           retain_fields(op.arguments[0].type, args[0], path);
           return true;
         }
