@@ -30,6 +30,7 @@ add_executable(nirqoba_unit_tests
   unit/temporary_artifact_test.cpp
   unit/runtime_args_test.cpp
   unit/runtime_buffers_test.cpp
+  unit/runtime_shutdown_test.cpp
   unit/cli_test.cpp
   unit/optimization_test.cpp
   unit/target_test.cpp
