@@ -19,7 +19,37 @@ recorded below is made under that authority.
 > `0.495-beta`. Only the newest entry carries the working-build label; older
 > `(released)` entries are actual published checkpoints.
 
-## Version 0.511-beta (working build)
+## Version 0.515-beta (working build)
+
+### Summary of Changes (since `0.511-beta`):
+
+- **Owned-only release is collector-free.** Owned aggregate destruction, owned
+  array release, owned pointer deallocation, borrowed views and stack-promoted
+  arrays no longer emit `nrq_gc_root_unregister` when the payload contains no
+  managed reference. Managed payloads retain their register/unregister pair. The
+  call disappears at `-O0` and `-O2`, and from the owned-aggregate object's
+  undefined symbols.
+- **Secure storage rejects managed payloads.** `memory.secure_allocate<T>` now
+  rejects a managed field at any depth with `NRQ3015`, because secure release
+  zeroes bytes without a rooted registration. Plain secure payloads remain
+  supported and emit no collector calls. This is a deliberate compile-time
+  incompatibility for previously accepted, but unrooted, secure managed programs.
+- **TIR ownership is verified.** `verify_tir_module` now enforces ownership/type
+  compatibility, valid release families, single consumption, return and borrow
+  sources, callee parameter contracts and result-record consistency. Ownership is
+  still structural metadata; no move/drop syntax or new language syntax was added.
+- **Tests:** 269 unit tests and 500 integration tests pass. New fixtures cover
+  owned aggregate/array/pointer/view/stack GC isolation at `-O0` and `-O2`,
+  managed-root retention, direct and nested secure managed rejection, and malformed
+  TIR ownership states.
+- **Performance:** no runtime benchmark was run. At `-O2` the owned-aggregate
+  executable is 62,976 bytes against the Phase 0 audit's 64,512-byte baseline;
+  this is an artifact observation, not a throughput claim.
+- **Still deferred:** first-class TIR move/drop operations, path-sensitive
+  destruction proofs, arena object semantics, secure managed rooting, exception
+  cleanup, owned strings, weak references, FFI and thread ownership.
+
+## Version 0.511-beta
 
 ### Summary of Changes (since `0.508-beta`):
 
