@@ -1,0 +1,24 @@
+// Nested generic closers are part of the supported type surface. Both a
+// collector-managed array and an owned array can hold managed references, and
+// the collector must trace them across a collection.
+struct Node {
+    int value;
+}
+
+int function main() {
+    var cells = array.allocate<managed<Node>>(2);
+    cells[0] = array.allocate<Node>(1);
+    cells[0][0].value = 11;
+    cells[1] = array.allocate<Node>(1);
+    cells[1][0].value = 22;
+
+    var rows = memory.owned_array<managed<Node>>(2);
+    rows[0] = cells[0];
+    rows[1] = cells[1];
+
+    gc.collect();
+    gc.collect();
+    print(rows[0][0].value);
+    print(rows[1][0].value);
+    return 0;
+}

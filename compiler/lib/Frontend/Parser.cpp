@@ -1,6 +1,7 @@
 #include "nirqoba/Frontend/Parser.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <utility>
 
 namespace nirq {
@@ -86,6 +87,23 @@ Token Parser::advance() {
 }
 
 const Token& Parser::expect(TokenKind kind, string_view context) {
+  // A type nested in another generic can close with the lexer's single `>>`
+  // token, as in `owned_array<managed<T>>`. Type contexts are the only callers
+  // that expect a bare '>', so split the token here and leave the second half
+  // for the enclosing type. Shift expressions still use GreaterGreater as one
+  // operator because they never go through expect().
+  if (kind == TokenKind::Greater && check(TokenKind::GreaterGreater)) {
+    Token first = advance();
+    first.kind = TokenKind::Greater;
+    Token second = first;
+    second.location.offset += 1;
+    second.location.column += 1;
+    second.location.length = 1;
+    tokens_[position_ - 1] = first;
+    tokens_.insert(tokens_.begin() + static_cast<std::ptrdiff_t>(position_),
+                   second);
+    return tokens_[position_ - 1];
+  }
   if (check(kind)) return tokens_[position_++];
   error_at(peek(), diag::kExpectedToken,
            "expected '" + string(token_kind_name(kind)) + "' " + string(context) +
