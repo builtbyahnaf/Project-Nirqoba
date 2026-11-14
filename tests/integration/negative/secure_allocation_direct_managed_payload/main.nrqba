@@ -1,0 +1,8 @@
+struct Node {
+    int value;
+}
+
+int function main() {
+    var node = memory.secure_allocate<managed<Node>>(8);
+    return 0;
+}
