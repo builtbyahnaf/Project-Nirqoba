@@ -825,6 +825,17 @@ static bool collect_has_managed_reference(const Type& type) {
   return !offsets.empty();
 }
 
+// A release only has a collector root to remove when the released storage can
+// contain a managed reference. The payload is the pointee of an owned pointer or
+// the element type of an owned array; the container/pointer token itself is not a
+// GC root. SoA storage is collector-owned and always has a root.
+static bool release_payload_has_managed_reference(const Type& type) {
+  if (type.is_soa() || type.is_managed_pointer()) return true;
+  if (type.is_owned_pointer() || type.is_owned_array())
+    return collect_has_managed_reference(type.element_type());
+  return false;
+}
+
 static bool function_uses_gc(const tir::Function& function) {
   auto type_uses_gc = [](const Type& type) {
     if (collect_has_managed_reference(type)) return true;
@@ -1934,7 +1945,7 @@ class FunctionTranslator {
           return;
         }
       }
-      unregister_root(data);
+      if (release_payload_has_managed_reference(type)) unregister_root(data);
       auto release = ensure_runtime_fn(
           module_, builder_, "nrq_memory_deallocate_checked",
           mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
@@ -1945,7 +1956,7 @@ class FunctionTranslator {
     if (type.is_owned_array()) {
       mlir::Value descriptor = extract(aggregate, path);
       mlir::Value data = extract(descriptor, {0});
-      unregister_root(data);
+      if (release_payload_has_managed_reference(type)) unregister_root(data);
       auto release = ensure_runtime_fn(
           module_, builder_, "nrq_memory_deallocate_checked",
           mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
@@ -3316,11 +3327,13 @@ class FunctionTranslator {
         if (op.callee == "array.owned_release" && args.size() == 1) {
           mlir::Value data = builder_.create<mlir::LLVM::ExtractValueOp>(
               loc, args[0], builder_.getDenseI64ArrayAttr({0})).getResult();
-          auto unregister = ensure_runtime_fn(
-              module_, builder_, "nrq_gc_root_unregister",
-              mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
-          builder_.create<mlir::LLVM::CallOp>(
-              loc, unregister, mlir::ValueRange{data});
+          if (release_payload_has_managed_reference(op.arguments[0].type)) {
+            auto unregister = ensure_runtime_fn(
+                module_, builder_, "nrq_gc_root_unregister",
+                mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
+            builder_.create<mlir::LLVM::CallOp>(
+                loc, unregister, mlir::ValueRange{data});
+          }
           if (op.arguments.size() == 1 &&
               stack_allocations_.find(op.arguments[0].id) !=
                   stack_allocations_.end())
