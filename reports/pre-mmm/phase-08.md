@@ -35,7 +35,9 @@ guide is [`docs/migration/phase-8.md`](../../docs/migration/phase-8.md).
 Every rule is implemented in `TypeChecker::requires_deterministic_cleanup` and its
 allocation/container callers. The helper walks struct fields recursively, so a nested
 owned pointer, owned array, SoA, shared token, borrowed field, array view or managed
-payload is classified by its actual contents rather than by its outer spelling.
+payload is classified by its actual contents rather than by its outer spelling. Each
+rejection returns an error type, so checking stops instead of continuing with the
+payload the policy just rejected.
 
 ## 3. Rejected unsupported patterns
 
@@ -153,6 +155,7 @@ Implementation and milestones:
 - `8ea8734` release: bump to 0.505-beta after shared and bulk-array rules
 - `ddc5d9e` release: bump to 0.508-beta after SoA and nested-generic rules
 - `d518691` release: bump to 0.511-beta after removing legacy language builtins
+- `32e1ea7` compiler: poison rejected allocation payload types
 
 Tests, documentation, audit and benchmark:
 
