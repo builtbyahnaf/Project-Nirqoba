@@ -1,0 +1,10 @@
+{
+  "mode": "build_and_run",
+  "args": ["-O2"],
+  "expect_exit": 0,
+  "expect_stdout": "",
+  "expect_ir_counts": {
+    "call void @nrq_gc_root_unregister": 0,
+    "call void @nrq_memory_deallocate_checked": 2
+  }
+}
