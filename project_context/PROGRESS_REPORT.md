@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.477-beta` |
+| Current Working Version | `0.483-beta` |
 | Development Stage | `Phase 7` |
-| Last Report Update | `2026-11-14 05:40:00` |
-| Report Entries | `23` |
+| Last Report Update | `2026-11-14 20:30:00` |
+| Report Entries | `24` |
 
 ---
 
@@ -2859,6 +2859,117 @@ No runtime or generated-code speedup is claimed.
 ---
 
 **End of Entry #023**
+
+## Entry #024 — Phase 7 Runtime Buffers and Native Resources
+
+**Version:** `0.483-beta`  
+**Date:** `2026-11-14 20:30:00`  
+**Scope:** `Phase 7 / Runtime Buffers / Native Resources / Entry Shutdown`  
+**Status:** `Completed`
+
+### 1. Overview
+
+The second Phase 7 session migrated roadmap steps 2 and 3. Escaping runtime
+strings now have one process-lifetime arena owner, the argument bridge no longer
+allocates, and live file, mapping and mutex registries are released at entry
+return. File handles also moved from a per-open map node to a generation-checked
+slot table. Four implementation upgrades were made; the version moved from
+`0.477-beta` to `0.480-beta` after the two runtime-buffer upgrades and to
+`0.483-beta` after the native-resource pair.
+
+### 2. Implementation
+
+- **Static argument bridge.** `args_windows.cpp` refreshes one process-owned
+  `NrqStringArray`; the previous `HeapAlloc` descriptor is gone.
+- **Process string arena.** `runtime_buffers.cpp` serves `file.read_text`
+  buffers from 1 MiB mutex-protected blocks, with an oversized allocation
+  getting its own block. Release is idempotent and owns every block until
+  shutdown.
+- **Every `main` return retires buffers.** Lowering emits
+  `nrq_runtime_shutdown` before each `Return` in the entry function, including
+  early returns and the argument wrapper's callee. No-argument `main` was
+  previously uncovered.
+- **Pipe flush removed.** Shutdown no longer calls `FlushFileBuffers`; output is
+  unbuffered and flushing an anonymous pipe waits for the reader, deadlocking
+  piped runs.
+- **Native registry release.** File, mapping and mutex registries are detached
+  under their lock and their OS handles closed. Explicit close remains normal;
+  shutdown is the deterministic fallback for a live resource at return.
+- **File slot table.** Tokens carry a slot index and generation. Closing clears
+  the slot and reopening it increments the generation, so a stale token cannot
+  name a new resource. Lookup still returns a `shared_ptr`, preserving operation
+  lifetime after the registry lock is dropped.
+
+No language syntax, ownership rule, borrow rule, collector policy, or optimizer
+changed.
+
+### 3. Verification
+
+| Check | Result |
+|---|---|
+| Build (RelWithDebInfo) | PASS (`0.483-beta`) |
+| Unit suite | 249/249 |
+| Integration suite | 464/464 |
+| Static argument descriptor | PASS |
+| Repeated `file.read_text` | PASS |
+| Entry shutdown boundary | PASS, exactly 1 call |
+| Live file handle at shutdown | PASS, stale token rejected |
+| Live mapping at shutdown | PASS, unmapped |
+| Reused file slot | PASS, stale token rejected |
+
+New tests are `runtime_args_test`, `runtime_buffers_test`,
+`runtime_shutdown_test`, `positive/file_read_repeated` and
+`positive/runtime_shutdown_boundary`. The last one checks emitted IR, so losing
+the shutdown call fails even when stdout is unchanged.
+
+### 4. Benchmark
+
+`benchmarks/pre_mmm_phase7_runtime/`, baseline worktree at `30a6ae6`
+(`0.477-beta`), current `0.483-beta`, `RelWithDebInfo`, alternating run order.
+
+| Workload | Baseline | Current | Change |
+|---|---:|---:|---:|
+| 20,000 x 4 KiB reads, median wall | 1,059.59 ms | 1,045.33 ms | **-1.35%** |
+| Same, median peak RSS | 93,106,176 B | 91,041,792 B | **-2.22%** |
+| 100,000 open/close, median wall | 303.85 ms | 297.66 ms | **-2.04%** |
+| Same, median peak RSS | 9,752,576 B | 9,773,056 B | +0.21% |
+
+The read gain is close to run-to-run variation and is reported as directional,
+not a guaranteed speedup. The first 64 KiB arena layout measured +3.4% wall and
++3.4% RSS; switching to 1 MiB blocks recovered both. Argument allocation removal
+and shutdown cleanup are correctness changes and are not claimed as speedups.
+
+### 5. Limitations
+
+- `system.exit` does not return and therefore does not run deterministic
+  shutdown; process teardown remains the fallback on that path.
+- `file.read_text` strings remain borrowed and valid only until entry return.
+- The file slot vector can reallocate, but tokens are indices, not addresses.
+- Container/aggregate internals are untouched. Async/task and tensor/device
+  subsystems do not exist in this tree.
+- No ASan/UBSan run is available in the MSVC configuration; the Phase 4 GC
+  stress flake remains separate.
+
+### 6. Commits
+
+Sixteen runtime-session commits cover implementation, tests, benchmarks and the
+`0.480-beta` / `0.483-beta` bumps. The full list is in
+`reports/pre-mmm/phase-07.md`.
+
+### 7. Agent Assessment
+
+- **Implementation completeness:** Roadmap steps 1–3 migrated; step 4 not
+  started; steps 5–6 not applicable.
+- **Verification confidence:** High for early returns, repeated reads, pipe
+  output, native-resource shutdown and stale-token rejection.
+- **Performance:** Small measured gains in both runtime workloads; no speedup
+  is claimed for the correctness-only changes.
+- **Next step:** container and aggregate internals, or stop before roadmap 4
+  because their destruction and alias rules need their own design pass.
+
+---
+
+**End of Entry #024**
 
 <!-- REPORT ENTRIES END -->
 
