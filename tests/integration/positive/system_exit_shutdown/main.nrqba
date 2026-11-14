@@ -1,0 +1,6 @@
+int function main() {
+    print("before-exit");
+    system.exit(7);
+    print("after-exit");
+    return 0;
+}
