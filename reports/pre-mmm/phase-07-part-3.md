@@ -161,13 +161,16 @@ rename to fail.
 ## 8. Version history
 
 - `0.483-beta` — Part 2 baseline.
-- `0.491-beta` — four Part 3 upgrades recorded.
-- `0.495-beta` — two more upgrades recorded.
+- `0.484-beta` — retrospective milestone: artifact transaction and
+  process-lifetime strings; no release commit exists at this label.
+- `0.487-beta` — retrospective milestone: `system.exit` cleanup and inline
+  shared roots; no release commit exists at this label.
+- `0.491-beta` — aggregate drop/retain paths and the mutex slot table.
+- `0.495-beta` — best-effort termination cleanup (one implementation upgrade).
 
-The intended intermediate `0.487-beta` label after the first two upgrades was not
-committed. It is not fabricated retroactively. This is the second such process
-gap, after the missing `0.480-beta`; future milestone commits must be made at the
-upgrade boundary rather than after a batch.
+The version log now records each intermediate label separately and marks the
+retrospective entries. Part 4 (`0.499-beta`) supersedes the step-4 limitation
+below and completes the container audit.
 
 ## 9. Remaining limitations
 
@@ -175,8 +178,8 @@ upgrade boundary rather than after a batch.
    pair and backup files.
 2. Read-string memory is process-lifetime and not released before termination.
 3. `system.exit` skips busy registries instead of waiting.
-4. Aggregate/container step 4 is partial; no container ownership redesign was
-   attempted.
+4. Aggregate/container step 4 was partial at this checkpoint; Part 4
+   (`0.499-beta`) later completed the audit and fixed SoA aggregate fields.
 5. The socket runtime is deliberately unlinked from the runtime and is not an
    applicable migration in this phase.
 6. Async/task and tensor/device subsystems do not exist in this tree.
