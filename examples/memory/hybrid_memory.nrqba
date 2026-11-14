@@ -1,0 +1,45 @@
+// Deterministic ownership is the default; collector storage is explicit.
+struct Node {
+    int value;
+}
+
+struct Edge {
+    int tag;
+    managed<Node> target;
+}
+
+struct Holder {
+    owned ptr int data;
+    shared ptr int count;
+}
+
+int function main() {
+    // Collector storage: the payload is trivial apart from a managed reference.
+    var edges = array.allocate<Edge>(2);
+    edges[0].tag = 1;
+    edges[0].target = array.allocate<Node>(1);
+    edges[0].target[0].value = 7;
+
+    // Bulk owned storage accepts trivial payloads and frees them deterministically.
+    var values = memory.owned_array<int>(4);
+    values[0] = 3;
+
+    // A lexical aggregate owns its data and reference-counted count. The generated
+    // destruction releases both when the block or function exits.
+    {
+        var holder = Holder {
+            data: memory.allocate<int>(1),
+            count: memory.shared_allocate<int>(1)
+        };
+        *holder.data = 5;
+        *holder.count = 2;
+        print(*holder.data);
+        print(*holder.count);
+    }
+
+    // Collector storage is collected only when the program asks for it.
+    gc.collect();
+    print(edges[0].target[0].value);
+    print(values[0]);
+    return 0;
+}
