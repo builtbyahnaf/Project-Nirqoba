@@ -424,3 +424,24 @@ they claim to be. The first three implementation obligations are therefore:
 3. reject secure managed payloads until a rooted secure contract exists.
 
 Those are Phase 1 prerequisites, not Phase 1 scope creep.
+
+---
+
+## 11. Phase 9 prerequisite status
+
+`0.515-beta` closes the three prerequisites without changing this architecture:
+
+- **Owned-only release is collector-free.** Owned aggregate, array, pointer and view
+  release emit no `nrq_gc_root_unregister` when the payload has no managed reference.
+  Managed payloads retain their register/unregister pair. No source syntax changed.
+- **Secure managed payloads are rejected.** `memory.secure_allocate<T>` accepts only
+  payloads without managed references. There is still no rooted secure allocation
+  path, and secure managed rooting remains follow-up work.
+- **TIR has a verified structural ownership contract.** Value ownership is stored on
+  the function, and the verifier checks ownership/type compatibility, valid release
+  families, single consumption, return and borrow sources, callee parameter
+  contracts and result-record consistency.
+
+The contract is still structural and flow-insensitive. First-class move/drop TIR
+operations, release-on-all-paths proofs, arena object semantics, exception cleanup
+and the remaining language gaps are Phase 1 work. The migration has not started.
