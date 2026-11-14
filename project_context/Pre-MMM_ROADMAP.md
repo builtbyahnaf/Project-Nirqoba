@@ -431,15 +431,17 @@ documented hardening work, not unfinished container migrations.
 
 ### Implementation
 
-- [ ] Enable deterministic ownership by default for every completed supported type and operation.
-- [ ] Keep unsupported ownership patterns explicitly rejected rather than silently falling back.
-- [ ] Keep GC opt-in and available for supported cyclic/dynamic object graphs.
-- [ ] Remove obsolete legacy paths only after their replacements are proven.
-- [ ] Update language documentation and examples to reflect actual behavior.
-- [ ] Publish migration notes for users.
-- [ ] Run the full regression suite and representative performance suite.
+Complete at `0.511-beta` (`reports/pre-mmm/phase-08.md`):
 
-**Completion:** The supported language surface consistently follows the intended hybrid memory model.
+- [x] Enable deterministic ownership by default for every completed supported type and operation. Lexical structs keep owned/shared/borrowed/managed field contracts; deterministic cleanup, borrowing and typed GC roots are unchanged.
+- [x] Keep unsupported ownership patterns explicitly rejected rather than silently falling back. Collector arrays, explicit/reallocated/secure storage, shared allocations, owned arrays and SoA columns reject payloads whose release paths they cannot run.
+- [x] Keep GC opt-in and available for supported cyclic/dynamic object graphs. Automatic collection starts disabled; `array.allocate<T>` is explicit and `gc.enable()`/`gc.collect()` remain available.
+- [x] Remove obsolete legacy paths only after their replacements are proven. `nrq_memory_allocate`/`nrq_memory_deallocate` and `nrq_gc_init`/`nrq_gc_shutdown`/`nrq_gc_collect` are undeclared; typed and namespaced paths pass their suites.
+- [x] Update language documentation and examples to reflect actual behavior. `docs/memory/management.md`, README, readiness banner and two runnable examples now match the implementation.
+- [x] Publish migration notes for users. `docs/migration/phase-8.md` covers changed defaults, supported/rejected patterns, explicit GC usage and compatibility.
+- [x] Run the full regression suite and representative performance suite. Final clean build: 258 unit / 489 integration tests pass; 400-site compile benchmark is neutral (-0.18% wall, -0.30% RSS, identical artifacts).
+
+**Completion:** Complete at `0.511-beta`: the supported language surface consistently follows the hybrid memory model. Deterministic ownership is the default, unsupported storage boundaries reject their payloads instead of falling back, and the collector is reachable only through explicit managed allocation and GC controls.
 
 ---
 
