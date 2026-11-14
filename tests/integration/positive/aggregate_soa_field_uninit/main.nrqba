@@ -1,0 +1,22 @@
+// A SoA field can be initialized after `uninit`. The zeroed field is safe for
+// destruction before assignment, and the later assignment still takes the
+// normal rooted-allocation path.
+struct Point {
+    int x;
+    int y;
+}
+
+struct Holder {
+    soa<Point> rows;
+    int tag;
+}
+
+int function main() {
+    var holder: Holder = uninit;
+    holder.rows = memory.owned_soa<Point>(2);
+    holder.tag = 4;
+    holder.rows[0].x = 8;
+
+    print(holder.rows[0].x + holder.tag);
+    return 0;
+}
