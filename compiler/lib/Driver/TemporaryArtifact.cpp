@@ -79,15 +79,26 @@ bool TemporaryDirectory::publish() {
   if (!owns_staged_directory_) return false;
 
   error_code error;
+  bool removed_empty_target = false;
   if (fs::exists(final_path_, error)) {
     // The caller checked for a non-empty target before staging. Recheck here so
     // a concurrently created project cannot be replaced.
     if (!fs::is_empty(final_path_, error) || error) return false;
     if (!fs::remove(final_path_, error) || error) return false;
+    removed_empty_target = true;
   }
 
   fs::rename(staged_path_, final_path_, error);
-  if (error) return false;
+  if (error) {
+    // Windows cannot rename onto an existing directory. Recreate the empty
+    // target if the commit failed after removing it, so a failed publish does
+    // not erase what the caller already had.
+    if (removed_empty_target) {
+      error_code restore;
+      fs::create_directories(final_path_, restore);
+    }
+    return false;
+  }
 
   release();
   return true;
