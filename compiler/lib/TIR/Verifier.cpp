@@ -92,6 +92,9 @@ std::string function_value(const tir::Function& function, int id) {
 
 bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics) {
   bool ok = true;
+  std::unordered_map<std::string, const tir::Function*> functions;
+  for (const auto& function : module.functions())
+    functions.emplace(function->name(), function.get());
 
   for (const auto& function : module.functions()) {
     const auto& operations = function->operations();
@@ -221,6 +224,56 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
         check_value(argument, op.location, "argument");
       for (const tir::Value element : op.aggregate_elements)
         check_value(element, op.location, "aggregate element");
+
+      if (op.kind == tir::OpKind::Call) {
+        const auto callee = functions.find(op.callee);
+        if (callee != functions.end()) {
+          const auto& parameters = callee->second->parameters();
+          for (std::size_t index = 0;
+               index < op.arguments.size() && index < parameters.size();
+               ++index) {
+            const tir::Value& argument = op.arguments[index];
+            const tir::Function::Parameter& parameter = parameters[index];
+            if (!argument.is_valid() || argument.ownership == ValueOwnership::Trivial)
+              continue;
+            const bool argument_borrows = is_borrowed(argument.ownership);
+            const bool parameter_borrows = is_borrowed(parameter.ownership);
+            // An owning value may be borrowed implicitly for a borrowed
+            // parameter. The reverse is a move out of a borrow and is invalid.
+            if (!parameter_borrows && argument_borrows) {
+              diagnostics.error(kType, op.location,
+                                function_value(*function, argument.id) +
+                                    "borrowed value passed to owning parameter '" +
+                                    parameter.name + "' of '" + op.callee + "'");
+              ok = false;
+            }
+            if (parameter.ownership == ValueOwnership::MutableBorrowed &&
+                argument.ownership == ValueOwnership::Borrowed) {
+              diagnostics.error(kType, op.location,
+                                function_value(*function, argument.id) +
+                                    "immutable borrow passed to mutable parameter '" +
+                                    parameter.name + "' of '" + op.callee + "'");
+              ok = false;
+            }
+            if (parameter.ownership == ValueOwnership::Shared &&
+                argument.ownership != ValueOwnership::Shared) {
+              diagnostics.error(kType, op.location,
+                                function_value(*function, argument.id) +
+                                    "non-shared value passed to shared parameter '" +
+                                    parameter.name + "' of '" + op.callee + "'");
+              ok = false;
+            }
+            if (parameter.ownership == ValueOwnership::Owned &&
+                argument.ownership == ValueOwnership::Shared) {
+              diagnostics.error(kType, op.location,
+                                function_value(*function, argument.id) +
+                                    "shared value passed to owned parameter '" +
+                                    parameter.name + "' of '" + op.callee + "'");
+              ok = false;
+            }
+          }
+        }
+      }
 
       if (op.kind == tir::OpKind::Call && is_consuming_release(op.callee)) {
         for (const tir::Value argument : op.arguments) {
