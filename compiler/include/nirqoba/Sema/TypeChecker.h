@@ -160,6 +160,12 @@ class TypeChecker {
   bool requires_deterministic_cleanup(const Type& type) const;
   bool requires_deterministic_cleanup(
       const Type& type, std::unordered_set<std::string>& active) const;
+  // True when a type contains a managed reference that must stay reachable by
+  // the collector. Secure storage has no rooted allocation contract, so such
+  // payloads cannot be released there.
+  bool contains_managed_reference(const Type& type) const;
+  bool contains_managed_reference(
+      const Type& type, std::unordered_set<std::string>& active) const;
   const std::vector<BorrowTarget>& aggregate_borrows_for(const Expr& expr) const;
   void validate_aggregate_borrow_lifetime(const std::vector<BorrowTarget>& borrows,
                                           size_t target_depth,

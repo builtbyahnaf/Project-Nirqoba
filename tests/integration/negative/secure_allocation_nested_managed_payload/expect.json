@@ -1,0 +1,9 @@
+{
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": [
+    "NRQ3015",
+    "secure allocations cannot contain a managed field",
+    "secure release has no rooted managed-reference contract"
+  ]
+}

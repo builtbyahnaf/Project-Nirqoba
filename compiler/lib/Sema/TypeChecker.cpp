@@ -1769,6 +1769,44 @@ bool TypeChecker::requires_deterministic_cleanup(
   return false;
 }
 
+bool TypeChecker::contains_managed_reference(const Type& type) const {
+  std::unordered_set<std::string> active;
+  return contains_managed_reference(type, active);
+}
+
+bool TypeChecker::contains_managed_reference(
+    const Type& type, std::unordered_set<std::string>& active) const {
+  if (!type.is_valid()) return false;
+  if (type.is_managed_pointer() || type.is_soa()) return true;
+  if (type.is_array() || type.is_dynamic_array() || type.is_owned_array() ||
+      type.is_array_view())
+    return contains_managed_reference(type.element_type(), active);
+  if (type.is_tuple()) {
+    for (const Type& element : type.tuple_elements())
+      if (contains_managed_reference(element, active)) return true;
+  }
+  if (type.is_struct()) {
+    const std::string& name = type.struct_name();
+    if (!active.insert(name).second) return false;
+    const StructInfo* info = find_struct(name);
+    if (info) {
+      for (const Parameter& field : info->fields)
+        if (contains_managed_reference(field.type, active)) {
+          active.erase(name);
+          return true;
+        }
+    } else {
+      for (const auto& field : type.struct_fields())
+        if (contains_managed_reference(field.second, active)) {
+          active.erase(name);
+          return true;
+        }
+    }
+    active.erase(name);
+  }
+  return false;
+}
+
 const std::vector<BorrowTarget>& TypeChecker::aggregate_borrows_for(
     const Expr& expr) const {
   static const std::vector<BorrowTarget> empty;
@@ -4541,6 +4579,14 @@ Type TypeChecker::check_call(CallExpr& call) {
           diag::kTypeMismatch, call.location(),
           "secure allocations cannot contain '" + payload_type.to_string() +
               "': secure release frees the storage without running field destruction");
+      return Type::error();
+    }
+    if (contains_managed_reference(payload_type)) {
+      diagnostics_.error(
+          diag::kTypeMismatch, call.location(),
+          "secure allocations cannot contain a managed field in '" +
+              payload_type.to_string() +
+              "': secure release has no rooted managed-reference contract");
       return Type::error();
     }
     return Type::pointer_type(payload_type);

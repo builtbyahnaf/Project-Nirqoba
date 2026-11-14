@@ -1,0 +1,12 @@
+struct Header {
+    int tag;
+    int length;
+}
+
+int function main() {
+    var header = memory.secure_allocate<Header>(64);
+    (*header).tag = 7;
+    (*header).length = 11;
+    print((*header).tag + (*header).length);
+    return 0;
+}

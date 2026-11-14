@@ -1,0 +1,19 @@
+struct Node {
+    int value;
+}
+
+struct Payload {
+    int tag;
+    managed<Node> node;
+}
+
+struct Envelope {
+    Payload payload;
+    int sequence;
+}
+
+int function main() {
+    var envelope = memory.secure_allocate<Envelope>(128);
+    (*envelope).sequence = 1;
+    return 0;
+}
