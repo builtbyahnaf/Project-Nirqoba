@@ -351,6 +351,27 @@ GC root and deallocating. Every destructor accepts null, so untouched `uninit`
 slots and moved-out fields are safe. Nested aggregates recurse before the
 enclosing field is released; each handle is released once.
 
+## SoA fields in aggregates (0.499-beta)
+
+`soa<T>` is an owned container value, and may be a struct or tuple field. It is one
+GC object, so the field is one pointer word and the containing aggregate is move-only.
+Construction from `memory.owned_soa<T>(n)` registers an entry root slot before the
+allocation; this is required even when the value is consumed immediately by an
+aggregate initializer, because the runtime validates the root slot while the
+allocation is in flight.
+
+`aggregate.owned_drop` treats the field as a leaf: it unregisters the container root
+in reverse declaration order, recursing through arrays, tuples and nested structs.
+It does not free the collector payload. `soa.owned_release` has the same contract:
+the collector reclaims the object in a later sweep. `soa<T>` columns may contain
+managed references, which are traced through the strided `(offset, stride)` pairs;
+they may not contain owned arrays or array views. Array views cannot be stored in
+aggregates at all.
+
+The regression cases cover direct fields, tuple fields, a returned aggregate, a
+mixed SoA/shared aggregate, move and field reinitialization, and reclamation after
+the aggregate leaves scope.
+
 ## Borrow lifetime propagation (0.415-beta)
 
 A pointer borrow now records the binding it came from. `var p = &owner;` shares the
