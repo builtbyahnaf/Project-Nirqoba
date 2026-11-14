@@ -1,29 +1,34 @@
 # Pre-MMM Phase 7 — Incremental subsystem migration
 
-**Version:** `0.477-beta`  
+**Version:** `0.483-beta`  
 **Date:** `2026-11-14`  
-**Baseline:** `0.473-beta` (`ae26bc1`)  
-**Selected subsystem:** compiler-owned temporary resources (roadmap order 1)  
-**Scope:** deterministic lifetime for compiler-generated artifacts and project
-scaffolds; publication only after a producing stage succeeds.
+**Baseline:** `0.473-beta` (`ae26bc1`) for the compiler-artifact work; `0.477-beta` (`30a6ae6`) for the runtime work  
+**Selected subsystems:** compiler-owned temporaries (1), runtime-owned buffers
+(2), native resources (3)  
+**Scope:** deterministic lifetime for compiler artifacts, escaping runtime
+strings, and file/mapping/mutex registries. Publication only after a producing
+stage succeeds; shutdown only after the entry function returns.
 
 ## 1. Verdict
 
-The first roadmap subsystem is migrated for its **compiler-generated file and
-directory resources**. Two implementation upgrades were made:
+Three roadmap subsystems are migrated:
 
-1. Compiler output artifacts are move-only staging leases. Builds publish an
-   object and executable only after their producing stages succeed; `run`
+1. **Compiler-generated files and directories.** Build outputs are move-only
+   staging leases published only after their producing stage succeeds; `run`
    removes the executable and object it created unless `--keep-artifacts` is
-   requested.
-2. `nirqoba new` writes into a move-only staging directory and renames the
-   complete project into place. A failed write or publish cannot leave a
-   partially scaffolded project visible.
+   requested; `nirqoba new` publishes a complete staging tree with one rename.
+2. **Runtime-owned strings.** The process argument descriptor no longer
+   allocates at all, and `file.read_text` allocates its escaping string from a
+   runtime-owned arena released exactly once by `nrq_runtime_shutdown`.
+3. **Native resources.** File, mapping and mutex registries are cleared and
+   their OS handles released at shutdown, so a live resource left at return is
+   not owned by process exit. File handles use a generation-checked slot table
+   instead of a per-open map node.
 
-This is not a language-level ownership migration. The compiler is a native
-process, so its internal resources use C++ lifetime ownership rather than the
-Nirqoba GC. No runtime collector, allocator, language syntax, cleanup rule or
-default memory policy changed.
+This is not a language-level ownership migration. The compiler and runtime are
+native processes; their internal resources use C++ lifetime ownership rather
+than the Nirqoba GC. No language syntax, ownership rule, cleanup ordering,
+collector policy, or default memory policy changed.
 
 ## 2. Why this subsystem, and what was not migrated
 
@@ -36,98 +41,130 @@ The roadmap orders Phase 7 as:
 5. async/task resources;
 6. tensor/device buffers.
 
-The compiler already owns its AST, TIR, MLIR and LLVM values through
-`unique_ptr`, `shared_ptr`, `OwningOpRef` and scope-bound containers. The
-remaining compiler-generated resources were files and directories written
-directly to final paths, plus build products that `run` never removed. Those are
-the first eligible boundary.
+The compiler already owns AST, TIR, MLIR and LLVM values through `unique_ptr`,
+`shared_ptr`, `OwningOpRef` and scope-bound containers. Its remaining generated
+resources were files written directly to final paths and build products `run`
+never removed. The runtime's remaining process-lifetime allocations were the
+argument bridge, escaping `string` buffers, and OS-resource registries. These
+were the next eligible boundaries.
 
-The following were deliberately **not** migrated:
+Deliberately **not** migrated:
 
-- **Runtime file-read buffers.** `nrq_file_read_text` returns a process-heap
-  buffer whose lifetime follows the returned string. The language has no
-  borrowing contract for that external buffer, so forcing deterministic release
-  would create a dangling string. It remains on the existing runtime/GC
-  fallback path and is documented as an unsupported ownership pattern.
-- **Process-lifetime argument descriptor.** It is one allocation created at
-  startup and has no per-operation owner; it is not a temporary resource.
 - **Collector pages and allocator shards.** They are a later subsystem and are
   intentionally untouched.
+- **Thread-local GC debug rings.** Their registry is leaked on purpose: a
+  thread-local destructor can run after namespace-scope statics are destroyed,
+  so making the registry a static owner would introduce a shutdown race. The
+  fixed site table remains the only heap object in that path.
+- **Containers and aggregates.** Their internals are roadmap step 4 and were not
+  touched in this phase.
+- **Async/task and tensor/device resources.** No concurrency runtime or tensor
+  subsystem exists in this tree, so there was nothing genuine to migrate.
 
-## 3. Upgrade 1 — artifact leases and ephemeral run outputs
+## 3. Compiler-owned temporaries (roadmap 1)
 
-### Before
+### Artifact leases
 
-`run_pipeline` wrote the COFF object and linker output directly to their final
-paths. `nirqoba run` then left both files behind, even though the executable was
-only needed for that run. A failed link could also leave a new object or
-executable beside an older successful build, making the output directory look
-valid when it was not.
+`TemporaryArtifact` is a move-only owner of a unique sibling staging file. The
+destructor removes a non-published staged file; `publish()` replaces the final
+path with one rename; moving transfers cleanup responsibility. `build` stages
+the COFF object and executable and publishes each only after its producing stage
+succeeds. A failed build cleans staging and keeps the previous successful
+artifacts. Publication failure is `NRQ5010`.
 
-### Implementation
+`run` executes the staged executable and removes the executable and object after
+every program exit. `--keep-artifacts` publishes both at their old paths.
 
-`TemporaryArtifact` is a move-only owner of a staging file:
+### Atomic scaffolds
 
-- the staged path is a unique sibling of the final path;
-- the destructor removes the staged file on every non-publishing exit;
-- `publish()` replaces the final path with one rename;
-- moving transfers cleanup responsibility and leaves the source empty;
-- `discard()` releases immediately.
+`TemporaryDirectory` writes `src/`, `lib/`, `README.md` and both source files in
+a unique sibling directory, refuses a non-empty target, and renames the complete
+tree into place. Every failure path removes staging.
 
-The driver stages the object and executable before invoking the pipeline. A
-successful `build` publishes the object and then the executable. A failed build
-returns before publication, so the previous artifacts remain and the new staged
-files are removed. `run` executes the staged executable and removes both staged
-files when the program exits unless `--keep-artifacts` is present.
+The build publishes two files sequentially, not as one filesystem transaction.
+If executable publication fails after object publication, the new object and the
+previous executable can coexist. This is an explicit limitation, not a claimed
+atomic pair.
 
-The Windows publication uses `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` without
-`MOVEFILE_WRITE_THROUGH`. Publication is an in-process atomicity boundary, not a
-crash-durability promise; the synchronous flush added a measured multi-
-millisecond cost to every build and was removed after the first benchmark run.
+## 4. Runtime-owned buffers (roadmap 2)
 
-### Test coverage
+### Upgrade 1 — static argument bridge
 
-- `TemporaryArtifactTest.DestructionRemovesOnlyTheStagedFile`
-- `TemporaryArtifactTest.MoveTransfersCleanupResponsibility`
-- `TemporaryArtifactTest.PublishReplacesTheFinalArtifact`
-- `TemporaryArtifactTest.PublishWithoutStagedFileLeavesTheOldArtifact`
-- `TemporaryArtifactTest.StagedNamesAreUniqueSiblings`
-- `CliTest.RunKeepsArtifactsOnlyWhenRequested`
-- `positive/run_artifact_cleanup` — `run` leaves no `.exe` or `.obj`
-- `positive/build_artifact_publication` — `build` publishes both files
-- `positive/hello` — `--keep-artifacts` preserves the object for the existing
-  COFF-header check
+`runtime/src/args_windows.cpp` previously built an `NrqStringArray` descriptor
+with `HeapAlloc` for every process. The CRT argv pointers already live for the
+process, so the bridge now refreshes one process-owned static descriptor. This
+removes the startup allocation and needs no shutdown hook.
 
-## 4. Upgrade 2 — atomic project scaffolding
+### Upgrade 2 — process string arena
 
-### Before
+`file.read_text` returns a borrowed `string` whose lifetime the language cannot
+express: there is no per-string destruction contract, and freeing it after the
+call would leave a dangling language string. The runtime therefore owns every
+escaping read buffer for the process.
 
-`nirqoba new` created `src/`, `lib/`, `README.md` and the two source files
-directly in the target. A write failure could leave a directory that looked like
-a project but was missing a file. A pre-existing empty directory was also used
-as the write target immediately.
+`runtime/src/runtime_buffers.cpp` is a mutex-protected bump arena:
 
-### Implementation
+- 1 MiB blocks serve ordinary strings; an allocation larger than a block gets
+  its own block;
+- allocation never moves earlier strings;
+- `release_process_strings()` frees every block and is idempotent;
+- the committed block size was raised from 64 KiB to 1 MiB after the first
+  benchmark showed 64 KiB blocks at +3.4% wall and +3.4% peak RSS. The 1 MiB
+  layout removes enough block-management and free overhead to recover both.
 
-`TemporaryDirectory` is the directory analogue of the artifact lease:
+`nrq_runtime_shutdown` releases the arena after the entry function's last
+statement. Lowering emits the call before **every** `tir::OpKind::Return` in the
+TIR function named `main`, including early returns and the argument wrapper's
+callee. Previously it was emitted only in the argument wrapper, so a no-argument
+`main` never retired anything.
 
-- `nirqoba new` creates a unique sibling staging directory;
-- all three files and both subdirectories are written there;
-- `publish()` refuses a non-empty target, removes an empty target at the commit
-  point, and renames the staging tree into place;
-- every failure path removes the staging tree in the destructor.
+`system.exit` does not return; that path still relies on process teardown. The
+report does not claim deterministic cleanup there.
 
-The success output and the three generated files are unchanged.
+### Pipe deadlock found by the benchmark
 
-### Test coverage
+The old `nrq_runtime_shutdown` flushed stdout with `FlushFileBuffers`. Output is
+written with unbuffered `WriteFile`, and flushing an anonymous pipe blocks until
+the reader drains it. A parent that waited for the process before reading stdout
+therefore deadlocked once shutdown became reachable. The flush was removed;
+shutdown now retires buffers only.
 
-- `TemporaryDirectoryTest.PublishesACompleteTreeOverAnEmptyTarget`
-- `TemporaryDirectoryTest.RefusesANonEmptyTargetAndRemovesStaging`
-- `TemporaryDirectoryTest.MoveTransfersDirectoryCleanup`
-- Manual `nirqoba new` against a missing directory, an existing empty directory
-  and a non-empty directory
+## 5. Native resources (roadmap 3)
 
-## 5. Boundary and fallback rules
+### Registry release at shutdown
+
+`nrq_runtime_shutdown` clears and closes live file, mapping and mutex resources:
+
+- the file registry is detached under its lock, then each handle is closed under
+  the resource's operation lock;
+- mappings are detached, then each view, section and file handle is released;
+- mutex resources are detached and marked closing, then their condition
+  variables are notified.
+
+Clearing before closing makes a stale token invalid instead of resolving a
+half-closed resource. Explicit language close remains the normal path; shutdown
+is the deterministic fallback for anything still live at return.
+
+### File-handle slot table
+
+The file registry used `std::unordered_map<void*, shared_ptr<FileResource>>`
+with a monotonic integer token. Every open allocated a map node, and a closed
+token could never be distinguished from a future token if a counter wrapped.
+
+The registry is now an inline `std::vector<FileSlot>`:
+
+- a token carries a 32-bit slot index in its low half and a 32-bit generation in
+  its high half;
+- closing clears the slot; reusing it increments the generation;
+- lookup rejects a generation mismatch, so a stale token cannot reactivate a
+  reused slot;
+- lookup still returns a `shared_ptr`, preserving an operation's resource
+  lifetime after the registry lock is dropped.
+
+The vector may reallocate as slots are added, but tokens address indices, not
+element addresses, so growth does not invalidate live handles.
+
+## 6. Boundary and fallback rules
 
 | Resource | Owner | Failure behavior | Fallback |
 |---|---|---|---|
@@ -135,89 +172,123 @@ The success output and the three generated files are unchanged.
 | executable during build | `TemporaryArtifact` | staged file removed; previous executable kept | none needed |
 | executable/object during `run` | `TemporaryArtifact` | removed after every program exit | `--keep-artifacts` publishes them |
 | project scaffold | `TemporaryDirectory` | staging tree removed; target untouched | target must be absent or empty |
-| runtime file-read string | runtime/GC fallback | unchanged | documented unsupported ownership |
+| argument descriptor | runtime static storage | none | process lifetime |
+| `file.read_text` string | process string arena | empty string on failure | released at shutdown |
+| live file/mapping/mutex | runtime registry | invalid token after close/shutdown | explicit close; shutdown fallback |
 
-The build publishes two files sequentially, not as one filesystem transaction.
-If publication of the executable fails after the object was published, the new
-object and the previous executable can coexist. Publication failures are
-reported as `NRQ5010`; the staging file is cleaned. A crash between the two
-renames has the same narrow window. This is an explicit limitation, not a
-claimed atomic pair.
+`system.exit` bypasses deterministic shutdown. A string returned by
+`file.read_text` is valid until `nrq_runtime_shutdown`; it must not be retained
+across that boundary. The language has no syntax to call shutdown manually, so
+this is an entry-return contract, not a user-visible API.
 
-`--keep-artifacts` is the compatibility fallback for users who relied on
-`nirqoba run` leaving its build products. It publishes the same paths the old
-implementation used.
-
-## 6. Verification
+## 7. Verification
 
 | Check | Result |
 |---|---|
-| Clean build (RelWithDebInfo) | PASS |
-| Compiler version | `0.477-beta` (Phase 7) |
-| Unit suite | 237/237 |
-| Integration suite | 462/462 |
-| Artifact unit cases | PASS |
-| `run` artifacts removed | PASS |
-| `build` artifacts published | PASS |
-| `--keep-artifacts` preserves object | PASS |
-| `nirqoba new` missing/empty target | PASS |
-| `nirqoba new` non-empty target | rejected, unchanged |
-| Generated executable hash | identical to 0.473-beta |
-| GC/ownership stress | full unit GC set passes |
+| Build (RelWithDebInfo) | PASS |
+| Compiler version | `0.483-beta` (Phase 7) |
+| Unit suite | 249/249 |
+| Integration suite | 464/464 |
+| Runtime arguments | static descriptor; no `HeapAlloc` |
+| Repeated `file.read_text` | PASS, 3 reads, expected checksum |
+| Entry shutdown boundary | PASS, exactly 1 `nrq_runtime_shutdown` call |
+| Live file handle at shutdown | closed; stale token rejected |
+| Live mapping at shutdown | unmapped; registry cleared |
+| Reused file slot | stale token rejected |
+| GC/ownership stress | existing GC unit set passes |
 
-The runtime, allocator, lowering and optimizer were not changed. The executable
-from `hello` is byte-identical between 0.473 and 0.477
-(`6d4d6ff0763c68a54d4b57ca227ac7c4674f2b8cae3f3aaaae95696515e8d7a9`), which
-confirms that the migration changed artifact lifetime rather than code
-generation.
+New tests: `runtime_args_test`, `runtime_buffers_test`,
+`runtime_shutdown_test`, `positive/file_read_repeated`, and
+`positive/runtime_shutdown_boundary`. The shutdown boundary test checks emitted
+IR, so a future lowering change that drops the call fails even if a program
+happens to produce the same output.
 
 No ASan/UBSan run is available in the MSVC configuration. The Phase 4 GC stress
 flake remains a separate pre-existing issue.
 
-## 7. Benchmark
+## 8. Benchmark
 
-`benchmarks/pre_mmm_phase7/`, 41 interleaved samples, Windows 11 x64, MSVC
-14.51, `RelWithDebInfo`:
+`benchmarks/pre_mmm_phase7_runtime/`, Windows 11 x64, MSVC 14.51,
+`RelWithDebInfo`, baseline worktree at `0.477-beta` (`30a6ae6`). Both compilers
+built the same source; runs alternated order. The workload checks stdout on every
+run.
 
-| Measurement | 0.473-beta | 0.477-beta | Change |
+### Repeated `file.read_text`
+
+20,000 reads of a 4 KiB file, every returned string kept alive. 9 interleaved
+samples:
+
+| Measurement | 0.477-beta | 0.483-beta | Change |
 |---|---:|---:|---:|
-| Build wall time | 99.298 ms | 102.779 ms | **+3.51%** (+3.48 ms) |
-| Run wall time | 157.214 ms | 155.831 ms | **-0.88%** (-1.38 ms) |
-| `new` wall time | 33.933 ms | 36.325 ms | **+7.05%** (+2.39 ms) |
-| Compiler peak RSS | 30,298,112 B | 30,371,840 B | **+0.24%** |
-| Artifacts left by `run` | 2 files | **0 files** | **-2** |
-| Bytes left by `run` | 10,300 B | **0 B** | **-100%** |
-| Generated executable | 9,728 B | 9,728 B | identical SHA-256 |
+| Median wall time | 1,059.59 ms | 1,045.33 ms | **-1.35%** |
+| Median peak RSS | 93,106,176 B | 91,041,792 B | **-2.22%** |
+| Output checksum | `81920000` | `81920000` | identical |
 
-The build and scaffold costs are small in absolute terms but are real
-publication overhead; they are reported rather than hidden. The first
-benchmark run measured a larger build regression because publication used a
-synchronous disk flush. Removing that flush reduced the overhead; a 21-sample
-run measured build at -0.68%, while the final 41-sample run measured +3.51%, so
-run-to-run variation is of the same order as the effect. The `new` command still
-pays roughly 2 ms for creating a staging directory and renaming it, a one-time
-cost per project.
+The gain is small and close to run-to-run variation; it is reported as a
+directional result, not a guaranteed speedup. The important change is ownership:
+before, 20,000 read buffers were unreachable allocations at exit; now the arena
+releases them at shutdown.
 
-## 8. Commits
+### File-handle round trip
 
-- `driver: give compiler artifacts deterministic ownership`
-- `test: cover compiler artifact leases and run cleanup`
-- `driver: publish project scaffolds atomically`
-- `test: cover atomic project-directory publication`
-- `driver: publish artifacts without a synchronous disk flush`
-- `driver: restore an empty scaffold target when publication fails`
-- `benchmark: measure Phase 7 artifact lifetime and publication cost`
-- documentation, roadmap, version, and progress commits follow.
+100,000 `file.open("NUL", true)` / `file.close` pairs. 5 interleaved samples:
 
-## 9. Assessment
+| Measurement | 0.477-beta | 0.483-beta | Change |
+|---|---:|---:|---:|
+| Median wall time | 303.85 ms | 297.66 ms | **-2.04%** |
+| Median peak RSS | 9,752,576 B | 9,773,056 B | +0.21% |
 
-**Implementation completeness:** The compiler-owned temporary-resource boundary
-is migrated for build artifacts, run products and project scaffolds.
-**Verification confidence:** High for lifetime, early-exit cleanup, move
-transfer, pre-existing-file safety and scaffold publication. The sequential
-two-file publication window is documented and not claimed atomic.
-**Performance:** Build/run parity within measurement noise; `new` has a small,
-explicit staging cost; artifact leakage from `run` is eliminated.
-**Remaining work:** runtime-owned buffers (including file-read strings), native
-resource internals, container internals and async resources remain on their
-existing paths. They are not partially migrated by this phase.
+The wall-time improvement is consistent with removing one map-node allocation
+per open. The RSS difference is one page and is treated as noise.
+
+### Arguments and native cleanup
+
+The argument bridge removes one allocation per process; at process start this is
+below the resolution of a wall-clock benchmark and is not claimed as a measured
+speedup. Native shutdown cleanup adds work proportional to live resources at
+exit. It is a correctness guarantee, not a performance optimization; no speedup
+is claimed.
+
+## 9. Commits
+
+Runtime session:
+
+- `runtime: make the argument descriptor process-owned static storage`
+- `test: cover the static runtime argument bridge`
+- `runtime: add a process-lifetime arena for borrowed strings`
+- `runtime: allocate file-read buffers from the process string arena`
+- `runtime: retire string buffers at shutdown without pipe flushes`
+- `lowering: retire runtime buffers at every main return`
+- `test: cover runtime buffer ownership, release, and concurrency`
+- `test: verify repeated file reads and the entry shutdown boundary`
+- `benchmark: measure the process string arena against 0.477-beta`
+- `runtime: release live native registries at shutdown`
+- `test: cover native-resource release at runtime shutdown`
+- `release: bump to 0.480-beta after the runtime buffer pair`
+- `runtime: store file handles in a generation-checked slot table`
+- `test: reject a stale file token after its slot is reused`
+- `benchmark: measure file-handle registry round trips`
+- `release: bump to 0.483-beta after native-resource migration`
+
+Compiler-artifact session at `0.477-beta`: artifact leases, scaffold
+publication, flush removal, empty-target restoration, benchmark, and its tests.
+
+## 10. Assessment
+
+**Implementation completeness:** Roadmap steps 1–3 are migrated. Containers and
+aggregates (step 4) are untouched. Async and tensor/device subsystems do not
+exist in this tree, so steps 5–6 remain not applicable.
+
+**Verification confidence:** High for argument lifetime, repeated reads, early
+returns, pipe output, live-resource shutdown and stale-token rejection. The
+`system.exit` path and the two-file publication window are explicit limitations.
+The read benchmark gain is small enough to be directional rather than proven.
+
+**Performance:** Repeated reads -1.35% wall and -2.22% peak RSS; file-handle
+round trips -2.04% wall with RSS parity. Argument allocation removal and native
+shutdown cleanup are correctness changes with no claimed speedup.
+
+**Deferred:** container/aggregate internals; async/task resources (no runtime);
+tensor/device buffers (no subsystem); collector pages and allocator shards;
+ASan/UBSan (unavailable in the MSVC configuration); the pre-existing Phase 4 GC
+stress flake.
