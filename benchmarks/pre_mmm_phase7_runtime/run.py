@@ -38,9 +38,9 @@ def run_timed(command, cwd=REPO):
     return time.perf_counter() - start, peak, process.returncode, out, err
 
 
-def build(compiler, output):
+def build(compiler, output, source):
     elapsed, peak, code, _, err = run_timed(
-        [str(compiler), "build", str(SOURCE), "-o", str(output)])
+        [str(compiler), "build", str(source), "-o", str(output)])
     if code != 0:
         raise RuntimeError(f"build failed with {compiler}: {err}")
     return elapsed * 1000, peak
@@ -55,6 +55,7 @@ def main():
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--current", required=True)
     parser.add_argument("--repeats", type=int, default=9)
+    parser.add_argument("--source", default=str(SOURCE))
     parser.add_argument("--output", default=str(Path(__file__).parent /
                                                 "results.json"))
     args = parser.parse_args()
@@ -64,13 +65,14 @@ def main():
         "current": Path(args.current).resolve(),
     }
 
+    source = Path(args.source)
     with tempfile.TemporaryDirectory(prefix="nrq-phase7-runtime-") as temp:
         root = Path(temp)
         binaries = {}
         builds = {}
         for name, compiler in compilers.items():
             output = root / f"{name}.exe"
-            builds[name] = build(compiler, output)
+            builds[name] = build(compiler, output, source)
             binaries[name] = output
 
         samples = {name: [] for name in compilers}
@@ -91,7 +93,7 @@ def main():
                 })
 
         results = {
-            "source": str(SOURCE),
+            "source": str(source),
             "repeats": args.repeats,
             "baseline_compiler": str(compilers["baseline"]),
             "current_compiler": str(compilers["current"]),

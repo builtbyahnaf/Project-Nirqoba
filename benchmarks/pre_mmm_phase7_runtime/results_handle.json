@@ -1,0 +1,94 @@
+{
+  "source": "benchmarks\\pre_mmm_phase7_runtime\\handle_roundtrip.nrqba",
+  "repeats": 5,
+  "baseline_compiler": "D:\\Actual Project Files\\Project Nirqoba\\.phase7-runtime-baseline\\build\\msvc-dev\\bin\\nirqoba.exe",
+  "current_compiler": "D:\\Actual Project Files\\Project Nirqoba\\build\\msvc-dev\\bin\\nirqoba.exe",
+  "build": {
+    "baseline": {
+      "wall_ms": 106.86919999989186,
+      "peak_rss_bytes": 35110912
+    },
+    "current": {
+      "wall_ms": 207.50829999997222,
+      "peak_rss_bytes": 35180544
+    }
+  },
+  "runs": {
+    "baseline": [
+      {
+        "wall_ms": 412.9189999994196,
+        "peak_rss_bytes": 10301440,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 348.7336999996842,
+        "peak_rss_bytes": 9752576,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 297.88579999967624,
+        "peak_rss_bytes": 9752576,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 303.85299999943527,
+        "peak_rss_bytes": 9764864,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 302.03810000057274,
+        "peak_rss_bytes": 9752576,
+        "stdout": "100000"
+      }
+    ],
+    "current": [
+      {
+        "wall_ms": 402.7626999995846,
+        "peak_rss_bytes": 10203136,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 349.162399999841,
+        "peak_rss_bytes": 9768960,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 293.4162000001379,
+        "peak_rss_bytes": 9781248,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 297.657000000072,
+        "peak_rss_bytes": 9773056,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 290.7538999997996,
+        "peak_rss_bytes": 9371648,
+        "stdout": "100000"
+      }
+    ]
+  },
+  "summary": {
+    "baseline": {
+      "median_wall_ms": 303.853,
+      "median_peak_rss_bytes": 9752576,
+      "stdout": [
+        "100000"
+      ]
+    },
+    "current": {
+      "median_wall_ms": 297.657,
+      "median_peak_rss_bytes": 9773056,
+      "stdout": [
+        "100000"
+      ]
+    }
+  },
+  "comparison": {
+    "wall_change_percent": -2.04,
+    "peak_rss_change_bytes": 20480,
+    "peak_rss_change_percent": 0.21,
+    "same_stdout": true
+  }
+}
