@@ -383,6 +383,35 @@ TEST(TirTest, VerifierRejectsBorrowedArgumentToOwnedParameter) {
   ASSERT_TRUE(diag.has_errors());
 }
 
+TEST(TirTest, VerifierAcceptsOwnedArgumentToBorrowedParameter) {
+  DiagnosticEngine diag;
+  tir::Module mod;
+  const Type pointer = Type::pointer_type(Type::int_type());
+
+  auto callee = std::make_unique<tir::Function>("read", Type::void_type());
+  tir::Value borrowed = callee->allocate_value(pointer, ValueOwnership::Borrowed);
+  callee->add_parameter("value", pointer, borrowed, ValueOwnership::Borrowed);
+  tir::Op callee_return;
+  callee_return.kind = tir::OpKind::Return;
+  callee->add_operation(callee_return);
+  mod.add_function(std::move(callee));
+
+  auto caller = std::make_unique<tir::Function>("caller", Type::void_type());
+  tir::Value owned = caller->allocate_value(pointer, ValueOwnership::Owned);
+  caller->add_parameter("value", pointer, owned, ValueOwnership::Owned);
+  tir::Op call;
+  call.kind = tir::OpKind::Call;
+  call.callee = "read";
+  call.arguments.push_back(owned);
+  caller->add_operation(call);
+  tir::Op caller_return;
+  caller_return.kind = tir::OpKind::Return;
+  caller->add_operation(caller_return);
+  mod.add_function(std::move(caller));
+
+  ASSERT_TRUE(verify_tir_module(mod, diag));
+}
+
 TEST(TirTest, VerifierRejectsImmutableBorrowToMutableParameter) {
   DiagnosticEngine diag;
   tir::Module mod;
