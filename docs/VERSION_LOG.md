@@ -31,11 +31,12 @@ recorded below is made under that authority.
   `nrq_memory_deallocate` are undeclared. Use `memory.allocate<T>` and
   `memory.deallocate`, which participate in the typed ownership and cleanup
   contract.
-- **Tests:** 258 unit tests and 488 integration tests pass after the removals.
+- **Tests:** 258 unit tests and 489 integration tests pass after the removals.
   The unit count drops by one because the two GC control tests were merged into
-  one namespaced test.
-- **Phase 8 implementation is complete;** documentation, migration notes and the
-  phase report follow this label.
+  one namespaced test; the integration suite gained a secure-storage managed
+  payload case.
+- **Phase 8 implementation and documentation are complete;** the final phase
+  report follows this label.
 - **Still deferred:** bounded release of process-lifetime `file.read_text`
   buffers; crash-safe publication; busy-registry termination cleanup;
   synchronous reclamation of collector-owned SoA storage.

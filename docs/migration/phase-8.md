@@ -134,8 +134,8 @@ needs no source change.
 
 ## 7. Verification
 
-At `0.511-beta` the clean `RelWithDebInfo` build passes 258 unit tests and 488
-integration tests. The integration count includes one positive test for nested generic
-managed payloads and focused negative tests for every rejected storage boundary. The
-phase report records the full inventory, benchmark comparison and remaining
-limitations.
+At `0.511-beta` the clean `RelWithDebInfo` build passes 258 unit tests and 489
+integration tests. The integration count includes positive tests for nested generic
+and secure-storage managed payloads plus focused negative tests for every rejected
+storage boundary. The phase report records the full inventory, benchmark comparison
+and remaining limitations.
