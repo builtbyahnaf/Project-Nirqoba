@@ -27,6 +27,7 @@ add_executable(nirqoba_unit_tests
   unit/tir_test.cpp
   unit/nrq_dialect_test.cpp
   unit/mlir_pipeline_test.cpp
+  unit/temporary_artifact_test.cpp
   unit/cli_test.cpp
   unit/optimization_test.cpp
   unit/target_test.cpp

@@ -1,0 +1,5 @@
+{
+  "mode": "build",
+  "expect_exit": 0,
+  "expect_files": ["main.exe", "main.obj"]
+}

@@ -421,6 +421,17 @@ def run_case(case_dir, compiler_exe, temp_dir):
                     f"{expected}.\nGot:\n{opt_out}"
                 )
 
+    # Compiler-owned temporary artifacts: `run` normally removes the
+    # executable and object it generated. `build` publishes them.
+    for name in spec.get("expect_no_files", []):
+        candidate = temp_dir / name
+        if candidate.exists():
+            return False, f"Expected temporary artifact '{candidate}' to be removed"
+    for name in spec.get("expect_files", []):
+        candidate = temp_dir / name
+        if not candidate.exists():
+            return False, f"Expected artifact '{candidate}' was not produced"
+
     # Special check for COFF object header if requested
     if spec.get("check_coff_header", False):
         stem = source_file.stem
@@ -488,8 +499,12 @@ def main():
         temp_path = Path(temp_dir)
         for case in cases:
             rel_name = case.relative_to(integration_dir)
+            # Each case owns its artifact directory. Artifact-presence checks
+            # must not see files a previous case deliberately kept.
+            case_temp = temp_path / rel_name
+            case_temp.mkdir(parents=True, exist_ok=True)
             print(f"Testing {rel_name}... ", end="", flush=True)
-            ok, msg = run_case(case, compiler_exe, temp_path)
+            ok, msg = run_case(case, compiler_exe, case_temp)
             if ok is None:
                 print("SKIP")
                 skipped.append((rel_name, msg))

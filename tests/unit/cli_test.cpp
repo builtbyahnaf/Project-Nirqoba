@@ -56,6 +56,23 @@ TEST(CliTest, ParseRunCommandWithTrailingArgs) {
   ASSERT_EQ(opts.trailing_args[1], "arg2");
 }
 
+TEST(CliTest, RunKeepsArtifactsOnlyWhenRequested) {
+  {
+    const char* argv[] = {"nirqoba", "run", "prog.nrqba"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(3, argv, opts, err));
+    ASSERT_FALSE(opts.keep_artifacts);
+  }
+  {
+    const char* argv[] = {"nirqoba", "run", "prog.nrqba", "--keep-artifacts"};
+    CommandLineOptions opts;
+    std::string err;
+    ASSERT_TRUE(parse_command_line(4, argv, opts, err));
+    ASSERT_TRUE(opts.keep_artifacts);
+  }
+}
+
 TEST(CliTest, CheckRejectsInvalidEmitKind) {
   const char* argv[] = {"nirqoba", "check", "main.nrqba", "--emit=mlir"};
   CommandLineOptions opts;
