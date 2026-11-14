@@ -1,0 +1,7 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 0,
+  "expect_ir_counts": {
+    "call void @nrq_runtime_shutdown": 1
+  }
+}
