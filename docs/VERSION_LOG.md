@@ -19,7 +19,23 @@ recorded below is made under that authority.
 > `0.495-beta`. Only the newest entry carries the working-build label; older
 > `(released)` entries are actual published checkpoints.
 
-## Version 0.505-beta (working build)
+## Version 0.508-beta (working build)
+
+### Summary of Changes (since `0.505-beta`):
+
+- **SoA columns reject reference-counted and borrowed fields.** A SoA release
+  unregisters the container root but does not walk column fields. Shared tokens,
+  direct borrowed fields and borrows nested in a column now fail construction;
+  plain and managed-reference columns remain supported.
+- **Nested generic closers work in type contexts.** `owned_array<managed<T>>`
+  and the equivalent nested managed, SoA and view types no longer require a
+  space before the final `>`. Shift expressions are unchanged.
+- **Tests:** 259 unit tests and 486 integration tests pass at this milestone.
+- **Still deferred:** bounded release of process-lifetime `file.read_text`
+  buffers; crash-safe publication; busy-registry termination cleanup;
+  synchronous reclamation of collector-owned SoA storage.
+
+## Version 0.505-beta
 
 ### Summary of Changes (since `0.501-beta`):
 
