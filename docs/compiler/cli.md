@@ -4,7 +4,7 @@
 
 ```text
 nirqoba build <file.nrqba>... [--out-dir DIR] [-o PATH] [--module-path DIR] [--emit=ast|layout|tir|mlir|llvm|obj] [--verbose]
-nirqoba run   <file.nrqba>... [--out-dir DIR] [--module-path DIR] [--verbose] [-- <args>...]
+nirqoba run   <file.nrqba>... [--out-dir DIR] [--module-path DIR] [--keep-artifacts] [--verbose] [-- <args>...]
 nirqoba check <file.nrqba>... [--module-path DIR] [--emit=ast|tir]
 nirqoba version | --version
 nirqoba help [command] | --help
@@ -31,6 +31,29 @@ public int function calculate_area(int width, int height) {
     return width * height;
 }
 ```
+
+### Compiler artifact ownership
+
+`build` writes the object and executable through unique sibling staging files
+and publishes each one only after its producing stage succeeds. A failed build
+removes the staged files and leaves an existing successful artifact in place.
+
+`run` owns its executable and object only for the duration of the program. Both
+are removed after the program exits, including a non-zero exit. Pass
+`--keep-artifacts` to publish them at their normal paths for inspection:
+
+```text
+nirqoba run main.nrqba --keep-artifacts --out-dir build/debug
+```
+
+`nirqoba new` writes the project into a staging directory and renames the
+complete tree into place. It refuses a non-empty target, and a failed write
+leaves no partial project.
+
+The build publishes the object and executable as two sequential renames, not as
+one filesystem transaction. A publication failure is reported as `NRQ5010`; the
+staged file is removed. Runtime-owned strings returned by builtins such as
+`file.read_text` are not part of this boundary and keep their existing lifetime.
 
 ### Aggregate layout
 
@@ -134,3 +157,5 @@ int function main() {
 | `NRQ5005` | Error | Linker failure or missing runtime library |
 | `NRQ5006` | Error | Generated program failed to launch |
 | `NRQ5007` | Error | Invalid source file extension |
+| `NRQ5008` | Error | Project scaffold could not be created |
+| `NRQ5010` | Error | A staged compiler artifact could not be published |
