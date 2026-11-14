@@ -3951,18 +3951,13 @@ class FunctionTranslator {
           }
           return true;
         }
-        if (op.callee == "nrq_gc_init" || op.callee == "nrq_gc_enable" ||
-            op.callee == "gc.enable" || op.callee == "nrq_gc_shutdown" ||
-            op.callee == "nrq_gc_disable" || op.callee == "gc.disable" ||
-            op.callee == "nrq_gc_collect" || op.callee == "gc.collect") {
-          const char* runtime_sym =
-              (op.callee == "nrq_gc_init" || op.callee == "nrq_gc_enable" ||
-               op.callee == "gc.enable")
-                  ? "nrq_gc_enable"
-                  : (op.callee == "nrq_gc_shutdown" || op.callee == "nrq_gc_disable" ||
-                     op.callee == "gc.disable")
-                        ? "nrq_gc_disable"
-                        : "nrq_gc_collect";
+        if (op.callee == "gc.enable" || op.callee == "gc.disable" ||
+            op.callee == "gc.collect") {
+          const char* runtime_sym = op.callee == "gc.enable"
+                                        ? "nrq_gc_enable"
+                                        : op.callee == "gc.disable"
+                                              ? "nrq_gc_disable"
+                                              : "nrq_gc_collect";
           auto fn = ensure_runtime_fn(module_, builder_, runtime_sym,
                                      mlir::LLVM::LLVMVoidType::get(ctx_), {});
           builder_.create<mlir::LLVM::CallOp>(loc, fn, mlir::ValueRange{});

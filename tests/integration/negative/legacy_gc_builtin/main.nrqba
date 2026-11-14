@@ -1,0 +1,4 @@
+int function main() {
+    nrq_gc_collect();
+    return 0;
+}

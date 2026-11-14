@@ -4472,39 +4472,6 @@ Type TypeChecker::check_call(CallExpr& call) {
     return Type::int_type();
   }
 
-  // Builtin 'nrq_gc_init'
-  if (call.callee() == "nrq_gc_init") {
-    if (call.arguments().size() != 0) {
-      diagnostics_.error(diag::kPrintArity, call.location(),
-                         "'nrq_gc_init' takes no arguments, but " +
-                             to_string(call.arguments().size()) + " were given");
-      return Type::void_type();
-    }
-    return Type::void_type();
-  }
-
-  // Builtin 'nrq_gc_shutdown'
-  if (call.callee() == "nrq_gc_shutdown") {
-    if (call.arguments().size() != 0) {
-      diagnostics_.error(diag::kPrintArity, call.location(),
-                         "'nrq_gc_shutdown' takes no arguments, but " +
-                             to_string(call.arguments().size()) + " were given");
-      return Type::void_type();
-    }
-    return Type::void_type();
-  }
-
-  // Builtin 'nrq_gc_collect'
-  if (call.callee() == "nrq_gc_collect") {
-    if (call.arguments().size() != 0) {
-      diagnostics_.error(diag::kPrintArity, call.location(),
-                         "'nrq_gc_collect' takes no arguments, but " +
-                             to_string(call.arguments().size()) + " were given");
-      return Type::void_type();
-    }
-    return Type::void_type();
-  }
-
   // Namespaced GC API from Phase 6.5. Statistics are a value with named
   // fields so callers can inspect individual counters without runtime casts.
   if (call.callee() == "gc.enable" || call.callee() == "gc.disable" ||
