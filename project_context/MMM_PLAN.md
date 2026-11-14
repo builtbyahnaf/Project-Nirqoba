@@ -6,7 +6,8 @@
 **Priority:** Critical architectural migration  
 **Status:** Phase 0 complete at `0.511-beta`; target architecture frozen in  
 `reports/memory-model/target-architecture.md` and audited in  
-`reports/memory-model/migration-audit.md`. Phase 1 has not started.  
+`reports/memory-model/migration-audit.md`. Pre-MMM Phase 9 closed the audit's  
+three critical prerequisites at `0.515-beta`. Dedicated Phase 1 has not started.  
 **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
 **Primary objective:** Establish deterministic ownership as Nirqoba's default memory-management model, with borrowing, arenas, explicit shared ownership, selective garbage collection, and advanced manual memory management as complementary mechanisms.
 
@@ -902,6 +903,11 @@ Acceptance:
 - The new default is unambiguously deterministic ownership.
 - No unresolved critical ownership ambiguity remains.
 
+Post-freeze hardening at `0.515-beta` closed the audit's three critical
+prerequisites: owned-only release no longer calls the collector, secure storage
+rejects managed payloads, and TIR verifies structural ownership/release/borrow
+invariants. This is prerequisite cleanup, not Phase 1.
+
 ## Phase 1 — Ownership representation
 
 Implement the semantic and intermediate-representation foundations.
@@ -923,6 +929,11 @@ Acceptance:
 - Ownership transfer is represented explicitly.
 - Invalid ownership states can be detected.
 - Existing GC functionality remains operational.
+
+Entry state at `0.515-beta`: ownership metadata and a structural verifier exist,
+so the last two acceptance points have a foundation. Transfer and destruction are
+still string-named calls rather than first-class TIR operations; that design and
+implementation is the actual Phase 1 task.
 
 ## Phase 2 — Deterministic destruction and move semantics
 
