@@ -373,7 +373,7 @@ Completed at `0.477-beta` (`reports/pre-mmm/phase-07.md`):
 - [x] Preserve external build behavior. A successful `build` still produces the same object and executable paths; the `hello` executable is byte-identical to `0.473-beta`.
 - [x] Remove obsolete internal GC dependencies only when no longer needed. None existed on this path; the compiler is a native process and its artifacts now use C++ RAII, not tracing.
 - [x] Benchmark the migrated subsystem. 41 interleaved samples: build +3.51%, run -0.88%, `new` +7.05%, peak RSS +0.24%; `run` artifacts fall from 2 files / 10,300 B to zero.
-- [x] Keep a rollback point. `.phase7-baseline` is the `0.473-beta` worktree; `--keep-artifacts` restores the old `run` artifact behavior.
+- [x] Keep a rollback point. Commit `ae26bc1` is the `0.473-beta` baseline; it was checked out as a disposable worktree for measurement and removed after verification. `--keep-artifacts` restores the old `run` artifact behavior.
 - [x] Publish project scaffolds atomically. `TemporaryDirectory` writes the complete tree beside the target and renames it into place; failures leave no partial project.
 
 Remaining Phase 7 subsystems are **not started**: runtime-owned buffers and

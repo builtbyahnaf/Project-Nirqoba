@@ -20,7 +20,12 @@ reported with their absolute values as well as percentages.
 
 ## Command
 
+Recreate the baseline worktree first; it is removed after verification so it
+cannot be mistaken for part of the release:
+
 ```text
+git worktree add --detach .phase7-baseline ae26bc1
+powershell -File scripts/build.ps1 -Configuration RelWithDebInfo  # in the worktree
 python benchmarks/pre_mmm_phase7/run.py \
   --baseline .phase7-baseline/build/msvc-dev/bin/nirqoba.exe \
   --current build/msvc-dev/bin/nirqoba.exe --repeats 41
