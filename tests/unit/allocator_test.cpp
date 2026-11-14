@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <atomic>
 #include <condition_variable>
@@ -475,6 +476,21 @@ TEST(AllocatorTest, ConcurrentSharedRetainsAndReleasesKeepFinalOwnerAlive) {
   ASSERT_EQ(nrq_memory_shared_count(pointer), uint64_t{1});
   ASSERT_EQ(nrq_memory_shared_release(pointer), int32_t{1});
   ASSERT_EQ(nrq_memory_shared_count(pointer), uint64_t{0});
+}
+
+TEST(AllocatorTest, SharedRootMetadataHandlesInlineAndOverflowOffsets) {
+  // Four managed fields stay in the inline metadata; ten force the vector
+  // fallback. Both must register, release, and restore the same layout.
+  for (const size_t count : {size_t{4}, size_t{10}}) {
+    std::array<size_t, 10> offsets{};
+    for (size_t index = 0; index < count; ++index)
+      offsets[index] = index * sizeof(void*);
+    void* pointer = nrq_memory_shared_allocate_rooted(
+        128, 16, 128, offsets.data(), count);
+    ASSERT_NE(pointer, nullptr);
+    ASSERT_EQ(nrq_memory_shared_count(pointer), uint64_t{1});
+    ASSERT_EQ(nrq_memory_shared_release(pointer), int32_t{1});
+  }
 }
 
 TEST(AllocatorTest, FinalSharedReleaseDoesNotHoldTheGlobalRegistryLock) {
