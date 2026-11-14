@@ -12,6 +12,43 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.495-beta (working build)
+
+### Summary of Changes (since `0.483-beta`):
+
+*Pre-MMM Phase 7 Part 3; `0.457-beta` remains the released `n-1` checkpoint.*
+
+- **Paired artifact publication is a rollback transaction.** Object and
+  executable keep hard-link backups; a failed second rename restores both
+  finals. Handled failures can no longer leave a new object beside an old
+  executable. A process crash between renames is still documented as an
+  unresolved window.
+- **Read strings are process-lifetime values.** `file.read_text` buffers are
+  immutable and valid through deferred cleanup and static destructors; the OS
+  reclaims the arena at termination. This removes the unsound entry-return
+  invalidation rule; process-lifetime memory growth remains a limitation.
+- **`system.exit` cleans up best-effort.** Uncontended file, mapping and mutex
+  registries are retired; busy registries are reclaimed by the OS so a blocked
+  I/O thread cannot prevent termination.
+- **Shared aggregate roots are inline.** Up to eight managed-reference offsets
+  live in the root metadata; deeper layouts use the vector fallback. Aggregate
+  drop/retain paths use `SmallVector` instead of heap paths.
+- **Mutex handles use a generation-checked slot table**, removing one map node
+  per create/destroy and rejecting stale tokens.
+- **Benchmark:** build publication 108.433 -> 111.931 ms (**+3.23%**, safety
+  cost); 100k mutex round trips 47.396 -> 42.319 ms (**-10.71%**); 20k reads
+  +0.12% wall / +1.10% peak RSS (noise). Executable size 21,504 -> 19,968 B
+  (-7.14%) for the benchmark program.
+- **Validation:** 258 unit tests and 466 integration tests pass. No ASan/UBSan
+  run is available in the MSVC configuration.
+- **Release history:** `0.491-beta` records the first four Part 3 upgrades and
+  `0.495-beta` the next two. The intended `0.487-beta` intermediate label was
+  not committed and is not fabricated retroactively; the earlier `0.480-beta`
+  gap remains as previously documented.
+- **Still deferred:** container-internals audit; publication crash journal;
+  bounded string release; async/task and tensor/device subsystems (absent from
+  this tree).
+
 ## Version 0.483-beta (working build)
 
 ### Summary of Changes (since `0.477-beta`):
