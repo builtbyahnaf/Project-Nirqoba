@@ -6,6 +6,7 @@
 #endif
 
 #include "nirqoba/runtime/system.h"
+#include "nirqoba/runtime/io.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -145,6 +146,12 @@ uint64_t nrq_system_used_bytes(void) {
 }
 
 void nrq_system_exit(int32_t exit_code) {
+    // system.exit is a normal termination request, not an abnormal crash. Run
+    // the same deterministic native-resource retirement as an entry return
+    // before leaving the process. Shutdown is serialised and idempotent; no
+    // language code runs after this point, so borrowed process-lifetime strings
+    // remain valid until ExitProcess reclaims them.
+    nrq_runtime_shutdown();
     ExitProcess(static_cast<UINT>(exit_code));
 }
 
