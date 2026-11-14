@@ -1,0 +1,32 @@
+// A returned aggregate moves its SoA field out of the callee. The caller must
+// keep the container rooted through the call and release it at its own scope
+// exit, not twice in the callee.
+struct Point {
+    int x;
+    int y;
+}
+
+struct Holder {
+    soa<Point> rows;
+    int tag;
+}
+
+Holder function make_holder(int seed) {
+    var holder = Holder {
+        rows: memory.owned_soa<Point>(2),
+        tag: seed
+    };
+    holder.rows[0].x = seed + 1;
+    return holder;
+}
+
+int function consume(Holder holder) {
+    return holder.rows[0].x + holder.tag;
+}
+
+int function main() {
+    var holder = make_holder(4);
+    gc.collect();
+    print(consume(holder));
+    return 0;
+}
