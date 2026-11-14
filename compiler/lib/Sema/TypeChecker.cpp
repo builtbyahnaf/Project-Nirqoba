@@ -4923,7 +4923,14 @@ Type TypeChecker::check_call(CallExpr& call) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                            "shared allocation size must be an integer");
     }
-    return Type::pointer_type(resolve_generic_type(call.generic_argument()));
+    const Type payload_type =
+        resolve_aggregate_type(resolve_generic_type(call.generic_argument()));
+    if (requires_deterministic_cleanup(payload_type))
+      diagnostics_.error(
+          diag::kTypeMismatch, call.location(),
+          "shared allocations cannot contain '" + payload_type.to_string() +
+              "': the final release frees storage without running field destruction");
+    return Type::pointer_type(payload_type);
   }
   if (call.callee() == "memory.shared_retain") {
     if (call.arguments().size() != 1) {
