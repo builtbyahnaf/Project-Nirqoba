@@ -1,5 +1,11 @@
 # Language Readiness Audit and Benchmark
 
+> **Historical audit.** This document records the Phase 6 readiness corpus and
+> measurements at `0.266-beta`; it is not the current language status. At
+> `0.511-beta` (Pre-MMM Phase 8), the supported ownership surface follows the
+> storage-boundary policy in [memory management](memory/management.md) and
+> [the Phase 8 migration notes](migration/phase-8.md).
+
 **Audit date:** 2026-11-01
 **Compiler:** Nirqoba 0.266-beta (Phase 6), LLVM/MLIR 23.1.4, `x86_64-pc-windows-msvc`
 **Build:** RelWithDebInfo (`build/msvc-dev`)
