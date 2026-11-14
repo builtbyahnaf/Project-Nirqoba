@@ -10,6 +10,7 @@
 
 #include <filesystem>
 #include <string_view>
+#include <vector>
 
 namespace nirq {
 
@@ -91,6 +92,51 @@ class TemporaryArtifact {
   std::filesystem::path staged_path_;
   std::filesystem::path final_path_;
   bool owns_staged_file_ = false;
+};
+
+// Publishes a set of artifacts as one all-or-nothing operation on the normal
+// failure paths. Each existing final is first preserved through a hard-link
+// backup (copy fallback), then every staged file replaces its final. If any
+// rename fails, already-published finals are restored from their backups and
+// finals that did not exist before are removed. A crash between renames is not
+// a transaction and is documented as a limitation; a returned failure is never
+// allowed to leave a new object beside an old executable.
+class ArtifactTransaction {
+ public:
+  ArtifactTransaction() = default;
+  ~ArtifactTransaction();
+
+  ArtifactTransaction(ArtifactTransaction&& other) noexcept;
+  ArtifactTransaction& operator=(ArtifactTransaction&& other) noexcept;
+  ArtifactTransaction(const ArtifactTransaction&) = delete;
+  ArtifactTransaction& operator=(const ArtifactTransaction&) = delete;
+
+  // Takes ownership of a staged artifact. Order is publication order.
+  void add(TemporaryArtifact artifact);
+
+  bool empty() const { return entries_.empty(); }
+
+  // Publishes every entry, or restores every final touched before returning
+  // false. On failure, staged files that were not consumed are still owned by
+  // their lease and are removed by the destructor.
+  bool publish();
+
+  // Removes every staged file and backup without publishing.
+  void discard() noexcept;
+
+ private:
+  struct Entry {
+    TemporaryArtifact artifact;
+    std::filesystem::path backup_path;
+    bool had_previous = false;
+    bool published = false;
+  };
+
+  bool prepare_backup(Entry& entry);
+  void remove_backup(Entry& entry) noexcept;
+  void rollback() noexcept;
+
+  std::vector<Entry> entries_;
 };
 
 }  // namespace nirq
