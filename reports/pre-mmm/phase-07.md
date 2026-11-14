@@ -1,6 +1,7 @@
 # Pre-MMM Phase 7 — Incremental subsystem migration
 
-**Version:** `0.483-beta`  
+**Version:** `0.483-beta` (label advanced in one step from `0.477-beta`; no
+separate `0.480-beta` release commit exists)  
 **Date:** `2026-11-14`  
 **Baseline:** `0.473-beta` (`ae26bc1`) for the compiler-artifact work; `0.477-beta` (`30a6ae6`) for the runtime work  
 **Selected subsystems:** compiler-owned temporaries (1), runtime-owned buffers
@@ -187,7 +188,7 @@ this is an entry-return contract, not a user-visible API.
 |---|---|
 | Build (RelWithDebInfo) | PASS |
 | Compiler version | `0.483-beta` (Phase 7) |
-| Unit suite | 249/249 |
+| Unit suite | 252/252 |
 | Integration suite | 464/464 |
 | Runtime arguments | static descriptor; no `HeapAlloc` |
 | Repeated `file.read_text` | PASS, 3 reads, expected checksum |
@@ -264,7 +265,6 @@ Runtime session:
 - `benchmark: measure the process string arena against 0.477-beta`
 - `runtime: release live native registries at shutdown`
 - `test: cover native-resource release at runtime shutdown`
-- `release: bump to 0.480-beta after the runtime buffer pair`
 - `runtime: store file handles in a generation-checked slot table`
 - `test: reject a stale file token after its slot is reused`
 - `benchmark: measure file-handle registry round trips`
