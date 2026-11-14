@@ -2873,9 +2873,9 @@ The second Phase 7 session migrated roadmap steps 2 and 3. Escaping runtime
 strings now have one process-lifetime arena owner, the argument bridge no longer
 allocates, and live file, mapping and mutex registries are released at entry
 return. File handles also moved from a per-open map node to a generation-checked
-slot table. Four implementation upgrades were made; the version moved from
-`0.477-beta` to `0.480-beta` after the two runtime-buffer upgrades and to
-`0.483-beta` after the native-resource pair.
+slot table. Four implementation upgrades were made. The version label advanced
+from `0.477-beta` directly to `0.483-beta`; no separate `0.480-beta` release
+commit exists, so this entry does not claim one.
 
 ### 2. Implementation
 
@@ -2908,7 +2908,7 @@ changed.
 | Check | Result |
 |---|---|
 | Build (RelWithDebInfo) | PASS (`0.483-beta`) |
-| Unit suite | 249/249 |
+| Unit suite | 252/252 |
 | Integration suite | 464/464 |
 | Static argument descriptor | PASS |
 | Repeated `file.read_text` | PASS |
@@ -2952,9 +2952,9 @@ and shutdown cleanup are correctness changes and are not claimed as speedups.
 
 ### 6. Commits
 
-Sixteen runtime-session commits cover implementation, tests, benchmarks and the
-`0.480-beta` / `0.483-beta` bumps. The full list is in
-`reports/pre-mmm/phase-07.md`.
+The session adds implementation, test, benchmark, documentation and the
+`0.483-beta` release commit. The implementation list and validation report are
+in `reports/pre-mmm/phase-07.md` and `reports/pre-mmm/phase-07-validation.md`.
 
 ### 7. Agent Assessment
 
