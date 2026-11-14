@@ -1,0 +1,245 @@
+{
+  "mode": "aggregate-drop-compile",
+  "functions": 20,
+  "scopes_per_function": 250,
+  "drop_sites": 5000,
+  "repeats": 15,
+  "baseline": {
+    "median_wall_ms": 7454.763,
+    "median_peak_rss_bytes": 417304576,
+    "object_bytes": 1362995,
+    "executable_bytes": 622592,
+    "outputs": [
+      ""
+    ]
+  },
+  "current": {
+    "median_wall_ms": 7507.598,
+    "median_peak_rss_bytes": 417480704,
+    "object_bytes": 1362995,
+    "executable_bytes": 622592,
+    "outputs": [
+      ""
+    ]
+  },
+  "comparison": {
+    "wall_change_percent": 0.71,
+    "peak_rss_change_percent": 0.04
+  },
+  "samples": {
+    "baseline": [
+      {
+        "wall_ms": 7316.8005000006815,
+        "peak_rss_bytes": 417632256,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7361.109699999361,
+        "peak_rss_bytes": 417419264,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7330.397099998663,
+        "peak_rss_bytes": 416780288,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7454.762800000026,
+        "peak_rss_bytes": 417234944,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7508.88930000292,
+        "peak_rss_bytes": 418189312,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7757.034199999907,
+        "peak_rss_bytes": 416911360,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7670.341499997448,
+        "peak_rss_bytes": 418795520,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7477.64449999886,
+        "peak_rss_bytes": 417062912,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7381.954800002859,
+        "peak_rss_bytes": 417542144,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7844.719999997324,
+        "peak_rss_bytes": 417329152,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 8741.781799999444,
+        "peak_rss_bytes": 417189888,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7342.701600002329,
+        "peak_rss_bytes": 418115584,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7338.49679999912,
+        "peak_rss_bytes": 416849920,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7528.320299999905,
+        "peak_rss_bytes": 417304576,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7261.5386999968905,
+        "peak_rss_bytes": 416817152,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      }
+    ],
+    "current": [
+      {
+        "wall_ms": 7507.598100000905,
+        "peak_rss_bytes": 416952320,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7293.507200000022,
+        "peak_rss_bytes": 417292288,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7340.025500001502,
+        "peak_rss_bytes": 417505280,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7434.076000001369,
+        "peak_rss_bytes": 418308096,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7517.810299999837,
+        "peak_rss_bytes": 417841152,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7392.735499997798,
+        "peak_rss_bytes": 417226752,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7517.011600000842,
+        "peak_rss_bytes": 417026048,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7531.558999999106,
+        "peak_rss_bytes": 417513472,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7643.738499999017,
+        "peak_rss_bytes": 417480704,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7709.247499999037,
+        "peak_rss_bytes": 418074624,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 8743.91470000046,
+        "peak_rss_bytes": 418328576,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 8421.282999999676,
+        "peak_rss_bytes": 417480704,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7472.941299998638,
+        "peak_rss_bytes": 417177600,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7366.884799997933,
+        "peak_rss_bytes": 417243136,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 7303.377800002636,
+        "peak_rss_bytes": 418643968,
+        "object_bytes": 1362995,
+        "executable_bytes": 622592,
+        "stdout": ""
+      }
+    ]
+  }
+}
