@@ -1099,8 +1099,33 @@ std::unordered_map<void*, uint64_t> shared_reference_counts;
 // root for as long as the last reference token exists. The runtime records the
 // descriptor at allocation so final release can unregister it before freeing.
 struct SharedRootMetadata {
+  // Aggregate field layouts are usually short. Keep the common case inline so a
+  // shared allocation with managed fields does not also allocate a separate
+  // offsets vector; deeper layouts retain the vector fallback.
+  static constexpr size_t kInlineOffsets = 8;
   size_t object_size = 0;
-  std::vector<size_t> offsets;
+  std::array<size_t, kInlineOffsets> inline_offsets{};
+  size_t inline_count = 0;
+  std::vector<size_t> overflow;
+
+  void assign(const size_t* values, size_t count) {
+    if (count <= kInlineOffsets) {
+      std::copy(values, values + count, inline_offsets.begin());
+      inline_count = count;
+      overflow.clear();
+      return;
+    }
+    overflow.assign(values, values + count);
+    inline_count = 0;
+  }
+
+  const size_t* data() const {
+    return inline_count != 0 ? inline_offsets.data() : overflow.data();
+  }
+
+  size_t count() const {
+    return inline_count != 0 ? inline_count : overflow.size();
+  }
 };
 std::unordered_map<void*, SharedRootMetadata> shared_roots;
 std::mutex memory_profile_mutex;
@@ -1576,8 +1601,8 @@ int32_t nrq_memory_shared_release(void* pointer) {
     // The allocator rejected the release (a stack allocator requires LIFO), so
     // the object is still live. Restore its root before reporting the failure.
     nrq_gc_root_register_typed(pointer, root_metadata.object_size,
-                               root_metadata.offsets.data(),
-                               root_metadata.offsets.size());
+                               root_metadata.data(),
+                               root_metadata.count());
     std::lock_guard<std::mutex> lock(allocator_mutex);
     try {
       shared_roots.emplace(pointer, std::move(root_metadata));
@@ -1608,10 +1633,9 @@ void* nrq_memory_shared_allocate_rooted(size_t bytes, size_t alignment,
   SharedRootMetadata metadata;
   metadata.object_size = object_size;
   try {
-    metadata.offsets.assign(reference_offsets,
-                            reference_offsets + reference_count);
-    nrq_gc_root_register_typed(pointer, object_size, reference_offsets,
-                               reference_count);
+    metadata.assign(reference_offsets, reference_count);
+    nrq_gc_root_register_typed(pointer, object_size, metadata.data(),
+                               metadata.count());
     std::lock_guard<std::mutex> lock(allocator_mutex);
     shared_roots.emplace(pointer, std::move(metadata));
   } catch (...) {
