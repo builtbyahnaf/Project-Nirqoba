@@ -44,12 +44,14 @@ No commit is pushed. `0.457-beta` remains the released `n-1` checkpoint.
 
 ## Version history
 
-- `0.491-beta` records four Part 3 upgrades.
-- `0.495-beta` records the next two.
-- The intended `0.487-beta` intermediate label after the first pair was not
-  committed; it is not fabricated retroactively.
-- The earlier missing `0.480-beta` remains documented as a process gap from
-  Part 2.
+- `0.491-beta` records the aggregate-path and mutex-slot upgrades.
+- `0.495-beta` records the best-effort termination upgrade (one upgrade).
+- `0.484-beta` and `0.487-beta` are retrospective milestones for the first four
+  Part 3 upgrades; no release commit exists at those labels.
+- `0.480-beta` is the retrospective Part 2 milestone for the argument bridge and
+  string arena; the work shipped in `0.483-beta`.
+- Part 4 (`0.499-beta`) later completes the container audit and is outside this
+  validation's claim.
 
 ## Rollback points
 
@@ -70,9 +72,10 @@ No commit is pushed. `0.457-beta` remains the released `n-1` checkpoint.
 | 5. Async/task resources | Not applicable; no concurrency runtime in tree |
 | 6. Tensor/device buffers | Not applicable; no tensor subsystem in tree |
 
-**Phase 7 is not complete** because roadmap step 4's container-internals audit
-remains, and publication crash recovery and bounded string release are unresolved
-design work.
+**Phase 7 was not complete at this checkpoint** because roadmap step 4's
+container-internals audit remained. Part 4 (`0.499-beta`) completed that audit;
+publication crash recovery and bounded string release remain unresolved design
+work.
 
 ## Remaining limitations
 
