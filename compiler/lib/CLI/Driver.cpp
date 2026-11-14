@@ -179,8 +179,21 @@ static int create_project(const string& directory) {
     return 1;
   }
 
-  fs::create_directories(root / "src", ec);
-  fs::create_directories(root / "lib", ec);
+  // Build the whole project in a sibling staging directory and rename it into
+  // place. A failed write therefore cannot leave a project with some of its
+  // files, and an existing empty target is only removed at the commit point.
+  TemporaryDirectory staging(
+      TemporaryDirectory::make_staged_path(root), root);
+  if (!staging.create()) {
+    DiagnosticEngine diag;
+    diag.error(diag::kProjectScaffoldFailed, SourceLocation{},
+               "cannot create a staging directory beside '" + directory + "'");
+    render_diagnostics(diag, nullptr);
+    return 1;
+  }
+
+  fs::create_directories(staging.staged_path() / "src", ec);
+  fs::create_directories(staging.staged_path() / "lib", ec);
   if (ec) {
     DiagnosticEngine diag;
     diag.error(diag::kProjectScaffoldFailed, SourceLocation{},
@@ -193,8 +206,9 @@ static int create_project(const string& directory) {
   const string name = root.filename().empty() ? string("project")
                                               : root.filename().string();
   string error;
-  if (!write_scaffold_file(root / "src" / "main.nrqba", kProjectMainTemplate, error) ||
-      !write_scaffold_file(root / "lib" / "greeting.nrqba",
+  if (!write_scaffold_file(staging.staged_path() / "src" / "main.nrqba",
+                           kProjectMainTemplate, error) ||
+      !write_scaffold_file(staging.staged_path() / "lib" / "greeting.nrqba",
                            kProjectGreetingTemplate, error)) {
     DiagnosticEngine diag;
     diag.error(diag::kProjectScaffoldFailed, SourceLocation{}, error);
@@ -213,9 +227,18 @@ static int create_project(const string& directory) {
       "nirqoba run src/main.nrqba --module-path lib -- one two\n"
       "nirqoba build src/main.nrqba --module-path lib -o app.exe\n"
       "```\n";
-  if (!write_scaffold_file(root / "README.md", readme, error)) {
+  if (!write_scaffold_file(staging.staged_path() / "README.md", readme,
+                           error)) {
     DiagnosticEngine diag;
     diag.error(diag::kProjectScaffoldFailed, SourceLocation{}, error);
+    render_diagnostics(diag, nullptr);
+    return 1;
+  }
+
+  if (!staging.publish()) {
+    DiagnosticEngine diag;
+    diag.error(diag::kProjectScaffoldFailed, SourceLocation{},
+               "cannot publish project directory '" + directory + "'");
     render_diagnostics(diag, nullptr);
     return 1;
   }

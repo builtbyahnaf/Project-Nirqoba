@@ -13,6 +13,46 @@
 
 namespace nirq {
 
+// A directory lease for a compiler-owned staging tree. Unlike a file lease,
+// publication is a directory rename, so readers never observe a partially
+// scaffolded project.
+class TemporaryDirectory {
+ public:
+  TemporaryDirectory() = default;
+  TemporaryDirectory(std::filesystem::path staged_path,
+                     std::filesystem::path final_path);
+  ~TemporaryDirectory();
+
+  TemporaryDirectory(TemporaryDirectory&& other) noexcept;
+  TemporaryDirectory& operator=(TemporaryDirectory&& other) noexcept;
+  TemporaryDirectory(const TemporaryDirectory&) = delete;
+  TemporaryDirectory& operator=(const TemporaryDirectory&) = delete;
+
+  static std::filesystem::path make_staged_path(
+      const std::filesystem::path& final_path);
+
+  // Creates the staged directory tree. The destructor removes it on every path
+  // that does not publish it.
+  bool create();
+
+  const std::filesystem::path& staged_path() const { return staged_path_; }
+  const std::filesystem::path& final_path() const { return final_path_; }
+  bool owns_staged_directory() const { return owns_staged_directory_; }
+
+  // Renames the staged tree into place. Refuses to replace a non-empty target,
+  // and leaves a failed target untouched.
+  bool publish();
+
+  void discard() noexcept;
+
+ private:
+  void release() noexcept;
+
+  std::filesystem::path staged_path_;
+  std::filesystem::path final_path_;
+  bool owns_staged_directory_ = false;
+};
+
 class TemporaryArtifact {
  public:
   TemporaryArtifact() = default;
