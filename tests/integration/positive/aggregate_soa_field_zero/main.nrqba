@@ -1,0 +1,23 @@
+// An empty aggregate SoA field still takes part in rooting and destruction.
+// The allocation has no payload, so tracing and root release must both accept
+// the empty container without reading a header.
+struct Point {
+    int x;
+    int y;
+}
+
+struct Holder {
+    soa<Point> rows;
+    int tag;
+}
+
+int function main() {
+    var holder = Holder {
+        rows: memory.owned_soa<Point>(0),
+        tag: 3
+    };
+    gc.collect();
+    gc.collect();
+    print(holder.tag);
+    return 0;
+}
