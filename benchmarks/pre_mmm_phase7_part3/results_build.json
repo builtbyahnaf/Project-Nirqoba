@@ -1,0 +1,154 @@
+{
+  "mode": "build",
+  "repeats": 9,
+  "baseline": {
+    "median_wall_ms": 108.433,
+    "median_peak_rss_bytes": 30412800,
+    "outputs": [
+      ""
+    ]
+  },
+  "current": {
+    "median_wall_ms": 111.931,
+    "median_peak_rss_bytes": 30486528,
+    "outputs": [
+      ""
+    ]
+  },
+  "comparison": {
+    "wall_change_percent": 3.23,
+    "peak_rss_change_percent": 0.24
+  },
+  "samples": {
+    "baseline": [
+      {
+        "wall_ms": 351.79729999981646,
+        "peak_rss_bytes": 30887936,
+        "exe_bytes": 21504,
+        "obj_bytes": 815,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 103.68370000014693,
+        "peak_rss_bytes": 30359552,
+        "exe_bytes": 21504,
+        "obj_bytes": 815,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 93.87729999980365,
+        "peak_rss_bytes": 30420992,
+        "exe_bytes": 21504,
+        "obj_bytes": 815,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 129.9778000002334,
+        "peak_rss_bytes": 30429184,
+        "exe_bytes": 21504,
+        "obj_bytes": 815,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 108.25449999992998,
+        "peak_rss_bytes": 30412800,
+        "exe_bytes": 21504,
+        "obj_bytes": 815,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 134.04699999955483,
+        "peak_rss_bytes": 30396416,
+        "exe_bytes": 21504,
+        "obj_bytes": 815,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 108.43339999973978,
+        "peak_rss_bytes": 30466048,
+        "exe_bytes": 21504,
+        "obj_bytes": 815,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 98.0226000001494,
+        "peak_rss_bytes": 30367744,
+        "exe_bytes": 21504,
+        "obj_bytes": 815,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 124.98149999919406,
+        "peak_rss_bytes": 30392320,
+        "exe_bytes": 21504,
+        "obj_bytes": 815,
+        "stdout": ""
+      }
+    ],
+    "current": [
+      {
+        "wall_ms": 244.1142999996373,
+        "peak_rss_bytes": 30515200,
+        "exe_bytes": 19968,
+        "obj_bytes": 815,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 93.62050000072486,
+        "peak_rss_bytes": 30449664,
+        "exe_bytes": 19968,
+        "obj_bytes": 815,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 111.93089999960648,
+        "peak_rss_bytes": 30445568,
+        "exe_bytes": 19968,
+        "obj_bytes": 815,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 112.06500000025699,
+        "peak_rss_bytes": 30543872,
+        "exe_bytes": 19968,
+        "obj_bytes": 815,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 98.25150000051508,
+        "peak_rss_bytes": 30486528,
+        "exe_bytes": 19968,
+        "obj_bytes": 815,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 133.91289999981382,
+        "peak_rss_bytes": 30511104,
+        "exe_bytes": 19968,
+        "obj_bytes": 815,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 121.24300000050425,
+        "peak_rss_bytes": 30466048,
+        "exe_bytes": 19968,
+        "obj_bytes": 815,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 99.81239999979152,
+        "peak_rss_bytes": 30441472,
+        "exe_bytes": 19968,
+        "obj_bytes": 815,
+        "stdout": ""
+      },
+      {
+        "wall_ms": 99.24760000012611,
+        "peak_rss_bytes": 30511104,
+        "exe_bytes": 19968,
+        "obj_bytes": 815,
+        "stdout": ""
+      }
+    ]
+  }
+}
