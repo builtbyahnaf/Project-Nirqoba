@@ -794,17 +794,17 @@ int run_driver(int argc, const char* const* argv) {
     int ret = run_pipeline(pipe_opts, diag);
     if (ret != 0) return ret;
 
-    if (object_lease && !object_lease->publish()) {
+    // Object and executable are published as one failure-atomic set. The
+    // transaction keeps the previous finals as hard-link backups and restores
+    // both if either replacement fails, so a returned failure cannot leave a
+    // new object beside an old executable.
+    ArtifactTransaction transaction;
+    if (object_lease) transaction.add(std::move(*object_lease));
+    if (output_lease) transaction.add(std::move(*output_lease));
+    if (!transaction.publish()) {
       diag.error(diag::kArtifactPublishFailed, SourceLocation{},
-                 "could not publish object file '" +
-                     object_lease->final_path().string() + "'");
-      render_diagnostics(diag, nullptr);
-      return 1;
-    }
-    if (output_lease && !output_lease->publish()) {
-      diag.error(diag::kArtifactPublishFailed, SourceLocation{},
-                 "could not publish output file '" +
-                     output_lease->final_path().string() + "'");
+                 "could not publish build artifacts for '" + output_file +
+                     "'");
       render_diagnostics(diag, nullptr);
       return 1;
     }
@@ -833,8 +833,10 @@ int run_driver(int argc, const char* const* argv) {
     }
 
     if (options.keep_artifacts) {
-      if ((object_lease && !object_lease->publish()) ||
-          (output_lease && !output_lease->publish())) {
+      ArtifactTransaction transaction;
+      if (object_lease) transaction.add(std::move(*object_lease));
+      if (output_lease) transaction.add(std::move(*output_lease));
+      if (!transaction.publish()) {
         diag.error(diag::kArtifactPublishFailed, SourceLocation{},
                    "could not keep the generated artifacts");
         render_diagnostics(diag, nullptr);

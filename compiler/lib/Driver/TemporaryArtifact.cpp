@@ -3,6 +3,7 @@
 #include <atomic>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -200,6 +201,133 @@ void TemporaryArtifact::discard() noexcept {
 void TemporaryArtifact::release() noexcept {
   owns_staged_file_ = false;
   staged_path_.clear();
+}
+
+ArtifactTransaction::~ArtifactTransaction() { discard(); }
+
+ArtifactTransaction::ArtifactTransaction(ArtifactTransaction&& other) noexcept
+    : entries_(std::move(other.entries_)) {
+  other.entries_.clear();
+}
+
+ArtifactTransaction& ArtifactTransaction::operator=(
+    ArtifactTransaction&& other) noexcept {
+  if (this == &other) return *this;
+  discard();
+  entries_ = std::move(other.entries_);
+  other.entries_.clear();
+  return *this;
+}
+
+void ArtifactTransaction::add(TemporaryArtifact artifact) {
+  Entry entry;
+  entry.artifact = std::move(artifact);
+  entries_.push_back(std::move(entry));
+}
+
+bool ArtifactTransaction::prepare_backup(Entry& entry) {
+  error_code error;
+  if (!fs::exists(entry.artifact.final_path(), error)) return true;
+  if (error) return false;
+
+  const fs::path& final_path = entry.artifact.final_path();
+  fs::path directory = final_path.parent_path();
+  string filename = final_path.filename().string();
+  if (filename.empty()) filename = "artifact";
+  const string tag = ".nrq-backup-" + to_string(process_id()) + "-" +
+                     to_string(++g_staged_counter);
+  entry.backup_path = directory / ("." + filename + tag);
+
+#ifdef _WIN32
+  // A hard link preserves the previous final without moving it, so a failure
+  // before the first replacement leaves the output directory untouched. The
+  // copy fallback covers filesystems that reject hard links.
+  if (CreateHardLinkW(entry.backup_path.c_str(), final_path.c_str(), nullptr)) {
+    entry.had_previous = true;
+    return true;
+  }
+#endif
+  if (!fs::copy_file(final_path, entry.backup_path,
+                     fs::copy_options::overwrite_existing, error) ||
+      error) {
+    return false;
+  }
+  entry.had_previous = true;
+  return true;
+}
+
+void ArtifactTransaction::remove_backup(Entry& entry) noexcept {
+  if (entry.backup_path.empty()) return;
+  error_code error;
+  fs::remove(entry.backup_path, error);
+  entry.backup_path.clear();
+  entry.had_previous = false;
+}
+
+void ArtifactTransaction::rollback() noexcept {
+  // Restore in reverse publication order. A final with a previous version is
+  // replaced by its hard-link backup; a final that did not exist before is
+  // removed. Failures here leave the backup in place rather than deleting the
+  // only surviving copy.
+  for (auto entry = entries_.rbegin(); entry != entries_.rend(); ++entry) {
+    if (entry->published) {
+      error_code error;
+      if (entry->had_previous && fs::exists(entry->backup_path, error)) {
+#ifdef _WIN32
+        if (MoveFileExW(entry->backup_path.c_str(),
+                        entry->artifact.final_path().c_str(),
+                        MOVEFILE_REPLACE_EXISTING)) {
+          entry->backup_path.clear();
+          entry->had_previous = false;
+          continue;
+        }
+#else
+        fs::remove(entry->artifact.final_path(), error);
+        error.clear();
+        fs::rename(entry->backup_path, entry->artifact.final_path(), error);
+        if (!error) {
+          entry->backup_path.clear();
+          entry->had_previous = false;
+          continue;
+        }
+#endif
+      } else {
+        fs::remove(entry->artifact.final_path(), error);
+      }
+    }
+    remove_backup(*entry);
+  }
+}
+
+bool ArtifactTransaction::publish() {
+  if (entries_.empty()) return true;
+
+  for (Entry& entry : entries_) {
+    if (!prepare_backup(entry)) {
+      for (Entry& prepared : entries_) remove_backup(prepared);
+      return false;
+    }
+  }
+
+  for (Entry& entry : entries_) {
+    if (!entry.artifact.publish()) {
+      rollback();
+      return false;
+    }
+    entry.published = true;
+  }
+
+  for (Entry& entry : entries_) remove_backup(entry);
+  entries_.clear();
+  return true;
+}
+
+void ArtifactTransaction::discard() noexcept {
+  for (Entry& entry : entries_) {
+    remove_backup(entry);
+    entry.artifact.discard();
+  }
+  entries_.clear();
 }
 
 }  // namespace nirq
