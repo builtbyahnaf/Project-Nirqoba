@@ -19,7 +19,24 @@ recorded below is made under that authority.
 > `0.495-beta`. Only the newest entry carries the working-build label; older
 > `(released)` entries are actual published checkpoints.
 
-## Version 0.501-beta (working build)
+## Version 0.505-beta (working build)
+
+### Summary of Changes (since `0.501-beta`):
+
+- **Shared allocations reject deterministic owners.** A shared payload whose
+  fields include an owned resource, a shared token, a borrow or an array view
+  cannot be released field-by-field at the final decrement, so it is rejected.
+  Managed-only payloads retain their traced roots.
+- **Owned arrays reject reference-counted and borrowed elements.** Bulk
+  `array.owned_release` frees the element block; it does not walk element
+  fields. Elements with shared tokens, borrowed fields or array views are now
+  rejected instead of silently dropping their cleanup.
+- **Tests:** 259 unit tests and 483 integration tests pass at this milestone.
+- **Still deferred:** bounded release of process-lifetime `file.read_text`
+  buffers; crash-safe publication; busy-registry termination cleanup;
+  synchronous reclamation of collector-owned SoA storage.
+
+## Version 0.501-beta
 
 ### Summary of Changes (since `0.499-beta`):
 
@@ -33,7 +50,7 @@ recorded below is made under that authority.
   `memory.reallocate<T>` and `memory.secure_allocate<T>` reject the same
   payloads because their release paths free raw bytes without field
   destruction. Managed-only payloads remain available.
-- **Tests:** 259 unit tests and 485 integration tests pass, including the new
+- **Tests:** 259 unit tests and 480 integration tests pass, including the new
   positive managed-payload case and the rejected shared/borrowed/owned cases.
 - **Still deferred:** bounded release of process-lifetime `file.read_text`
   buffers; crash-safe publication; busy-registry termination cleanup;
