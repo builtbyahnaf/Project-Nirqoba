@@ -104,6 +104,19 @@ TEST(RuntimeShutdownTest, FileReadStringSurvivesEntryShutdown) {
   ASSERT_EQ(string(text), string("phase7 string"));
 }
 
+TEST(RuntimeShutdownTest, ExitCleanupRetiresUncontendedRegistries) {
+  TemporaryFile file("exit cleanup");
+  void* handle = nrq_file_open_handle(file.path().string().c_str(), 0);
+  ASSERT_NE(handle, nullptr);
+
+  // The termination path uses try-lock, but an uncontended registry must still
+  // be fully retired rather than being abandoned to process teardown.
+  nrq_runtime_shutdown_for_exit();
+
+  ASSERT_EQ(nrq_file_close_handle(handle),
+            static_cast<int32_t>(ERROR_INVALID_HANDLE));
+}
+
 TEST(RuntimeShutdownTest, LiveMappingIsUnmappedAndRegistryCleared) {
   TemporaryFile file("shutdown mapping");
   void* address = nrq_memory_map_file(file.path().string().c_str(), 0);
