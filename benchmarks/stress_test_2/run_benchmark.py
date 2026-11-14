@@ -54,7 +54,7 @@ RESULT_JSON = BENCH_DIR / "benchmark_results.json"
 
 NRQ_EXE = PROJECT_ROOT / "build" / "msvc-dev" / "bin" / "nirqoba.exe"
 RUSTC_EXE = Path(r"C:\Users\USER\.cargo\bin\rustc.exe")
-JDK_BIN = Path(r"C:\Users\USER\.gradle\jdks\eclipse_adoptium-25-amd64-windows.2\bin")
+JDK_BIN = Path(r"D:\Victim of space issue\.gradle\jdks\eclipse_adoptium-17-amd64-windows.2\bin")
 JAVAC_EXE = JDK_BIN / "javac.exe"
 JAVA_EXE = JDK_BIN / "java.exe"
 VCVARS_BAT = Path(

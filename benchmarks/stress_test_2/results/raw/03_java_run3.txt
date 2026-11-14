@@ -1,39 +1,39 @@
-$ C:\Users\USER\.gradle\jdks\eclipse_adoptium-25-amd64-windows.2\bin\java.exe -Xms2g -Xmx2g -XX:+UseSerialGC -cp D:\Actual Project Files\Project Nirqoba\benchmarks\stress_test_2\bin\java_classes Benchmark03Cycles
+$ D:\Victim of space issue\.gradle\jdks\eclipse_adoptium-17-amd64-windows.2\bin\java.exe -Xms2g -Xmx2g -XX:+UseSerialGC -cp D:\Actual Project Files\Project Nirqoba\benchmarks\stress_test_2\bin\java_classes Benchmark03Cycles
 exit_code=0
 timed_out=False
-wall_seconds=0.572
+wall_seconds=0.443
 TEST cyclic_graph_reclamation
 IMPL java
 OBJECTS 1000000
 WARMUP_ROUNDS 2
 MEASURE_ROUNDS 5
 ROUND 0
-BUILD_MS 7.696
-COLLECT_MS 52.237
+BUILD_MS 5.988
+COLLECT_MS 42.677
 CHECKSUM 499999500000
 LIVE_AFTER 0
 CYCLES_CLEARED 500000
 ROUND 1
-BUILD_MS 10.367
-COLLECT_MS 60.461
+BUILD_MS 5.390
+COLLECT_MS 43.726
 CHECKSUM 499999500000
 LIVE_AFTER 0
 CYCLES_CLEARED 500000
 ROUND 2
-BUILD_MS 8.005
-COLLECT_MS 53.601
+BUILD_MS 5.564
+COLLECT_MS 45.080
 CHECKSUM 499999500000
 LIVE_AFTER 0
 CYCLES_CLEARED 500000
 ROUND 3
-BUILD_MS 7.523
-COLLECT_MS 52.741
+BUILD_MS 6.207
+COLLECT_MS 39.468
 CHECKSUM 499999500000
 LIVE_AFTER 0
 CYCLES_CLEARED 500000
 ROUND 4
-BUILD_MS 7.676
-COLLECT_MS 52.297
+BUILD_MS 5.540
+COLLECT_MS 43.084
 CHECKSUM 499999500000
 LIVE_AFTER 0
 CYCLES_CLEARED 500000
