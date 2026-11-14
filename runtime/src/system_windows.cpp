@@ -146,12 +146,11 @@ uint64_t nrq_system_used_bytes(void) {
 }
 
 void nrq_system_exit(int32_t exit_code) {
-    // system.exit is a normal termination request, not an abnormal crash. Run
-    // the same deterministic native-resource retirement as an entry return
-    // before leaving the process. Shutdown is serialised and idempotent; no
-    // language code runs after this point, so borrowed process-lifetime strings
-    // remain valid until ExitProcess reclaims them.
-    nrq_runtime_shutdown();
+    // system.exit is a normal termination request, not an abnormal crash. Retire
+    // native resources without waiting for a lock held by another thread; the OS
+    // reclaims anything still busy. No language code runs after this point, so
+    // borrowed process-lifetime strings remain valid until ExitProcess.
+    nrq_runtime_shutdown_for_exit();
     ExitProcess(static_cast<UINT>(exit_code));
 }
 

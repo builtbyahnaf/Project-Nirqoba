@@ -42,6 +42,9 @@ void nrq_runtime_init(void);
 
 // Shuts down the Nirqoba runtime.
 void nrq_runtime_shutdown(void);
+// Best-effort termination cleanup used by system.exit. Unlike normal shutdown,
+// it never waits for a registry or operation lock held by another thread.
+void nrq_runtime_shutdown_for_exit(void);
 
 #ifdef __cplusplus
 }

@@ -8,8 +8,11 @@
 
 namespace nirq::runtime {
 
-void release_file_resources() noexcept;
-void release_mapping_resources() noexcept;
-void release_mutex_resources() noexcept;
+// `wait` false is the termination path: if another thread holds a registry or
+// operation lock, skip that registry and let ExitProcess reclaim its handles.
+// Blocking there could wait forever on a blocked socket/file operation.
+void release_file_resources(bool wait) noexcept;
+void release_mapping_resources(bool wait) noexcept;
+void release_mutex_resources(bool wait) noexcept;
 
 }  // namespace nirq::runtime
