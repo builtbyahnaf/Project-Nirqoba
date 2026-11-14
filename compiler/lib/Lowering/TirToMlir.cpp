@@ -4232,6 +4232,17 @@ class FunctionTranslator {
           builder_.create<mlir::LLVM::CallOp>(
               loc, mutator_leave, mlir::ValueRange{});
         }
+        // The entry function is the only place that can retire process-owned
+        // runtime buffers. Doing it at every return edge covers the no-argument
+        // `main` as well as the argument wrapper's callee. `system.exit` does
+        // not return, so that path still relies on process teardown.
+        if (emit_abi_reference_) {
+          auto shutdown = ensure_runtime_fn(
+              module_, builder_, "nrq_runtime_shutdown",
+              mlir::LLVM::LLVMVoidType::get(ctx_), {});
+          builder_.create<mlir::LLVM::CallOp>(
+              loc, shutdown, mlir::ValueRange{});
+        }
         if (op.operand.is_valid()) {
           if (val) {
             builder_.create<mlir::func::ReturnOp>(loc, mlir::ValueRange{val});
@@ -4661,6 +4672,7 @@ static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
         mlir::LLVM::LLVMVoidType::get(ctx), {});
     builder.create<mlir::LLVM::CallOp>(loc, leave, mlir::ValueRange{});
   }
+
   builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange{exit_code});
   return true;
 }
