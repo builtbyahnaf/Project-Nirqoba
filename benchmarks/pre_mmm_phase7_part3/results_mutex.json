@@ -1,0 +1,118 @@
+{
+  "mode": "mutex",
+  "repeats": 9,
+  "baseline": {
+    "median_wall_ms": 47.396,
+    "median_peak_rss_bytes": 9768960,
+    "outputs": [
+      "100000"
+    ]
+  },
+  "current": {
+    "median_wall_ms": 42.319,
+    "median_peak_rss_bytes": 9781248,
+    "outputs": [
+      "100000"
+    ]
+  },
+  "comparison": {
+    "wall_change_percent": -10.71,
+    "peak_rss_change_percent": 0.13
+  },
+  "samples": {
+    "baseline": [
+      {
+        "wall_ms": 143.52159999998548,
+        "peak_rss_bytes": 10326016,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 85.83309999994526,
+        "peak_rss_bytes": 9596928,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 47.07780000080675,
+        "peak_rss_bytes": 9777152,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 47.39570000037929,
+        "peak_rss_bytes": 9764864,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 46.83199999999488,
+        "peak_rss_bytes": 9670656,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 47.137300000031246,
+        "peak_rss_bytes": 9768960,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 46.02100000010978,
+        "peak_rss_bytes": 9768960,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 48.45209999984945,
+        "peak_rss_bytes": 9785344,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 48.81790000035835,
+        "peak_rss_bytes": 9785344,
+        "stdout": "100000"
+      }
+    ],
+    "current": [
+      {
+        "wall_ms": 139.74439999947208,
+        "peak_rss_bytes": 10313728,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 92.62829999988753,
+        "peak_rss_bytes": 9654272,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 39.73279999991064,
+        "peak_rss_bytes": 9781248,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 40.76739999982237,
+        "peak_rss_bytes": 9773056,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 42.547900000499794,
+        "peak_rss_bytes": 9781248,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 40.82689999995637,
+        "peak_rss_bytes": 9777152,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 40.39600000032806,
+        "peak_rss_bytes": 9781248,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 42.319299999689974,
+        "peak_rss_bytes": 9777152,
+        "stdout": "100000"
+      },
+      {
+        "wall_ms": 51.32859999957873,
+        "peak_rss_bytes": 9785344,
+        "stdout": "100000"
+      }
+    ]
+  }
+}
