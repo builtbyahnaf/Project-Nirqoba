@@ -28,3 +28,16 @@ TEST(SyncTest, MutexSerializesConcurrentNativeCallers) {
 TEST(SyncTest, DestroyNullOwnerIsNoop) {
   nrq_mutex_destroy(nullptr);
 }
+
+TEST(SyncTest, DestroyedSlotIsReusedWithANewGeneration) {
+  void* first = nrq_mutex_create();
+  ASSERT_NE(first, nullptr);
+  nrq_mutex_destroy(first);
+
+  void* second = nrq_mutex_create();
+  ASSERT_NE(second, nullptr);
+  ASSERT_NE(first, second);
+  nrq_mutex_lock(second);
+  nrq_mutex_unlock(second);
+  nrq_mutex_destroy(second);
+}
