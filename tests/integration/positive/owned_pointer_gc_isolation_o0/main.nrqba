@@ -1,0 +1,6 @@
+int function main(string[] args) {
+    var pointer = memory.allocate<int>(args.length + 16);
+    pointer[0] = 7;
+    memory.deallocate(pointer);
+    return 0;
+}
