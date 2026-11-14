@@ -365,7 +365,25 @@ For each subsystem:
 - [ ] Benchmark the migrated subsystem.
 - [ ] Keep a rollback point until the new implementation is stable.
 
-**Completion:** Each subsystem uses the correct memory domain without requiring a global migration.
+### Compiler-owned temporary resources — first eligible subsystem
+
+Completed at `0.477-beta` (`reports/pre-mmm/phase-07.md`):
+
+- [x] Move compiler-generated artifacts onto the deterministic ownership path. Build objects and executables are staged through move-only `TemporaryArtifact` leases and published only after success; `run` removes its executable and object unless `--keep-artifacts` is given.
+- [x] Preserve external build behavior. A successful `build` still produces the same object and executable paths; the `hello` executable is byte-identical to `0.473-beta`.
+- [x] Remove obsolete internal GC dependencies only when no longer needed. None existed on this path; the compiler is a native process and its artifacts now use C++ RAII, not tracing.
+- [x] Benchmark the migrated subsystem. 41 interleaved samples: build +3.51%, run -0.88%, `new` +7.05%, peak RSS +0.24%; `run` artifacts fall from 2 files / 10,300 B to zero.
+- [x] Keep a rollback point. `.phase7-baseline` is the `0.473-beta` worktree; `--keep-artifacts` restores the old `run` artifact behavior.
+- [x] Publish project scaffolds atomically. `TemporaryDirectory` writes the complete tree beside the target and renames it into place; failures leave no partial project.
+
+Remaining Phase 7 subsystems are **not started**: runtime-owned buffers and
+internal allocations, native-resource handling, container/aggregate internals,
+async resources, and tensor/device buffers. Runtime file-read strings remain on
+the documented GC/runtime fallback because they escape into the language as
+`string` and have no ownership contract yet.
+
+**Completion:** Partially complete at `0.477-beta`: the first subsystem boundary
+is migrated and documented; later subsystems retain their existing behavior.
 
 ---
 
