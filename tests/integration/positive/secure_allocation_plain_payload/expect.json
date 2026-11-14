@@ -1,5 +1,9 @@
 {
   "mode": "build_and_run",
   "expect_exit": 0,
-  "expect_stdout": "18\n"
+  "expect_stdout": "18\n",
+  "expect_ir_counts": {
+    "call void @nrq_gc_root_unregister": 0,
+    "call void @nrq_memory_secure_release": 1
+  }
 }
