@@ -402,22 +402,24 @@ Completed at `0.483-beta`, extended at `0.495-beta` (`reports/pre-mmm/phase-07-p
 
 ### Container and aggregate internals — roadmap 4
 
-Partially complete at `0.495-beta` (`reports/pre-mmm/phase-07-part-3.md`):
+Complete at `0.499-beta` (`reports/pre-mmm/phase-07-part-4.md`):
 
 - [x] Migrate shared aggregate root metadata. Up to eight managed-reference offsets are inline; deeper layouts retain the vector fallback.
-- [x] Remove per-drop aggregate path allocations. Owned-drop and shared-retain traversal uses `SmallVector<int64_t, 8>`.
+- [x] Remove per-drop aggregate path allocations. Owned-drop and shared-retain traversal uses `SmallVector<int64_t, 8>`, then direct recursive helpers instead of a per-site `std::function`.
 - [x] Preserve aggregate destruction and alias behavior. Existing owned-aggregate, shared-field and cleanup cases pass unchanged.
-- [x] Benchmark or account for the change. No separate container allocator exists; the allocation removal is structural and covered by aggregate tests, not a claimed speedup.
-- [ ] Complete a container-internals audit. Owned arrays, views and SoA already use deterministic ownership/GC roots; no redesign was attempted.
+- [x] Benchmark or account for the change. Part 4: 5,000 drop sites, 15 alternating builds, +0.71% wall and +0.04% peak RSS, neutral; no speedup claimed.
+- [x] Complete a container-internals audit. Owned arrays use explicit storage and typed roots; views are non-owning descriptors; SoA is collector-owned with strided reference tracing; shared storage uses reference counts and inline root metadata. No redesign was warranted.
+- [x] Fix SoA aggregate rooting. A SoA initializer in a struct or tuple now forces an entry root frame before the rooted allocation.
+- [x] Release SoA fields during aggregate destruction. The drop walk unregisters each container root; the sweep reclaims collector storage.
 
-Remaining Phase 7 work is the container-internals audit in roadmap 4. Async/task
-resources (roadmap 5) and tensor/device buffers (roadmap 6) have no subsystem in
-this tree, so they are not applicable. Collector pages and allocator shards remain
-outside this phase.
+Async/task resources (roadmap 5) and tensor/device buffers (roadmap 6) have no
+subsystem in this tree, so they are not applicable. Collector pages and
+allocator shards remain outside this phase.
 
-**Completion:** Partially complete at `0.495-beta`: roadmap steps 1–3 are
-migrated, aggregate internals are migrated, and the container audit remains.
-Steps 5–6 have no implementation to migrate.
+**Completion:** Complete at `0.499-beta`: roadmap steps 1–4 are migrated and
+audited; steps 5–6 have no implementation to migrate. Publication crash
+recovery, bounded read-string release and busy-registry termination cleanup are
+documented hardening work, not unfinished container migrations.
 
 ---
 
