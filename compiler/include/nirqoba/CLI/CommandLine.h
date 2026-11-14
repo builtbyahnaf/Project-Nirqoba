@@ -60,6 +60,9 @@ struct CommandLineOptions {
   // points consume (allocation-site tags, event emission). The default is the
   // production path, which contains none of it.
   bool debug_enabled = false;
+  // `run` normally removes the executable and object it generated; this keeps
+  // them at their final paths for inspection. `build` already keeps them.
+  bool keep_artifacts = false;
   std::vector<std::string> trailing_args;  // For `nirqoba run ... -- args`
 };
 
