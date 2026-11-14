@@ -15,8 +15,9 @@ that loses context can resume from it plus `git log`.
 | 2d | column addressing in TIR + lowering for `ps[i].f` | done (86fadcc) |
 | 2e | runtime bounds check on the row index | done (61509a0) |
 | 3 | reference-column tracing | done (3c63c47) |
-| 3 | strided GC trace callback for reference columns | pending |
+| 3 | strided GC trace callback for reference columns | done |
 | 4 | column views, benchmarks, docs, version milestone | pending |
+| 5 | aggregate field rooting, destruction, move and reclamation | done (`0.499-beta`) |
 
 ## Stage 1 (`8f48c93`)
 
@@ -548,9 +549,29 @@ wins cache-resident, SoA wins bandwidth-bound.
 Hardware cache-miss counters are **not** available without PMU access (ETW/PDH or an
 external tool), so none are reported. The report states this explicitly instead of
 presenting byte-ratio reasoning as measured misses.
+## Stage 5 — aggregate fields (`0.499-beta`)
+
+`soa<T>` was already an owned type, but two aggregate paths did not treat it as
+one. A container created directly as a struct or tuple initializer did not force
+an entry root frame: the allocation lowering emitted a rooted allocation with a
+slot that the root planner had omitted, and the runtime rejected it with
+"rooted GC allocation requires a registered pointer root slot". The planner now
+marks `memory.owned_soa` as a rooted allocation exactly like `array.allocate`.
+
+`aggregate.owned_drop` also skipped SoA fields in its recursive walk. It now
+recognises the container as a leaf, extracts the pointer and calls
+`nrq_gc_root_unregister`; it deliberately does not deallocate collector storage.
+The drop/retain recursion uses member helpers instead of a per-site
+`std::function`.
+
+Tests: `aggregate_soa_field`, `aggregate_soa_field_reclaimed`,
+`aggregate_soa_tuple_field`, `aggregate_soa_field_move`,
+`aggregate_soa_field_return`, `aggregate_soa_and_shared_field`, and the unit
+case `MlirPipelineTest.RootsSoaAggregateFieldAndReleasesItOnDrop`.
+
 ## Invariants that must not be broken
 
 - Ordinary structs, AoS layout, and their tests are untouched by every stage.
-- No program may allocate an SoA until stage 3's trace callback exists; a reference
-  column without one is a use-after-free, not a missing feature.
+- A reference column requires the strided trace descriptor; the runtime has
+  provided it since stage 3, and columns without it remain refused.
 - `NRQ5010` remains the code for "element is not a struct".
