@@ -1,0 +1,8 @@
+struct Row {
+    borrow ptr int data;
+}
+
+int function main() {
+    var rows = memory.owned_soa<Row>(2);
+    return 0;
+}

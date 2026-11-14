@@ -1,0 +1,9 @@
+struct Row {
+    shared ptr int data;
+}
+
+int function main() {
+    var rows = memory.owned_soa<Row>(2);
+    rows[0].data = memory.shared_allocate<int>(4);
+    return 0;
+}

@@ -299,6 +299,7 @@ static std::string cleanup_for_owner_producer(const std::string& callee,
   if (callee == "socket.connect") return "socket.close";
   if (callee == "memory.owned_array" ||
       callee == "memory.owned_array_aligned") return "array.owned_release";
+  if (callee == "memory.owned_soa") return "soa.owned_release";
   return {};
 }
 
@@ -4113,6 +4114,20 @@ Type TypeChecker::check_call(CallExpr& call) {
             "soa<" + element.struct_name() + "> cannot own column '" + field.first +
                 "': columns cannot hold owned arrays or array views yet");
         return Type::error();
+      }
+    }
+    if (const StructInfo* info = find_struct(element.struct_name())) {
+      for (const Parameter& field : info->fields) {
+        const Type field_type = resolve_aggregate_type(field.type);
+        if (field.borrowed || field.shared ||
+            contains_shared_pointer(field_type) ||
+            contains_borrowed_field(field_type)) {
+          diagnostics_.error(
+              diag::kTypeMismatch, call.location(),
+              "soa<" + element.struct_name() + "> cannot own column '" + field.name +
+                  "': columns cannot hold reference-counted or borrowed fields yet");
+          return Type::error();
+        }
       }
     }
     return Type::soa_type(element);
