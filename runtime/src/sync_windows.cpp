@@ -12,7 +12,6 @@
 #include <memory>
 #include <mutex>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -25,14 +24,33 @@ struct MutexResource {
   bool closing = false;
 };
 
+struct MutexSlot {
+  std::shared_ptr<MutexResource> resource;
+  uint32_t generation = 0;
+};
+
 std::mutex registry_mutex;
-std::unordered_map<void*, std::shared_ptr<MutexResource>> resources;
-uintptr_t next_handle = 1;
+std::vector<MutexSlot> mutex_slots;
+uint32_t next_mutex_generation = 1;
+
+bool decode_mutex_token(void* handle, uint32_t& index, uint32_t& generation) {
+  const uintptr_t raw = reinterpret_cast<uintptr_t>(handle);
+  const uint32_t encoded_index = static_cast<uint32_t>(raw & 0xffffffffu);
+  generation = static_cast<uint32_t>(raw >> 32);
+  if (encoded_index == 0 || generation == 0) return false;
+  index = encoded_index - 1;
+  return true;
+}
 
 std::shared_ptr<MutexResource> find_mutex(void* handle) {
+  uint32_t index = 0;
+  uint32_t generation = 0;
+  if (!decode_mutex_token(handle, index, generation)) return nullptr;
   std::lock_guard<std::mutex> lock(registry_mutex);
-  auto found = resources.find(handle);
-  return found == resources.end() ? nullptr : found->second;
+  if (index >= mutex_slots.size()) return nullptr;
+  MutexSlot& slot = mutex_slots[index];
+  if (slot.generation != generation) return nullptr;
+  return slot.resource;
 }
 
 }  // namespace
@@ -43,9 +61,10 @@ void release_mutex_resources() noexcept {
   std::vector<std::shared_ptr<MutexResource>> doomed;
   {
     std::lock_guard<std::mutex> lock(registry_mutex);
-    doomed.reserve(resources.size());
-    for (auto& entry : resources) doomed.push_back(std::move(entry.second));
-    resources.clear();
+    doomed.reserve(mutex_slots.size());
+    for (MutexSlot& slot : mutex_slots)
+      if (slot.resource) doomed.push_back(std::move(slot.resource));
+    mutex_slots.clear();
   }
   for (auto& resource : doomed) {
     std::lock_guard<std::mutex> state_lock(resource->state_mutex);
@@ -62,10 +81,16 @@ void* nrq_mutex_create(void) {
   try {
     auto resource = std::make_shared<MutexResource>();
     std::lock_guard<std::mutex> lock(registry_mutex);
-    if (next_handle == 0 || next_handle > UINTPTR_MAX - 1) return nullptr;
-    void* handle = reinterpret_cast<void*>(next_handle++);
-    resources.emplace(handle, std::move(resource));
-    return handle;
+    size_t index = 0;
+    while (index < mutex_slots.size() && mutex_slots[index].resource) ++index;
+    if (index == mutex_slots.size()) mutex_slots.emplace_back();
+    if (next_mutex_generation == 0) next_mutex_generation = 1;
+    MutexSlot& slot = mutex_slots[index];
+    slot.generation = next_mutex_generation++;
+    slot.resource = std::move(resource);
+    const uint64_t raw = (static_cast<uint64_t>(slot.generation) << 32) |
+                         (static_cast<uint64_t>(index) + 1);
+    return reinterpret_cast<void*>(static_cast<uintptr_t>(raw));
   } catch (...) {
     return nullptr;
   }
@@ -101,18 +126,22 @@ void nrq_mutex_destroy(void* handle) {
   // the owning slot cleared. Treat that null sentinel as an already-released
   // owner while continuing to diagnose stale non-null tokens.
   if (!handle) return;
+  uint32_t index = 0;
+  uint32_t generation = 0;
+  if (!decode_mutex_token(handle, index, generation))
+    nrq_runtime_fatal("mutex.destroy received an invalid or destroyed mutex");
   std::shared_ptr<MutexResource> resource;
   {
     std::lock_guard<std::mutex> registry_lock(registry_mutex);
-    auto found = resources.find(handle);
-    if (found == resources.end())
+    if (index >= mutex_slots.size() ||
+        mutex_slots[index].generation != generation ||
+        !mutex_slots[index].resource)
       nrq_runtime_fatal("mutex.destroy received an invalid or destroyed mutex");
-    resource = found->second;
+    resource = std::move(mutex_slots[index].resource);
     std::lock_guard<std::mutex> state_lock(resource->state_mutex);
     if (resource->locked)
       nrq_runtime_fatal("mutex.destroy cannot destroy a locked mutex");
     resource->closing = true;
-    resources.erase(found);
   }
   resource->changed.notify_all();
 }
