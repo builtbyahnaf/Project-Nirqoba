@@ -82,7 +82,7 @@ TEST(RuntimeBuffersTest, ReleaseIsIdempotentAndAllowsReuse) {
   ASSERT_EQ(runtime::process_string_bytes(), size_t{0});
 }
 
-TEST(RuntimeBuffersTest, FileReadsRemainValidUntilShutdown) {
+TEST(RuntimeBuffersTest, FileReadsAreProcessLifetimeValues) {
   TemporaryTextFile file("phase seven runtime buffer");
   const string path = file.path().string();
   const char* first = nrq_file_read_text(path.c_str());
@@ -95,14 +95,17 @@ TEST(RuntimeBuffersTest, FileReadsRemainValidUntilShutdown) {
   ASSERT_TRUE(runtime::process_string_bytes() > 0);
 
   nrq_runtime_shutdown();
-  ASSERT_EQ(runtime::process_string_bytes(), size_t{0});
+  // Entry shutdown retires native resources, not borrowed strings. The values
+  // are still observable and no later language code can outlive the process.
+  ASSERT_TRUE(runtime::process_string_bytes() > 0);
+  ASSERT_EQ(string(first), string("phase seven runtime buffer"));
+  ASSERT_EQ(string(second), string("phase seven runtime buffer"));
 
-  // Shutdown is a lifetime boundary, not a terminal state: a later embedding can
-  // initialise the runtime and read again.
   const char* after = nrq_file_read_text(path.c_str());
   ASSERT_NE(after, nullptr);
   ASSERT_EQ(string(after), string("phase seven runtime buffer"));
-  nrq_runtime_shutdown();
+  runtime::release_process_strings();
+  ASSERT_EQ(runtime::process_string_bytes(), size_t{0});
 }
 
 TEST(RuntimeBuffersTest, ConcurrentAllocationsRemainValid) {

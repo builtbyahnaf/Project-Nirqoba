@@ -93,15 +93,15 @@ TEST(RuntimeShutdownTest, MutexRegistryIsUsableAfterShutdown) {
   nrq_mutex_destroy(second);
 }
 
-TEST(RuntimeShutdownTest, FileReadStringIsValidUntilShutdown) {
+TEST(RuntimeShutdownTest, FileReadStringSurvivesEntryShutdown) {
   TemporaryFile file("phase7 string");
   const char* text = nrq_file_read_text(file.path().string().c_str());
   ASSERT_NE(text, nullptr);
   ASSERT_EQ(string(text), string("phase7 string"));
 
-  // The pointer is intentionally not used after this call; shutdown ends the
-  // process-owned lifetime of every read buffer.
+  // Entry shutdown does not free borrowed strings; the OS is the release point.
   nrq_runtime_shutdown();
+  ASSERT_EQ(string(text), string("phase7 string"));
 }
 
 TEST(RuntimeShutdownTest, LiveMappingIsUnmappedAndRegistryCleared) {

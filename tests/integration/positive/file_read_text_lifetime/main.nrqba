@@ -1,0 +1,21 @@
+struct TextHolder {
+    string text;
+}
+
+string function load_text(string path) {
+    return file.read_text(path);
+}
+
+int function main() {
+    let original = file.read_text("tests/integration/positive/file_read_text_lifetime/data.txt");
+    let copy = original;
+    let holder = TextHolder { text: copy };
+    let shared = holder.text;
+    print(original);
+    print(copy);
+    print(holder.text);
+    print(shared);
+    print(original.length);
+    print(load_text("tests/integration/positive/file_read_text_lifetime/data.txt"));
+    return 0;
+}
