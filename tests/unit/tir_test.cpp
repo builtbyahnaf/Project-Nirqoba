@@ -415,6 +415,26 @@ TEST(TirTest, VerifierRejectsImmutableBorrowToMutableParameter) {
   ASSERT_TRUE(diag.has_errors());
 }
 
+TEST(TirTest, VerifierRejectsForgedResultOwnership) {
+  DiagnosticEngine diag;
+  tir::Module mod;
+  auto fn = std::make_unique<tir::Function>("forged", Type::void_type());
+  const Type pointer = Type::pointer_type(Type::int_type());
+  tir::Value value = fn->allocate_value(pointer, ValueOwnership::Owned);
+  value.ownership = ValueOwnership::Shared;
+  tir::Op constant;
+  constant.kind = tir::OpKind::ConstantInt;
+  constant.result = value;
+  fn->add_operation(constant);
+  tir::Op ret;
+  ret.kind = tir::OpKind::Return;
+  fn->add_operation(ret);
+  mod.add_function(std::move(fn));
+
+  ASSERT_FALSE(verify_tir_module(mod, diag));
+  ASSERT_TRUE(diag.has_errors());
+}
+
 TEST(TirTest, VerifierAcceptsOwnedRelease) {
   DiagnosticEngine diag;
   tir::Module mod;
