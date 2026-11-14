@@ -1,0 +1,5 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 0,
+  "expect_stdout": "phase7-lifetime\nphase7-lifetime\nphase7-lifetime\nphase7-lifetime\n15\nphase7-lifetime\n"
+}
