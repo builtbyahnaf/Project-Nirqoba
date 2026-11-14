@@ -217,6 +217,14 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
         }
       }
 
+      if (op.result.is_valid() && value_in_range(*function, op.result) &&
+          op.result.ownership != function->value_ownership(op.result.id)) {
+        diagnostics.error(kType, op.location,
+                          function_value(*function, op.result.id) +
+                              "operation result ownership disagrees with the value record");
+        ok = false;
+      }
+
       check_value(op.operand, op.location, "operand");
       check_value(op.lhs, op.location, "lhs");
       check_value(op.rhs, op.location, "rhs");
