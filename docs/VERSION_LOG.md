@@ -12,6 +12,13 @@ recorded below is made under that authority.
 
 ---
 
+> **Phase 7 intermediate-label note.** `0.480-beta`, `0.484-beta` and
+> `0.487-beta` are retrospective milestone entries: the work was implemented
+> and shipped, but no release commit was made at those labels. They are kept as
+> separate upgrade records instead of being compressed into `0.483-beta` or
+> `0.495-beta`. Only the newest entry carries the working-build label; older
+> `(released)` entries are actual published checkpoints.
+
 ## Version 0.499-beta (working build)
 
 ### Summary of Changes (since `0.495-beta`):
