@@ -6,6 +6,8 @@
 #include "nirqoba/runtime/allocator.h"
 #include "nirqoba/runtime/fatal.h"
 
+#include "runtime_shutdown.h"
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -14,6 +16,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 using namespace std;
 
@@ -48,6 +51,31 @@ std::wstring utf8_to_wide(const char* path) {
   return result;
 }
 }  // namespace
+
+namespace nirq::runtime {
+
+void release_mapping_resources() noexcept {
+  std::vector<std::shared_ptr<Mapping>> doomed;
+  {
+    std::lock_guard<std::mutex> lock(mapping_mutex);
+    doomed.reserve(mappings.size());
+    for (auto& entry : mappings) doomed.push_back(std::move(entry.second));
+    mappings.clear();
+  }
+  for (auto& mapping : doomed) {
+    std::lock_guard<std::mutex> operation_lock(mapping->operation_mutex);
+    if (mapping->closed) continue;
+    if (mapping->view) UnmapViewOfFile(mapping->view);
+    if (mapping->section) CloseHandle(mapping->section);
+    if (mapping->file != INVALID_HANDLE_VALUE) CloseHandle(mapping->file);
+    mapping->view = nullptr;
+    mapping->section = nullptr;
+    mapping->file = INVALID_HANDLE_VALUE;
+    mapping->closed = true;
+  }
+}
+
+}  // namespace nirq::runtime
 
 extern "C" {
 

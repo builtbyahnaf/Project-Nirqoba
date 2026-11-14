@@ -44,6 +44,7 @@ set(NIRQOBA_RUNTIME_SOURCES
   src/io_windows.cpp
   src/runtime_buffers.cpp
   src/runtime_buffers.h
+  src/runtime_shutdown.h
   src/fatal_windows.cpp
   src/runtime_version.cpp
   src/runtime_config.h

@@ -5,12 +5,15 @@
 #include "nirqoba/runtime/sync.h"
 #include "nirqoba/runtime/fatal.h"
 
+#include "runtime_shutdown.h"
+
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 namespace {
 
@@ -33,6 +36,25 @@ std::shared_ptr<MutexResource> find_mutex(void* handle) {
 }
 
 }  // namespace
+
+namespace nirq::runtime {
+
+void release_mutex_resources() noexcept {
+  std::vector<std::shared_ptr<MutexResource>> doomed;
+  {
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    doomed.reserve(resources.size());
+    for (auto& entry : resources) doomed.push_back(std::move(entry.second));
+    resources.clear();
+  }
+  for (auto& resource : doomed) {
+    std::lock_guard<std::mutex> state_lock(resource->state_mutex);
+    resource->closing = true;
+  }
+  for (auto& resource : doomed) resource->changed.notify_all();
+}
+
+}  // namespace nirq::runtime
 
 extern "C" {
 

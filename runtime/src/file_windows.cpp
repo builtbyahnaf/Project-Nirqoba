@@ -8,6 +8,7 @@
 #include "nirqoba/runtime/file.h"
 
 #include "runtime_buffers.h"
+#include "runtime_shutdown.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -16,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 static const char kEmptyString[] = "";
 namespace {
@@ -35,6 +37,27 @@ std::shared_ptr<FileResource> find_file_resource(void* token) {
     return found == file_resources.end() ? nullptr : found->second;
 }
 }
+
+namespace nirq::runtime {
+
+void release_file_resources() noexcept {
+    std::vector<std::shared_ptr<FileResource>> doomed;
+    {
+        std::lock_guard<std::mutex> lock(file_resource_mutex);
+        doomed.reserve(file_resources.size());
+        for (auto& entry : file_resources) doomed.push_back(std::move(entry.second));
+        file_resources.clear();
+    }
+    for (auto& resource : doomed) {
+        std::lock_guard<std::mutex> operation_lock(resource->operation_mutex);
+        if (resource->handle != INVALID_HANDLE_VALUE) {
+            CloseHandle(resource->handle);
+            resource->handle = INVALID_HANDLE_VALUE;
+        }
+    }
+}
+
+}  // namespace nirq::runtime
 
 extern "C" {
 

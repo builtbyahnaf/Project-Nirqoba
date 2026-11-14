@@ -9,6 +9,7 @@
 #include "nirqoba/runtime/fatal.h"
 
 #include "runtime_buffers.h"
+#include "runtime_shutdown.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -175,6 +176,14 @@ void nrq_runtime_shutdown(void) {
     // FlushFileBuffers on an anonymous pipe blocks until the reader drains it,
     // which deadlocked any parent that waited for this process before reading
     // its stdout. Shutdown now retires runtime-owned buffers only.
+    // Program code normally closes native resources explicitly. A live handle
+    // still owned at return is nevertheless released here, so process exit is
+    // not the owner of last resort. Registries are cleared before their handles
+    // are closed, making a stale token invalid rather than race-prone.
+    nirq::runtime::release_file_resources();
+    nirq::runtime::release_mapping_resources();
+    nirq::runtime::release_mutex_resources();
+
     // The language cannot free borrowed strings individually, so the runtime
     // owns every escaping string buffer for the process and releases the arena
     // here. This is the deterministic end of their lifetime; pointers are not
