@@ -10,6 +10,7 @@
 #include "nirqoba/runtime/allocator.h"
 #include "nirqoba/runtime/file.h"
 #include "nirqoba/runtime/io.h"
+#include "nirqoba/runtime/sync.h"
 
 using namespace std;
 
@@ -61,6 +62,46 @@ TEST(RuntimeShutdownTest, ReusedFileSlotDoesNotReactivateAStaleToken) {
   ASSERT_EQ(nrq_file_close_handle(first_handle),
             static_cast<int32_t>(ERROR_INVALID_HANDLE));
   ASSERT_EQ(nrq_file_close_handle(second_handle), int32_t{0});
+}
+
+TEST(RuntimeShutdownTest, ShutdownIsIdempotent) {
+  TemporaryFile file("idempotent shutdown");
+  void* handle = nrq_file_open_handle(file.path().string().c_str(), 0);
+  ASSERT_NE(handle, nullptr);
+
+  nrq_runtime_shutdown();
+  nrq_runtime_shutdown();
+
+  ASSERT_EQ(nrq_file_close_handle(handle),
+            static_cast<int32_t>(ERROR_INVALID_HANDLE));
+}
+
+TEST(RuntimeShutdownTest, MutexRegistryIsUsableAfterShutdown) {
+  void* first = nrq_mutex_create();
+  ASSERT_NE(first, nullptr);
+  nrq_mutex_lock(first);
+  nrq_mutex_unlock(first);
+
+  nrq_runtime_shutdown();
+
+  // Shutdown is not a one-way process latch for the registry itself: a fresh
+  // mutex must still be created and used for the remaining lifetime.
+  void* second = nrq_mutex_create();
+  ASSERT_NE(second, nullptr);
+  nrq_mutex_lock(second);
+  nrq_mutex_unlock(second);
+  nrq_mutex_destroy(second);
+}
+
+TEST(RuntimeShutdownTest, FileReadStringIsValidUntilShutdown) {
+  TemporaryFile file("phase7 string");
+  const char* text = nrq_file_read_text(file.path().string().c_str());
+  ASSERT_NE(text, nullptr);
+  ASSERT_EQ(string(text), string("phase7 string"));
+
+  // The pointer is intentionally not used after this call; shutdown ends the
+  // process-owned lifetime of every read buffer.
+  nrq_runtime_shutdown();
 }
 
 TEST(RuntimeShutdownTest, LiveMappingIsUnmappedAndRegistryCleared) {
