@@ -160,8 +160,8 @@ baseline because the baseline aborts on the SoA aggregate cases.
 |---|---|
 | RelWithDebInfo build | PASS |
 | Compiler version | `0.499-beta (Phase 7)` |
-| Unit suite | 258/258 |
-| Integration suite | 470/470 |
+| Unit suite | 259/259 |
+| Integration suite | 474/474 |
 | SoA field rooted and traced | PASS |
 | SoA field root released on aggregate drop | PASS |
 | SoA field reached through a tuple | PASS |

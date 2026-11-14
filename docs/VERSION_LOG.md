@@ -48,7 +48,7 @@ recorded below is made under that authority.
   417,480,704 B (+0.04% peak RSS). The difference is neutral; no speedup is
   claimed for the traversal refactor. The SoA correctness cases cannot run on
   the baseline because it aborts on them.
-- **Validation:** 258 unit tests and 470 integration tests pass. No ASan/UBSan
+- **Validation:** 259 unit tests and 474 integration tests pass. No ASan/UBSan
   run is available in the MSVC configuration.
 - **Still deferred:** publication crash journal; bounded release of
   process-lifetime `file.read_text` buffers; safe cleanup of busy registries

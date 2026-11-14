@@ -3100,7 +3100,7 @@ busy-registry termination fallback remain documented hardening items.
 |---|---|
 | RelWithDebInfo build | PASS (`0.499-beta`) |
 | Unit suite | 259/259 |
-| Integration suite | 472/472 |
+| Integration suite | 474/474 |
 | SoA field rooted and traced | PASS |
 | SoA root released on aggregate drop | PASS |
 | SoA field in tuple | PASS |
