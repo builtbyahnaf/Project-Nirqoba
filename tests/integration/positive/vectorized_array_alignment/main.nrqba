@@ -1,8 +1,12 @@
-int function main() {
+int function main(string[] args) {
     var values = memory.owned_array<int>(64);
+    // Keep the owned array observable after removal of the old GC barrier;
+    // otherwise LLVM constant-folds the whole loop and removes the alloca this
+    // fixture is meant to inspect.
+    var seed = args.length;
     var i = 0;
     while (i < 64) {
-        values[i] = i * 2;
+        values[i] = i * 2 + seed;
         i += 1;
     }
     var total = 0;
