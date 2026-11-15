@@ -19,7 +19,25 @@ recorded below is made under that authority.
 > `0.495-beta`. Only the newest entry carries the working-build label; older
 > `(released)` entries are actual published checkpoints.
 
-## Version 0.523-beta (working build)
+## Version 0.527-beta (working build)
+
+### Summary of Changes (since `0.523-beta`):
+
+- **Borrow paths and drop/release pairing.** A borrow records the selected
+  storage path (`p.x`, `values[]`), must originate from `address_of`, and every
+  `tir.drop` must be immediately followed by the release call it names.
+- **TIR output exposes the representation.** Function signatures show ownership
+  categories, and the dump lists lifetime relations and destruction obligations
+  with their state, alongside the move/borrow/end_borrow/drop operations.
+- **Ownership diagnostics are actionable.** Use-after-move, double-end and
+  double-drop errors carry a note at the operation that created the invalid
+  state.
+- **Tests:** 289 unit tests and the integration suite cover the new rules,
+  including positive representations and corrupted-TIR negative cases.
+- **Documentation:** `docs/memory/ownership-representation.md` and the CLI
+  diagnostic table describe the contract and its non-goals.
+
+## Version 0.523-beta
 
 ### Summary of Changes (since `0.519-beta`):
 
