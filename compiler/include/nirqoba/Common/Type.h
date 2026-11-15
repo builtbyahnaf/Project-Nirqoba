@@ -24,15 +24,44 @@
 
 namespace nirq {
 
+// Ownership category of a value, parameter or return.
+//
+// The category is part of the semantic model, not a Sema-only annotation: TIR
+// carries it on every value record so lowering and verification can agree on
+// who is responsible for a value's lifetime. `Trivial` is used for values with
+// no ownership semantics (integers, booleans, ordinary struct fields of such
+// types); the remaining categories are the ones the migration plan requires.
 enum class ValueOwnership {
   Trivial,
-  Owned,
-  Borrowed,
-  MutableBorrowed,
-  Shared,
-  GcManaged,
-  Raw
+  Owned,             // deterministic owner: this value must be destroyed once
+  Borrowed,          // immutable non-owning access, lifetime-bound to its source
+  MutableBorrowed,   // exclusive non-owning access, lifetime-bound to its source
+  Shared,            // explicit reference-counted owner
+  GcManaged,         // collector-managed reference; the collector owns the lifetime
+  Raw,               // raw/manual pointer with no compiler-managed lifetime
+  ArenaBound,        // lifetime owned by an enclosing arena (Phase 5)
+  Weak,              // non-owning weak reference (Phase 6)
 };
+
+// True for categories that carry a destruction or release obligation.
+// `GcManaged` is excluded deliberately: the collector, not lexical cleanup, is
+// responsible for reclaiming managed objects.
+bool is_owning_ownership(ValueOwnership ownership);
+
+// True for non-owning access categories, including weak references.
+bool is_borrowing_ownership(ValueOwnership ownership);
+
+// True when the category may be moved to a new owner by an ordinary transfer.
+// Borrowed, raw and GC-managed values cannot be transferred as owned values.
+bool is_transferable_ownership(ValueOwnership ownership);
+
+// True when the category requires an explicit release/destruction operation to
+// discharge its obligation. Shared values are released through their control
+// block; arena-bound values are released with their arena.
+bool requires_destruction(ValueOwnership ownership);
+
+// Stable lowercase spelling used by TIR printing, MLIR attributes and tests.
+std::string_view ownership_name(ValueOwnership ownership);
 
 enum class TypeKind {
   Error,

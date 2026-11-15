@@ -22,6 +22,53 @@ struct Value {
   bool is_valid() const { return id >= 0; }
 };
 
+// Why an owned value moved. The reason is metadata, not a runtime action: a
+// move is always a change of responsible owner, never an implicit copy.
+enum class TransferKind {
+  Local,       // initializing or assigning a local binding
+  Return,      // returning ownership to the caller
+  Argument,    // passing ownership to a callee
+  Field,       // moving an owned field out of an aggregate
+  Element,     // moving an owned element out of a container
+};
+
+// How a value's lifetime is bound. `Lexical` covers a borrow that ends with its
+// block; `Parameter` binds a borrow to a callee parameter that outlives the
+// call; `Return` binds a returned borrow to a caller-supplied source.
+enum class LifetimeKind {
+  None,
+  Lexical,
+  Parameter,
+  Return,
+};
+
+// A lifetime relationship preserved in TIR. `borrow` is the non-owning value
+// and `source` is the owner it must not outlive. Returned borrows name the
+// source parameter instead of a local value.
+struct LifetimeRecord {
+  Value borrow;
+  Value source;
+  LifetimeKind kind = LifetimeKind::None;
+  std::string source_parameter;
+  std::string field_path;
+  bool mutable_access = false;
+  SourceLocation location;
+};
+
+// A destruction obligation registered when an owning value is introduced. TIR
+// represents the obligation separately from the release call so verification can
+// reject a missing, duplicated or wrongly-typed discharge.
+struct DestructionObligation {
+  int id = -1;
+  Value owner;
+  Type type;
+  std::string release;
+  std::string resource_domain;
+  SourceLocation location;
+  bool discharged = false;
+  bool transferred = false;
+};
+
 enum class OpKind {
   ConstantInt,       // result = integer_value
   ConstantNull,      // result = null/zero value of result.type
@@ -50,6 +97,12 @@ enum class OpKind {
   // Phase 5 sequence operations:
   Length,            // result = element count of operand (string or dynamic array)
   DynamicIndex,      // result = element lhs[operand] of a dynamic array
+  // Phase 1 ownership operations. These carry ownership semantics in TIR and
+  // lower to the same machine code as the operations they annotate.
+  Move,              // result = tir.move operand; operand is no longer usable
+  Borrow,            // operand = borrowed value, lhs = owner; no runtime action
+  EndBorrow,         // operand = borrow whose lexical lifetime ended
+  Drop,              // operand = owning value whose obligation is discharged
   Unreachable,       // marks a block control never reaches (emitted at a dead merge point)
 };
 
@@ -128,6 +181,12 @@ struct Op {
   int false_label = -1;
   int field_index = -1;           // GetElementPtr / AggregateExtract: field/element index
   std::vector<Value> aggregate_elements;  // AggregatePack: values to pack
+
+  // Ownership metadata carried by Move/Borrow/Drop operations.
+  TransferKind transfer_kind = TransferKind::Local;
+  bool mutable_borrow = false;    // Borrow: exclusive access
+  std::string borrow_path;        // Borrow: field path or empty for the whole value
+  int obligation_id = -1;         // Drop: the obligation being discharged
 };
 
 class Function {
@@ -155,6 +214,53 @@ class Function {
   }
   void set_return_borrow_parameter(std::string parameter) {
     return_borrow_parameter_ = std::move(parameter);
+  }
+
+  // Lifetime relationships discovered while lowering. A borrow is always
+  // recorded here as well as in the Borrow operation, so transformations can
+  // query the relationship without scanning the operation stream.
+  std::vector<LifetimeRecord>& lifetimes() { return lifetimes_; }
+  const std::vector<LifetimeRecord>& lifetimes() const { return lifetimes_; }
+  void add_lifetime(LifetimeRecord record) {
+    lifetimes_.push_back(std::move(record));
+  }
+
+  // Destruction obligations. The id is stable for the function and is what a
+  // Drop operation names; ids are never reused after a discharge.
+  const std::vector<DestructionObligation>& obligations() const {
+    return obligations_;
+  }
+  int add_obligation(Value owner, Type type, std::string release,
+                     std::string resource_domain, SourceLocation location) {
+    DestructionObligation obligation;
+    obligation.id = next_obligation_id_++;
+    obligation.owner = owner;
+    obligation.type = std::move(type);
+    obligation.release = std::move(release);
+    obligation.resource_domain = std::move(resource_domain);
+    obligation.location = location;
+    obligations_.push_back(std::move(obligation));
+    return obligations_.back().id;
+  }
+  DestructionObligation* obligation(int id) {
+    for (DestructionObligation& obligation : obligations_)
+      if (obligation.id == id) return &obligation;
+    return nullptr;
+  }
+  const DestructionObligation* obligation(int id) const {
+    for (const DestructionObligation& obligation : obligations_)
+      if (obligation.id == id) return &obligation;
+    return nullptr;
+  }
+  // First obligation for an owner slot that has not been discharged. Used when
+  // a cleanup is emitted: the builder does not need to thread ids through the
+  // deferred-call stack, only the slot.
+  DestructionObligation* pending_obligation_for_owner(Value owner) {
+    for (DestructionObligation& obligation : obligations_)
+      if (!obligation.discharged && !obligation.transferred &&
+          obligation.owner.id == owner.id)
+        return &obligation;
+    return nullptr;
   }
 
   std::vector<Op>& operations() { return operations_; }
@@ -192,7 +298,10 @@ class Function {
   std::vector<Op> operations_;
   std::vector<Type> types_;
   std::vector<ValueOwnership> ownerships_;
+  std::vector<LifetimeRecord> lifetimes_;
+  std::vector<DestructionObligation> obligations_;
   int next_label_id_ = 0;
+  int next_obligation_id_ = 0;
 };
 
 class Module {

@@ -39,6 +39,10 @@ std::string_view op_name(OpKind kind) {
     case OpKind::AggregateExtract: return "aggregate_extract";
     case OpKind::Length: return "length";
     case OpKind::DynamicIndex: return "dyn_index";
+    case OpKind::Move: return "move";
+    case OpKind::Borrow: return "borrow";
+    case OpKind::EndBorrow: return "end_borrow";
+    case OpKind::Drop: return "drop";
     case OpKind::Unreachable: return "unreachable";
   }
   return "unknown";

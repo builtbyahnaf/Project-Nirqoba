@@ -1,6 +1,44 @@
 #include "nirqoba/Common/Type.h"
 
 namespace nirq {
+
+bool is_owning_ownership(ValueOwnership ownership) {
+  return ownership == ValueOwnership::Owned ||
+         ownership == ValueOwnership::Shared ||
+         ownership == ValueOwnership::ArenaBound;
+}
+
+bool is_borrowing_ownership(ValueOwnership ownership) {
+  return ownership == ValueOwnership::Borrowed ||
+         ownership == ValueOwnership::MutableBorrowed ||
+         ownership == ValueOwnership::Weak;
+}
+
+bool is_transferable_ownership(ValueOwnership ownership) {
+  return ownership == ValueOwnership::Owned ||
+         ownership == ValueOwnership::Shared;
+}
+
+bool requires_destruction(ValueOwnership ownership) {
+  return ownership == ValueOwnership::Owned ||
+         ownership == ValueOwnership::Shared ||
+         ownership == ValueOwnership::ArenaBound;
+}
+
+std::string_view ownership_name(ValueOwnership ownership) {
+  switch (ownership) {
+    case ValueOwnership::Trivial: return "trivial";
+    case ValueOwnership::Owned: return "owned";
+    case ValueOwnership::Borrowed: return "borrowed";
+    case ValueOwnership::MutableBorrowed: return "mutable_borrowed";
+    case ValueOwnership::Shared: return "shared";
+    case ValueOwnership::GcManaged: return "gc_managed";
+    case ValueOwnership::Raw: return "raw";
+    case ValueOwnership::ArenaBound: return "arena_bound";
+    case ValueOwnership::Weak: return "weak";
+  }
+  return "unknown";
+}
 using namespace std;
 
 namespace {
