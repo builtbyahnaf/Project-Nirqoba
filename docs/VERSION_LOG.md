@@ -27,8 +27,9 @@ recorded below is made under that authority.
   cleanup is still armed, an assignment to that slot emits the pending
   destruction before storing the replacement. This covers conditional releases
   and conditional moves, where the slot is null only on one path.
-- **Defer reserves its binding.** Assigning over an owner whose cleanup is
-  scheduled by `defer` is rejected instead of leaking the old value.
+- **Defer captures its argument.** A deferred release keeps the value that was
+  registered, so rebinding the owner and deferring the replacement remains a
+  supported pattern with two independent releases.
 - **Explicit releases and defers resolve their obligations** rather than marking
   them transferred to a nonexistent new owner.
 - Tests: 298 unit tests pass; the memory-model suite adds overwrite and

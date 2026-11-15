@@ -21,7 +21,9 @@ checked by the verifier.
   nulls the slot on one path while the other path still owns it.
 - Explicit `memory.deallocate`, resource release and `defer` discharge the
   obligation instead of claiming the value moved to a new owner.
-- A binding reserved by `defer` cannot be overwritten; the conflict is diagnosed.
+- A deferred call captures its argument when registered. Rebinding the owner
+  afterwards is safe: the earlier defer releases the captured value and the new
+  owner gets its own cleanup.
 - Verification requires every obligation to be discharged or transferred, and
   rejects use of a value after its destruction.
 

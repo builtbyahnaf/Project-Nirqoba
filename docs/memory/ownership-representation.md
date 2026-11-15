@@ -160,9 +160,10 @@ the aggregate forms the language supports.
 ### 4.4 Explicit cleanup
 
 An explicit `memory.deallocate`, resource release or `defer` destroys the value
-itself, so it discharges the obligation rather than transferring it. A binding
-whose cleanup is scheduled by `defer` cannot be overwritten, because the
-deferred call expects to release the original value.
+itself, so it discharges the obligation rather than transferring it. A deferred
+call captures its argument when registered; rebinding the owner afterwards is
+safe because the earlier defer still releases the captured value and the new
+owner registers its own cleanup.
 
 Exception and panic unwinding are not part of the language. `system.exit`
 terminates the process and does not run lexical cleanup; runtime teardown only
