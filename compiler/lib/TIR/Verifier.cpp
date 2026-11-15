@@ -755,22 +755,28 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
       }
     }
 
-    // Each Drop must name the release call that actually discharges it. A drop
-    // whose release is missing or reordered would let the obligation table claim
-    // a cleanup that lowering never performs.
+    // A Drop now owns its release: lowering expands it into the call. A drop
+    // without a release name, or one immediately followed by a duplicate release
+    // of the same value, would destroy twice or not at all.
     for (std::size_t index = 0; index < operations.size(); ++index) {
       const tir::Op& drop = operations[index];
       if (drop.kind != tir::OpKind::Drop) continue;
-      const tir::Op* release =
-          index + 1 < operations.size() ? &operations[index + 1] : nullptr;
-      if (release == nullptr || release->kind != tir::OpKind::Call ||
-          release->callee != drop.string_value || release->arguments.empty() ||
-          release->arguments.front().id != drop.operand.id) {
+      if (drop.string_value.empty()) {
         diagnostics.error(kDestruction, drop.location,
                           "internal: drop for obligation " +
                               std::to_string(drop.obligation_id) +
-                              " is not followed by its '" + drop.string_value +
-                              "' release call");
+                              " has no release operation");
+        ok = false;
+        continue;
+      }
+      if (index + 1 >= operations.size()) continue;
+      const tir::Op& next = operations[index + 1];
+      if (next.kind == tir::OpKind::Call && next.callee == drop.string_value &&
+          !next.arguments.empty() &&
+          next.arguments.front().id == drop.operand.id) {
+        diagnostics.error(kDestruction, next.location,
+                          "internal: drop is followed by a second '" +
+                              drop.string_value + "' release of the same value");
         ok = false;
       }
     }

@@ -4878,8 +4878,12 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
       func_op.setArgAttrsAttr(builder.getArrayAttr(argument_attrs));
     }
 
+    // Destructive cleanup is represented once, as a Drop, and expanded here.
+    // The copy keeps the verified module unchanged for later diagnostics.
+    tir::Function lowered_fn = *tir_fn;
+    lowered_fn.expand_drop_operations_to_calls();
     FunctionTranslator translator(
-        *module, *tir_fn, borrowed_summary, collections, func_op, builder,
+        *module, lowered_fn, borrowed_summary, collections, func_op, builder,
         &context, diagnostics, fast_math, configuration, string_literals,
         symbol == "main", mutator_regions.count(tir_fn->name()) != 0);
     if (!translator.translate()) return nullptr;

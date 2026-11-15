@@ -385,6 +385,7 @@ void TirBuilder::emit_deferred_from(size_t scope_depth, tir::Function& function)
         function.add_operation(move(print));
         continue;
       }
+      bool emitted_drop = false;
       tir::Op call;
       call.kind = tir::OpKind::Call;
       call.location = deferred->location;
@@ -417,11 +418,15 @@ void TirBuilder::emit_deferred_from(size_t scope_depth, tir::Function& function)
           drop.string_value = deferred->callee;
           function.add_operation(std::move(drop));
           obligation->discharged = true;
+          emitted_drop = true;
         }
       }
-      if (deferred->result_type.is_valid() && !deferred->result_type.is_void())
-        call.result = function.allocate_value(deferred->result_type);
-      function.add_operation(move(call));
+      // A drop lowers to its release call, so emitting both would release twice.
+      if (!emitted_drop) {
+        if (deferred->result_type.is_valid() && !deferred->result_type.is_void())
+          call.result = function.allocate_value(deferred->result_type);
+        function.add_operation(move(call));
+      }
       if ((deferred->automatic || deferred->clear_owner_slot_after_call) &&
           deferred->owner_slot.is_valid()) {
         tir::Value null_value = function.allocate_value(deferred->owner_slot.type);

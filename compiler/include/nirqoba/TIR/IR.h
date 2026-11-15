@@ -267,6 +267,28 @@ class Function {
   std::vector<Op>& operations() { return operations_; }
   const std::vector<Op>& operations() const { return operations_; }
 
+  // A Drop owns the release that discharges its obligation. Lowering expands
+  // each Drop into the equivalent call at the last possible moment, so TIR (and
+  // its verifier) sees one destruction record while MLIR still gets an ordinary
+  // runtime call. Expansion copies the function, leaving the verified TIR intact.
+  void expand_drop_operations_to_calls() {
+    std::vector<Op> expanded;
+    expanded.reserve(operations_.size());
+    for (Op& op : operations_) {
+      if (op.kind != OpKind::Drop) {
+        expanded.push_back(std::move(op));
+        continue;
+      }
+      Op release;
+      release.kind = OpKind::Call;
+      release.location = op.location;
+      release.callee = op.string_value;
+      if (op.operand.is_valid()) release.arguments.push_back(op.operand);
+      expanded.push_back(std::move(release));
+    }
+    operations_ = std::move(expanded);
+  }
+
   const std::vector<Parameter>& parameters() const { return parameters_; }
   void add_parameter(std::string name, Type type, Value value,
                      ValueOwnership ownership = ValueOwnership::Trivial,

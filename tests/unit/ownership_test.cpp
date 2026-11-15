@@ -501,17 +501,15 @@ TEST(OwnershipTest, VerifierRejectsDropWithoutMatchingRelease) {
   ASSERT_TRUE(module != nullptr);
   tir::Function* main_fn = find_function(*module, "main");
   ASSERT_TRUE(main_fn != nullptr);
-  auto& operations = main_fn->operations();
-  for (std::size_t index = 0; index + 1 < operations.size(); ++index)
-    if (operations[index].kind == tir::OpKind::Drop &&
-        operations[index + 1].kind == tir::OpKind::Call) {
-      operations[index + 1].callee = "memory.shared_release";
+  for (tir::Op& op : main_fn->operations())
+    if (op.kind == tir::OpKind::Drop) {
+      op.string_value = "memory.shared_release";
       break;
     }
   DiagnosticEngine verify_diag;
   ASSERT_FALSE(verify_tir_module(*module, verify_diag));
   ASSERT_TRUE(diagnostic_contains(verify_diag,
-                                  "is not followed by its"));
+                                  "does not match obligation release"));
 }
 
 TEST(OwnershipTest, PrinterShowsOwnershipLifetimesAndObligations) {

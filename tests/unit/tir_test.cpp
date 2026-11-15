@@ -41,11 +41,16 @@ TEST(TirTest, BuildAndVerifySimpleProgram) {
   ASSERT_TRUE(printed.find("tir.return") != std::string::npos);
 }
 
+// Counts destructions, not textual calls: automatic cleanup is a Drop whose
+// release is expanded during lowering, while a user-written release stays a
+// Call in TIR.
 static std::size_t count_calls(const tir::Function& function,
                                const std::string& callee) {
   std::size_t count = 0;
-  for (const tir::Op& op : function.operations())
+  for (const tir::Op& op : function.operations()) {
     if (op.kind == tir::OpKind::Call && op.callee == callee) ++count;
+    if (op.kind == tir::OpKind::Drop && op.string_value == callee) ++count;
+  }
   return count;
 }
 
@@ -81,7 +86,8 @@ TEST(TirTest, ForInitializerCleanupRunsAtLoopExit) {
   int print_index = -1;
   for (std::size_t index = 0; index < main_fn->operations().size(); ++index) {
     const tir::Op& op = main_fn->operations()[index];
-    if (op.kind == tir::OpKind::Call && op.callee == "memory.shared_release")
+    if ((op.kind == tir::OpKind::Call && op.callee == "memory.shared_release") ||
+        (op.kind == tir::OpKind::Drop && op.string_value == "memory.shared_release"))
       release_index = static_cast<int>(index);
     if (op.kind == tir::OpKind::Print && print_index < 0)
       print_index = static_cast<int>(index);
