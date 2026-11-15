@@ -450,7 +450,7 @@ and the remaining language gaps are Phase 1 work. The migration has not started.
 
 ## 12. Phase 1 completion status
 
-Phase 1 is complete at `0.527-beta` without changing this architecture:
+Phase 1 is complete at `0.531-beta` without changing this architecture:
 
 - **Categories:** one `ValueOwnership` vocabulary with helpers classifies owning,
   borrowing, transferable and destructible values. `ArenaBound` and `Weak` are

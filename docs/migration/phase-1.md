@@ -1,6 +1,6 @@
 # Phase 1 — Ownership Representation Notes
 
-**Version:** `0.527-beta`  
+**Version:** `0.531-beta`  
 **Scope:** Memory Model Migration Phase 1. No new syntax.
 
 Phase 1 changes the compiler's internal ownership model, not the language you

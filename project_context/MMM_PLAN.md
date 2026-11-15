@@ -8,7 +8,7 @@
 `reports/memory-model/target-architecture.md` and audited in  
 `reports/memory-model/migration-audit.md`. Pre-MMM Phase 9 closed the audit's  
 three critical prerequisites at `0.515-beta`. Phase 1 — Ownership Representation  
-is complete at `0.527-beta`. Phase 2 has not started.  
+is complete at `0.531-beta`. Phase 2 has not started.  
 **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
 **Primary objective:** Establish deterministic ownership as Nirqoba's default memory-management model, with borrowing, arenas, explicit shared ownership, selective garbage collection, and advanced manual memory management as complementary mechanisms.
 
@@ -936,7 +936,7 @@ so the last two acceptance points have a foundation. Transfer and destruction ar
 still string-named calls rather than first-class TIR operations; that design and
 implementation is the actual Phase 1 task.
 
-Completion state at `0.527-beta`: ownership categories have one shared vocabulary;
+Completion state at `0.531-beta`: ownership categories have one shared vocabulary;
 `tir.move`, `tir.borrow`, `tir.end_borrow` and `tir.drop` represent transfer,
 borrowing and destruction obligations; lexical and parameter lifetimes are stored
 explicitly; the verifier rejects invalid transfer, borrow and drop states; metadata

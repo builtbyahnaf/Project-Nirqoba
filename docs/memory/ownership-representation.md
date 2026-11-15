@@ -1,6 +1,6 @@
 # Ownership Representation — Phase 1
 
-**Version:** `0.527-beta`  
+**Version:** `0.531-beta`  
 **Scope:** Memory Model Migration Phase 1. No new language syntax.
 
 Phase 1 gives the ownership semantics Nirqoba already enforced in semantic

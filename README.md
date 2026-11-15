@@ -149,7 +149,7 @@ Nirqoba uses a multi-tier compilation pipeline designed to preserve semantic and
 
 ## Development Status & Roadmap
 
-The language is actively progressing through its architectural milestones. Current active version: **`0.527-beta`** (MMM Phase 1 / Ownership Representation).
+The language is actively progressing through its architectural milestones. Current active version: **`0.531-beta`** (MMM Phase 1 / Ownership Representation).
 
 | Phase | Description | Status |
 |---|---|---|

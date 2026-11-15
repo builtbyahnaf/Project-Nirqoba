@@ -12,7 +12,7 @@
   move/destruction execution or Phase 3 lifetime enforcement.
 - **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
 
-Starting version: `0.515-beta`. Final version: `0.527-beta`.
+Starting version: `0.515-beta`. Final version: `0.531-beta`.
 
 ## 2. Scope
 
@@ -135,8 +135,8 @@ python tests\run_tests.py --compiler build\msvc-dev\bin\nirqoba.exe --configurat
 
 Results:
 
-- Unit: 289 tests, 289 passed.
-- Integration: 501 tests, 501 passed, 0 failed, 0 skipped.
+- Unit: 294 tests, 294 passed.
+- Integration: 502 tests, 502 passed, 0 failed, 0 skipped.
 - New unit coverage: category classification; return and argument moves; borrow
   plus lifetime plus end_borrow; borrowed parameter lifetime; obligation
   registration/discharge/transfer; borrow paths; printing; and negative cases for
@@ -189,7 +189,7 @@ New `docs/memory/ownership-representation.md`; updated
 | Invalid ownership transformations are detectable | PASS |
 | Diagnostics identify ownership violations | PASS |
 | Existing GC functionality remains operational | PASS (GC tests and integration suite) |
-| Existing and new relevant tests pass | PASS (289 unit / 501 integration) |
+| Existing and new relevant tests pass | PASS (294 unit / 502 integration) |
 
 ## 12. Final Verdict
 

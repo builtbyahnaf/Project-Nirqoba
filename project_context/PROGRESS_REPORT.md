@@ -11,7 +11,7 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.527-beta` |
+| Current Working Version | `0.531-beta` |
 | Development Stage | `MMM Phase 1 — Ownership Representation` |
 | Last Report Update | `2026-11-15 16:30:00` |
 | Report Entries | `30` |
@@ -3504,7 +3504,7 @@ only under a new explicit instruction.
 
 ## Entry #030 — MMM Phase 1: Ownership Representation
 
-**Version:** `0.527-beta`  
+**Version:** `0.531-beta`  
 **Date:** `2026-11-15 16:30:00`  
 **Scope:** `MMM Phase 1 / semantic ownership categories / TIR transfer, borrow, lifetime and destruction representation / verifier extension`  
 **Status:** Complete
@@ -3542,8 +3542,8 @@ TIR representation without changing source syntax, runtime behaviour or GC.
 
 ### 3. Verification
 
-- `289` unit tests pass.
-- `501` integration tests pass on Windows x64/MSVC RelWithDebInfo.
+- `294` unit tests pass.
+- `502` integration tests pass on Windows x64/MSVC RelWithDebInfo.
 - New coverage: positive representation for return/argument transfer, borrows,
   parameter lifetimes, obligations and printing; negative corrupted-TIR cases for
   every new verifier rule; MLIR attribute preservation; a CLI `--emit=tir` dump

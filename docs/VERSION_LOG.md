@@ -19,6 +19,22 @@ recorded below is made under that authority.
 > `0.495-beta`. Only the newest entry carries the working-build label; older
 > `(released)` entries are actual published checkpoints.
 
+## Version 0.531-beta (working build)
+
+### Summary of Changes (since `0.527-beta`):
+
+- **Transfer reasons are checked against their consumers.** A `return` move must
+  feed a `Return`, an `argument` move must feed a call, and a transfer reason can
+  no longer describe an unrelated consumer.
+- **Destruction obligations must attach to storage.** An obligation owner must be
+  produced by `alloca`, `array_alloca`, `gep`, `address_of` or `soa_column_ptr`,
+  and reserved `Weak`/`ArenaBound` categories cannot be ordinary return ownership.
+- **Transferred aggregate fields keep their ownership.** Extracting an owned field
+  records the field's category on the extracted value so its move verifies, while a
+  plain read remains trivial.
+- **Tests:** 294 unit tests and 502 integration tests pass; the new runtime
+  regression covers a return-to-local-to-release transfer chain with a live borrow.
+
 ## Version 0.527-beta (working build)
 
 ### Summary of Changes (since `0.523-beta`):
