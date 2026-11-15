@@ -756,3 +756,25 @@ int function main() {
   ASSERT_TRUE(alias_has_lifetime);
   ASSERT_TRUE(main_has_obligation);
 }
+
+TEST(MlirPipelineTest, DropLowersToItsReleaseCall) {
+  mlir::DialectRegistry registry;
+  nirq::register_all_dialects(registry);
+  mlir::MLIRContext context(registry);
+  context.loadAllAvailableDialects();
+  nirq::DiagnosticEngine diagnostics;
+  // The size is a parameter, so the allocation cannot be promoted to a stack
+  // slot and the Drop must lower to the real release.
+  auto module = lower_source_to_mlir(
+      "int function take(int size) {\n"
+      "  let buffer = memory.allocate<byte>(size);\n"
+      "  return size;\n"
+      "}\n"
+      "int function main() {\n"
+      "  return take(8);\n"
+      "}\n",
+      context, diagnostics);
+  ASSERT_TRUE(static_cast<bool>(module));
+  ASSERT_TRUE(module_calls_symbol(*module,
+                                  "nrq_memory_deallocate_checked"));
+}
