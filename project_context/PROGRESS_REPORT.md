@@ -3611,8 +3611,8 @@ changing the runtime ABI.
 
 ### 3. Verification
 
-- `298` unit tests pass.
-- Full runner: `517` cases (`502` integration + `15` memory model), all pass.
+- `299` unit tests pass.
+- Full runner: `518` cases (`502` integration + `16` memory model), all pass.
 - New runtime coverage: local, argument, return, field and chained moves,
   conditional moves, early and multiple returns, loop `continue`/`break`,
   recursive frames, partial initialization, nested aggregates, re-owned slots and

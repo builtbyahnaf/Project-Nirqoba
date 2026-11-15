@@ -111,13 +111,13 @@ documented limitations, not silently claimed support.
 
 ## 9. Tests and Evidence
 
-- Unit: `298` tests, `298` passed.
+- Unit: `299` tests, `299` passed.
 - Full runner (integration + memory model): `518` cases, `518` passed, 0 failed,
   0 skipped.
-- `tests/memory_model` has 15 cases covering local/argument/return/field/chained
-  moves, conditional moves, early and multiple returns, loop exits, recursion,
-  partial initialization, nested aggregates, re-owned slots, owner overwrite and
-  reverse destruction order.
+- `tests/memory_model` has 16 cases covering local/argument/return/field/chained
+  and shared moves, conditional moves, early and multiple returns, loop exits,
+  recursion, partial initialization, nested aggregates, re-owned slots, owner
+  overwrite and reverse destruction order.
 - TIR evidence: `reverse_destruction_order` asserts the shared release appears
   before the raw deallocation.
 - MLIR evidence: `MlirPipelineTest.DropLowersToItsReleaseCall` observes

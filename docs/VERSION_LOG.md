@@ -32,7 +32,7 @@ recorded below is made under that authority.
   supported pattern with two independent releases.
 - **Explicit releases and defers resolve their obligations** rather than marking
   them transferred to a nonexistent new owner.
-- Tests: 298 unit tests pass; the memory-model suite adds overwrite and
+- Tests: 299 unit tests pass; the memory-model suite adds overwrite and
   conditional-release runtime coverage.
 
 ## Version 0.535-beta (working build)
