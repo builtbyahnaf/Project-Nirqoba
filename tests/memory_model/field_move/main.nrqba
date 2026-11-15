@@ -1,0 +1,16 @@
+struct Pair {
+    owned ptr int left;
+    owned ptr int right;
+}
+
+int function main() {
+    var pair = Pair {
+        left: memory.allocate<int>(1),
+        right: memory.allocate<int>(1)
+    };
+    *pair.left = 3;
+    *pair.right = 4;
+    let left = pair.left;
+    print(*left + *pair.right);
+    return 42;
+}

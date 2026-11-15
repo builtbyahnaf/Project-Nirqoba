@@ -1,0 +1,17 @@
+int function pick(bool take) {
+    var buffer = memory.allocate<byte>(8);
+    buffer[0] = 7 as byte;
+    if (take) {
+        let owner = buffer;
+        print(owner[0] as int);
+    } else {
+        print(buffer[0] as int);
+    }
+    return 0;
+}
+
+int function main() {
+    pick(true);
+    pick(false);
+    return 42;
+}

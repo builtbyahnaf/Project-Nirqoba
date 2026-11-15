@@ -1,0 +1,12 @@
+byte* function make_buffer() {
+    var buffer = memory.allocate<byte>(8);
+    buffer[0] = 9 as byte;
+    return buffer;
+}
+
+int function main() {
+    let buffer = make_buffer();
+    print(buffer[0] as int);
+    memory.deallocate(buffer);
+    return 42;
+}

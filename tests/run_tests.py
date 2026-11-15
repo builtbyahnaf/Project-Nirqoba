@@ -337,6 +337,16 @@ def run_case(case_dir, compiler_exe, temp_dir):
             if needle not in out:
                 return False, f"Stdout does not contain '{needle}'.\nGot:\n{out}"
 
+    ordered = spec.get("expect_stdout_index_order")
+    if ordered:
+        position = -1
+        for needle in ordered:
+            found = out.find(needle, position + 1)
+            if found < 0:
+                return False, (
+                    f"Stdout does not contain '{needle}' after position {position}.\nGot:\n{out}")
+            position = found
+
     if expected_stdout_not_contains is not None:
         for needle in expected_stdout_not_contains:
             if needle in out:
@@ -474,6 +484,8 @@ def main():
     parser = argparse.ArgumentParser(description="Nirqoba Integration Test Runner")
     parser.add_argument("--compiler", required=True, help="Path to nirqoba.exe")
     parser.add_argument("--configuration", default="RelWithDebInfo", help="Build configuration")
+    parser.add_argument("--skip-memory-model", action="store_true",
+                        help="Run only tests/integration, not tests/memory_model")
     args = parser.parse_args()
 
     compiler_exe = Path(args.compiler).resolve()
@@ -488,17 +500,30 @@ def main():
         print(f"Error: Integration tests directory '{integration_dir}' not found")
         sys.exit(1)
 
-    cases = sorted([d for d in integration_dir.glob("**/*") if d.is_dir() and (d / "expect.json").exists()])
+    # Memory-model cases use the same expect.json schema. Keeping them in their
+    # own root makes the Phase 2 ownership suite readable without excluding it
+    # from a full run.
+    case_roots = [(integration_dir, "")]
+    memory_model_dir = repo_root / "tests" / "memory_model"
+    if memory_model_dir.exists() and not args.skip_memory_model:
+        case_roots.append((memory_model_dir, "memory_model/"))
 
-    print(f"Discovered {len(cases)} integration test cases.")
+    cases = []
+    for root, prefix in case_roots:
+        cases.extend(
+            (case, prefix + str(case.relative_to(root)))
+            for case in sorted(root.glob("**/*"))
+            if case.is_dir() and (case / "expect.json").exists()
+        )
+
+    print(f"Discovered {len(cases)} integration and memory-model cases.")
     passed = 0
     failed = 0
     skipped = []
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
-        for case in cases:
-            rel_name = case.relative_to(integration_dir)
+        for case, rel_name in cases:
             # Each case owns its artifact directory. Artifact-presence checks
             # must not see files a previous case deliberately kept.
             case_temp = temp_path / rel_name

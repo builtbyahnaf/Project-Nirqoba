@@ -1,0 +1,9 @@
+int function main() {
+    var first = memory.allocate<byte>(8);
+    first[0] = 8 as byte;
+    let second = first;
+    let third = second;
+    print(third[0] as int);
+    memory.deallocate(third);
+    return 42;
+}
