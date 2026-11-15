@@ -781,6 +781,36 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
       }
     }
 
+    // A value cannot be used after its destruction on the same straight-line
+    // path. Labels start a different path, so the set is cleared there; this is
+    // deliberately local and does not pretend to be full path-sensitive analysis.
+    {
+      std::unordered_set<int> destroyed;
+      auto reject_destroyed_use = [&](const tir::Value& value,
+                                      const tir::Op& op) {
+        if (!value.is_valid() || destroyed.count(value.id) == 0) return;
+        diagnostics.error(kDestruction, op.location,
+                          "internal: value " + std::to_string(value.id) +
+                              " is used after its destruction");
+        ok = false;
+      };
+      for (const tir::Op& op : operations) {
+        if (op.kind == tir::OpKind::Label) {
+          destroyed.clear();
+          continue;
+        }
+        reject_destroyed_use(op.operand, op);
+        reject_destroyed_use(op.lhs, op);
+        reject_destroyed_use(op.rhs, op);
+        for (const tir::Value argument : op.arguments)
+          reject_destroyed_use(argument, op);
+        for (const tir::Value element : op.aggregate_elements)
+          reject_destroyed_use(element, op);
+        if (op.kind == tir::OpKind::Drop && op.operand.is_valid())
+          destroyed.insert(op.operand.id);
+      }
+    }
+
     // Obligation table validation. Phase 2 requires every registered obligation
     // to end somewhere: either discharged at a cleanup point or transferred to a
     // new owner. An obligation that is neither is a leak the compiler created.

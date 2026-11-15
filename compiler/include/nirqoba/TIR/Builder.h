@@ -93,6 +93,9 @@ class TirBuilder {
   // around the expression that transfers ownership, so TIR can distinguish a
   // returned value from an argument or an ordinary local transfer.
   tir::TransferKind transfer_context_ = tir::TransferKind::Local;
+  // True while lowering the argument of an explicit release call, where a
+  // transfer discharges the obligation instead of handing it to a new owner.
+  bool lowering_release_argument_ = false;
   // Borrowed values created in each lexical scope, ended when that scope exits.
   std::vector<std::vector<tir::Value>> borrow_scopes_;
   // Borrow value whose EndBorrow must not be emitted: it is being returned to

@@ -64,6 +64,15 @@ std::string borrow_path_spelling(const Expr& expression) {
   }
 }
 
+static bool is_release_callee(const std::string& callee) {
+  return callee == "memory.deallocate" || callee == "memory.shared_release" ||
+         callee == "array.owned_release" || callee == "soa.owned_release" ||
+         callee == "aggregate.owned_drop" || callee == "aggregate.shared_release" ||
+         callee == "file.close" || callee == "socket.close" ||
+         callee == "mutex.destroy" || callee == "memory.secure_release" ||
+         callee == "memory.unmap_file";
+}
+
 std::string cleanup_for_resource_domain(const std::string& domain) {
   if (domain == "file") return "file.close";
   if (domain == "socket") return "socket.close";
@@ -457,13 +466,17 @@ void TirBuilder::suppress_automatic_cleanup(const tir::Value& slot) {
       if (pending.automatic && pending.active &&
           pending.owner_slot.is_valid() && pending.owner_slot.id == slot.id)
         pending.active = false;
-  // The owner was transferred, so its destruction obligation passed to the new
-  // owner. It is neither discharged here nor leaked; verification can still
-  // distinguish this from a lost obligation.
+  // An explicit release call destroys the value here, while any other transfer
+  // passes the obligation to the new owner. Verification can distinguish the
+  // two, and completeness no longer reports either as a lost obligation.
   if (current_function_ != nullptr) {
     if (tir::DestructionObligation* obligation =
-            current_function_->pending_obligation_for_owner(slot))
-      obligation->transferred = true;
+            current_function_->pending_obligation_for_owner(slot)) {
+      if (lowering_release_argument_)
+        obligation->discharged = true;
+      else
+        obligation->transferred = true;
+    }
   }
 }
 
@@ -968,6 +981,13 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
             suppress_matching(deferred_expressions_.back());
             if (conditional_depth_ == 0)
               for (auto& scope : deferred_expressions_) suppress_matching(scope);
+            // The defer itself is the destruction of this owner. Without this,
+            // a superseded automatic cleanup leaves a resolved obligation behind.
+            if (lowered.owner_slot.is_valid() && current_function_ != nullptr)
+              if (tir::DestructionObligation* obligation =
+                      current_function_->pending_obligation_for_owner(
+                          lowered.owner_slot))
+                obligation->discharged = true;
             if (!lowered.owner_slot.is_valid()) {
               for (auto& scope : deferred_expressions_)
                 for (auto& pending : scope)
@@ -1326,10 +1346,15 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       }
 
       std::vector<tir::Value> arg_vals;
+      const bool release_call = is_release_callee(
+          call.has_resolved_symbol() ? call.resolved_symbol() : call.callee());
+      const bool previous_release_argument = lowering_release_argument_;
+      lowering_release_argument_ = release_call;
       for (const auto& argument : call.arguments()) {
         TransferContextGuard guard(transfer_context_, tir::TransferKind::Argument);
         arg_vals.push_back(lower_expression(*argument, function));
       }
+      lowering_release_argument_ = previous_release_argument;
 
       // `length(value)` is the call spelling of the `.length` property.
       if (call.callee() == "length" && arg_vals.size() == 1) {

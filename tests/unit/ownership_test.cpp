@@ -725,3 +725,31 @@ TEST(OwnershipTest, VerifierRejectsUndischargedObligation) {
   ASSERT_TRUE(diagnostic_contains(verify_diag,
                                   "is never discharged or transferred"));
 }
+
+TEST(OwnershipTest, VerifierRejectsUseAfterDestruction) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_use_after_drop.nrqba",
+      "int function main() {\n"
+      "  let buffer = memory.allocate<byte>(8);\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  auto& operations = main_fn->operations();
+  for (std::size_t index = 0; index < operations.size(); ++index) {
+    if (operations[index].kind != tir::OpKind::Drop) continue;
+    tir::Op use;
+    use.kind = tir::OpKind::Print;
+    use.location = operations[index].location;
+    use.operand = operations[index].operand;
+    operations.insert(operations.begin() + index + 1, use);
+    break;
+  }
+  DiagnosticEngine verify_diag;
+  ASSERT_FALSE(verify_tir_module(*module, verify_diag));
+  ASSERT_TRUE(diagnostic_contains(verify_diag,
+                                  "used after its destruction"));
+}
