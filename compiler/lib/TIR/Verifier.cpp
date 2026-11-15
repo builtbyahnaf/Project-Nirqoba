@@ -781,8 +781,9 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
       }
     }
 
-    // Obligation table validation. Completeness is intentionally not required:
-    // conditional cleanup and early exits are Phase 2's path-sensitive job.
+    // Obligation table validation. Phase 2 requires every registered obligation
+    // to end somewhere: either discharged at a cleanup point or transferred to a
+    // new owner. An obligation that is neither is a leak the compiler created.
     for (const tir::DestructionObligation& obligation : function->obligations()) {
       if (!value_in_range(*function, obligation.owner)) {
         diagnostics.error(kDestruction, obligation.location,
@@ -805,6 +806,13 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
                           "internal: obligation release '" + obligation.release +
                               "' does not match owner type " +
                               obligation.type.mangle());
+        ok = false;
+      }
+      if (!obligation.discharged && !obligation.transferred) {
+        diagnostics.error(kDestruction, obligation.location,
+                          "internal: destruction obligation " +
+                              std::to_string(obligation.id) +
+                              " is never discharged or transferred");
         ok = false;
       }
     }

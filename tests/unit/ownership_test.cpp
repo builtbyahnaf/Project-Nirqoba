@@ -705,3 +705,23 @@ TEST(OwnershipTest, ReownedSlotGetsAFreshDestructionObligation) {
   ASSERT_EQ(drops, 1u);
   ASSERT_TRUE(verify_tir_module(*module, diag));
 }
+
+TEST(OwnershipTest, VerifierRejectsUndischargedObligation) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_undischarged.nrqba",
+      "int function main() {\n"
+      "  let buffer = memory.allocate<byte>(8);\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  ASSERT_FALSE(main_fn->obligations().empty());
+  main_fn->obligations().front().discharged = false;
+  DiagnosticEngine verify_diag;
+  ASSERT_FALSE(verify_tir_module(*module, verify_diag));
+  ASSERT_TRUE(diagnostic_contains(verify_diag,
+                                  "is never discharged or transferred"));
+}
