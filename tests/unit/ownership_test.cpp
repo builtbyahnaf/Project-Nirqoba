@@ -753,3 +753,32 @@ TEST(OwnershipTest, VerifierRejectsUseAfterDestruction) {
   ASSERT_TRUE(diagnostic_contains(verify_diag,
                                   "used after its destruction"));
 }
+
+TEST(OwnershipTest, VerifierRejectsDuplicateReleaseAfterDrop) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_duplicate_release.nrqba",
+      "int function main() {\n"
+      "  let buffer = memory.allocate<byte>(8);\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  auto& operations = main_fn->operations();
+  for (std::size_t index = 0; index < operations.size(); ++index) {
+    if (operations[index].kind != tir::OpKind::Drop) continue;
+    tir::Op duplicate;
+    duplicate.kind = tir::OpKind::Call;
+    duplicate.location = operations[index].location;
+    duplicate.callee = operations[index].string_value;
+    duplicate.arguments.push_back(operations[index].operand);
+    operations.insert(operations.begin() + index + 1, duplicate);
+    break;
+  }
+  DiagnosticEngine verify_diag;
+  ASSERT_FALSE(verify_tir_module(*module, verify_diag));
+  ASSERT_TRUE(diagnostic_contains(verify_diag,
+                                  "second 'memory.deallocate' release"));
+}
