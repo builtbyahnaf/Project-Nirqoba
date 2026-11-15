@@ -25,6 +25,13 @@ string value_name(tir::Value value) {
   return value.is_valid() ? "%" + to_string(value.id) : "<none>";
 }
 
+// Ownership is part of what a TIR reader must be able to see. Trivial is the
+// default and stays implicit so ordinary arithmetic output remains compact.
+string ownership_suffix(ValueOwnership ownership) {
+  if (ownership == ValueOwnership::Trivial) return {};
+  return "[" + string(ownership_name(ownership)) + "]";
+}
+
 string_view transfer_name(tir::TransferKind kind) {
   switch (kind) {
     case tir::TransferKind::Local: return "local";
@@ -46,9 +53,11 @@ string print_tir(const tir::Module& module) {
     for (size_t i = 0; i < function->parameters().size(); ++i) {
       if (i > 0) out << ", ";
       out << "%" << function->parameters()[i].value.id << " : "
-          << function->parameters()[i].type.mangle();
+          << function->parameters()[i].type.mangle()
+          << ownership_suffix(function->parameters()[i].ownership);
     }
-    out << ") -> " << function->return_type().mangle() << " {\n";
+    out << ") -> " << function->return_type().mangle()
+        << ownership_suffix(function->return_ownership()) << " {\n";
 
     for (const tir::Op& op : function->operations()) {
       out << "    ";
@@ -173,6 +182,33 @@ string print_tir(const tir::Module& module) {
           break;
       }
       out << "\n";
+    }
+    for (const tir::LifetimeRecord& lifetime : function->lifetimes()) {
+      out << "    // lifetime ";
+      switch (lifetime.kind) {
+        case tir::LifetimeKind::Lexical: out << "lexical"; break;
+        case tir::LifetimeKind::Parameter: out << "parameter"; break;
+        case tir::LifetimeKind::Return: out << "return"; break;
+        case tir::LifetimeKind::None: out << "none"; break;
+      }
+      out << (lifetime.mutable_access ? " mutable" : " immutable");
+      if (lifetime.borrow.is_valid())
+        out << " borrow=" << value_name(lifetime.borrow);
+      if (lifetime.source.is_valid())
+        out << " source=" << value_name(lifetime.source);
+      if (!lifetime.source_parameter.empty())
+        out << " parameter=" << lifetime.source_parameter;
+      if (!lifetime.field_path.empty()) out << " path=\"" << lifetime.field_path << "\"";
+      out << "\n";
+    }
+    for (const tir::DestructionObligation& obligation : function->obligations()) {
+      out << "    // obligation " << obligation.id << " owner="
+          << value_name(obligation.owner) << " release=" << obligation.release
+          << " state="
+          << (obligation.discharged
+                  ? "discharged"
+                  : obligation.transferred ? "transferred" : "pending")
+          << "\n";
     }
     out << "  }\n";
   }

@@ -114,6 +114,7 @@ class TirBuilder {
   void emit_move(const tir::Value& source, tir::Function& function,
                  const SourceLocation& location, tir::Value& result);
   void emit_end_borrows(tir::Function& function);
+  void emit_all_end_borrows(tir::Function& function);
   void register_obligation(const tir::Value& slot, const std::string& callee,
                            const SourceLocation& location,
                            tir::Function& function);

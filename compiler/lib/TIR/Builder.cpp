@@ -32,6 +32,38 @@ ValueOwnership ownership_for_release(const std::string& callee) {
   return ValueOwnership::Owned;
 }
 
+// Stable spelling of the storage a borrow selects. It mirrors the dotted field
+// paths Sema already tracks, so a lifetime record and a Sema diagnostic name the
+// same location. Dynamic indices are rendered as `[]` because their value is not
+// known at compile time.
+std::string borrow_path_spelling(const Expr& expression) {
+  switch (expression.kind()) {
+    case Expr::Kind::Name:
+      return static_cast<const NameExpr&>(expression).name();
+    case Expr::Kind::MemberAccess: {
+      const auto& member = static_cast<const MemberAccessExpr&>(expression);
+      const std::string base = borrow_path_spelling(member.base());
+      if (base.empty()) return member.member();
+      return base + "." + member.member();
+    }
+    case Expr::Kind::Index: {
+      const auto& index = static_cast<const IndexExpr&>(expression);
+      const std::string base = borrow_path_spelling(index.base());
+      return base.empty() ? std::string("[]") : base + "[]";
+    }
+    case Expr::Kind::Unary: {
+      const auto& unary = static_cast<const UnaryExpr&>(expression);
+      if (unary.op() == UnaryOp::Dereference) {
+        const std::string base = borrow_path_spelling(unary.operand());
+        return base.empty() ? std::string("[]") : base + "[]";
+      }
+      return {};
+    }
+    default:
+      return {};
+  }
+}
+
 std::string cleanup_for_resource_domain(const std::string& domain) {
   if (domain == "file") return "file.close";
   if (domain == "socket") return "socket.close";
@@ -309,6 +341,22 @@ void TirBuilder::emit_end_borrows(tir::Function& function) {
     function.add_operation(std::move(end));
   }
   borrow_scopes_.back().clear();
+}
+
+void TirBuilder::emit_all_end_borrows(tir::Function& function) {
+  // A terminator closes every lexical scope at once, innermost first. The
+  // vectors stay in place because the corresponding lower_block calls still pop
+  // one entry each on the way out.
+  for (size_t depth = borrow_scopes_.size(); depth > 0; --depth) {
+    for (tir::Value borrow : borrow_scopes_[depth - 1]) {
+      if (escaping_borrows_.count(borrow.id) != 0) continue;
+      tir::Op end;
+      end.kind = tir::OpKind::EndBorrow;
+      end.operand = borrow;
+      function.add_operation(std::move(end));
+    }
+    borrow_scopes_[depth - 1].clear();
+  }
 }
 
 void TirBuilder::register_obligation(const tir::Value& slot,
@@ -868,6 +916,10 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
              op.operand.ownership == ValueOwnership::MutableBorrowed))
           escaping_borrows_.insert(op.operand.id);
       }
+      // A return ends every lexical scope. Borrows owned by those scopes must be
+      // marked ended before the terminator; only a borrow being returned is
+      // deliberately left open for the caller.
+      emit_all_end_borrows(function);
       emit_deferred_from(0, function);
       function.add_operation(std::move(op));
       return;
@@ -1083,11 +1135,13 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         borrow.operand = address;
         borrow.lhs = slot;
         borrow.mutable_borrow = mutable_borrow;
+        borrow.borrow_path = borrow_path_spelling(unary.operand());
         function.add_operation(std::move(borrow));
         tir::LifetimeRecord lifetime;
         lifetime.borrow = address;
         lifetime.source = slot;
         lifetime.kind = tir::LifetimeKind::Lexical;
+        lifetime.field_path = borrow_path_spelling(unary.operand());
         lifetime.mutable_access = mutable_borrow;
         lifetime.location = unary.location();
         function.add_lifetime(std::move(lifetime));

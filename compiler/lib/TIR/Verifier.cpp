@@ -209,6 +209,7 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
     std::unordered_map<int, const tir::Op*> borrows;
     std::unordered_set<int> ended_borrows;
     std::unordered_set<int> discharged_obligations;
+    std::unordered_set<int> address_of_results;
 
     auto check_value = [&](tir::Value value, const SourceLocation& location,
                            const std::string& role) {
@@ -262,6 +263,9 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
                               "operation result ownership disagrees with the value record");
         ok = false;
       }
+
+      if (op.kind == tir::OpKind::AddressOf && op.result.is_valid())
+        address_of_results.insert(op.result.id);
 
       check_value(op.operand, op.location, "operand");
       check_value(op.lhs, op.location, "lhs");
@@ -437,6 +441,13 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
           if (is_borrowing_ownership(op.lhs.ownership)) {
             diagnostics.error(kBorrow, op.location,
                               "internal: a borrowed value cannot be the owner of another borrow");
+            ok = false;
+          }
+          if (op.operand.is_valid() &&
+              address_of_results.count(op.operand.id) == 0) {
+            diagnostics.error(kBorrow, op.location,
+                              function_value(*function, op.operand.id) +
+                                  "borrow does not originate from an address_of operation");
             ok = false;
           }
           if (borrows.count(op.operand.id) != 0) {
@@ -650,6 +661,26 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
                             "internal: return lifetime must name a borrowed parameter");
           ok = false;
         }
+      }
+    }
+
+    // Each Drop must name the release call that actually discharges it. A drop
+    // whose release is missing or reordered would let the obligation table claim
+    // a cleanup that lowering never performs.
+    for (std::size_t index = 0; index < operations.size(); ++index) {
+      const tir::Op& drop = operations[index];
+      if (drop.kind != tir::OpKind::Drop) continue;
+      const tir::Op* release =
+          index + 1 < operations.size() ? &operations[index + 1] : nullptr;
+      if (release == nullptr || release->kind != tir::OpKind::Call ||
+          release->callee != drop.string_value || release->arguments.empty() ||
+          release->arguments.front().id != drop.operand.id) {
+        diagnostics.error(kDestruction, drop.location,
+                          "internal: drop for obligation " +
+                              std::to_string(drop.obligation_id) +
+                              " is not followed by its '" + drop.string_value +
+                              "' release call");
+        ok = false;
       }
     }
 
