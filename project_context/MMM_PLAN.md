@@ -8,7 +8,8 @@
 `reports/memory-model/target-architecture.md` and audited in  
 `reports/memory-model/migration-audit.md`. Pre-MMM Phase 9 closed the audit's  
 three critical prerequisites at `0.515-beta`. Phase 1 — Ownership Representation  
-is complete at `0.531-beta`. Phase 2 has not started.  
+is complete at `0.531-beta`. Phase 2 — Deterministic Destruction and Move  
+Semantics is complete at `0.539-beta`.  
 **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
 **Primary objective:** Establish deterministic ownership as Nirqoba's default memory-management model, with borrowing, arenas, explicit shared ownership, selective garbage collection, and advanced manual memory management as complementary mechanisms.
 
@@ -965,6 +966,17 @@ Acceptance:
 - No ownership leaks in tested control-flow paths.
 - Move operations avoid unnecessary physical copying.
 - Existing language behavior remains compatible where intended.
+
+Completion state at `0.539-beta`: automatic cleanup is a `tir.drop` that owns
+its release; lowering expands it into the same runtime call. A moved slot that is
+re-owned registers a fresh obligation, every obligation must resolve, explicit
+releases and `defer` discharge rather than transfer, and an overwrite destroys a
+still-live owner before storing the replacement. Partial initialization relies on
+the zeroed `uninit` aggregate and recursive field destruction. `tests/memory_model`
+covers locals, arguments, returns, fields, chains, conditional moves, early and
+multiple returns, loops, recursion, partial initialization and nested aggregates.
+The language has no exceptions or panics, so unwind cleanup is documented as
+unsupported; `system.exit` also does not run lexical cleanup.
 
 ## Phase 3 — Borrowing and lifetime enforcement
 
