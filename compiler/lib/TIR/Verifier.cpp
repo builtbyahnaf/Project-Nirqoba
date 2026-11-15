@@ -231,13 +231,37 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
     std::unordered_set<int> passed_arguments;
     // Values that denote a storage location an obligation can be attached to.
     std::unordered_set<int> storage_locations;
+    std::unordered_map<int, std::vector<int>> value_inputs;
     for (const tir::Op& op : operations) {
       if (op.kind == tir::OpKind::Return && op.operand.is_valid())
         returned_values.insert(op.operand.id);
       if (op.kind == tir::OpKind::Call)
         for (const tir::Value argument : op.arguments)
           if (argument.is_valid()) passed_arguments.insert(argument.id);
+      if (!op.result.is_valid()) continue;
+      std::vector<int>& inputs = value_inputs[op.result.id];
+      if (op.operand.is_valid()) inputs.push_back(op.operand.id);
+      if (op.lhs.is_valid()) inputs.push_back(op.lhs.id);
+      if (op.rhs.is_valid()) inputs.push_back(op.rhs.id);
+      for (const tir::Value argument : op.arguments)
+        if (argument.is_valid()) inputs.push_back(argument.id);
+      for (const tir::Value element : op.aggregate_elements)
+        if (element.is_valid()) inputs.push_back(element.id);
     }
+    // A value contributes to a return or call through dataflow, not only through
+    // direct use: a field moved into a returned aggregate is still an argument
+    // or return transfer by the time the aggregate is consumed.
+    auto close_over_inputs = [&](std::unordered_set<int>& seed) {
+      std::vector<int> worklist(seed.begin(), seed.end());
+      while (!worklist.empty()) {
+        const int id = worklist.back();
+        worklist.pop_back();
+        for (const int input : value_inputs[id])
+          if (seed.insert(input).second) worklist.push_back(input);
+      }
+    };
+    close_over_inputs(returned_values);
+    close_over_inputs(passed_arguments);
 
     auto check_value = [&](tir::Value value, const SourceLocation& location,
                            const std::string& role) {

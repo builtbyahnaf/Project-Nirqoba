@@ -564,17 +564,20 @@ TEST(OwnershipTest, VerifierRejectsArgumentMoveWithoutCallConsumer) {
   DiagnosticEngine diag;
   auto module = lower_source(
       "ownership_false_argument.nrqba",
-      "int function main() {\n"
+      "byte* function make() {\n"
       "  let allocation = memory.allocate<byte>(8);\n"
-      "  let owner = allocation;\n"
-      "  memory.deallocate(owner);\n"
+      "  return allocation;\n"
+      "}\n"
+      "int function main() {\n"
+      "  let value = make();\n"
+      "  memory.deallocate(value);\n"
       "  return 0;\n"
       "}\n",
       diag);
   ASSERT_TRUE(module != nullptr);
-  tir::Function* main_fn = find_function(*module, "main");
-  ASSERT_TRUE(main_fn != nullptr);
-  for (tir::Op& op : main_fn->operations())
+  tir::Function* make = find_function(*module, "make");
+  ASSERT_TRUE(make != nullptr);
+  for (tir::Op& op : make->operations())
     if (op.kind == tir::OpKind::Move) {
       op.transfer_kind = tir::TransferKind::Argument;
       break;
