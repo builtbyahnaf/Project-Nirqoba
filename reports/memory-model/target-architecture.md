@@ -268,7 +268,8 @@ TIR must make the following explicit and checkable:
 3. **Borrow** relationship: mutable/immutable, source value, field path.
 4. **Lifetime** relationship for source-bound returns and aggregate borrows.
 5. **Destruction obligation** for each owned value, including resource domain.
-6. **Discharge** of that obligation by a lexical cleanup, defer, move or transfer.
+6. **Discharge** of that obligation by a lexical cleanup, defer, move or transfer;
+   a drop owns its release, and an explicit release resolves the obligation.
 
 ### 5.2 Verifier rules
 
@@ -280,7 +281,10 @@ At minimum, the verifier must reject:
 - a borrowed value passed to an owning parameter or release;
 - an owning value escaping through a borrow-only path;
 - an aggregate/container payload that the receiving storage cannot release;
-- a managed reference stored in a boundary with no root contract.
+- a managed reference stored in a boundary with no root contract;
+- an obligation that is never discharged or transferred;
+- use of a value after its destruction;
+- a drop followed by a duplicate release of the same value.
 
 ### 5.3 Lowering contract
 
@@ -294,6 +298,18 @@ At minimum, the verifier must reject:
 
 Phase 1 does not add new user syntax, change the ownership rules, or rewrite the
 working Sema checks. It gives the existing semantics a verifiable IR form.
+
+### 5.5 Phase 2 conformance
+
+Phase 2 is complete at `0.539-beta`. Automatic cleanup is one `tir.drop` that
+lowering expands into its release; re-owned slots register fresh obligations;
+overwrites destroy a still-live owner first; and every supported scope exit
+(return, multiple returns, break, continue, normal fall-through, recursion)
+cleans in reverse registration order. Partial initialization relies on the zeroed
+`uninit` aggregate. The analysis remains structural and straight-line rather than
+a full path-sensitive discharge proof. Exception and panic unwinding are
+unsupported because the language has no such control flow; `system.exit` does not
+run lexical cleanup.
 
 ---
 
