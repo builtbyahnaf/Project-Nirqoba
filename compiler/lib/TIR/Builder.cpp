@@ -23,6 +23,15 @@ bool contains_owned_array(const Type& type) {
   return false;
 }
 
+// Ownership category of the value a release call destroys. The TIR value record
+// must say what the release means; a bare Trivial load would let a Drop look
+// like it discharged nothing.
+ValueOwnership ownership_for_release(const std::string& callee) {
+  if (callee == "memory.shared_release" || callee == "aggregate.shared_release")
+    return ValueOwnership::Shared;
+  return ValueOwnership::Owned;
+}
+
 std::string cleanup_for_resource_domain(const std::string& domain) {
   if (domain == "file") return "file.close";
   if (domain == "socket") return "socket.close";
@@ -116,15 +125,27 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
     body->set_return_ownership(ValueOwnership::Owned);
   else if (contains_owned_array(function.return_type()))
     body->set_return_ownership(ValueOwnership::Owned);
-  if (!function.return_borrow_parameter().empty())
+  if (!function.return_borrow_parameter().empty()) {
     body->set_return_borrow_parameter(function.return_borrow_parameter());
+    tir::LifetimeRecord lifetime;
+    lifetime.kind = tir::LifetimeKind::Return;
+    lifetime.source_parameter = function.return_borrow_parameter();
+    lifetime.mutable_access = function.returns_mutable_borrow();
+    lifetime.location = function.location();
+    body->add_lifetime(std::move(lifetime));
+  }
   tir::Function* function_ir = module.add_function(move(body));
+  current_function_ = function_ir;
 
   scopes_.clear();
   loop_stack_.clear();
   deferred_expressions_.clear();
   conditional_depth_ = 0;
+  transfer_context_ = tir::TransferKind::Local;
+  borrow_scopes_.clear();
+  escaping_borrows_.clear();
   push_scope();
+  borrow_scopes_.emplace_back();
   deferred_expressions_.emplace_back();
 
   for (const Parameter& parameter : function.parameters()) {
@@ -142,6 +163,17 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
     tir::Value param_val = function_ir->allocate_value(parameter.type, ownership);
     function_ir->add_parameter(parameter.name, parameter.type, param_val, ownership,
                                parameter.resource_domain);
+    if (parameter.borrowed) {
+      // A borrowed parameter's lifetime is owned by the caller. Keeping the
+      // record here preserves that relationship through TIR transformations.
+      tir::LifetimeRecord lifetime;
+      lifetime.borrow = param_val;
+      lifetime.kind = tir::LifetimeKind::Parameter;
+      lifetime.source_parameter = parameter.name;
+      lifetime.mutable_access = parameter.mutable_borrow;
+      lifetime.location = parameter.location;
+      function_ir->add_lifetime(std::move(lifetime));
+    }
 
     tir::Value slot = function_ir->allocate_value(parameter.type);
     tir::Op alloca;
@@ -173,13 +205,20 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
       cleanup.location = parameter.location;
       cleanup.automatic = true;
       cleanup.owner_slot = slot;
+      register_obligation(slot, cleanup.callee, parameter.location,
+                          *function_ir);
       deferred_expressions_.front().push_back(std::move(cleanup));
     }
   }
 
   lower_block(function.body(), *function_ir);
-  if (!block_terminated(*function_ir)) emit_deferred_from(0, *function_ir);
+  if (!block_terminated(*function_ir)) {
+    emit_end_borrows(*function_ir);
+    emit_deferred_from(0, *function_ir);
+  }
   deferred_expressions_.clear();
+  borrow_scopes_.clear();
+  current_function_ = nullptr;
   pop_scope();
 
   // Every block must end in a terminator. A void function may fall off the end
@@ -223,6 +262,7 @@ static bool contains_shared_pointer(const Type& type) {
 
 void TirBuilder::lower_block(const BlockStmt& block, tir::Function& function) {
   push_scope();
+  borrow_scopes_.emplace_back();
   deferred_expressions_.emplace_back();
   for (const StmtPtr& statement : block.statements()) {
     // Statements after `return`, `break` or `continue` are unreachable; the
@@ -230,10 +270,58 @@ void TirBuilder::lower_block(const BlockStmt& block, tir::Function& function) {
     if (block_terminated(function)) break;
     lower_statement(*statement, function);
   }
-  if (!block_terminated(function))
+  if (!block_terminated(function)) {
+    // Ends borrows before the owning scope releases its values: a borrow must
+    // never outlive the owner whose cleanup runs at this boundary.
+    emit_end_borrows(function);
     emit_deferred_from(deferred_expressions_.size() - 1, function);
+  }
   deferred_expressions_.pop_back();
+  borrow_scopes_.pop_back();
   pop_scope();
+}
+
+void TirBuilder::emit_move(const tir::Value& source, tir::Function& function,
+                           const SourceLocation& location, tir::Value& result) {
+  if (!source.is_valid()) return;
+  // A move produces a distinct value number even though lowering aliases the
+  // source. The alias is what lets verification say "the source is no longer
+  // usable" without inventing a runtime copy.
+  result = function.allocate_value(source.type, source.ownership);
+  tir::Op move_op;
+  move_op.kind = tir::OpKind::Move;
+  move_op.location = location;
+  move_op.operand = source;
+  move_op.result = result;
+  move_op.transfer_kind = transfer_context_;
+  function.add_operation(std::move(move_op));
+}
+
+void TirBuilder::emit_end_borrows(tir::Function& function) {
+  if (borrow_scopes_.empty()) return;
+  for (tir::Value borrow : borrow_scopes_.back()) {
+    // A borrow returned to the caller remains valid there and is not ended at
+    // this scope boundary.
+    if (escaping_borrows_.count(borrow.id) != 0) continue;
+    tir::Op end;
+    end.kind = tir::OpKind::EndBorrow;
+    end.operand = borrow;
+    function.add_operation(std::move(end));
+  }
+  borrow_scopes_.back().clear();
+}
+
+void TirBuilder::register_obligation(const tir::Value& slot,
+                                     const std::string& callee,
+                                     const SourceLocation& location,
+                                     tir::Function& function) {
+  if (!slot.is_valid() || callee.empty()) return;
+  // One obligation per owner slot. Re-arming a cleanup after a conditional move
+  // must not create a second obligation for the same storage.
+  for (const tir::DestructionObligation& obligation : function.obligations())
+    if (obligation.owner.id == slot.id) return;
+  function.add_obligation(slot, slot.type, callee, /*resource_domain=*/{},
+                          location);
 }
 
 void TirBuilder::emit_deferred_from(size_t scope_depth, tir::Function& function) {
@@ -255,7 +343,8 @@ void TirBuilder::emit_deferred_from(size_t scope_depth, tir::Function& function)
       call.callee = deferred->callee;
       call.arguments = deferred->arguments;
       if (deferred->automatic && deferred->owner_slot.is_valid()) {
-        tir::Value owner = function.allocate_value(deferred->owner_slot.type);
+        tir::Value owner = function.allocate_value(
+            deferred->owner_slot.type, ownership_for_release(deferred->callee));
         tir::Op load;
         load.kind = tir::OpKind::Load;
         load.location = deferred->location;
@@ -263,6 +352,24 @@ void TirBuilder::emit_deferred_from(size_t scope_depth, tir::Function& function)
         load.result = owner;
         function.add_operation(std::move(load));
         call.arguments = {owner};
+
+        // The release call is the mechanism; the Drop operation is the
+        // obligation discharge that verification can reason about. A drop is
+        // emitted only for an owning slot whose cleanup is still active.
+        register_obligation(deferred->owner_slot, deferred->callee,
+                            deferred->location, function);
+        tir::DestructionObligation* obligation =
+            function.pending_obligation_for_owner(deferred->owner_slot);
+        if (obligation != nullptr) {
+          tir::Op drop;
+          drop.kind = tir::OpKind::Drop;
+          drop.location = deferred->location;
+          drop.operand = owner;
+          drop.obligation_id = obligation->id;
+          drop.string_value = deferred->callee;
+          function.add_operation(std::move(drop));
+          obligation->discharged = true;
+        }
       }
       if (deferred->result_type.is_valid() && !deferred->result_type.is_void())
         call.result = function.allocate_value(deferred->result_type);
@@ -294,6 +401,14 @@ void TirBuilder::suppress_automatic_cleanup(const tir::Value& slot) {
       if (pending.automatic && pending.active &&
           pending.owner_slot.is_valid() && pending.owner_slot.id == slot.id)
         pending.active = false;
+  // The owner was transferred, so its destruction obligation passed to the new
+  // owner. It is neither discharged here nor leaked; verification can still
+  // distinguish this from a lost obligation.
+  if (current_function_ != nullptr) {
+    if (tir::DestructionObligation* obligation =
+            current_function_->pending_obligation_for_owner(slot))
+      obligation->transferred = true;
+  }
 }
 
 void TirBuilder::track_assignment_cleanup(const tir::Value& slot,
@@ -331,6 +446,8 @@ void TirBuilder::track_assignment_cleanup(const tir::Value& slot,
   cleanup.location = location;
   cleanup.automatic = true;
   cleanup.owner_slot = slot;
+  if (current_function_ != nullptr)
+    register_obligation(slot, callee, location, *current_function_);
   deferred_expressions_[owner_scope].push_back(std::move(cleanup));
 }
 
@@ -439,6 +556,8 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
         cleanup.location = declaration.location();
         cleanup.automatic = true;
         cleanup.owner_slot = slot;
+        register_obligation(slot, cleanup.callee, declaration.location(),
+                            function);
         deferred_expressions_.back().push_back(std::move(cleanup));
       }
       return;
@@ -742,7 +861,12 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       op.kind = tir::OpKind::Return;
       op.location = return_statement.location();
       if (return_statement.has_value()) {
+        TransferContextGuard guard(transfer_context_, tir::TransferKind::Return);
         op.operand = lower_expression(*return_statement.value(), function);
+        if (op.operand.is_valid() &&
+            (op.operand.ownership == ValueOwnership::Borrowed ||
+             op.operand.ownership == ValueOwnership::MutableBorrowed))
+          escaping_borrows_.insert(op.operand.id);
       }
       emit_deferred_from(0, function);
       function.add_operation(std::move(op));
@@ -886,6 +1010,12 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       op.lhs = slot;
       function.add_operation(std::move(op));
       if (expr.transfers_ownership()) {
+        // First make the ownership transfer explicit, then perform the slot
+        // invalidation that already existed. Lowering treats the Move as an
+        // alias; verification uses it to reject use of the moved value.
+        tir::Value moved;
+        emit_move(result, function, name.location(), moved);
+        result = moved;
         tir::Value null_value = function.allocate_value(slot.type);
         tir::Op null_op;
         null_op.kind = tir::OpKind::ConstantNull;
@@ -932,14 +1062,36 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
                              "internal: address-of target has no TIR slot");
           return tir::Value{};
         }
+        const bool mutable_borrow =
+            unary.ownership() != ValueOwnership::Borrowed;
         tir::Value address = function.allocate_value(
-            unary.type().is_valid() ? unary.type() : Type::pointer_type(slot.type));
+            unary.type().is_valid() ? unary.type() : Type::pointer_type(slot.type),
+            mutable_borrow ? ValueOwnership::MutableBorrowed
+                           : ValueOwnership::Borrowed);
         tir::Op op;
         op.kind = tir::OpKind::AddressOf;
         op.location = unary.location();
         op.result = address;
         op.operand = slot;
         function.add_operation(std::move(op));
+
+        // Record the borrow relationship explicitly. `slot` is the owner's
+        // storage, so the borrow's lifetime is bound to that storage's scope.
+        tir::Op borrow;
+        borrow.kind = tir::OpKind::Borrow;
+        borrow.location = unary.location();
+        borrow.operand = address;
+        borrow.lhs = slot;
+        borrow.mutable_borrow = mutable_borrow;
+        function.add_operation(std::move(borrow));
+        tir::LifetimeRecord lifetime;
+        lifetime.borrow = address;
+        lifetime.source = slot;
+        lifetime.kind = tir::LifetimeKind::Lexical;
+        lifetime.mutable_access = mutable_borrow;
+        lifetime.location = unary.location();
+        function.add_lifetime(std::move(lifetime));
+        if (!borrow_scopes_.empty()) borrow_scopes_.back().push_back(address);
         return address;
       }
       if (unary.op() == UnaryOp::Dereference) {
@@ -1111,6 +1263,7 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
 
       std::vector<tir::Value> arg_vals;
       for (const auto& argument : call.arguments()) {
+        TransferContextGuard guard(transfer_context_, tir::TransferKind::Argument);
         arg_vals.push_back(lower_expression(*argument, function));
       }
 
@@ -1409,6 +1562,10 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
           clear_field.operand = empty;
           clear_field.result = field_ptr;
           function.add_operation(std::move(clear_field));
+          tir::Value moved;
+          TransferContextGuard guard(transfer_context_, tir::TransferKind::Field);
+          emit_move(result, function, mem.location(), moved);
+          result = moved;
         }
       }
       return result;

@@ -25,6 +25,17 @@ string value_name(tir::Value value) {
   return value.is_valid() ? "%" + to_string(value.id) : "<none>";
 }
 
+string_view transfer_name(tir::TransferKind kind) {
+  switch (kind) {
+    case tir::TransferKind::Local: return "local";
+    case tir::TransferKind::Return: return "return";
+    case tir::TransferKind::Argument: return "argument";
+    case tir::TransferKind::Field: return "field";
+    case tir::TransferKind::Element: return "element";
+  }
+  return "unknown";
+}
+
 }  // namespace
 
 string print_tir(const tir::Module& module) {
@@ -141,6 +152,22 @@ string print_tir(const tir::Module& module) {
         case tir::OpKind::DynamicIndex:
           out << " " << value_name(op.lhs) << "[" << value_name(op.operand)
               << "] : " << op.result.type.mangle();
+          break;
+        case tir::OpKind::Move:
+          out << " " << value_name(op.operand) << " -> " << value_name(op.result)
+              << " kind=" << transfer_name(op.transfer_kind);
+          break;
+        case tir::OpKind::Borrow:
+          out << " " << value_name(op.operand) << " from " << value_name(op.lhs)
+              << (op.mutable_borrow ? " mutable" : " immutable");
+          if (!op.borrow_path.empty()) out << " path=\"" << op.borrow_path << "\"";
+          break;
+        case tir::OpKind::EndBorrow:
+          out << " " << value_name(op.operand);
+          break;
+        case tir::OpKind::Drop:
+          out << " " << value_name(op.operand) << " obligation=" << op.obligation_id
+              << " release=" << op.string_value;
           break;
         case tir::OpKind::Unreachable:
           break;

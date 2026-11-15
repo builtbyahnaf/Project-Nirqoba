@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "nirqoba/Diagnostics/DiagnosticEngine.h"
@@ -79,12 +80,43 @@ class TirBuilder {
   tir::Value lookup_slot(const std::string& name) const;
 
   DiagnosticEngine& diagnostics_;
+  // Function currently being lowered. Cleanup suppression uses it to mark a
+  // destruction obligation as transferred rather than discharged.
+  tir::Function* current_function_ = nullptr;
   std::vector<std::unordered_map<std::string, tir::Value>> scopes_;
   std::vector<LoopContext> loop_stack_;
   std::vector<std::vector<DeferredCall>> deferred_expressions_;
   // Number of enclosing branches, loop bodies, loop conditions and short-circuit
   // right-hand sides. A transfer at depth zero dominates the owner's cleanup.
   std::size_t conditional_depth_ = 0;
+  // Reason recorded on the next Move operation. The lowering context sets this
+  // around the expression that transfers ownership, so TIR can distinguish a
+  // returned value from an argument or an ordinary local transfer.
+  tir::TransferKind transfer_context_ = tir::TransferKind::Local;
+  // Borrowed values created in each lexical scope, ended when that scope exits.
+  std::vector<std::vector<tir::Value>> borrow_scopes_;
+  // Borrow value whose EndBorrow must not be emitted: it is being returned to
+  // the caller, so its lifetime is the caller's, not this scope's.
+  std::unordered_set<int> escaping_borrows_;
+  struct TransferContextGuard {
+    TransferContextGuard(tir::TransferKind& slot, tir::TransferKind value)
+        : slot_(slot), previous_(slot) {
+      slot_ = value;
+    }
+    ~TransferContextGuard() { slot_ = previous_; }
+    TransferContextGuard(const TransferContextGuard&) = delete;
+    TransferContextGuard& operator=(const TransferContextGuard&) = delete;
+
+   private:
+    tir::TransferKind& slot_;
+    tir::TransferKind previous_;
+  };
+  void emit_move(const tir::Value& source, tir::Function& function,
+                 const SourceLocation& location, tir::Value& result);
+  void emit_end_borrows(tir::Function& function);
+  void register_obligation(const tir::Value& slot, const std::string& callee,
+                           const SourceLocation& location,
+                           tir::Function& function);
 };
 
 }  // namespace nirq
