@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.515-beta` |
-| Development Stage | `Pre-MMM Phase 9 — Ownership Hardening` |
-| Last Report Update | `2026-11-15 08:00:00` |
-| Report Entries | `29` |
+| Current Working Version | `0.527-beta` |
+| Development Stage | `MMM Phase 1 — Ownership Representation` |
+| Last Report Update | `2026-11-15 16:30:00` |
+| Report Entries | `30` |
 
 ---
 
@@ -3499,6 +3499,71 @@ only under a new explicit instruction.
 ---
 
 **End of Entry #029**
+
+---
+
+## Entry #030 — MMM Phase 1: Ownership Representation
+
+**Version:** `0.527-beta`  
+**Date:** `2026-11-15 16:30:00`  
+**Scope:** `MMM Phase 1 / semantic ownership categories / TIR transfer, borrow, lifetime and destruction representation / verifier extension`  
+**Status:** Complete
+
+### 1. What Was Implemented
+
+Phase 1 gives the ownership rules Sema already enforced an explicit, verifiable
+TIR representation without changing source syntax, runtime behaviour or GC.
+
+- One `ValueOwnership` vocabulary with owning/borrowing/transfer/destruction
+  classification helpers.
+- `tir.move` for local, return, argument, field and element transfers.
+- `tir.borrow` with owner, storage path and mutability; `tir.end_borrow` at scope
+  exit; parameter and return lifetime relations.
+- `DestructionObligation` records discharged by `tir.drop`, paired with the
+  existing release calls; a transfer marks the obligation as owed by the new
+  owner.
+- Verifier extension (not duplication) with `NRQ4006`-`NRQ4008`: use after move,
+  double move, false transfer reason, borrow origin/mutability/lifetime errors,
+  duplicate borrow end, unknown/duplicate drop, obligation owner not storage,
+  drop/release mismatch, release family mismatch and reserved return categories.
+- Ownership metadata survives translation to MLIR as function attributes; the TIR
+  dump exposes categories, lifetimes and obligation state.
+
+### 2. Important Decisions
+
+- Transfers are represented as operations but lower as aliases; the existing
+  null-store invalidation remains the execution mechanism.
+- Destructibility is registered per owning storage slot, not per loaded value, so
+  conditional moves can mark an obligation transferred without inventing a second
+  obligation.
+- Path-sensitive completeness of discharge is deliberately not required; that is
+  Phase 2. Structural correctness of every emitted discharge is required now.
+- `ArenaBound` and `Weak` exist as categories only; no builder path produces them.
+
+### 3. Verification
+
+- `289` unit tests pass.
+- `501` integration tests pass on Windows x64/MSVC RelWithDebInfo.
+- New coverage: positive representation for return/argument transfer, borrows,
+  parameter lifetimes, obligations and printing; negative corrupted-TIR cases for
+  every new verifier rule; MLIR attribute preservation; a CLI `--emit=tir` dump
+  check.
+- Existing GC tests remain green; managed allocation is untouched.
+
+### 4. Compatibility and Limitations
+
+No source program changes meaning. The only behavioural change is rejection of
+malformed internal TIR. Phase 2 move/destruction execution, path-sensitive
+cleanup, Phase 3 lifetime inference/escape enforcement, arena object semantics,
+weak references, exception cleanup and owned strings remain unimplemented.
+
+### 5. Next Step
+
+Stop after Phase 1. Phase 2 requires explicit authorization.
+
+---
+
+**End of Entry #030**
 
 <!-- REPORT ENTRIES END -->
 
