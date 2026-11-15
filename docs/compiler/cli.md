@@ -156,7 +156,7 @@ int function main() {
 | `NRQ4005` | Error | Internal compiler error: unsupported type during MLIR lowering |
 | `NRQ4006` | Error | Internal compiler error: invalid ownership transfer or metadata |
 | `NRQ4007` | Error | Internal compiler error: invalid borrow or lifetime relationship |
-| `NRQ4008` | Error | Internal compiler error: invalid destruction obligation |
+| `NRQ4008` | Error | Internal compiler error: invalid or unresolved destruction obligation |
 | `NRQ5001` | Error | Cannot open source file |
 | `NRQ5002` | Error | Invalid command line argument |
 | `NRQ5003` | Error | A required toolchain component is missing (configuration or the compiler-rt profile runtime) |
