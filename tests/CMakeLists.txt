@@ -25,6 +25,7 @@ add_executable(nirqoba_unit_tests
   # test links the socket entry points, so it can only build once that runtime
   # is part of the build again. The file stays in the tree.
   unit/tir_test.cpp
+  unit/ownership_test.cpp
   unit/nrq_dialect_test.cpp
   unit/mlir_pipeline_test.cpp
   unit/temporary_artifact_test.cpp
