@@ -2088,6 +2088,17 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                        "assignment to undeclared variable '" + assignment.name() + "'");
     return;
   }
+  // A defer owns the destruction of this value at scope exit. Overwriting the
+  // slot now would either leak the old value or make the deferred release operate
+  // on the replacement, so the two cannot coexist on one binding.
+  if (symbol != nullptr &&
+      (symbol->owns_allocation || symbol->shared_allocation) &&
+      has_pending_deferred_release(symbol->allocation_id)) {
+    diagnostics_.error(diag::kUseAfterFree, assignment.target().location(),
+                       "cannot overwrite owner '" + symbol->name +
+                           "' after a defer scheduled its cleanup");
+    return;
+  }
   if (symbol != nullptr && !symbol->is_mutable()) {
     diagnostics_.error(diag::kImmutableAssignment, assignment.target().location(),
                        "'" + symbol->name + "' was declared as " +
