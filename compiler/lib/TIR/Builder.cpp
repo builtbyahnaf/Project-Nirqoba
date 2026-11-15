@@ -1591,7 +1591,12 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         // from the string_value (we'll use slot_name to carry the field name).
       }
 
-      tir::Value result = function.allocate_value(result_type);
+      // A transferred field is itself an owner after extraction. Recording the
+      // ownership on the extracted value is what makes the following move
+      // verifiable; a plain read keeps the trivial category.
+      tir::Value result = function.allocate_value(
+          result_type, expr.transfers_ownership() ? expr.ownership()
+                                                  : ValueOwnership::Trivial);
       tir::Op extract;
       extract.kind = tir::OpKind::AggregateExtract;
       extract.location = mem.location();
