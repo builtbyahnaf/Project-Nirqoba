@@ -1,13 +1,14 @@
 # Ownership Representation — Phase 1
 
-**Version:** `0.531-beta`  
-**Scope:** Memory Model Migration Phase 1. No new language syntax.
+**Version:** `0.539-beta`  
+**Scope:** Memory Model Migration Phases 1–2. No new language syntax.
 
-Phase 1 gives the ownership semantics Nirqoba already enforced in semantic
-analysis an explicit, verifiable representation in TIR. It does not implement the
-move/destruction execution rules of Phase 2 or the full borrow enforcement of
-Phase 3. The compiler still lowers the same programs to the same machine code;
-what changes is what the compiler can see and reject internally.
+Phase 1 gave the ownership semantics Nirqoba already enforced in semantic
+analysis an explicit, verifiable representation in TIR. Phase 2 makes that
+representation operational: `tir.drop` now generates the release, owner
+overwrites destroy the old value first, obligations must resolve, and explicit
+`defer`/release paths participate in the same bookkeeping. Full borrow
+enforcement remains Phase 3.
 
 ## 1. Ownership categories
 
@@ -107,13 +108,17 @@ a `DestructionObligation`:
 | `discharged` | A drop and release pair ran |
 | `transferred` | Ownership moved, so the new owner owes the release |
 
-The cleanup emits the release call it always did, preceded by a drop:
+The cleanup is one operation that owns its release:
 
 ```text
 %20 = tir.load %4
 tir.drop %20 obligation=0 release=memory.deallocate
-tir.call @memory.deallocate(%20)
 ```
+
+Lowering expands that drop into the `memory.deallocate` call on a copy of the
+function. Verified TIR therefore has one destruction record, and MLIR still
+receives an ordinary runtime release. A separate release call is only emitted
+when the source explicitly writes one (`memory.deallocate(x)` or `defer ...`).
 
 Verifier rules:
 
@@ -123,11 +128,52 @@ Verifier rules:
   release family must match the type;
 - an obligation may be discharged at most once;
 - a transferred obligation may not also be dropped;
-- every drop must be immediately followed by the release call it names.
+- a drop must name a release and may not be immediately followed by a duplicate
+  release of the same value;
+- every obligation must end discharged or transferred;
+- a value may not be used after its drop on the same straight-line path.
 
-The verifier does not yet require every obligation to be discharged on every
-path. That is Phase 2's path-sensitive destruction proof. It does guarantee that
-no metadata claims a cleanup that lowering does not perform.
+### 4.1 Destruction order
+
+Lexical cleanup runs in reverse registration order (LIFO). Parameters are
+registered before the body, so body owners are destroyed before parameters.
+Nested aggregate fields are released in reverse declaration order by
+`aggregate.owned_drop`. A moved field or whole value is null, so recursive
+destruction treats it as a no-op.
+
+### 4.2 Control flow
+
+Every terminator closes the scopes it leaves: `return` closes all scopes, `break`
+closes loop-body scopes, and `continue` closes the body scope before the step.
+Conditional releases and conditional moves leave the automatic cleanup armed
+because another path may still own the value. Assigning a replacement into such
+a slot first emits the pending destruction, which releases the live value on the
+path that still owns it and releases null on the path that already moved it.
+
+### 4.3 Partial initialization
+
+An `uninit` aggregate is zero-initialized. Field initialization writes only the
+selected fields, and recursive destruction releases the initialized fields while
+the zeroed fields are no-ops. No per-object initialization bitmap is needed for
+the aggregate forms the language supports.
+
+### 4.4 Explicit cleanup
+
+An explicit `memory.deallocate`, resource release or `defer` destroys the value
+itself, so it discharges the obligation rather than transferring it. A binding
+whose cleanup is scheduled by `defer` cannot be overwritten, because the
+deferred call expects to release the original value.
+
+Exception and panic unwinding are not part of the language. `system.exit`
+terminates the process and does not run lexical cleanup; runtime teardown only
+retires process-owned resources on a best-effort basis. These are documented
+limitations, not supported cleanup paths.
+
+The verifier is deliberately structural and straight-line: it proves each emitted
+destruction is well formed and every obligation resolves, but it does not prove
+path-sensitive completeness for arbitrary branch graphs. The generated builder
+cleanup covers the supported control flow; richer path proofs belong to a later
+analysis pass.
 
 ## 5. Transformation contract
 
@@ -140,9 +186,11 @@ Ownership metadata survives translation to MLIR:
   `parameter:value:immutable;return:value:immutable`;
 - functions with cleanup gain `nirqoba.destruction_obligations`.
 
-`tir.move`, `tir.borrow`, `tir.end_borrow` and `tir.drop` lower without runtime
-cost. They participate in the stack-promotion escape scan as observers, not
-escapes, so the Phase 2 escape optimisation keeps working.
+`tir.move`, `tir.borrow` and `tir.end_borrow` lower without runtime cost. They
+participate in the stack-promotion escape scan as observers, not escapes, so the
+optimisation keeps working. `tir.drop` lowers to exactly the release call named
+by its obligation; it does not add a registry, a GC root, a safepoint or a write
+barrier.
 
 ## 6. Diagnostics
 
@@ -158,14 +206,14 @@ offending expression.
 
 ## 7. Non-goals
 
-Phase 1 does not add:
+Phases 1–2 do not add:
 
-- move syntax or implicit move semantics;
-- deterministic destruction order or exception cleanup;
-- path-sensitive obligation proofs;
+- move or destruction syntax;
+- exception or panic unwinding cleanup;
+- full path-sensitive obligation proofs for arbitrary branch graphs;
 - lifetime inference or full borrow enforcement;
 - arena allocation or weak references;
-- GC changes. Managed allocation and collection are untouched.
+- ordinary-allocation migration (Phase 4) or GC changes.
 
 ## 8. Compatibility
 
