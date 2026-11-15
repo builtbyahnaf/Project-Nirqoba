@@ -227,6 +227,7 @@ class Function {
 
   // Destruction obligations. The id is stable for the function and is what a
   // Drop operation names; ids are never reused after a discharge.
+  std::vector<DestructionObligation>& obligations() { return obligations_; }
   const std::vector<DestructionObligation>& obligations() const {
     return obligations_;
   }

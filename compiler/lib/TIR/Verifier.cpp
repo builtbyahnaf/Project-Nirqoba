@@ -164,6 +164,18 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
                             function->return_type().mangle());
       ok = false;
     }
+    // Weak references and arena-bound values cannot escape as ordinary returns:
+    // no caller-visible lifetime contract exists for them in Phase 1.
+    if (function->return_ownership() == ValueOwnership::Weak ||
+        function->return_ownership() == ValueOwnership::ArenaBound) {
+      diagnostics.error(kOwnership, SourceLocation{},
+                        "internal: function '" + function->name() +
+                            "' returns a reserved ownership category '" +
+                            std::string(
+                                ownership_name(function->return_ownership())) +
+                            "'");
+      ok = false;
+    }
 
     const std::string& borrow_source = function->return_borrow_parameter();
     if (!borrow_source.empty()) {
@@ -213,6 +225,19 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
     std::unordered_set<int> discharged_obligations;
     std::unordered_map<int, SourceLocation> discharged_at;
     std::unordered_set<int> address_of_results;
+    // Consumers that give a transfer reason its meaning. A move marked Return
+    // must actually feed a return, and an Argument move must feed a call.
+    std::unordered_set<int> returned_values;
+    std::unordered_set<int> passed_arguments;
+    // Values that denote a storage location an obligation can be attached to.
+    std::unordered_set<int> storage_locations;
+    for (const tir::Op& op : operations) {
+      if (op.kind == tir::OpKind::Return && op.operand.is_valid())
+        returned_values.insert(op.operand.id);
+      if (op.kind == tir::OpKind::Call)
+        for (const tir::Value argument : op.arguments)
+          if (argument.is_valid()) passed_arguments.insert(argument.id);
+    }
 
     auto check_value = [&](tir::Value value, const SourceLocation& location,
                            const std::string& role) {
@@ -272,6 +297,17 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
 
       if (op.kind == tir::OpKind::AddressOf && op.result.is_valid())
         address_of_results.insert(op.result.id);
+      switch (op.kind) {
+        case tir::OpKind::Alloca:
+        case tir::OpKind::ArrayAlloca:
+        case tir::OpKind::GetElementPtr:
+        case tir::OpKind::AddressOf:
+        case tir::OpKind::SoaColumnPtr:
+          if (op.result.is_valid()) storage_locations.insert(op.result.id);
+          break;
+        default:
+          break;
+      }
 
       check_value(op.operand, op.location, "operand");
       check_value(op.lhs, op.location, "lhs");
@@ -419,6 +455,20 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
                                     "' does not match source ownership '" +
                                     std::string(ownership_name(op.operand.ownership)) +
                                     "'");
+              ok = false;
+            }
+          }
+          if (op.result.is_valid()) {
+            if (op.transfer_kind == tir::TransferKind::Return &&
+                returned_values.count(op.result.id) == 0) {
+              diagnostics.error(kOwnership, op.location,
+                                "internal: return transfer does not feed a return operation");
+              ok = false;
+            }
+            if (op.transfer_kind == tir::TransferKind::Argument &&
+                passed_arguments.count(op.result.id) == 0) {
+              diagnostics.error(kOwnership, op.location,
+                                "internal: argument transfer does not feed a call argument");
               ok = false;
             }
           }
@@ -713,6 +763,11 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
       if (obligation.release.empty()) {
         diagnostics.error(kDestruction, obligation.location,
                           "internal: destruction obligation has no release operation");
+        ok = false;
+      }
+      if (storage_locations.count(obligation.owner.id) == 0) {
+        diagnostics.error(kDestruction, obligation.location,
+                          "internal: destruction obligation owner is not a storage location");
         ok = false;
       }
       if (!release_matches_type(obligation.release, obligation.type)) {
