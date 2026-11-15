@@ -19,6 +19,20 @@ recorded below is made under that authority.
 > `0.495-beta`. Only the newest entry carries the working-build label; older
 > `(released)` entries are actual published checkpoints.
 
+## Version 0.535-beta (working build)
+
+### Summary of Changes (since `0.531-beta`):
+
+- **Drops perform destruction.** Automatic cleanup is emitted as one `tir.drop`
+  carrying its release operation; lowering expands it into the runtime call.
+  Verification rejects a missing release and a duplicate immediate release.
+- **Re-owned slots get new obligations.** A slot that was moved out or already
+  discharged and later receives an owner registers a fresh obligation instead of
+  reusing a resolved one.
+- **Obligations must resolve.** Every obligation must be discharged or transferred;
+  a dangling obligation is verified as a leak.
+- Tests: 295 unit tests pass with the new ownership cases.
+
 ## Version 0.531-beta (working build)
 
 ### Summary of Changes (since `0.527-beta`):
