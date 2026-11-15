@@ -709,3 +709,50 @@ TEST(MlirPipelineTest, EntryPointNamesTheRuntimeConfiguration) {
   ASSERT_FALSE(module_calls_symbol(*development.module,
                                    "nrq_runtime_abi_v1_production"));
 }
+
+// Phase 1: the ownership relationships recorded in TIR must still be visible
+// after translation to MLIR. Consumers that only understand standard dialects
+// may ignore these attributes, but a transformation that drops them has lost
+// information the migration depends on.
+TEST(MlirPipelineTest, PreservesOwnershipLifetimesAndObligationsAsAttributes) {
+  constexpr const char* source = R"nrqba(
+borrow value int* function alias(borrow int* value) {
+    return value;
+}
+int function main() {
+    var value = 11;
+    let pointer = alias(&value);
+    let buffer = memory.allocate<byte>(8);
+    print(*pointer);
+    return 0;
+}
+)nrqba";
+
+  mlir::DialectRegistry registry;
+  nirq::register_all_dialects(registry);
+  mlir::MLIRContext context(registry);
+  context.loadAllAvailableDialects();
+  nirq::DiagnosticEngine diagnostics;
+
+  auto module = lower_source_to_mlir(source, context, diagnostics);
+  ASSERT_FALSE(diagnostics.has_errors());
+  ASSERT_TRUE(static_cast<bool>(module));
+
+  bool alias_has_lifetime = false;
+  bool main_has_obligation = false;
+  module->walk([&](mlir::func::FuncOp function) {
+    if (function.getName() == "alias") {
+      if (auto attr = function->getAttrOfType<mlir::StringAttr>(
+              "nirqoba.lifetime_relations")) {
+        alias_has_lifetime =
+            attr.getValue().contains("parameter:value") &&
+            attr.getValue().contains("return:value");
+      }
+    }
+    if (function.getName() == "main")
+      main_has_obligation =
+          function->hasAttr("nirqoba.destruction_obligations");
+  });
+  ASSERT_TRUE(alias_has_lifetime);
+  ASSERT_TRUE(main_has_obligation);
+}
