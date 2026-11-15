@@ -452,6 +452,10 @@ static bool parameter_is_never_stored_through(const tir::Function& function,
       continue;
     }
     if (op.kind == tir::OpKind::Load || op.kind == tir::OpKind::Call) continue;
+    // Ownership markers observe a pointer without writing through it.
+    if (op.kind == tir::OpKind::Move || op.kind == tir::OpKind::Borrow ||
+        op.kind == tir::OpKind::EndBorrow || op.kind == tir::OpKind::Drop)
+      continue;
     if (op.kind == tir::OpKind::Return) continue;
     // Any other use of the pointer could write through it.
     return false;
@@ -680,6 +684,11 @@ static std::unordered_map<int, StackAllocationLayout> analyze_stack_allocations(
         if (op.kind == tir::OpKind::Store && uses_data &&
             data_pointers.count(op.lhs.id) && !uses_descriptor)
           continue;
+        // Ownership markers observe the descriptor/value without publishing it
+        // to another owner, so they do not disqualify stack promotion.
+        if (op.kind == tir::OpKind::Move || op.kind == tir::OpKind::Borrow ||
+            op.kind == tir::OpKind::EndBorrow || op.kind == tir::OpKind::Drop)
+          continue;
         escapes = true;
       }
       if (escapes) continue;
@@ -774,6 +783,10 @@ static std::unordered_map<int, StackAllocationLayout> analyze_stack_allocations(
           escapes = true;
           continue;
         }
+        // Ownership markers do not publish the pointer to another owner.
+        if (op.kind == tir::OpKind::Move || op.kind == tir::OpKind::Borrow ||
+            op.kind == tir::OpKind::EndBorrow || op.kind == tir::OpKind::Drop)
+          continue;
         escapes = true;
       }
       if (escapes) continue;
@@ -1383,15 +1396,8 @@ static mlir::Location to_mlir_loc(const SourceLocation& loc, mlir::MLIRContext* 
 }
 
 static llvm::StringRef ownership_spelling(ValueOwnership ownership) {
-  switch (ownership) {
-    case ValueOwnership::Owned: return "owned";
-    case ValueOwnership::Borrowed: return "borrowed";
-    case ValueOwnership::MutableBorrowed: return "mutable_borrowed";
-    case ValueOwnership::Shared: return "shared";
-    case ValueOwnership::GcManaged: return "gc_managed";
-    case ValueOwnership::Raw: return "raw";
-    case ValueOwnership::Trivial: return "trivial";
-  }
+  // One spelling source for TIR printing, MLIR attributes and diagnostics.
+  return ownership_name(ownership);
   return "trivial";
 }
 
@@ -4262,6 +4268,22 @@ class FunctionTranslator {
         return true;
       }
 
+      case tir::OpKind::Move: {
+        // Ownership transfer is a semantic alias, not a physical copy. Keeping
+        // the result mapped to the source value is what preserves the existing
+        // zero-copy behaviour.
+        mlir::Value source = get(op.operand);
+        if (source) set(op.result, source);
+        return true;
+      }
+
+      case tir::OpKind::Borrow:
+      case tir::OpKind::EndBorrow:
+      case tir::OpKind::Drop:
+        // Ownership markers have no runtime effect. Their information is
+        // preserved as attributes on surrounding values and on the function.
+        return true;
+
       case tir::OpKind::Unreachable: {
         builder_.create<mlir::LLVM::UnreachableOp>(loc);
         return true;
@@ -4758,6 +4780,31 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     if (!tir_fn->return_resource_domain().empty())
       func_op->setAttr("nirqoba.return_resource_domain",
                        builder.getStringAttr(tir_fn->return_resource_domain()));
+    // Phase 1 ownership metadata survives into MLIR as attributes. Consumers
+    // that only understand the standard dialects can ignore them, while the
+    // verifier and diagnostic passes can still see the relationships.
+    if (!tir_fn->lifetimes().empty()) {
+      std::string summary;
+      for (const tir::LifetimeRecord& lifetime : tir_fn->lifetimes()) {
+        if (!summary.empty()) summary += ";";
+        switch (lifetime.kind) {
+          case tir::LifetimeKind::Lexical: summary += "lexical"; break;
+          case tir::LifetimeKind::Parameter: summary += "parameter"; break;
+          case tir::LifetimeKind::Return: summary += "return"; break;
+          case tir::LifetimeKind::None: summary += "none"; break;
+        }
+        if (!lifetime.source_parameter.empty())
+          summary += ":" + lifetime.source_parameter;
+        summary += lifetime.mutable_access ? ":mutable" : ":immutable";
+      }
+      func_op->setAttr("nirqoba.lifetime_relations",
+                       builder.getStringAttr(summary));
+    }
+    if (!tir_fn->obligations().empty())
+      func_op->setAttr(
+          "nirqoba.destruction_obligations",
+          builder.getI32IntegerAttr(
+              static_cast<int32_t>(tir_fn->obligations().size())));
     if (!tir_fn->return_borrow_parameter().empty())
       func_op->setAttr("nirqoba.return_borrow_parameter",
                        builder.getStringAttr(tir_fn->return_borrow_parameter()));
