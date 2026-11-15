@@ -27,7 +27,7 @@ The `Verifier` (`verify_tir_module`) enforces structural invariants:
 - Load/Store slot types must match the loaded/stored value types.
 - Return operand types must match the declared function return type.
 
-## 4. Ownership Representation (MMM Phase 1)
+## 4. Ownership Representation and Destruction (MMM Phases 1–2)
 
 Every value, parameter and return carries a `ValueOwnership` category. Four
 ownership operations make the semantic relationships verifiable without changing
@@ -40,9 +40,10 @@ generated code:
   plus immutable/mutable access.
 - `tir.end_borrow` ends a lexical borrow before the owner's cleanup. Returned
   borrows stay open and are described by a function-level lifetime relation.
-- `tir.drop` discharges a `DestructionObligation` and is immediately followed by
-  the release call it names. Transfer marks the obligation as owed by the new
-  owner instead.
+- `tir.drop` discharges a `DestructionObligation` and owns the release call it
+  names. Lowering expands a drop into that call on a copy of the function, so TIR
+  has one destruction record and MLIR gets a normal runtime call. Transfer marks
+  the obligation as owed by the new owner instead.
 
 Functions store `LifetimeRecord` and `DestructionObligation` tables next to the
 operation stream. Translation to MLIR publishes them as `nirqoba.ownership`,
@@ -51,7 +52,10 @@ operation stream. Translation to MLIR publishes them as `nirqoba.ownership`,
 The verifier rejects use after move, double moves, a transfer reason that does not
 match its consumer, mutability/origin/lifetime mismatches on borrows, double-ended
 borrows, unknown or twice-discharged obligations, an obligation whose owner is not
-a storage location, a drop without its release, a release family mismatch and a
-reserved (`Weak`/`ArenaBound`) return category. Phase 2 path-sensitive discharge
-proofs and Phase 3 lifetime inference are out of scope.
+a storage location, a drop without its release or with a duplicate release, a
+release family mismatch, an obligation that is never discharged or transferred,
+use of a value after its destruction, and a reserved (`Weak`/`ArenaBound`) return
+category. The analysis is structural and straight-line; full path-sensitive
+discharge proofs for arbitrary branch graphs remain future work, as does Phase 3
+lifetime inference.
 
