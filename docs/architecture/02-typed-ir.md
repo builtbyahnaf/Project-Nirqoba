@@ -26,3 +26,32 @@ The `Verifier` (`verify_tir_module`) enforces structural invariants:
 - Every referenced `tir::Value` ID must be in bounds for the containing function.
 - Load/Store slot types must match the loaded/stored value types.
 - Return operand types must match the declared function return type.
+
+## 4. Ownership Representation (MMM Phase 1)
+
+Every value, parameter and return carries a `ValueOwnership` category. Four
+ownership operations make the semantic relationships verifiable without changing
+generated code:
+
+- `tir.move` records a transfer, its source and its reason (local, return,
+  argument, field or element). The source becomes unusable; the result aliases it
+  during lowering.
+- `tir.borrow` records a non-owning value, its owner and the selected storage path,
+  plus immutable/mutable access.
+- `tir.end_borrow` ends a lexical borrow before the owner's cleanup. Returned
+  borrows stay open and are described by a function-level lifetime relation.
+- `tir.drop` discharges a `DestructionObligation` and is immediately followed by
+  the release call it names. Transfer marks the obligation as owed by the new
+  owner instead.
+
+Functions store `LifetimeRecord` and `DestructionObligation` tables next to the
+operation stream. Translation to MLIR publishes them as `nirqoba.ownership`,
+`nirqoba.lifetime_relations` and `nirqoba.destruction_obligations` attributes.
+
+The verifier rejects use after move, double moves, a transfer reason that does not
+match its consumer, mutability/origin/lifetime mismatches on borrows, double-ended
+borrows, unknown or twice-discharged obligations, an obligation whose owner is not
+a storage location, a drop without its release, a release family mismatch and a
+reserved (`Weak`/`ArenaBound`) return category. Phase 2 path-sensitive discharge
+proofs and Phase 3 lifetime inference are out of scope.
+
