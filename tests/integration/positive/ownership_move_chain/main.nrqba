@@ -1,0 +1,16 @@
+int* function make() {
+    var buffer = memory.allocate<int>(4);
+    buffer[0] = 9;
+    return buffer;
+}
+
+int function main() {
+    let first = make();
+    let second = first;
+    print(second[0]);
+    memory.deallocate(second);
+    var value = 4;
+    let pointer = &value;
+    print(*pointer);
+    return 0;
+}
