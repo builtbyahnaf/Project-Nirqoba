@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.531-beta` |
-| Development Stage | `MMM Phase 1 — Ownership Representation` |
-| Last Report Update | `2026-11-15 16:30:00` |
-| Report Entries | `30` |
+| Current Working Version | `0.539-beta` |
+| Development Stage | `MMM Phase 2 — Deterministic Destruction and Move Semantics` |
+| Last Report Update | `2026-11-15 18:10:00` |
+| Report Entries | `31` |
 
 ---
 
@@ -3564,6 +3564,74 @@ Stop after Phase 1. Phase 2 requires explicit authorization.
 ---
 
 **End of Entry #030**
+
+## Entry #031 — MMM Phase 2: Deterministic Destruction and Move Semantics
+
+**Version:** `0.539-beta`  
+**Date:** `2026-11-15 18:10:00`  
+**Scope:** `MMM Phase 2 / executable moves / drop-generated destruction / exactly-once cleanup / partial initialization`  
+**Status:** Complete
+
+### 1. What Was Implemented
+
+Phase 2 makes the ownership representation operational without adding syntax or
+changing the runtime ABI.
+
+- Automatic cleanup is now one `tir.drop` that names its release. Lowering
+  expands the drop into that runtime call on a function copy, so TIR has one
+  destruction record and MLIR receives the same release call as before.
+- A moved-out slot that receives a new owner registers a fresh destruction
+  obligation. Reusing the transferred obligation previously hid the replacement's
+  cleanup from verification.
+- Assignment over a slot whose automatic cleanup is still armed destroys the old
+  value first. This handles conditional releases and conditional moves, where the
+  slot is null only on the path that moved.
+- Explicit releases, resource releases and `defer` discharge their obligation
+  instead of marking it transferred. A deferred call captures its argument, so
+  rebinding the owner afterwards remains supported.
+- Verification now requires every obligation to be discharged or transferred,
+  and rejects use of a value after destruction. Existing transfer, borrow,
+  lifetime and release-family checks remain.
+- `uninit` aggregates stay zeroed, so recursive field destruction releases only
+  initialized fields. No initialization bitmap or runtime registry is added.
+
+### 2. Important Decisions
+
+- `tir.drop` is the destruction record; the release call is its expansion. This
+  removes the Phase 1 decorative-marker problem without duplicating the call
+  lowering path.
+- Obligations belong to a live ownership of a storage slot, not permanently to
+  the slot. A re-owned slot therefore gets a new id.
+- Conditional cleanup relies on the null slot plus null-tolerant releases. The
+  builder does not attempt a full path-sensitive dataflow proof.
+- Direct reassignment of a live owner remains rejected; conditional overwrite and
+  explicit release are the supported forms.
+- No destructor registry, GC root, safepoint or write barrier is introduced.
+  Ordinary allocation remains GC-backed until Phase 4.
+
+### 3. Verification
+
+- `298` unit tests pass.
+- Full runner: `517` cases (`502` integration + `15` memory model), all pass.
+- New runtime coverage: local, argument, return, field and chained moves,
+  conditional moves, early and multiple returns, loop `continue`/`break`,
+  recursive frames, partial initialization, nested aggregates, re-owned slots and
+  owner overwrite.
+- Generated-code evidence: an ordered TIR check proves reverse destruction order;
+  `MlirPipelineTest.DropLowersToItsReleaseCall` proves drop expansion.
+- Existing GC, allocator, secure-storage, stack-promotion and integration tests
+  pass in the same run.
+
+### 4. Compatibility and Limitations
+
+Ownership transfer remains a zero-copy alias. No source program needs changes.
+Exception, panic and error-propagation cleanup are unsupported because the
+language has no such control flow. `system.exit` does not run lexical cleanup.
+The verifier is structural and straight-line rather than a full path-sensitive
+proof. Dynamic owned arrays still reject owning elements. No benchmark was run;
+Phase 2 adds no runtime instruction beyond the release Phase 1 already emitted.
+
+**End of Entry #031**
 
 <!-- REPORT ENTRIES END -->
 
