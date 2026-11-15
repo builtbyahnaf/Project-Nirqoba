@@ -19,7 +19,22 @@ recorded below is made under that authority.
 > `0.495-beta`. Only the newest entry carries the working-build label; older
 > `(released)` entries are actual published checkpoints.
 
-## Version 0.515-beta (working build)
+## Version 0.519-beta (working build)
+
+### Summary of Changes (since `0.515-beta`):
+
+- **Explicit ownership categories.** `ValueOwnership` now has one shared
+  vocabulary and classification helpers (`ArenaBound` and `Weak` are reserved
+  representation categories, not produced by the builder). TIR values,
+  parameters and returns keep their category.
+- **First-class transfer, borrow and drop operations.** Ownership transfers emit
+  `tir.move` with a reason, `&` emits `tir.borrow` with owner and mutability plus
+  a lifetime record, scope exit emits `tir.end_borrow`, and lexical cleanup emits
+  `tir.drop` naming the discharge obligation.
+- **No source or runtime change.** The operations are semantic markers; lowering
+  aliases a move and ignores the other markers, so generated code is unchanged.
+
+## Version 0.515-beta
 
 ### Summary of Changes (since `0.511-beta`):
 
