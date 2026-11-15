@@ -1,0 +1,14 @@
+byte* function make() {
+    let buffer = memory.allocate<byte>(8);
+    return buffer;
+}
+
+int function main() {
+    let owned = make();
+    memory.deallocate(owned);
+    let scratch = memory.allocate<byte>(4);
+    var value = 3;
+    let pointer = &value;
+    print(*pointer);
+    return 0;
+}

@@ -1,0 +1,13 @@
+{
+  "mode": "check",
+  "args": ["--emit=tir"],
+  "expect_exit": 0,
+  "expect_stdout_contains": [
+    "tir.move",
+    "tir.borrow",
+    "tir.end_borrow",
+    "tir.drop",
+    "// lifetime lexical mutable",
+    "// obligation"
+  ]
+}
