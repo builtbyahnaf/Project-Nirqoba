@@ -535,6 +535,122 @@ TEST(OwnershipTest, PrinterShowsOwnershipLifetimesAndObligations) {
   ASSERT_TRUE(printed.find("state=discharged") != string::npos);
 }
 
+TEST(OwnershipTest, VerifierRejectsReturnMoveWithoutReturnConsumer) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_false_return.nrqba",
+      "int function main() {\n"
+      "  let allocation = memory.allocate<byte>(8);\n"
+      "  let owner = allocation;\n"
+      "  memory.deallocate(owner);\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  for (tir::Op& op : main_fn->operations())
+    if (op.kind == tir::OpKind::Move) {
+      op.transfer_kind = tir::TransferKind::Return;
+      break;
+    }
+  DiagnosticEngine verify_diag;
+  ASSERT_FALSE(verify_tir_module(*module, verify_diag));
+  ASSERT_TRUE(diagnostic_contains(verify_diag,
+                                  "return transfer does not feed a return"));
+}
+
+TEST(OwnershipTest, VerifierRejectsArgumentMoveWithoutCallConsumer) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_false_argument.nrqba",
+      "int function main() {\n"
+      "  let allocation = memory.allocate<byte>(8);\n"
+      "  let owner = allocation;\n"
+      "  memory.deallocate(owner);\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  for (tir::Op& op : main_fn->operations())
+    if (op.kind == tir::OpKind::Move) {
+      op.transfer_kind = tir::TransferKind::Argument;
+      break;
+    }
+  DiagnosticEngine verify_diag;
+  ASSERT_FALSE(verify_tir_module(*module, verify_diag));
+  ASSERT_TRUE(diagnostic_contains(verify_diag,
+                                  "argument transfer does not feed a call"));
+}
+
+TEST(OwnershipTest, VerifierRejectsObligationOwnerThatIsNotStorage) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_obligation_owner.nrqba",
+      "int function main() {\n"
+      "  let buffer = memory.allocate<byte>(8);\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  for (const tir::Op& op : main_fn->operations())
+    if (op.kind == tir::OpKind::ConstantInt) {
+      // Point the obligation at an ordinary value instead of a storage slot.
+      main_fn->obligations().front().owner = op.result;
+      break;
+    }
+  DiagnosticEngine verify_diag;
+  ASSERT_FALSE(verify_tir_module(*module, verify_diag));
+  ASSERT_TRUE(diagnostic_contains(verify_diag,
+                                  "owner is not a storage location"));
+}
+
+TEST(OwnershipTest, VerifierRejectsReservedReturnOwnership) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_reserved_return.nrqba",
+      "int function main() {\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  main_fn->set_return_ownership(ValueOwnership::Weak);
+  DiagnosticEngine verify_diag;
+  ASSERT_FALSE(verify_tir_module(*module, verify_diag));
+  ASSERT_TRUE(diagnostic_contains(verify_diag,
+                                  "returns a reserved ownership category"));
+}
+
+TEST(OwnershipTest, SharedOwnershipStaysTransferable) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_shared_move.nrqba",
+      "int function main() {\n"
+      "  let first = memory.shared_allocate<byte>(8);\n"
+      "  let second = first;\n"
+      "  memory.shared_release(second);\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  ASSERT_FALSE(diag.has_errors());
+  const tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  bool shared_move = false;
+  for (const tir::Op& op : main_fn->operations())
+    if (op.kind == tir::OpKind::Move &&
+        op.operand.ownership == ValueOwnership::Shared)
+      shared_move = true;
+  ASSERT_TRUE(shared_move);
+  ASSERT_TRUE(verify_tir_module(*module, diag));
+}
+
 TEST(OwnershipTest, VerifierRejectsReturnedBorrowWithoutSourceParameter) {
   DiagnosticEngine diag;
   auto module = lower_source(
