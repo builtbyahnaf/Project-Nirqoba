@@ -364,10 +364,13 @@ void TirBuilder::register_obligation(const tir::Value& slot,
                                      const SourceLocation& location,
                                      tir::Function& function) {
   if (!slot.is_valid() || callee.empty()) return;
-  // One obligation per owner slot. Re-arming a cleanup after a conditional move
-  // must not create a second obligation for the same storage.
+  // One live obligation per owner slot. A slot that was moved out or already
+  // discharged and then receives a new owner needs a fresh obligation: reusing
+  // the transferred one would make the new destruction invisible to verification.
   for (const tir::DestructionObligation& obligation : function.obligations())
-    if (obligation.owner.id == slot.id) return;
+    if (obligation.owner.id == slot.id && !obligation.transferred &&
+        !obligation.discharged)
+      return;
   function.add_obligation(slot, slot.type, callee, /*resource_domain=*/{},
                           location);
 }
@@ -491,6 +494,8 @@ void TirBuilder::track_assignment_cleanup(const tir::Value& slot,
   if (inactive) {
     inactive->active = true;
     inactive->location = location;
+    if (current_function_ != nullptr)
+      register_obligation(slot, callee, location, *current_function_);
     return;
   }
 

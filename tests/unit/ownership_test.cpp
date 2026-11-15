@@ -680,3 +680,28 @@ TEST(OwnershipTest, VerifierRejectsReturnedBorrowWithoutSourceParameter) {
   ASSERT_TRUE(diagnostic_contains(verify_diag,
                                   "return lifetime must name a borrowed parameter"));
 }
+
+TEST(OwnershipTest, ReownedSlotGetsAFreshDestructionObligation) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_reowned_slot.nrqba",
+      "int function main() {\n"
+      "  var buffer = memory.allocate<byte>(8);\n"
+      "  let first = buffer;\n"
+      "  buffer = memory.allocate<byte>(8);\n"
+      "  memory.deallocate(first);\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  ASSERT_EQ(main_fn->obligations().size(), 3u);
+  std::size_t drops = 0;
+  for (const tir::Op& op : main_fn->operations())
+    if (op.kind == tir::OpKind::Drop) ++drops;
+  // The moved-out binding is released by the explicit call; only the re-owned
+  // slot gets an automatic Drop.
+  ASSERT_EQ(drops, 1u);
+  ASSERT_TRUE(verify_tir_module(*module, diag));
+}
