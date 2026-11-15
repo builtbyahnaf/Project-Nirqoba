@@ -684,10 +684,18 @@ static std::unordered_map<int, StackAllocationLayout> analyze_stack_allocations(
         if (op.kind == tir::OpKind::Store && uses_data &&
             data_pointers.count(op.lhs.id) && !uses_descriptor)
           continue;
-        // Ownership markers observe the descriptor/value without publishing it
-        // to another owner, so they do not disqualify stack promotion.
-        if (op.kind == tir::OpKind::Move || op.kind == tir::OpKind::Borrow ||
-            op.kind == tir::OpKind::EndBorrow || op.kind == tir::OpKind::Drop)
+        // A move is an alias: the result inherits the descriptor identity of
+        // its source, so later uses are still seen by the escape scan.
+        if (op.kind == tir::OpKind::Move) {
+          if (op.result.is_valid()) {
+            if (descriptors.count(op.operand.id)) descriptors.insert(op.result.id);
+            if (data_pointers.count(op.operand.id))
+              data_pointers.insert(op.result.id);
+          }
+          continue;
+        }
+        if (op.kind == tir::OpKind::Borrow || op.kind == tir::OpKind::EndBorrow ||
+            op.kind == tir::OpKind::Drop)
           continue;
         escapes = true;
       }
@@ -783,9 +791,18 @@ static std::unordered_map<int, StackAllocationLayout> analyze_stack_allocations(
           escapes = true;
           continue;
         }
-        // Ownership markers do not publish the pointer to another owner.
-        if (op.kind == tir::OpKind::Move || op.kind == tir::OpKind::Borrow ||
-            op.kind == tir::OpKind::EndBorrow || op.kind == tir::OpKind::Drop)
+        // A move aliases its source, so the result keeps the pointer identity
+        // the escape scan is tracking.
+        if (op.kind == tir::OpKind::Move) {
+          if (op.result.is_valid()) {
+            if (descriptors.count(op.operand.id)) descriptors.insert(op.result.id);
+            if (data_pointers.count(op.operand.id))
+              data_pointers.insert(op.result.id);
+          }
+          continue;
+        }
+        if (op.kind == tir::OpKind::Borrow || op.kind == tir::OpKind::EndBorrow ||
+            op.kind == tir::OpKind::Drop)
           continue;
         escapes = true;
       }
