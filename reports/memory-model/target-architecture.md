@@ -445,3 +445,28 @@ Those are Phase 1 prerequisites, not Phase 1 scope creep.
 The contract is still structural and flow-insensitive. First-class move/drop TIR
 operations, release-on-all-paths proofs, arena object semantics, exception cleanup
 and the remaining language gaps are Phase 1 work. The migration has not started.
+
+---
+
+## 12. Phase 1 completion status
+
+Phase 1 is complete at `0.527-beta` without changing this architecture:
+
+- **Categories:** one `ValueOwnership` vocabulary with helpers classifies owning,
+  borrowing, transferable and destructible values. `ArenaBound` and `Weak` are
+  represented but not produced yet.
+- **Transfer:** `tir.move` with a reason records every local, return, argument,
+  field and element transfer; the source is invalidated and later use is rejected.
+- **Borrow and lifetime:** `tir.borrow` names the owner and storage path, lexical
+  borrows end at scope exit, and parameter/return lifetime relations are stored.
+- **Destruction:** each owning cleanup has a `DestructionObligation` discharged by
+  a `tir.drop` paired with its release call; transfer marks the obligation as owed
+  by the new owner.
+- **Verification:** the Phase 9 verifier is extended with `NRQ4006`-`NRQ4008`
+  rules rather than duplicated.
+- **Preservation:** ownership, lifetime and obligation metadata reach MLIR as
+  attributes, and ownership markers do not change stack-promotion decisions.
+
+Path-sensitive cleanup proofs, move execution semantics, arena object lifetimes,
+weak references, exception cleanup and full borrow enforcement remain Phase 2 and
+later work.
