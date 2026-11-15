@@ -1,0 +1,29 @@
+struct Inner {
+    owned ptr int data;
+}
+
+struct Outer {
+    Inner inner;
+    owned ptr int extra;
+}
+
+int function consume(bool early) {
+    var outer = Outer {
+        inner: Inner { data: memory.allocate<int>(1) },
+        extra: memory.allocate<int>(1)
+    };
+    *outer.inner.data = 11;
+    *outer.extra = 12;
+    if (early) {
+        print(*outer.inner.data);
+        return 0;
+    }
+    print(*outer.inner.data + *outer.extra);
+    return 0;
+}
+
+int function main() {
+    consume(true);
+    consume(false);
+    return 42;
+}

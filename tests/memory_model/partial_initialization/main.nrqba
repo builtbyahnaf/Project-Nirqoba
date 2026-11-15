@@ -1,0 +1,15 @@
+struct Holder {
+    owned ptr int data;
+    owned ptr int other;
+    int tag;
+}
+
+int function main() {
+    var holder: Holder = uninit;
+    holder.tag = 4;
+    holder.data = memory.allocate<int>(1);
+    *holder.data = 6;
+    // `other` is deliberately never initialized; cleanup must skip it.
+    print(*holder.data + holder.tag);
+    return 42;
+}

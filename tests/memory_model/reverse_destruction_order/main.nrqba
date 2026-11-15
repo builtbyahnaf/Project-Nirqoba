@@ -1,0 +1,5 @@
+int function main() {
+    let first = memory.allocate<byte>(8);
+    let second = memory.shared_allocate<byte>(8);
+    return 0;
+}

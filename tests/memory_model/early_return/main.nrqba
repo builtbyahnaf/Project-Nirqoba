@@ -1,0 +1,21 @@
+int function release_early(bool take_early) {
+    var outer = memory.allocate<byte>(8);
+    outer[0] = 1 as byte;
+    {
+        var inner = memory.allocate<byte>(8);
+        inner[0] = 2 as byte;
+        if (take_early) {
+            print(inner[0] as int);
+            return 0;
+        }
+        print((inner[0] + outer[0]) as int);
+    }
+    print(outer[0] as int);
+    return 0;
+}
+
+int function main() {
+    release_early(true);
+    release_early(false);
+    return 42;
+}

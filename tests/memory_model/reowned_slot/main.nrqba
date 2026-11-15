@@ -1,0 +1,9 @@
+int function main() {
+    var buffer = memory.allocate<byte>(8);
+    let first = buffer;
+    buffer = memory.allocate<byte>(8);
+    buffer[0] = 4 as byte;
+    memory.deallocate(first);
+    print(buffer[0] as int);
+    return 42;
+}

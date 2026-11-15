@@ -1,0 +1,19 @@
+int function main() {
+    var index = 0;
+    var total = 0;
+    while (index < 6) {
+        var buffer = memory.allocate<byte>(8);
+        buffer[0] = index as byte;
+        if (index == 2) {
+            index += 1;
+            continue;
+        }
+        if (index == 4) {
+            break;
+        }
+        total += buffer[0] as int;
+        index += 1;
+    }
+    print(total);
+    return 42;
+}
