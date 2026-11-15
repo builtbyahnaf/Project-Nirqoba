@@ -19,7 +19,23 @@ recorded below is made under that authority.
 > `0.495-beta`. Only the newest entry carries the working-build label; older
 > `(released)` entries are actual published checkpoints.
 
-## Version 0.519-beta (working build)
+## Version 0.523-beta (working build)
+
+### Summary of Changes (since `0.519-beta`):
+
+- **TIR verifier enforces the ownership contract.** The Phase 9 verifier now
+  rejects use after move, double moves, borrow mutability/origin/lifetime
+  mismatches, double-ended borrows, unknown or twice-discharged obligations, a
+  drop without its release call, and a release whose family or resource domain
+  does not match the obligation. `NRQ4006`-`NRQ4008` name the broken rule.
+- **Ownership metadata reaches MLIR.** Functions publish
+  `nirqoba.lifetime_relations` and `nirqoba.destruction_obligations` alongside the
+  existing parameter and return ownership attributes.
+- **Stack promotion is preserved.** Moves propagate descriptor identity through
+  the escape scan, so promoted stack allocations are never released through the
+  heap deallocator and escaping allocations remain on the heap.
+
+## Version 0.519-beta
 
 ### Summary of Changes (since `0.515-beta`):
 
