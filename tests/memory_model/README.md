@@ -20,6 +20,8 @@ are included automatically by `tests/run_tests.py`.
 | `nested_aggregate` | Nested fields are destroyed on normal and early exits |
 | `reowned_slot` | A moved slot that receives a new owner gets a fresh obligation |
 | `overwrite_owner` | A still-live owner is destroyed before replacement |
+| `shared_move` | A shared token transfers without changing its count |
+| `defer_rebinding` | A deferred call keeps its captured value while the binding is rebound |
 | `reverse_destruction_order` | Drops follow reverse declaration order in TIR |
 
 Run the complete suite (integration plus these cases):
