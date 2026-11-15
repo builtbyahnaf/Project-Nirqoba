@@ -206,9 +206,12 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
     std::unordered_map<int, std::string> consumed;
     // First-class ownership state derived from Move/Borrow/EndBorrow/Drop.
     std::unordered_map<int, std::string> moved;
+    std::unordered_map<int, SourceLocation> moved_at;
     std::unordered_map<int, const tir::Op*> borrows;
     std::unordered_set<int> ended_borrows;
+    std::unordered_map<int, SourceLocation> ended_at;
     std::unordered_set<int> discharged_obligations;
+    std::unordered_map<int, SourceLocation> discharged_at;
     std::unordered_set<int> address_of_results;
 
     auto check_value = [&](tir::Value value, const SourceLocation& location,
@@ -218,6 +221,9 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
         diagnostics.error(kOwnership, location,
                           function_value(*function, value.id) + role +
                               " used after it was moved by '" + found->second + "'");
+        if (const auto at = moved_at.find(value.id); at != moved_at.end())
+          diagnostics.note(kOwnership, at->second,
+                           "value was transferred to a new owner here");
         ok = false;
       }
       if (const auto found = consumed.find(value.id); found != consumed.end()) {
@@ -416,9 +422,11 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
               ok = false;
             }
           }
-          if (op.operand.is_valid())
+          if (op.operand.is_valid()) {
             moved[op.operand.id] = std::string(tir::op_name(op.kind)) + " (" +
                                    std::string(transfer_name(op.transfer_kind)) + ")";
+            moved_at[op.operand.id] = op.location;
+          }
           break;
         }
         case tir::OpKind::Borrow: {
@@ -486,9 +494,13 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
             diagnostics.error(kBorrow, op.location,
                               function_value(*function, op.operand.id) +
                                   "borrow ended more than once");
+            if (const auto at = ended_at.find(op.operand.id); at != ended_at.end())
+              diagnostics.note(kBorrow, at->second,
+                               "borrow was first ended here");
             ok = false;
           } else {
             ended_borrows.insert(op.operand.id);
+            ended_at[op.operand.id] = op.location;
           }
           break;
         }
@@ -518,9 +530,14 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
                                 "internal: obligation " +
                                     std::to_string(obligation->id) +
                                     " is discharged more than once");
+              if (const auto at = discharged_at.find(obligation->id);
+                  at != discharged_at.end())
+                diagnostics.note(kDestruction, at->second,
+                                 "obligation was first discharged here");
               ok = false;
             } else {
               discharged_obligations.insert(obligation->id);
+              discharged_at[obligation->id] = op.location;
             }
             if (obligation->type != op.operand.type) {
               diagnostics.error(kDestruction, op.location,

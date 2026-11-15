@@ -69,6 +69,14 @@ bool diagnostic_contains(const DiagnosticEngine& diag, const string& needle) {
   return false;
 }
 
+bool has_note(const DiagnosticEngine& diag, const string& needle) {
+  for (const Diagnostic& diagnostic : diag.diagnostics())
+    if (diagnostic.severity == Severity::Note &&
+        diagnostic.message.find(needle) != string::npos)
+      return true;
+  return false;
+}
+
 const tir::Op* find_drop(const tir::Function& function) {
   return first_kind(function, tir::OpKind::Drop);
 }
@@ -314,6 +322,7 @@ TEST(OwnershipTest, VerifierRejectsUseAfterMove) {
   DiagnosticEngine verify_diag;
   ASSERT_FALSE(verify_tir_module(*module, verify_diag));
   ASSERT_TRUE(diagnostic_contains(verify_diag, "used after it was moved"));
+  ASSERT_TRUE(has_note(verify_diag, "transferred to a new owner"));
 }
 
 TEST(OwnershipTest, VerifierRejectsBorrowMutabilityMismatch) {
