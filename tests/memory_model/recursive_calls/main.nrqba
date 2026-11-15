@@ -1,0 +1,16 @@
+int function descend(int depth) {
+    var buffer = memory.allocate<byte>(8);
+    buffer[0] = depth as byte;
+    if (depth == 0) {
+        print(buffer[0] as int);
+        return 0;
+    }
+    let result = descend(depth - 1);
+    print(buffer[0] as int);
+    return result;
+}
+
+int function main() {
+    descend(3);
+    return 42;
+}

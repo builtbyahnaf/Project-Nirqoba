@@ -1,0 +1,21 @@
+int function choose(int mode) {
+    var buffer = memory.allocate<byte>(8);
+    buffer[0] = (mode + 1) as byte;
+    if (mode == 0) {
+        print(buffer[0] as int);
+        return 0;
+    }
+    if (mode == 1) {
+        print(buffer[0] as int);
+        return 0;
+    }
+    print(buffer[0] as int);
+    return 0;
+}
+
+int function main() {
+    choose(0);
+    choose(1);
+    choose(2);
+    return 42;
+}
