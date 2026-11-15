@@ -47,6 +47,9 @@ class TirBuilder {
   void lower_block(const BlockStmt& block, tir::Function& function);
   void lower_statement(const Stmt& statement, tir::Function& function);
   void emit_deferred_from(std::size_t scope_depth, tir::Function& function);
+  // Emits the load/drop/clear sequence for one active automatic cleanup. Used
+  // both at scope exit and immediately before an owner slot is overwritten.
+  void emit_destruction(const DeferredCall& deferred, tir::Function& function);
   tir::Value lower_expression(const Expr& expr, tir::Function& function);
   tir::Value resolve_lvalue_ptr(const Expr& target, tir::Function& function);
 

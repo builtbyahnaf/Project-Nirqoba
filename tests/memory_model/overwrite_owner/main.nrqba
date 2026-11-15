@@ -1,0 +1,17 @@
+int function replace(bool release_first) {
+    var buffer = memory.allocate<byte>(8);
+    buffer[0] = 3 as byte;
+    if (release_first) {
+        memory.deallocate(buffer);
+    }
+    buffer = memory.allocate<byte>(8);
+    buffer[0] = 4 as byte;
+    print(buffer[0] as int);
+    return 0;
+}
+
+int function main() {
+    replace(true);
+    replace(false);
+    return 42;
+}

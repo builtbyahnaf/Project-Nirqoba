@@ -384,6 +384,55 @@ void TirBuilder::register_obligation(const tir::Value& slot,
                           location);
 }
 
+void TirBuilder::emit_destruction(const DeferredCall& deferred,
+                                  tir::Function& function) {
+  if (!deferred.owner_slot.is_valid()) return;
+  tir::Value owner = function.allocate_value(
+      deferred.owner_slot.type, ownership_for_release(deferred.callee));
+  tir::Op load;
+  load.kind = tir::OpKind::Load;
+  load.location = deferred.location;
+  load.lhs = deferred.owner_slot;
+  load.result = owner;
+  function.add_operation(std::move(load));
+
+  register_obligation(deferred.owner_slot, deferred.callee, deferred.location,
+                      function);
+  tir::DestructionObligation* obligation =
+      function.pending_obligation_for_owner(deferred.owner_slot);
+  if (obligation != nullptr) {
+    tir::Op drop;
+    drop.kind = tir::OpKind::Drop;
+    drop.location = deferred.location;
+    drop.operand = owner;
+    drop.obligation_id = obligation->id;
+    drop.string_value = deferred.callee;
+    function.add_operation(std::move(drop));
+    obligation->discharged = true;
+  } else {
+    tir::Op call;
+    call.kind = tir::OpKind::Call;
+    call.location = deferred.location;
+    call.callee = deferred.callee;
+    call.arguments = {owner};
+    function.add_operation(std::move(call));
+  }
+
+  tir::Value null_value = function.allocate_value(deferred.owner_slot.type);
+  tir::Op null_op;
+  null_op.kind = tir::OpKind::ConstantNull;
+  null_op.location = deferred.location;
+  null_op.result = null_value;
+  function.add_operation(std::move(null_op));
+  tir::Op clear;
+  clear.kind = tir::OpKind::Store;
+  clear.location = deferred.location;
+  clear.lhs = deferred.owner_slot;
+  clear.operand = null_value;
+  clear.result = deferred.owner_slot;
+  function.add_operation(std::move(clear));
+}
+
 void TirBuilder::emit_deferred_from(size_t scope_depth, tir::Function& function) {
   for (size_t depth = deferred_expressions_.size(); depth > scope_depth; --depth) {
     const auto& expressions = deferred_expressions_[depth - 1];
@@ -397,49 +446,19 @@ void TirBuilder::emit_deferred_from(size_t scope_depth, tir::Function& function)
         function.add_operation(move(print));
         continue;
       }
-      bool emitted_drop = false;
+      if (deferred->automatic) {
+        emit_destruction(*deferred, function);
+        continue;
+      }
       tir::Op call;
       call.kind = tir::OpKind::Call;
       call.location = deferred->location;
       call.callee = deferred->callee;
       call.arguments = deferred->arguments;
-      if (deferred->automatic && deferred->owner_slot.is_valid()) {
-        tir::Value owner = function.allocate_value(
-            deferred->owner_slot.type, ownership_for_release(deferred->callee));
-        tir::Op load;
-        load.kind = tir::OpKind::Load;
-        load.location = deferred->location;
-        load.lhs = deferred->owner_slot;
-        load.result = owner;
-        function.add_operation(std::move(load));
-        call.arguments = {owner};
-
-        // The release call is the mechanism; the Drop operation is the
-        // obligation discharge that verification can reason about. A drop is
-        // emitted only for an owning slot whose cleanup is still active.
-        register_obligation(deferred->owner_slot, deferred->callee,
-                            deferred->location, function);
-        tir::DestructionObligation* obligation =
-            function.pending_obligation_for_owner(deferred->owner_slot);
-        if (obligation != nullptr) {
-          tir::Op drop;
-          drop.kind = tir::OpKind::Drop;
-          drop.location = deferred->location;
-          drop.operand = owner;
-          drop.obligation_id = obligation->id;
-          drop.string_value = deferred->callee;
-          function.add_operation(std::move(drop));
-          obligation->discharged = true;
-          emitted_drop = true;
-        }
-      }
-      // A drop lowers to its release call, so emitting both would release twice.
-      if (!emitted_drop) {
-        if (deferred->result_type.is_valid() && !deferred->result_type.is_void())
-          call.result = function.allocate_value(deferred->result_type);
-        function.add_operation(move(call));
-      }
-      if ((deferred->automatic || deferred->clear_owner_slot_after_call) &&
+      if (deferred->result_type.is_valid() && !deferred->result_type.is_void())
+        call.result = function.allocate_value(deferred->result_type);
+      function.add_operation(move(call));
+      if (deferred->clear_owner_slot_after_call &&
           deferred->owner_slot.is_valid()) {
         tir::Value null_value = function.allocate_value(deferred->owner_slot.type);
         tir::Op null_op;
@@ -641,6 +660,30 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
         diagnostics_.error(kUnresolvedSymbol, assignment.target().location(),
                            "internal: assignment target has no TIR slot");
         return;
+      }
+      // An assignment to a simple name may overwrite an owner that is still
+      // live on some path. The active automatic cleanup is the precise signal:
+      // an unconditional move or explicit release deactivates it, while a
+      // conditional release leaves it armed and the slot null only on that path.
+      // Destroying now (a null release on the moved path) prevents the overwrite
+      // from leaking the value that is still owned on the other path.
+      bool destroys_before_store = false;
+      if (assignment.target().kind() == Expr::Kind::Name &&
+          !(assignment.value().kind() == Expr::Kind::Name &&
+            static_cast<const NameExpr&>(assignment.value()).name() ==
+                static_cast<const NameExpr&>(assignment.target()).name())) {
+        for (auto& scope : deferred_expressions_) {
+          for (auto& pending : scope) {
+            if (!pending.automatic || !pending.active ||
+                !pending.owner_slot.is_valid() ||
+                pending.owner_slot.id != slot.id)
+              continue;
+            emit_destruction(pending, function);
+            destroys_before_store = true;
+            break;
+          }
+          if (destroys_before_store) break;
+        }
       }
       tir::Op store;
       store.kind = tir::OpKind::Store;
