@@ -19,6 +19,21 @@ recorded below is made under that authority.
 > `0.495-beta`. Only the newest entry carries the working-build label; older
 > `(released)` entries are actual published checkpoints.
 
+## Version 0.539-beta (working build)
+
+### Summary of Changes (since `0.535-beta`):
+
+- **Overwriting an owner destroys the old value first.** When an automatic
+  cleanup is still armed, an assignment to that slot emits the pending
+  destruction before storing the replacement. This covers conditional releases
+  and conditional moves, where the slot is null only on one path.
+- **Defer reserves its binding.** Assigning over an owner whose cleanup is
+  scheduled by `defer` is rejected instead of leaking the old value.
+- **Explicit releases and defers resolve their obligations** rather than marking
+  them transferred to a nonexistent new owner.
+- Tests: 298 unit tests pass; the memory-model suite adds overwrite and
+  conditional-release runtime coverage.
+
 ## Version 0.535-beta (working build)
 
 ### Summary of Changes (since `0.531-beta`):
