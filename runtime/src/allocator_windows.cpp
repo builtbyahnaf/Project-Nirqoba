@@ -413,7 +413,7 @@ struct ArenaChunk {
 class ArenaAllocator : public Allocator {
  public:
   explicit ArenaAllocator(size_t capacity) : Allocator(std::max(capacity, size_t{4096})) {}
-  ~ArenaAllocator() override { reset(); }
+  ~ArenaAllocator() override { release_chunks(); }
 
   void* allocate(size_t bytes, size_t alignment) override {
     if (bytes == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0)
@@ -439,9 +439,20 @@ class ArenaAllocator : public Allocator {
   void deallocate(void*) override {}
 
   bool reset() override {
-    for (const ArenaChunk& chunk : chunks_)
-      HeapFree(GetProcessHeap(), 0, chunk.raw);
-    chunks_.clear();
+    // Retain only the initial, capacity-bounded chunk. Growth chunks are freed
+    // so a reset cannot pin an arbitrarily large peak working set; retaining
+    // the first chunk lets repeated reset/reuse avoid a fresh VirtualAlloc.
+    const bool retain_first =
+        !chunks_.empty() && chunks_.front().size <= capacity_;
+    const size_t first_to_free = retain_first ? 1 : 0;
+    for (size_t index = first_to_free; index < chunks_.size(); ++index)
+      HeapFree(GetProcessHeap(), 0, chunks_[index].raw);
+    if (retain_first) {
+      chunks_.resize(1);
+      chunks_.front().used = 0;
+    } else {
+      chunks_.clear();
+    }
     return true;
   }
   NrqAllocatorKind kind() const override { return NRQ_ALLOCATOR_ARENA; }
@@ -480,6 +491,12 @@ class ArenaAllocator : public Allocator {
   }
 
  protected:
+  void release_chunks() {
+    for (const ArenaChunk& chunk : chunks_)
+      HeapFree(GetProcessHeap(), 0, chunk.raw);
+    chunks_.clear();
+  }
+
   bool fits(const ArenaChunk& chunk, size_t bytes, size_t alignment) const {
     if (chunk.used > chunk.size ||
         chunk.base > std::numeric_limits<uintptr_t>::max() - chunk.used)
@@ -1122,7 +1139,26 @@ bool erase_arena_allocations_locked(Allocator* allocator) {
 std::mutex allocator_mutex;
 std::unordered_map<void*, std::unique_ptr<Allocator>> allocator_handles;
 std::unordered_map<Allocator*, size_t> selected_counts;
-std::unordered_map<void*, uint64_t> shared_reference_counts;
+// Shared ownership uses one control per live pointer and pointer-selected
+// shards. A retain or non-final release touches one shard lock and one atomic
+// count; it no longer serializes with unrelated allocator traffic. The shard
+// lock protects map/control lifetime, while the atomic count provides the
+// overflow-safe 1->0 transition.
+constexpr size_t kSharedShardCount = 64;
+struct SharedControl {
+  std::atomic<uint64_t> strong{1};
+};
+struct SharedShard {
+  std::mutex mutex;
+  std::unordered_map<void*, std::unique_ptr<SharedControl>> controls;
+};
+std::array<SharedShard, kSharedShardCount> shared_shards;
+
+SharedShard& shared_shard_for(void* pointer) {
+  const size_t index = std::hash<void*>{}(pointer) % kSharedShardCount;
+  return shared_shards[index];
+}
+
 // Shared allocations whose explicit storage contains managed references need a
 // root for as long as the last reference token exists. The runtime records the
 // descriptor at allocation so final release can unregister it before freeing.
@@ -1156,6 +1192,7 @@ struct SharedRootMetadata {
   }
 };
 std::unordered_map<void*, SharedRootMetadata> shared_roots;
+std::mutex shared_roots_mutex;
 std::mutex memory_profile_mutex;
 NrqMemoryProfile memory_profile{};
 std::atomic<bool> memory_profiler_enabled{false};
@@ -1558,18 +1595,29 @@ void nrq_memory_array_range_check(uint64_t start, uint64_t count, uint64_t lengt
 void* nrq_memory_shared_allocate(size_t bytes, size_t alignment) {
   void* pointer = nrq_memory_allocate(bytes, alignment);
   if (!pointer) return nullptr;
+  SharedShard& shared_shard = shared_shard_for(pointer);
   try {
     {
-      std::lock_guard<std::mutex> lock(allocator_mutex);
-      shared_reference_counts.emplace(pointer, 1);
+      std::lock_guard<std::mutex> lock(shared_shard.mutex);
+      auto inserted = shared_shard.controls.emplace(
+          pointer, std::make_unique<SharedControl>());
+      if (!inserted.second)
+        nrq_runtime_fatal("shared allocation already has a control block");
     }
     AllocationShard& shard = shard_for(pointer);
     std::lock_guard<std::mutex> lock(shard.mutex);
     auto* owner = shard.allocations.find(pointer);
-    if (!owner)
+    if (!owner) {
+      std::lock_guard<std::mutex> control_lock(shared_shard.mutex);
+      shared_shard.controls.erase(pointer);
       nrq_runtime_fatal("shared allocation disappeared from the registry");
+    }
     owner->owner.shared = true;
   } catch (...) {
+    {
+      std::lock_guard<std::mutex> lock(shared_shard.mutex);
+      shared_shard.controls.erase(pointer);
+    }
     nrq_memory_deallocate_checked(pointer);
     return nullptr;
   }
@@ -1581,50 +1629,87 @@ static void release_operation_pin_locked(Allocator* allocator);
 
 void* nrq_memory_shared_retain(void* pointer) {
   if (!pointer) return nullptr;
-  std::lock_guard<std::mutex> lock(allocator_mutex);
-  auto found = shared_reference_counts.find(pointer);
-  if (found == shared_reference_counts.end() || found->second == 0 ||
-      found->second == UINT64_MAX) return nullptr;
-  ++found->second;
-  return pointer;
+  SharedShard& shared_shard = shared_shard_for(pointer);
+  std::lock_guard<std::mutex> lock(shared_shard.mutex);
+  auto found = shared_shard.controls.find(pointer);
+  if (found == shared_shard.controls.end()) return nullptr;
+  SharedControl& control = *found->second;
+  uint64_t current = control.strong.load(std::memory_order_relaxed);
+  while (current != 0 && current != UINT64_MAX) {
+    // The shard lock makes the control live, but the CAS still gives overflow
+    // an explicit, race-free contract if the count is ever observed directly.
+    if (control.strong.compare_exchange_weak(
+            current, current + 1, std::memory_order_acq_rel,
+            std::memory_order_relaxed))
+      return pointer;
+  }
+  return nullptr;
 }
 
 int32_t nrq_memory_shared_release(void* pointer) {
   if (!pointer) return 0;
-  Allocator* allocator = nullptr;
-  AllocationShard* shard = nullptr;
-  bool rooted = false;
-  SharedRootMetadata root_metadata;
+  SharedShard& shared_shard = shared_shard_for(pointer);
+  std::unique_ptr<SharedControl> final_control;
   {
-    std::lock_guard<std::mutex> lock(allocator_mutex);
-    auto shared = shared_reference_counts.find(pointer);
-    if (shared == shared_reference_counts.end() || shared->second == 0) return 0;
-    if (shared->second > 1) {
-      --shared->second;
+    std::lock_guard<std::mutex> lock(shared_shard.mutex);
+    auto found = shared_shard.controls.find(pointer);
+    if (found == shared_shard.controls.end()) return 0;
+    SharedControl& control = *found->second;
+    const uint64_t current = control.strong.load(std::memory_order_relaxed);
+    if (current == 0) return 0;
+    if (current > 1) {
+      control.strong.fetch_sub(1, std::memory_order_acq_rel);
       return 1;
     }
-    shard = &shard_for(pointer);
-    std::lock_guard<std::mutex> shard_lock(shard->mutex);
-    auto* owner = shard->allocations.find(pointer);
-    if (!owner || owner->owner.operation_in_flight)
-      return 0;
-    allocator = owner->owner.allocator;
+    // Remove the control before deallocation. A concurrent retain then sees a
+    // missing entry instead of resurrecting storage whose final release has
+    // already begun.
+    final_control = std::move(found->second);
+    shared_shard.controls.erase(found);
+    final_control->strong.store(0, std::memory_order_release);
+  }
+
+  SharedRootMetadata root_metadata;
+  bool rooted = false;
+  {
+    std::lock_guard<std::mutex> lock(shared_roots_mutex);
     auto root = shared_roots.find(pointer);
     if (root != shared_roots.end()) {
       root_metadata = std::move(root->second);
       shared_roots.erase(root);
       rooted = true;
     }
-    // A zero count reserves this final release. The live ownership record keeps
-    // the allocator alive until the callback and record erase complete; destroy
-    // and reset scan that record and refuse while it is in flight.
-    shared->second = 0;
+  }
+
+  AllocationShard& shard = shard_for(pointer);
+  Allocator* allocator = nullptr;
+  {
+    std::lock_guard<std::mutex> shard_lock(shard.mutex);
+    auto* owner = shard.allocations.find(pointer);
+    if (!owner || owner->owner.operation_in_flight) {
+      // A malformed call can reach a pointer whose allocator record is gone.
+      // Restore the reference token rather than freeing or corrupting it.
+      if (rooted) {
+        nrq_gc_root_register_typed(pointer, root_metadata.object_size,
+                                   root_metadata.data(),
+                                   root_metadata.count());
+        std::lock_guard<std::mutex> root_lock(shared_roots_mutex);
+        shared_roots.emplace(pointer, std::move(root_metadata));
+      }
+      final_control->strong.store(1, std::memory_order_release);
+      std::lock_guard<std::mutex> control_lock(shared_shard.mutex);
+      shared_shard.controls.emplace(pointer, std::move(final_control));
+      return 0;
+    }
+    allocator = owner->owner.allocator;
+    // The live ownership record keeps the allocator alive until the callback
+    // and record erase complete; destroy and reset scan that record and refuse
+    // while it is in flight.
     owner->owner.operation_in_flight = true;
   }
 
   // Remove the collector-visible root before the storage can be freed. The
-  // reference count is already reserved at zero, so no concurrent retain can
-  // resurrect the object between these two steps.
+  // control is already absent, so no concurrent retain can resurrect it.
   if (rooted)
     nrq_gc_root_unregister(reinterpret_cast<void**>(pointer));
 
@@ -1637,36 +1722,33 @@ int32_t nrq_memory_shared_release(void* pointer) {
   }
 
   {
-    std::lock_guard<std::mutex> lock(allocator_mutex);
-    auto shared = shared_reference_counts.find(pointer);
-    std::lock_guard<std::mutex> shard_lock(shard->mutex);
-    auto* owner = shard->allocations.find(pointer);
-    if (shared == shared_reference_counts.end() || shared->second != 0 ||
-        !owner || !owner->owner.operation_in_flight)
+    std::lock_guard<std::mutex> shard_lock(shard.mutex);
+    auto* owner = shard.allocations.find(pointer);
+    if (!owner || !owner->owner.operation_in_flight)
       nrq_runtime_fatal("allocator ownership changed during shared release");
     if (released) {
       record_deallocation_profile(owner->owner.bytes);
-      shard->allocations.erase(pointer);
-      shared_reference_counts.erase(shared);
-      shard->changed.notify_all();
+      shard.allocations.erase(pointer);
+      shard.changed.notify_all();
     } else {
       owner->owner.operation_in_flight = false;
-      shared->second = 1;
-      shard->changed.notify_all();
+      shard.changed.notify_all();
     }
   }
   if (!released && rooted) {
     // The allocator rejected the release (a stack allocator requires LIFO), so
-    // the object is still live. Restore its root before reporting the failure.
+    // the object is still live. Restore its root and token before reporting
+    // the failure.
     nrq_gc_root_register_typed(pointer, root_metadata.object_size,
                                root_metadata.data(),
                                root_metadata.count());
-    std::lock_guard<std::mutex> lock(allocator_mutex);
-    try {
-      shared_roots.emplace(pointer, std::move(root_metadata));
-    } catch (...) {
-      nrq_runtime_fatal("failed to restore a shared allocation's GC root");
-    }
+    std::lock_guard<std::mutex> root_lock(shared_roots_mutex);
+    shared_roots.emplace(pointer, std::move(root_metadata));
+  }
+  if (!released) {
+    final_control->strong.store(1, std::memory_order_release);
+    std::lock_guard<std::mutex> control_lock(shared_shard.mutex);
+    shared_shard.controls.emplace(pointer, std::move(final_control));
   }
   if (callback_failed)
     nrq_runtime_fatal("allocator deallocation callback failed during shared release");
@@ -1694,7 +1776,7 @@ void* nrq_memory_shared_allocate_rooted(size_t bytes, size_t alignment,
     metadata.assign(reference_offsets, reference_count);
     nrq_gc_root_register_typed(pointer, object_size, metadata.data(),
                                metadata.count());
-    std::lock_guard<std::mutex> lock(allocator_mutex);
+    std::lock_guard<std::mutex> lock(shared_roots_mutex);
     shared_roots.emplace(pointer, std::move(metadata));
   } catch (...) {
     nrq_gc_root_unregister(reinterpret_cast<void**>(pointer));
@@ -1705,9 +1787,13 @@ void* nrq_memory_shared_allocate_rooted(size_t bytes, size_t alignment,
 }
 
 uint64_t nrq_memory_shared_count(void* pointer) {
-  std::lock_guard<std::mutex> lock(allocator_mutex);
-  auto found = shared_reference_counts.find(pointer);
-  return found == shared_reference_counts.end() ? 0 : found->second;
+  if (!pointer) return 0;
+  SharedShard& shared_shard = shared_shard_for(pointer);
+  std::lock_guard<std::mutex> lock(shared_shard.mutex);
+  auto found = shared_shard.controls.find(pointer);
+  return found == shared_shard.controls.end()
+             ? 0
+             : found->second->strong.load(std::memory_order_acquire);
 }
 
 void* nrq_memory_allocate_from(void* handle, size_t bytes, size_t alignment) {
