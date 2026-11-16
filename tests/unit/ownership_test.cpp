@@ -1261,7 +1261,6 @@ TEST(OwnershipTest, VerifierRejectsArenaAllocationOfManagedPayload) {
       "int function main() {\n"
       "  let arena = memory.arena(64);\n"
       "  let value = memory.allocate<int>(4, arena);\n"
-      "  memory.arena_destroy(arena);\n"
       "  return 0;\n"
       "}\n",
       diag);

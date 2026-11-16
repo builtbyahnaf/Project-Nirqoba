@@ -2,7 +2,8 @@
 // and a helper call. None of these operations may enter the collector merely
 // because the runtime library is available.
 int function add_one(int value) {
-    var buffer = memory.allocate<int>(4);
+    var bytes = (memory.cpu_count() * (4 as i32)) as int;
+    var buffer = memory.allocate<int>(bytes);
     *buffer = value + 1;
     let result = *buffer;
     memory.deallocate(buffer);

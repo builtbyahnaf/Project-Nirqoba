@@ -1,5 +1,6 @@
 int function main() {
-    var buffer = memory.allocate<int>(16);
+    var bytes = (memory.cpu_count() * (4 as i32)) as int;
+    var buffer = memory.allocate<int>(bytes);
     buffer[0] = 17;
     let value = *buffer;
     memory.deallocate(buffer);
