@@ -11,7 +11,7 @@ three critical prerequisites at `0.515-beta`. Phase 1 — Ownership Representati
 is complete at `0.531-beta`. Phase 2 — Deterministic Destruction and Move  
 Semantics is complete at `0.539-beta`. Phase 3 — Borrowing and Lifetime  
 Enforcement is complete at `0.547-beta`. Phase 4 — Ordinary Non-GC Allocation  
-is complete at `0.551-beta`. Phase 5 — Arena and Pool Support is complete at `0.563-beta`. Phase 6 — Explicit Shared Ownership is complete at `0.571-beta`.  
+is complete at `0.551-beta`. Phase 5 — Arena and Pool Support is complete at `0.563-beta`. Phase 6 — Explicit Shared Ownership is complete at `0.571-beta`. Phase 7 — GC Isolation and Explicit Selection is complete at `0.575-beta`.  
 **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
 **Primary objective:** Establish deterministic ownership as Nirqoba's default memory-management model, with borrowing, arenas, explicit shared ownership, selective garbage collection, and advanced manual memory management as complementary mechanisms.
 
@@ -1121,7 +1121,7 @@ reset now retains only its initial capacity-bounded chunk and frees growth
 chunks. Weak references remain deliberately deferred: there is no source type
 or concrete library requirement, and supported shared payloads reject shared
 fields, so a shared-to-shared owning cycle cannot be constructed. Cyclic graphs
-remain the explicit collector's domain. Phase 7 was not started.
+remain the explicit collector's domain. Phase 7 builds on this state.
 
 ## Phase 7 — GC isolation and explicit selection
 
@@ -1147,6 +1147,23 @@ Acceptance:
 - Ordinary owned objects are not accidentally collected.
 - GC-specific behavior is only emitted where required.
 - Mixed-strategy programs are correct.
+
+Completion state at `0.575-beta`: the audit in
+`reports/memory-model/phase-7-audit.md` classifies every GC allocation entry
+point. `array.allocate<T>` remains the explicit collector allocation and
+`managed<T>` its reference type; `memory.owned_soa<T>` is an explicitly GC-backed
+container whose legacy name is documented. Ordinary storage containing managed
+fields, shared storage containing managed fields, owned arrays and aggregate
+roots all have a defined typed-root registration and release point. Tracked
+arena and pool allocations now reject managed payloads because bulk reset/destroy
+has no root-unregistration operation; the TIR verifier enforces the same
+contract. Shared allocation of a managed payload is classified as a transitive
+GC effect. Root frames, safepoints, write barriers and mutator regions are
+verified by focused fixtures at `-O0` and `-O2`; ordinary owned, borrowed, arena,
+pool and plain-shared programs contain no `nrq_gc` IR or object dependency. The
+collector still reclaims unreachable cyclic managed graphs. Benchmarks and known
+limitations are recorded in `reports/memory-model/phase-7.md` and
+`benchmarks/memory-model/phase-7/`. Phase 8 was not started.
 
 ## Phase 8 — Manual memory and FFI integration
 
