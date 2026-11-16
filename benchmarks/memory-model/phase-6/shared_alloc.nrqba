@@ -1,0 +1,17 @@
+// Shared allocation: one owner is created and released per iteration.
+int function main() {
+    var iterations = 1000000;
+    var width = (memory.cpu_count() as int) + 48;
+    var checksum = 0;
+    var start = time.cycles();
+    for (var index = 0; index < iterations; index += 1) {
+        var block = memory.shared_allocate<int>(width);
+        *block = index % 251;
+        checksum += *block;
+        memory.shared_release(block);
+    }
+    var stop = time.cycles();
+    print(checksum);
+    print(stop - start);
+    return 0;
+}

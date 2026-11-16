@@ -1,0 +1,21 @@
+// Shared allocation with an explicit second token. This isolates the
+// retain/release cost alongside the same allocation count as shared_move.
+int function main() {
+    var iterations = 1000000;
+    var width = (memory.cpu_count() as int) + 48;
+    var checksum = 0;
+    var start = time.cycles();
+    for (var index = 0; index < iterations; index += 1) {
+        var first = memory.shared_allocate<int>(width);
+        var second = memory.shared_retain(first);
+        *first = index % 251;
+        checksum += memory.shared_count(second) as int;
+        checksum += *second;
+        memory.shared_release(second);
+        memory.shared_release(first);
+    }
+    var stop = time.cycles();
+    print(checksum);
+    print(stop - start);
+    return 0;
+}
