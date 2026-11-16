@@ -46,6 +46,24 @@ are included automatically by `tests/run_tests.py`.
 | `borrow_mutable_return` | A mutable borrow returned from its declared source works |
 | `borrow_field_scope` | A mutable borrowed field is usable inside its owner scope |
 | `borrow_owner_access` | A direct owner write while its borrow is live is rejected |
+| `manual_lifecycle` | Manual allocation writes, reads and releases explicitly |
+| `manual_automatic_cleanup` | A manual owner with no explicit release gets the lexical fallback |
+| `manual_move` | Moving a manual owner invalidates the source and releases once |
+| `manual_borrow` | A scoped borrow writes and reads manual storage before release |
+| `manual_allocator_handle` | Manual allocation preserves an explicit general allocator handle |
+| `manual_managed_payload` | A managed field in manual storage stays rooted across collection |
+| `manual_conditional_release` | Every branch discharges the manual owner exactly once |
+| `manual_deallocate_rejected` | Ordinary deallocation of manual storage is rejected |
+| `manual_secure_release_rejected` | Secure release of manual storage is rejected |
+| `manual_double_release` | A second manual release is rejected |
+| `manual_use_after_release` | Reading after manual release is rejected |
+| `manual_borrow_release` | Releasing while a manual borrow is live is rejected |
+| `manual_reallocate_rejected` | Manual storage cannot be resized |
+| `manual_arena_rejected` | Manual allocation cannot use a tracked arena/pool |
+| `manual_function_argument_rejected` | Manual storage cannot cross an owned parameter |
+| `manual_return_rejected` | Manual storage cannot cross an owned return |
+| `manual_owned_payload_rejected` | Deterministic-cleanup payloads are rejected |
+| `manual_ffi_unsupported` | The parser rejects the absent `extern` surface |
 
 Run the complete suite (integration plus these cases):
 
