@@ -1,0 +1,13 @@
+void function consume(shared int* value) {
+    print(memory.shared_count(value) as int);
+    memory.shared_release(value);
+}
+
+int function main() {
+    let owner = memory.shared_allocate<int>(4);
+    let second = memory.shared_retain(owner);
+    consume(second);
+    print(memory.shared_count(owner) as int);
+    memory.shared_release(owner);
+    return 0;
+}
