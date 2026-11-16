@@ -2077,6 +2077,21 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       }
     }
   }
+  if (symbol && assignment.is_simple_name()) {
+    // A direct write to a binding is an overlapping access for every borrow of
+    // that storage. Exclude the binding being rebound: `view = other_borrow`
+    // releases the old restriction instead of writing through it.
+    if (const Symbol* conflict = symbols_.find_conflicting_borrow(
+            symbol->allocation_id, /*requested_mutable=*/true, {}, symbol->name)) {
+      diagnostics_.error(
+          diag::kTypeMismatch, assignment.target().location(),
+          "cannot write to '" + symbol->name +
+              "' while borrow '" + borrow_display(*conflict) + "' is live");
+      diagnostics_.note(diag::kTypeMismatch, conflict->location,
+                        "conflicting borrow is active here");
+      return;
+    }
+  }
   if (symbol && symbol->owns_allocation &&
       symbols_.has_live_borrow(symbol->allocation_id)) {
     diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
