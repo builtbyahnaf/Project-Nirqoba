@@ -1,0 +1,7 @@
+int function main() {
+    var buffer = memory.allocate<int>(16);
+    buffer[0] = 17;
+    let value = *buffer;
+    memory.deallocate(buffer);
+    return value + 25;
+}

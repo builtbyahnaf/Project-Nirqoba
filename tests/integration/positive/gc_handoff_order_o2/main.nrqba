@@ -1,0 +1,16 @@
+struct Node {
+    int value;
+}
+
+managed<Node> function make(int value) {
+    var node = array.allocate<Node>(1);
+    node[0].value = value;
+    return node;
+}
+
+int function main() {
+    var stored = make(7);
+    gc.collect();
+    print(stored[0].value);
+    return 0;
+}
