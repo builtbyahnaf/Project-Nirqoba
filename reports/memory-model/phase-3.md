@@ -24,7 +24,8 @@ The work is semantic enforcement, a CFG verifier and test/documentation coverage
 - An immutable borrow cannot write through the borrow and cannot be passed to a
   mutable-borrow parameter.
 - The owner cannot be moved, destroyed or overwritten while a live immutable
-  borrow depends on it.
+  borrow depends on it. A direct simple-name write is checked for every binding,
+  not only for owning pointers.
 - Ending an immutable borrow removes only the read restriction; the owner stays
   alive and keeps its own cleanup.
 

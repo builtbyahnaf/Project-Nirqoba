@@ -33,7 +33,7 @@ recorded below is made under that authority.
   not make it unusable after the loop.
 - **No runtime cost.** MLIR evidence asserts that an address-of/read program
   contains no borrow, allocation or GC call.
-- Tests: 307 unit tests and 542 full-run cases pass; the memory-model borrow
+- Tests: 308 unit tests and 542 full-run cases pass; the memory-model borrow
   suite now has 40 cases.
 
 ## Version 0.543-beta (working build)
