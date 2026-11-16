@@ -1,0 +1,13 @@
+struct Holder { shared ptr int data; }
+
+int function main() {
+    var first = Holder { data: memory.shared_allocate<int>(1) };
+    *first.data = 8;
+    {
+        var copy = first;
+        print(memory.shared_count(copy.data) as int);
+        print(*copy.data);
+    }
+    print(memory.shared_count(first.data) as int);
+    return 0;
+}
