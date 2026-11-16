@@ -259,6 +259,17 @@ struct nrq_gc_allocation_facts {
   size_t layout_bytes;
 };
 struct nrq_gc_allocation_facts nrq_gc_get_allocation_facts(void);
+// Bytes of page-local metadata an ordinary page carries. The start, mark, and
+// remembered bitmaps each cover every max_align_t slot in the page; the total
+// is the per-page cost that AOR extraction trades against per-object bytes.
+struct nrq_gc_page_metadata_facts {
+  size_t page_bytes;
+  size_t object_start_bitmap_bytes;
+  size_t mark_bitmap_bytes;
+  size_t remembered_bitmap_bytes;
+  size_t total_bitmap_bytes;
+};
+struct nrq_gc_page_metadata_facts nrq_gc_get_page_metadata_facts(void);
 // What one payload size costs in space: the aligned span the allocator stores,
 // how many of them an ordinary page holds, the space left at the end of that
 // page, and how much a full slab reservation serves before a refill. A payload
