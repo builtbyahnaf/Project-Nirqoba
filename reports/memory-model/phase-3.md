@@ -184,7 +184,7 @@ Two defects found during Phase 3 were fixed because they blocked sound borrowing
 ## 10. Tests and Evidence
 
 - Unit: `307` tests, `307` passed.
-- Full runner: `535` cases (`502` integration + `33` memory model), `535`
+- Full runner: `542` cases (`502` integration + `40` memory model), `542`
   passed, 0 failed, 0 skipped.
 - New memory-model cases:
   - positive: immutable pairs, mutable writes, branch merges, loop back-edges,

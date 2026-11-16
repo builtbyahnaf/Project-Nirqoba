@@ -3676,7 +3676,7 @@ note at the live borrow.
 ### 4. Verification
 
 - `307` unit tests pass.
-- Full runner: `535` cases (`502` integration + `33` memory model), all pass.
+- Full runner: `542` cases (`502` integration + `40` memory model), all pass.
 - New positive coverage: immutable pairs, mutable writes, branch merges, loop
   scopes, disjoint fields, forwarded calls, parameter-bound returns, nested
   scopes, mutable expiration, loop-local borrows and recursion.

@@ -54,7 +54,7 @@ borrow dead, it conservatively keeps the restriction.
 
 ## Verification
 
-`307` unit tests and `535` full-run cases pass. The new `tests/memory_model`
+`307` unit tests and `542` full-run cases pass. The new `tests/memory_model`
 borrow cases cover immutable/mutable access, branch merges, loop scopes,
 disjoint fields, forwarding, parameter-bound returns, recursion and the
 corresponding rejection cases.
