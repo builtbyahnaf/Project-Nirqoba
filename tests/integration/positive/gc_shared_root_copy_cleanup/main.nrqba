@@ -1,0 +1,27 @@
+struct Child {
+    int value;
+}
+
+struct Node {
+    managed<Child> child;
+}
+
+managed<Child> function make_child() {
+    var child = array.allocate<Child>(1);
+    child[0].value = 73;
+    return child;
+}
+
+int function main() {
+    var shared = memory.shared_allocate<Node>(16);
+    (*shared).child = make_child();
+    var copy = memory.shared_retain(shared);
+    memory.shared_release(copy);
+    gc.collect();
+    print((*shared).child[0].value);
+    memory.shared_release(shared);
+    gc.collect();
+    let stats = gc.get_statistics();
+    print(stats.live_objects);
+    return 0;
+}

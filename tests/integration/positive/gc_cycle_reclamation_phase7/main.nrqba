@@ -1,0 +1,32 @@
+struct Node {
+    managed<Node> next;
+    int value;
+}
+
+managed<Node> function make_cycle() {
+    var first = array.allocate<Node>(1);
+    var second = array.allocate<Node>(1);
+    first[0].value = 42;
+    second[0].value = 42;
+    first[0].next = second;
+    second[0].next = first;
+    return first;
+}
+
+void function churn() {
+    var round = 0;
+    while (round < 3) {
+        var root = make_cycle();
+        gc.collect();
+        print(root[0].next[0].value);
+        round = round + 1;
+    }
+}
+
+int function main() {
+    churn();
+    gc.collect();
+    let stats = gc.get_statistics();
+    print(stats.live_objects);
+    return 0;
+}
