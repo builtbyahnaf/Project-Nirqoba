@@ -12,6 +12,49 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.591-beta
+
+### Summary of Changes (since `0.583-beta`):
+
+- **Phase 9 stabilization completed.** The ownership-first hybrid model was
+  audited and optimized without adding a strategy, changing a lifetime rule, or
+  weakening a release/root/barrier guarantee.
+- **Natural-alignment allocation no longer carries a private prefix.** On x64 the
+  process heap already satisfies `max_align_t`, so default-aligned blocks are
+  allocated and freed directly. Over-aligned requests still use the prefix path.
+  Allocator identity, size and alignment remain in the ownership registry.
+- **Cached release no longer signals a condition variable.** No waiter can block
+  on a cache-path record because that path never marks a record in flight.
+  Slow-path release still notifies.
+- **Dead cleanup clear removed before return.** A null constant and store that
+  immediately precede `tir.return` are dropped after verified TIR and `Drop`
+  expansion; destruction calls and discharged obligations are unchanged.
+- **Default allocation path reads its thread selection and cache switch once**
+  instead of rereading both after a cache miss.
+- Tests: `332` unit tests and `624` full-run cases pass. The Phase 9 matrix
+  builds ten ownership fixtures at `-O0`, `-O2`, production and debug, compares
+  behavior, and checks generated LLVM for duplicated releases and GC leakage.
+- Benchmarks: `benchmarks/memory-model/phase-9/` records 15 fresh-process
+  samples. Retained allocation improved `215.9 -> 182.3 ns/op` (median), peak RSS
+  fell `7.3%`, and the retained allocate+release total improved about `3.8%`.
+  Release alone regressed `108.3 -> 129.6 ns/op`; this is reported, not hidden.
+- No FFI was added. Phase 10 CDMM was not started.
+
+---
+
+## Version 0.587-beta
+
+### Summary of Changes (since `0.583-beta`):
+
+- Intermediate Phase 9 version after the first two implementation upgrades:
+  natural-aligned heap blocks lost their unnecessary private prefix, and cached
+  releases stopped waking a condition variable with no waiter.
+- Phase label advanced to 9. The final Phase 9 documentation, remaining
+  verification and post-optimization benchmark results are recorded under
+  `0.591-beta`.
+
+---
+
 ## Version 0.583-beta
 
 ### Summary of Changes (since `0.575-beta`):
