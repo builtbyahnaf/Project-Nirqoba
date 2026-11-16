@@ -998,6 +998,17 @@ Acceptance:
 - Borrowing does not introduce GC behavior.
 - The compiler handles branches, loops, recursion, and nested calls correctly.
 
+Completion state at `0.547-beta`: immutable and mutable borrows are enforced at
+source and in TIR; a call narrows `&` to the parameter's declared permission;
+live owners cannot be moved, released or overwritten; disjoint field paths stay
+usable. A new TIR borrow-flow pass computes active borrows and invalid owners at
+every CFG merge and loop back-edge, with alias liveness ending a restriction at
+last use. Source-bound returns, aggregate/call escapes and lifetime-record
+exactness are verified. `tests/memory_model` covers branches, loops, recursion,
+forwarding, parameter returns, scope expiration and the rejection cases. Runtime
+borrow tracking, arena-specific lifetime inference and general lifetime
+annotations remain later work.
+
 ## Phase 4 — Ordinary non-GC allocation
 
 Implement the default owned allocation path.

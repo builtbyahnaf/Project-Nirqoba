@@ -193,6 +193,14 @@ return, break, continue, or an explicit `defer` that supersedes it.
   has an explicit borrow contract;
 - borrow checking must not allocate or enter GC.
 
+**Current state (Phase 3):** the source checker enforces immutable/mutable
+exclusivity, owner validity, source-bound returns and aggregate/container
+escapes. A TIR CFG pass verifies active borrows at merges and loop back-edges,
+tracks alias liveness and rejects writes, moves and drops that invalidate a live
+borrow. Borrowing lowers to no runtime operation. General user-defined lifetime
+parameters and arbitrary pointer aliases inside foreign calls remain future
+work.
+
 ### 3.3 Arena and pool
 
 **Target:** allocator instances with an explicit lifetime boundary; arena-scoped
@@ -284,7 +292,14 @@ At minimum, the verifier must reject:
 - a managed reference stored in a boundary with no root contract;
 - an obligation that is never discharged or transferred;
 - use of a value after its destruction;
-- a drop followed by a duplicate release of the same value.
+- a drop followed by a duplicate release of the same value;
+- overlapping borrows that conflict at a branch merge or loop back-edge;
+- a borrow of an owner moved or destroyed on a reachable path;
+- a write overlapping a live borrow;
+- a borrowed return whose source does not match the declared parameter;
+- an aggregate holding a borrow escaping through a return or call;
+- a mutable/immutable return mismatch;
+- a duplicate or stale lexical lifetime record.
 
 ### 5.3 Lowering contract
 

@@ -149,7 +149,7 @@ Nirqoba uses a multi-tier compilation pipeline designed to preserve semantic and
 
 ## Development Status & Roadmap
 
-The language is actively progressing through its architectural milestones. Current active version: **`0.539-beta`** (MMM Phase 2 / Deterministic Destruction and Move Semantics).
+The language is actively progressing through its architectural milestones. Current active version: **`0.547-beta`** (MMM Phase 3 / Borrowing and Lifetime Enforcement).
 
 | Phase | Description | Status |
 |---|---|---|
@@ -166,6 +166,7 @@ The language is actively progressing through its architectural milestones. Curre
 | **Pre-MMM Phase 9** | Collector-free owned release, secure managed rejection, TIR ownership verification | Completed |
 | **MMM Phase 1** | Explicit ownership categories, transfer, borrow, lifetime and destruction representations in TIR | Completed |
 | **MMM Phase 2** | Executable moves, drop-generated destruction, exactly-once cleanup and partial-initialization safety | Completed |
+| **MMM Phase 3** | Immutable/mutable borrow enforcement, CFG borrow flow, source-bound returns, escapes and lifetime validation | Completed |
 | **Phase 7–9** | Generics, algebraic data types, advanced pattern matching | Planned |
 | **Phase 10–12** | Structured concurrency, async/await, task scheduling | Planned |
 | **Phase 13–15** | C/C++ FFI interoperability and graphics ecosystem | Planned |
