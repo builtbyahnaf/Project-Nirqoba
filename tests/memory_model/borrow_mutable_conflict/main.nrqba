@@ -1,0 +1,9 @@
+void function conflict(borrow mut int* first, borrow mut int* second) {
+}
+
+int function main() {
+    var value = 0;
+    var pointer = &value;
+    conflict(pointer, pointer);
+    return 42;
+}

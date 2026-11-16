@@ -1,0 +1,10 @@
+borrow source int* function alias(borrow int* source) {
+    return source;
+}
+
+int function main() {
+    var value = 5;
+    var view = alias(&value);
+    view[0] = 9;
+    return 42;
+}
