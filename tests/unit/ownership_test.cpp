@@ -1196,3 +1196,29 @@ TEST(OwnershipTest, VerifierRejectsDropOfGcManagedAllocation) {
   ASSERT_TRUE(diagnostic_contains(
       diag, "drop operand must be owning, not 'gc_managed'"));
 }
+
+TEST(OwnershipTest, VerifierRejectsSharedAllocationMarkedOrdinary) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_shared_allocation_strategy.nrqba",
+      "int function main() {\n"
+      "  var buffer = memory.shared_allocate<int>(8);\n"
+      "  let count = memory.shared_count(buffer);\n"
+      "  memory.shared_release(buffer);\n"
+      "  return count as int;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  bool changed = false;
+  for (tir::Op& op : main_fn->operations())
+    if (op.kind == tir::OpKind::Call && op.callee == "memory.shared_allocate") {
+      op.result.ownership = ValueOwnership::Owned;
+      changed = true;
+    }
+  ASSERT_TRUE(changed);
+  ASSERT_FALSE(verify_tir_module(*module, diag));
+  ASSERT_TRUE(diagnostic_contains(
+      diag, "allocation strategy 'memory.shared_allocate' requires ownership 'shared'"));
+}
