@@ -1,0 +1,7 @@
+int function main() {
+    let pool = memory.pool(64);
+    let value = memory.allocate<int>(4, pool);
+    let view = &value[0];
+    memory.pool_release(value);
+    return 42;
+}
