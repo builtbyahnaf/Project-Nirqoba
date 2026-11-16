@@ -18,11 +18,6 @@ constexpr const char* kOwnership = "NRQ4006";
 constexpr const char* kBorrow = "NRQ4007";
 constexpr const char* kDestruction = "NRQ4008";
 
-bool is_owning(ValueOwnership ownership) {
-  return is_owning_ownership(ownership) ||
-         ownership == ValueOwnership::GcManaged;
-}
-
 std::string_view transfer_name(tir::TransferKind kind) {
   switch (kind) {
     case tir::TransferKind::Local: return "local";
@@ -86,6 +81,68 @@ bool is_consuming_release(const std::string& callee) {
       "memory.unmap_file",
   };
   return releases.count(callee) != 0;
+}
+
+// Allocation strategy is part of the TIR contract, not just a callee spelling.
+// An ordinary owned allocation cannot be represented as a GC-managed value, and
+// a collector allocation cannot be represented as ordinary owned storage. This
+// keeps a future pass from changing the allocation path by rewriting one name.
+enum class AllocationStorage {
+  OrdinaryPointer,
+  OwnedArray,
+  ManagedPointer,
+  SharedPointer,
+};
+
+struct AllocationContract {
+  const char* callee;
+  ValueOwnership ownership;
+  AllocationStorage storage;
+};
+
+const AllocationContract* allocation_contract(const std::string& callee) {
+  static const AllocationContract contracts[] = {
+      {"memory.allocate", ValueOwnership::Owned, AllocationStorage::OrdinaryPointer},
+      {"memory.reallocate", ValueOwnership::Owned, AllocationStorage::OrdinaryPointer},
+      {"memory.secure_allocate", ValueOwnership::Owned,
+       AllocationStorage::OrdinaryPointer},
+      {"memory.owned_array", ValueOwnership::Owned, AllocationStorage::OwnedArray},
+      {"memory.owned_array_aligned", ValueOwnership::Owned,
+       AllocationStorage::OwnedArray},
+      {"array.allocate", ValueOwnership::GcManaged,
+       AllocationStorage::ManagedPointer},
+      {"memory.shared_allocate", ValueOwnership::Shared,
+       AllocationStorage::SharedPointer},
+      {"memory.shared_retain", ValueOwnership::Shared,
+       AllocationStorage::SharedPointer},
+  };
+  for (const AllocationContract& contract : contracts)
+    if (callee == contract.callee) return &contract;
+  return nullptr;
+}
+
+bool storage_matches_type(AllocationStorage storage, const Type& type) {
+  switch (storage) {
+    case AllocationStorage::OrdinaryPointer:
+      return type.is_pointer() && !type.is_managed_pointer();
+    case AllocationStorage::OwnedArray:
+      return type.is_owned_array();
+    case AllocationStorage::ManagedPointer:
+      return type.is_managed_pointer();
+    case AllocationStorage::SharedPointer:
+      return type.is_pointer();
+  }
+  return false;
+}
+
+std::string allocation_storage_name(AllocationStorage storage) {
+  switch (storage) {
+    case AllocationStorage::OrdinaryPointer: return "ordinary owned pointer";
+    case AllocationStorage::OwnedArray: return "owned array";
+    case AllocationStorage::ManagedPointer: return "GC-managed pointer";
+    case AllocationStorage::SharedPointer: return "shared pointer";
+  }
+  return "unknown";
 }
 
 bool release_matches_type(const std::string& callee, const Type& type) {
@@ -344,6 +401,34 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
         check_value(element, op.location, "aggregate element");
 
       if (op.kind == tir::OpKind::Call) {
+        if (const AllocationContract* contract = allocation_contract(op.callee)) {
+          if (!op.result.is_valid()) {
+            diagnostics.error(kOwnership, op.location,
+                              "internal: allocation '" + op.callee +
+                                  "' produced no value");
+            ok = false;
+          } else {
+            if (op.result.ownership != contract->ownership) {
+              diagnostics.error(
+                  kOwnership, op.location,
+                  "internal: allocation strategy '" + op.callee +
+                      "' requires ownership '" +
+                      std::string(ownership_name(contract->ownership)) +
+                      "', not '" +
+                      std::string(ownership_name(op.result.ownership)) + "'");
+              ok = false;
+            }
+            if (!storage_matches_type(contract->storage, op.result.type)) {
+              diagnostics.error(
+                  kOwnership, op.location,
+                  "internal: allocation strategy '" + op.callee +
+                      "' requires " +
+                      allocation_storage_name(contract->storage) +
+                      " storage, not type " + op.result.type.mangle());
+              ok = false;
+            }
+          }
+        }
         const auto callee = functions.find(op.callee);
         if (callee != functions.end()) {
           const auto& parameters = callee->second->parameters();
@@ -424,6 +509,29 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
             diagnostics.error(kType, op.location,
                               function_value(*function, argument.id) +
                                   "shared value passed to memory.deallocate");
+            ok = false;
+          }
+          const bool ordinary_release =
+              op.callee == "memory.deallocate" ||
+              op.callee == "memory.secure_release" ||
+              op.callee == "array.owned_release";
+          if (ordinary_release &&
+              argument.ownership == ValueOwnership::GcManaged) {
+            diagnostics.error(
+                kDestruction, op.location,
+                function_value(*function, argument.id) +
+                    "collector-managed value passed to ordinary release '" +
+                    op.callee + "'");
+            ok = false;
+          }
+          if (op.callee == "array.owned_release" &&
+              argument.ownership != ValueOwnership::Trivial &&
+              argument.ownership != ValueOwnership::Owned) {
+            diagnostics.error(kDestruction, op.location,
+                              function_value(*function, argument.id) +
+                                  "owned-array release requires an owned array, not '" +
+                                  std::string(ownership_name(argument.ownership)) +
+                                  "'");
             ok = false;
           }
         }
@@ -581,7 +689,7 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
           break;
         }
         case tir::OpKind::Drop: {
-          if (!is_owning(op.operand.ownership)) {
+          if (!is_owning_ownership(op.operand.ownership)) {
             diagnostics.error(kDestruction, op.location,
                               "internal: drop operand must be owning, not '" +
                                   std::string(ownership_name(op.operand.ownership)) +
