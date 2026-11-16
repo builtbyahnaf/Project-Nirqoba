@@ -1182,6 +1182,22 @@ Acceptance:
 - FFI cannot silently violate ownership rules.
 - Allocation and deallocation pairing is correct.
 
+Completion state at `0.583-beta`: manual storage has a distinct `Manual`
+ownership category and the explicit `memory.manual_allocate<T>` /
+`memory.manual_release` pair. Sema, TIR and lowering preserve the category;
+ordinary, secure, shared and resource releases reject manual storage and the
+reverse pairing is rejected too. Moves, borrows, double release, use after
+release, live-borrow release and reallocation follow the documented rules.
+Manual storage is function-local and rejects tracked arena/pool handles and
+payloads requiring deterministic field cleanup. Managed payloads use the
+existing typed-root path; plain manual storage emits no GC dependency. The
+source language still has no `extern`, foreign pointer, callback or ABI
+surface, so FFI ownership transfer, retained foreign pointers and callbacks
+remain explicitly unsupported rather than being invented. The audit is
+`reports/memory-model/phase-8-audit.md`, the completion report is
+`reports/memory-model/phase-8.md`, and the benchmarks are in
+`benchmarks/memory-model/phase-8/`.
+
 ## Phase 9 — Optimization, compatibility, and stabilization
 
 Only after semantic correctness is established:
