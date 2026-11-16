@@ -1,0 +1,21 @@
+// Manual storage containing a managed field, with one explicit collection.
+struct Holder {
+    managed<int> value;
+}
+int function main() {
+    var iterations = 100000;
+    var checksum = 0;
+    var start = time.cycles();
+    for (var index = 0; index < iterations; index += 1) {
+        var holder = memory.manual_allocate<Holder>(8);
+        holder[0].value = array.allocate<int>(1);
+        holder[0].value[0] = index % 97;
+        checksum += holder[0].value[0];
+        memory.manual_release(holder);
+    }
+    gc.collect();
+    var stop = time.cycles();
+    print(checksum);
+    print(stop - start);
+    return 0;
+}

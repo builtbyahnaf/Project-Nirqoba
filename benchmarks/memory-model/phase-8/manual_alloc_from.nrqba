@@ -1,0 +1,18 @@
+// Manual allocation from one explicit general allocator handle.
+int function main() {
+    var iterations = 1000000;
+    var width = (memory.cpu_count() as int) + 48;
+    var allocator = memory.general_allocator();
+    var checksum = 0;
+    var start = time.cycles();
+    for (var index = 0; index < iterations; index += 1) {
+        var block = memory.manual_allocate<byte>(width, allocator);
+        block[0] = (index % 251) as byte;
+        checksum += block[0] as int;
+        memory.manual_release(block);
+    }
+    var stop = time.cycles();
+    print(checksum);
+    print(stop - start);
+    return 0;
+}

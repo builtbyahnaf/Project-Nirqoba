@@ -1,0 +1,17 @@
+// Scoped borrow access to one manual allocation.
+int function main() {
+    var iterations = 10000000;
+    var block = memory.manual_allocate<int>(4);
+    var checksum = 0;
+    var start = time.cycles();
+    for (var index = 0; index < iterations; index += 1) {
+        let view = &block[0];
+        *view = (index * 7) % 251;
+        checksum += *view;
+    }
+    var stop = time.cycles();
+    memory.manual_release(block);
+    print(checksum);
+    print(stop - start);
+    return 0;
+}
