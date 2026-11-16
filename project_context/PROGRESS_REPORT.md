@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.571-beta` |
-| Development Stage | `MMM Phase 5 — Arena and Pool Support` |
-| Last Report Update | `2026-11-16 12:00:00` |
-| Report Entries | `37` |
+| Current Working Version | `0.575-beta` |
+| Development Stage | `MMM Phase 7 — GC Isolation and Explicit Selection` |
+| Last Report Update | `2026-11-16 20:00:00` |
+| Report Entries | `38` |
 
 ---
 
@@ -3937,3 +3937,81 @@ added. No benchmark was run; Phase 4 adds verifier checks only, and the runtime
 allocation path is unchanged. Phase 5 was not started.
 
 **End of Entry #033**
+
+---
+
+## Entry #038 — MMM Phase 7: GC Isolation and Explicit Selection
+
+**Version:** `0.575-beta`  
+**Date:** `2026-11-16 20:00:00`  
+**Phase:** Memory Model Migration Phase 7  
+**Status:** Complete
+
+### 1. Audit and Classification
+
+`reports/memory-model/phase-7-audit.md` traces every GC allocation entry point
+from source through Sema, TIR, MLIR, LLVM and the runtime. `array.allocate<T>`
+is the explicit collector allocation and `managed<T>` its reference type.
+`memory.owned_soa<T>` is an explicitly GC-backed container whose legacy name is
+now documented. Ordinary `memory.allocate<T>` storage containing managed fields,
+shared storage containing managed fields, owned arrays and aggregate roots all
+have a defined root registration and release point. `memory.secure_allocate`
+continues to reject managed payloads.
+
+The audit found one real defect: a tracked arena or pool allocation accepted a
+payload containing `managed<T>`, registered a typed root, and then reset or
+destroyed the arena without unregistering that root. The probe demonstrated a
+stale root pointing into freed storage. The audit also found that
+`function_uses_gc` did not seed from `memory.shared_allocate<T>` when `T`
+contained a managed field.
+
+### 2. Implementation
+
+- Sema rejects `memory.allocate<T>` with a tracked arena or pool when `T`
+  contains a managed reference. The diagnostic names the missing reset/destroy
+  root-unregistration contract.
+- The TIR verifier rejects the same malformed `ArenaBound` payload, so a
+  hand-built or rewritten module cannot bypass Sema.
+- Shared allocation of a managed payload is now a GC-effect seed, giving the
+  allocating function the mutator region it needs.
+- Ordinary allocation, shared allocation, owned arrays, aggregate roots and
+  explicit GC containers retain their existing root/release behavior. The
+  collector was not weakened or replaced.
+
+### 3. Verification
+
+- `326` unit tests pass, including the new arena-payload verifier case and two
+  runtime-isolation counter tests.
+- Full runner: `603` cases pass, `0` failed, `0` skipped. All Phase 1–6 cases
+  are preserved.
+- New fixtures cover owned storage across a collecting helper, shared root
+  copies and final cleanup, repeated unreachable cycles, O0/O2 arena/pool/helper
+  isolation, O2 barrier preservation, debug-runtime isolation and the shared
+  managed-effect classification.
+- `tests/phase7_isolation.py` checks twelve ordinary fixtures at `-O0` and
+  `-O2`: no `nrq_gc` in emitted LLVM, no `nrq_gc` symbol in the object, expected
+  runtime exit, and zero GC symbols for the development runtime. A managed
+  control object contains GC symbols, so the check is not vacuous.
+
+### 4. Benchmarks
+
+`benchmarks/memory-model/phase-7/` uses seven fresh-process samples per mode.
+Medians: managed allocation `54.5 ns/object`; root register/unregister
+`64.8 ns`; root frame `28.1 ns`; safepoint `0.38 ns`; write barrier `1.78 ns`;
+500k-object full collection `6.22 ms`; 200k-object cycle build `74.2 ns/object`
+with `2.18 ms` collection; four-thread allocation `110.7 ns/object`. Ordinary
+isolation medians: owned `58.0 ns`, borrowed read `0.072 ns`, arena `45.6 ns`,
+pool `141.9 ns`, plain shared `244.0 ns`, with every GC counter unchanged.
+Peak RSS ranged from about `9.8 MB` for isolation to `44.2 MB` for the managed
+allocation run. No universal speedup is claimed.
+
+### 5. Limitations
+
+Tracked arena/pool payloads cannot contain managed references. Manual allocator
+handles retain a manual root contract. Indirect calls are conservative
+collection points. FFI ownership, weak references, a new cycle collector and
+automatic CDMM selection are deferred; Phase 8 was not started. The current
+language has no source-level thread-spawn surface, so concurrency evidence is
+from runtime tests and the benchmark harness.
+
+**End of Entry #038**
