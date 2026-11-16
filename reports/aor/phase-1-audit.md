@@ -112,7 +112,25 @@ This is the only case where `next` is required for reachability of the object se
 
 **Classification:** Replace with a preallocated/segmented external worklist in Phase 3. No object-specific storage is needed once the worklist is not intrusive.
 
-## 5. Consumers outside `gc.cpp`
+## 5. Page ownership audit
+
+Ordinary pages are 64 KiB aligned, so an address inside one can be mapped to its base by masking the low 16 bits. `PageDirectory` additionally hashes the page number and returns the descriptor; large pages use exact-object entries.
+
+`header->page` is read in these places:
+
+| Site | Purpose | Can derive? |
+|---|---|---|
+| `publish_tlab_locked` | choose start-bitmap vs. index publication | Yes: page is known from the TLAB cursor, but the header is the publication unit today. |
+| `sweep_object` | page counts and span release | Yes for bitmap pages; large pages need the directory. |
+| `header_marked`, `set_header_marked` | page mark bitmap | Yes for ordinary pages; directory for large. |
+| `find_object_locked` | prove the exact header belongs to the page | Already has the page from lookup. |
+| `object_payload_bytes` callers | release span and statistics | No direct need for the pointer beyond the already-known page. |
+
+The stored pointer saves a page-directory probe on every mark and publication. Removing it before a direct page table exists would make marking depend on a hash lookup, which the roadmap explicitly rejects.
+
+**Classification:** Derive for ordinary pages once a direct page table exists; keep a large-page fallback. Do not remove the pointer while it is the cheapest correct path.
+
+## 6. Consumers outside `gc.cpp`
 
 - `runtime/include/nirqoba/runtime/gc.h` exposes header size and instance/shared byte counts as allocation facts. Tests assert 48/40/8.
 - `nrq_object_layout` is a public immutable descriptor. Compiler lowering emits reference-offset arrays for root registration; those arrays are not object headers.
