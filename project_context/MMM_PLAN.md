@@ -1215,6 +1215,24 @@ Only after semantic correctness is established:
 
 Do not optimize by weakening ownership guarantees.
 
+Completion state at `0.591-beta`: the full memory model was audited before
+optimization. Natural-aligned default heap blocks no longer carry an
+unnecessary private prefix; over-aligned requests keep the prefix path and the
+ownership registry still records allocator, size and alignment. Cached release
+no longer signals a condition variable that cannot have a waiter. Lowering
+removes a dead null/store pair immediately before `tir.return` after verified
+TIR and Drop expansion; releases, obligations and reverse-order destruction are
+unchanged. Borrow lowering, arena, pool, shared ownership and GC effects were
+measured and reviewed; no change was forced where the evidence did not justify
+one. Ten representative fixtures are behaviorally identical at `-O0`, `-O2`,
+production and debug, and generated LLVM is checked for duplicate releases and
+GC leakage. The full runner remains green. FFI remains unsupported, and no
+strategy selection, weak reference, cycle collector or universal header was
+added. The audit is `reports/memory-model/phase-9-audit.md`, the completion
+report is `reports/memory-model/phase-9.md`, benchmarks are in
+`benchmarks/memory-model/phase-9/`, and the migration guide is
+`docs/migration/phase-9.md`.
+
 ## Phase 10 — Compiler-Directed Memory Management (CDMM)
 
 **Priority: Critical — Flagship compiler feature**

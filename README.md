@@ -149,7 +149,7 @@ Nirqoba uses a multi-tier compilation pipeline designed to preserve semantic and
 
 ## Development Status & Roadmap
 
-The language is actively progressing through its architectural milestones. Current active version: **`0.583-beta`** (MMM Phase 8 / Manual Memory and FFI Boundary).
+The language is actively progressing through its architectural milestones. Current active version: **`0.591-beta`** (MMM Phase 9 / Optimization, Compatibility, and Stabilization).
 
 | Phase | Description | Status |
 |---|---|---|
@@ -172,6 +172,7 @@ The language is actively progressing through its architectural milestones. Curre
 | **MMM Phase 6** | Sharded atomic shared counts, final-release safety, borrow/release diagnostics, arena reset reuse and a documented weak-reference/cycle boundary | Completed |
 | **MMM Phase 7** | Explicit GC allocation, typed roots/frames, transitive effects, safepoints, barriers, mutator coordination, mixed-strategy interoperability and declaration-aware GC-free IR/dependency checks | Completed |
 | **MMM Phase 8** | Distinct manual ownership, explicit manual allocation/release, allocator provenance, release pairing, GC/manual rooting, and documented unsupported FFI boundary | Completed |
+| **MMM Phase 9** | Natural-aligned allocation without a prefix, cached-release wakeup removal, dead return-cleanup elimination, O0/O2/debug equivalence and before/after benchmarks | Completed |
 | **Phase 7–9** | Generics, algebraic data types, advanced pattern matching | Planned |
 | **Phase 10–12** | Structured concurrency, async/await, task scheduling | Planned |
 | **Phase 13–15** | C/C++ FFI interoperability and graphics ecosystem | Planned |
