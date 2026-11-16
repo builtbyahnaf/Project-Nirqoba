@@ -2,13 +2,18 @@
 
 namespace nirq::tir {
 
-Value Function::allocate_value(Type type, ValueOwnership ownership) {
+Value Function::allocate_value(Type type, ValueOwnership ownership,
+                               int arena_id, int arena_kind) {
   Value value;
   value.id = static_cast<int>(types_.size());
   value.type = type;
   value.ownership = ownership;
+  value.arena_id = arena_id;
+  value.arena_kind = arena_kind;
   types_.push_back(type);
   ownerships_.push_back(ownership);
+  arena_ids_.push_back(arena_id);
+  arena_kinds_.push_back(arena_kind);
   return value;
 }
 

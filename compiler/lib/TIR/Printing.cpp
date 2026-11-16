@@ -181,6 +181,10 @@ string print_tir(const tir::Module& module) {
         case tir::OpKind::Unreachable:
           break;
       }
+      if (op.result.is_valid() && op.result.arena_id != 0)
+        out << " arena=" << op.result.arena_id;
+      if (op.result.is_valid() && op.result.ownership != ValueOwnership::Trivial)
+        out << " own=" << ownership_name(op.result.ownership);
       out << "\n";
     }
     for (const tir::LifetimeRecord& lifetime : function->lifetimes()) {

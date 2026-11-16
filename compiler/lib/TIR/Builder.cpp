@@ -328,7 +328,8 @@ void TirBuilder::emit_move(const tir::Value& source, tir::Function& function,
   // A move produces a distinct value number even though lowering aliases the
   // source. The alias is what lets verification say "the source is no longer
   // usable" without inventing a runtime copy.
-  result = function.allocate_value(source.type, source.ownership);
+  result = function.allocate_value(source.type, source.ownership, source.arena_id,
+                                  source.arena_kind);
   tir::Op move_op;
   move_op.kind = tir::OpKind::Move;
   move_op.location = location;
@@ -640,7 +641,12 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       }
 
       scopes_.back().emplace(declaration.name(), slot);
-      if (!declaration.cleanup_callee().empty()) {
+      // Arena-bound storage belongs to the arena; a per-binding release would
+      // free inside the region or bypass its bulk lifetime. Sema suppresses the
+      // cleanup, and this guard keeps a stale cleanup annotation from
+      // reintroducing it.
+      if (!declaration.cleanup_callee().empty() &&
+          initial.ownership != ValueOwnership::ArenaBound) {
         DeferredCall cleanup;
         cleanup.callee = declaration.cleanup_callee();
         cleanup.location = declaration.location();
@@ -1127,7 +1133,9 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
                            "internal: variable '" + name.name() + "' has no TIR slot");
         return tir::Value{};
       }
-      tir::Value result = function.allocate_value(slot.type, name.ownership());
+      tir::Value result = function.allocate_value(slot.type, name.ownership(),
+                                                  name.arena_id(),
+                                                  name.arena_kind());
       tir::Op op;
       op.kind = tir::OpKind::Load;
       op.location = name.location();
@@ -1192,7 +1200,8 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         tir::Value address = function.allocate_value(
             unary.type().is_valid() ? unary.type() : Type::pointer_type(slot.type),
             mutable_borrow ? ValueOwnership::MutableBorrowed
-                           : ValueOwnership::Borrowed);
+                           : ValueOwnership::Borrowed,
+            slot.arena_id, slot.arena_kind);
         tir::Op op;
         op.kind = tir::OpKind::AddressOf;
         op.location = unary.location();
@@ -1235,7 +1244,9 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         zero_op.integer_value = 0;
         zero_op.result = zero;
         function.add_operation(std::move(zero_op));
-        tir::Value elem_ptr = function.allocate_value(elem_type);
+        tir::Value elem_ptr = function.allocate_value(
+            elem_type, ValueOwnership::Trivial, pointer.arena_id,
+            pointer.arena_kind);
         tir::Op gep;
         gep.kind = tir::OpKind::GetElementPtr;
         gep.location = unary.location();
@@ -1414,7 +1425,8 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
 
       tir::Value result;
       if (call.type().is_valid() && !call.type().is_void()) {
-        result = function.allocate_value(call.type(), call.ownership());
+        result = function.allocate_value(call.type(), call.ownership(),
+                                        call.arena_id(), call.arena_kind());
       }
 
       tir::Op op;
@@ -1575,7 +1587,9 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       const tir::Value index_val = lower_expression(idx_expr.index(), function);
 
       // GEP to the element pointer.
-      tir::Value elem_ptr = function.allocate_value(result_type);
+      tir::Value elem_ptr = function.allocate_value(
+          result_type, ValueOwnership::Trivial, base_val.arena_id,
+          base_val.arena_kind);
       {
         tir::Op gep;
         gep.kind = tir::OpKind::GetElementPtr;
@@ -1805,7 +1819,9 @@ tir::Value TirBuilder::resolve_lvalue_ptr(const Expr& target, tir::Function& fun
       function.add_operation(std::move(check));
     }
     Type elem_type = idx_expr.type().is_valid() ? idx_expr.type() : base_ptr.type.element_type();
-    tir::Value elem_ptr = function.allocate_value(elem_type);
+    tir::Value elem_ptr = function.allocate_value(
+        elem_type, ValueOwnership::Trivial, base_ptr.arena_id,
+        base_ptr.arena_kind);
     tir::Op gep;
     gep.kind = tir::OpKind::GetElementPtr;
     gep.location = idx_expr.location();
@@ -1830,7 +1846,9 @@ tir::Value TirBuilder::resolve_lvalue_ptr(const Expr& target, tir::Function& fun
       zero_op.integer_value = 0;
       zero_op.result = zero;
       function.add_operation(std::move(zero_op));
-      tir::Value elem_ptr = function.allocate_value(elem_type);
+      tir::Value elem_ptr = function.allocate_value(
+          elem_type, ValueOwnership::Trivial, pointer.arena_id,
+          pointer.arena_kind);
       tir::Op gep;
       gep.kind = tir::OpKind::GetElementPtr;
       gep.location = unary.location();
@@ -1875,7 +1893,9 @@ tir::Value TirBuilder::resolve_lvalue_ptr(const Expr& target, tir::Function& fun
     tir::Value base_ptr = resolve_lvalue_ptr(mem_expr.base(), function);
     if (!base_ptr.is_valid()) return tir::Value{};
     Type field_type = mem_expr.type().is_valid() ? mem_expr.type() : Type::error();
-    tir::Value field_ptr = function.allocate_value(field_type);
+    tir::Value field_ptr = function.allocate_value(
+        field_type, ValueOwnership::Trivial, base_ptr.arena_id,
+        base_ptr.arena_kind);
     tir::Op gep;
     gep.kind = tir::OpKind::GetElementPtr;
     gep.location = mem_expr.location();

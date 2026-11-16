@@ -18,6 +18,10 @@ struct Value {
   int id = -1;
   Type type;
   ValueOwnership ownership = ValueOwnership::Trivial;
+  // Arena/pool identity for ArenaBound values; 0 for every other value.
+  int arena_id = 0;
+  // 1 = arena, 2 = pool, 0 = not a tracked region value.
+  int arena_kind = 0;
 
   bool is_valid() const { return id >= 0; }
 };
@@ -300,7 +304,8 @@ class Function {
   // Reserves the next value number. Types are recorded so the verifier can
   // check operand types without re-deriving them.
   Value allocate_value(Type type,
-                       ValueOwnership ownership = ValueOwnership::Trivial);
+                       ValueOwnership ownership = ValueOwnership::Trivial,
+                       int arena_id = 0, int arena_kind = 0);
   int allocate_label() { return next_label_id_++; }
 
   void add_operation(Op op) { operations_.push_back(std::move(op)); }
@@ -309,6 +314,12 @@ class Function {
   Type value_type(int id) const { return types_[static_cast<std::size_t>(id)]; }
   ValueOwnership value_ownership(int id) const {
     return ownerships_[static_cast<std::size_t>(id)];
+  }
+  int value_arena_id(int id) const {
+    return arena_ids_[static_cast<std::size_t>(id)];
+  }
+  int value_arena_kind(int id) const {
+    return arena_kinds_[static_cast<std::size_t>(id)];
   }
 
  private:
@@ -321,6 +332,8 @@ class Function {
   std::vector<Op> operations_;
   std::vector<Type> types_;
   std::vector<ValueOwnership> ownerships_;
+  std::vector<int> arena_ids_;
+  std::vector<int> arena_kinds_;
   std::vector<LifetimeRecord> lifetimes_;
   std::vector<DestructionObligation> obligations_;
   int next_label_id_ = 0;
