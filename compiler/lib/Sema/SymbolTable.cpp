@@ -98,6 +98,38 @@ void SymbolTable::mark_allocation_moved(uint64_t allocation_id) {
     }
 }
 
+bool SymbolTable::has_live_arena_values(int arena_id) const {
+  if (arena_id == 0) return false;
+  for (const auto& scope : scopes_)
+    for (const auto& entry : scope) {
+      const Symbol& symbol = entry.second;
+      if (symbol.arena_id != arena_id || symbol.moved) continue;
+      if (symbol.arena_bound || symbol.borrowed) return true;
+    }
+  return false;
+}
+
+void SymbolTable::invalidate_arena(int arena_id) {
+  if (arena_id == 0) return;
+  for (auto& scope : scopes_)
+    for (auto& entry : scope) {
+      Symbol& symbol = entry.second;
+      if (symbol.arena_id == arena_id &&
+          (symbol.arena_bound || symbol.borrowed))
+        symbol.moved = true;
+    }
+}
+
+void SymbolTable::mark_name_moved(const string& name) {
+  for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+    auto found = scope->find(name);
+    if (found != scope->end()) {
+      found->second.moved = true;
+      return;
+    }
+  }
+}
+
 uint64_t SymbolTable::ensure_allocation_id(const string& name,
                                            uint64_t allocation_id) {
   for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {

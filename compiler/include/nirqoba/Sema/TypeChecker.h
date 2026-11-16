@@ -206,6 +206,10 @@ class TypeChecker {
   std::vector<std::size_t> loop_deferred_scope_depths_;
   std::string current_module_;
   uint64_t next_allocation_id_ = 1;
+  // Monotonic identity for each tracked arena/pool. It is deliberately a
+  // separate namespace from allocation ids so every reset/destroy check can
+  // name the arena lifetime without conflating it with a pointer owner.
+  int next_arena_id_ = 1;
   bool checking_deferred_cleanup_ = false;
   bool checking_lvalue_ = false;
   // Set while checking the operand of `&`, so creating a borrow does not also

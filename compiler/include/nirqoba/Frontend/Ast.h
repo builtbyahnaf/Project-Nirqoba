@@ -46,6 +46,15 @@ class Expr {
   void set_ownership(ValueOwnership ownership) { ownership_ = ownership; }
   bool transfers_ownership() const { return transfers_ownership_; }
   void set_transfers_ownership(bool transfer = true) { transfers_ownership_ = transfer; }
+  // Non-zero when this expression denotes an arena/pool handle or a value whose
+  // storage belongs to a tracked arena. The id is assigned by Sema and travels
+  // with the expression into TIR so arena lifetime checks do not depend on the
+  // spelling of a call.
+  int arena_id() const { return arena_id_; }
+  void set_arena_id(int id) { arena_id_ = id; }
+  // 0 = not an arena handle, 1 = arena, 2 = pool.
+  int arena_kind() const { return arena_kind_; }
+  void set_arena_kind(int kind) { arena_kind_ = kind; }
 
  private:
   Kind kind_;
@@ -53,6 +62,8 @@ class Expr {
   Type type_;
   ValueOwnership ownership_ = ValueOwnership::Trivial;
   bool transfers_ownership_ = false;
+  int arena_id_ = 0;
+  int arena_kind_ = 0;
 };
 
 using ExprPtr = std::unique_ptr<Expr>;

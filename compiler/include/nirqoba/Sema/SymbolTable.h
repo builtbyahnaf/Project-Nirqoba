@@ -70,6 +70,12 @@ struct Symbol {
   // True when the binding uniquely owns an explicit runtime allocation/resource.
   bool owns_allocation = false;
   bool shared_allocation = false;
+  // Arena/pool lifetime metadata. A handle symbol carries arena_kind 1 (arena)
+  // or 2 (pool) and owns the id; storage allocated from it is arena_bound and
+  // carries the same id without an individual release obligation.
+  int arena_id = 0;
+  int arena_kind = 0;
+  bool arena_bound = false;
   std::string cleanup_callee;
   bool borrowed = false;
   bool mutable_borrow = false;
@@ -139,6 +145,13 @@ class SymbolTable {
   const Symbol* lookup(const std::string& name) const;
   void mark_allocation_moved(uint64_t allocation_id);
   bool allocation_is_moved(uint64_t allocation_id) const;
+  // True when an arena-bound value or borrow belonging to `arena_id` is still
+  // live in a visible scope. Reset/destroy must be rejected while this holds.
+  bool has_live_arena_values(int arena_id) const;
+  // Invalidates every arena-bound value and borrow for an arena after a reset
+  // or destroy. The handle itself stays usable; destroy separately marks it.
+  void invalidate_arena(int arena_id);
+  void mark_name_moved(const std::string& name);
   // Address-taking gives a scalar a tracked lifetime shared with its aliases.
   uint64_t ensure_allocation_id(const std::string& name, uint64_t allocation_id);
   bool has_live_borrow(uint64_t allocation_id) const;
