@@ -1,0 +1,13 @@
+struct Mixed { owned ptr int buffer; shared ptr int data; }
+
+int function main() {
+    var source = Mixed {
+        buffer: memory.allocate<int>(1),
+        data: memory.shared_allocate<int>(1)
+    };
+    var moved = source;
+    *moved.data = 17;
+    print(memory.shared_count(moved.data) as int);
+    print(*moved.data);
+    return 0;
+}
