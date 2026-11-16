@@ -1,0 +1,9 @@
+int* function invalid() {
+    var value = 5;
+    return &value;
+}
+
+int function main() {
+    let pointer = invalid();
+    return *pointer;
+}

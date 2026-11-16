@@ -1,0 +1,7 @@
+int function main() {
+    let buffer = memory.allocate<byte>(8);
+    let pointer = &buffer[0];
+    memory.deallocate(buffer);
+    print(*pointer);
+    return 42;
+}

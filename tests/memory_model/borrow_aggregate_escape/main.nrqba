@@ -1,0 +1,13 @@
+struct Holder {
+    borrow ptr int value;
+}
+
+Holder function invalid(borrow int* source) {
+    return Holder { value: source };
+}
+
+int function main() {
+    var value = 5;
+    let holder = invalid(&value);
+    return 0;
+}
