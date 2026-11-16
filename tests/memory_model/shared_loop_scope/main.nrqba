@@ -1,0 +1,11 @@
+int function main() {
+    var total = 0;
+    for (var index = 0; index < 5; index += 1) {
+        let value = memory.shared_allocate<int>(4);
+        *value = index;
+        total += *value;
+        memory.shared_release(value);
+    }
+    print(total);
+    return 0;
+}
