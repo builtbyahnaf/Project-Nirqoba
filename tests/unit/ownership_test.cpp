@@ -1005,3 +1005,53 @@ TEST(OwnershipTest, BorrowFlowRejectsReturnOfWrongBorrowedParameter) {
                                   "returns a borrow of parameter 'second' but "
                                   "declares 'first'"));
 }
+
+TEST(OwnershipTest, BorrowFlowRejectsDuplicateLexicalLifetime) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_duplicate_lifetime.nrqba",
+      "int function main() {\n"
+      "  var value = 5;\n"
+      "  let pointer = &value;\n"
+      "  return *pointer;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  ASSERT_FALSE(diag.has_errors());
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  for (const tir::LifetimeRecord& lifetime : main_fn->lifetimes())
+    if (lifetime.kind == tir::LifetimeKind::Lexical) {
+      main_fn->add_lifetime(lifetime);
+      break;
+    }
+  DiagnosticEngine verify_diag;
+  ASSERT_FALSE(verify_tir_module(*module, verify_diag));
+  ASSERT_TRUE(diagnostic_contains(verify_diag,
+                                  "more than one lexical lifetime record"));
+}
+
+TEST(OwnershipTest, BorrowFlowRejectsMutableReturnFromImmutableBorrow) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_mutable_return.nrqba",
+      "borrow mut source byte* function writable(borrow mut byte* source) {\n"
+      "  return source;\n"
+      "}\n"
+      "int function main() {\n"
+      "  var owner = memory.allocate<byte>(1);\n"
+      "  var view = writable(owner);\n"
+      "  return view[0] as int;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  ASSERT_FALSE(diag.has_errors());
+  tir::Function* writable = find_function(*module, "writable");
+  ASSERT_TRUE(writable != nullptr);
+  writable->set_return_ownership(ValueOwnership::Borrowed);
+  DiagnosticEngine verify_diag;
+  ASSERT_FALSE(verify_tir_module(*module, verify_diag));
+  ASSERT_TRUE(diagnostic_contains(verify_diag,
+                                  "immutable borrowed return cannot alias a "
+                                  "mutable borrow"));
+}
