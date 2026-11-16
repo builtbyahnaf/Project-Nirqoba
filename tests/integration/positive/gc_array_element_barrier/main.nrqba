@@ -1,0 +1,20 @@
+struct Node {
+    int value;
+}
+
+struct Cell {
+    managed<Node> node;
+}
+
+int function main() {
+    var cells = array.allocate<Cell>(2);
+    var first = array.allocate<Node>(1);
+    var second = array.allocate<Node>(1);
+    first[0].value = 11;
+    second[0].value = 22;
+    cells[0].node = first;
+    cells[1].node = second;
+    gc.collect();
+    print(cells[0].node[0].value + cells[1].node[0].value);
+    return 0;
+}

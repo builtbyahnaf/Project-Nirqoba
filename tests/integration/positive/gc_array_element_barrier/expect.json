@@ -1,0 +1,10 @@
+{
+  "mode": "build_and_run",
+  "args": ["-O2"],
+  "expect_stdout": "33\n",
+  "expect_exit": 0,
+  "expect_ir_counts": {
+    "call void @nrq_gc_root_store": 4,
+    "call ptr @nrq_gc_allocate_array_typed_rooted": 3
+  }
+}
