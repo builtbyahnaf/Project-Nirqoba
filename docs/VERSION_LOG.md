@@ -39,7 +39,7 @@ recorded below is made under that authority.
   `-O2`, rejects every `nrq_gc` reference in emitted LLVM and every `nrq_gc`
   symbol in the object, runs each executable, and repeats the check for the
   development runtime. A managed control must contain GC symbols.
-- Tests: 326 unit tests and 603 full-run cases pass, 0 failed, 0 skipped.
+- Tests: 326 unit tests and 606 full-run cases pass, 0 failed, 0 skipped.
   Existing Phase 1–6 cases are preserved; the new cases cover the arena/pool
   rejection, malformed arena TIR, shared managed-effect classification, root
   lifetime across helpers and shared copies, O0/O2 arena/pool/helper isolation,

@@ -273,7 +273,7 @@ Results:
 | Check | Result |
 | --- | --- |
 | Unit | **326/326 pass** |
-| Full runner | **603/603 pass**, 0 failed, 0 skipped |
+| Full runner | **606/606 pass**, 0 failed, 0 skipped |
 | Isolation script | 12 ordinary fixtures × 2 optimization levels + debug run; 0 failures |
 | Managed control | 8 GC object symbols |
 | Benchmark | 7 fresh-process samples per mode |

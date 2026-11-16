@@ -3982,7 +3982,7 @@ contained a managed field.
 
 - `326` unit tests pass, including the new arena-payload verifier case and two
   runtime-isolation counter tests.
-- Full runner: `603` cases pass, `0` failed, `0` skipped. All Phase 1–6 cases
+- Full runner: `606` cases pass, `0` failed, `0` skipped. All Phase 1–6 cases
   are preserved.
 - New fixtures cover owned storage across a collecting helper, shared root
   copies and final cleanup, repeated unreachable cycles, O0/O2 arena/pool/helper
