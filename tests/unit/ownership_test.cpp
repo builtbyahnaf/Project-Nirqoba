@@ -1094,3 +1094,105 @@ TEST(OwnershipTest, SemaRejectsDirectWriteWhileBorrowed) {
   ASSERT_TRUE(diagnostic_contains(diag, "cannot write to 'value' while borrow"));
   ASSERT_TRUE(has_note(diag, "conflicting borrow is active here"));
 }
+
+TEST(OwnershipTest, VerifierRejectsOrdinaryAllocationMarkedGcManaged) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_ordinary_allocation_strategy.nrqba",
+      "int function main() {\n"
+      "  var buffer = memory.allocate<int>(8);\n"
+      "  memory.deallocate(buffer);\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  bool changed = false;
+  for (tir::Op& op : main_fn->operations())
+    if (op.kind == tir::OpKind::Call && op.callee == "memory.allocate") {
+      op.result.ownership = ValueOwnership::GcManaged;
+      changed = true;
+    }
+  ASSERT_TRUE(changed);
+  ASSERT_FALSE(verify_tir_module(*module, diag));
+  ASSERT_TRUE(diagnostic_contains(
+      diag, "allocation strategy 'memory.allocate' requires ownership 'owned'"));
+}
+
+TEST(OwnershipTest, VerifierRejectsCollectorAllocationMarkedOwned) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_gc_allocation_strategy.nrqba",
+      "struct Node { int value; }\n"
+      "int function main() {\n"
+      "  var node = array.allocate<Node>(1);\n"
+      "  node[0].value = 7;\n"
+      "  return node[0].value;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  bool changed = false;
+  for (tir::Op& op : main_fn->operations())
+    if (op.kind == tir::OpKind::Call && op.callee == "array.allocate") {
+      op.result.ownership = ValueOwnership::Owned;
+      changed = true;
+    }
+  ASSERT_TRUE(changed);
+  ASSERT_FALSE(verify_tir_module(*module, diag));
+  ASSERT_TRUE(diagnostic_contains(
+      diag, "allocation strategy 'array.allocate' requires ownership 'gc_managed'"));
+}
+
+TEST(OwnershipTest, VerifierRejectsGcValueThroughOrdinaryDeallocation) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_gc_ordinary_release.nrqba",
+      "int function main() {\n"
+      "  var buffer = memory.allocate<int>(8);\n"
+      "  memory.deallocate(buffer);\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  bool changed = false;
+  for (tir::Op& op : main_fn->operations())
+    if (op.kind == tir::OpKind::Call && op.callee == "memory.deallocate") {
+      for (tir::Value& argument : op.arguments)
+        argument.ownership = ValueOwnership::GcManaged;
+      changed = true;
+    }
+  ASSERT_TRUE(changed);
+  ASSERT_FALSE(verify_tir_module(*module, diag));
+  ASSERT_TRUE(diagnostic_contains(
+      diag, "collector-managed value passed to ordinary release 'memory.deallocate'"));
+}
+
+TEST(OwnershipTest, VerifierRejectsDropOfGcManagedAllocation) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_drop_gc_allocation.nrqba",
+      "int function main() {\n"
+      "  var buffer = memory.allocate<int>(4);\n"
+      "  buffer[0] = 1;\n"
+      "  return buffer[0];\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  bool changed = false;
+  for (tir::Op& op : main_fn->operations())
+    if (op.kind == tir::OpKind::Drop) {
+      op.operand.ownership = ValueOwnership::GcManaged;
+      changed = true;
+    }
+  ASSERT_TRUE(changed);
+  ASSERT_FALSE(verify_tir_module(*module, diag));
+  ASSERT_TRUE(diagnostic_contains(
+      diag, "drop operand must be owning, not 'gc_managed'"));
+}
