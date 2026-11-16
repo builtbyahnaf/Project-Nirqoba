@@ -1,0 +1,9 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 0,
+  "expect_stdout": "7\n",
+  "expect_ir_counts": {
+    "nrq_gc": 0,
+    "call void @nrq_memory_deallocate_checked": 1
+  }
+}
