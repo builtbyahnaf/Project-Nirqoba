@@ -175,7 +175,21 @@ The remembered bit is a duplicate of membership in `remembered_young`. Moving it
 
 **Classification:** Move remembered to page-local metadata in Phase 2; keep young/age packed in the header for now; preserve the debug masks or update the API deliberately.
 
-## 9. Consumers outside `gc.cpp`
+## 9. Layout-descriptor audit
+
+`layout` is the last header field and the only route to precise tracing for a normal object. The descriptor is shared, immutable, and interned. Its fields are:
+
+- `payload_size`, `reference_count`, `flags`;
+- `reference_offsets` table;
+- optional `trace` callback;
+- optional SoA column geometry;
+- the inline offsets added for narrow records in the preceding optimization.
+
+A page-local uniform page class can replace the per-object pointer with a page descriptor pointer. A mixed page cannot: two adjacent objects can have different layouts and sizes. The current allocator deliberately mixes sizes in a page to reduce tail waste, so removing `layout` requires either uniform page classes or a per-slot descriptor index.
+
+**Classification:** Keep for mixed pages; move to page metadata for uniform pages in Phase 4/5. The descriptor itself is already shared and must not be duplicated per object.
+
+## 10. Consumers outside `gc.cpp`
 
 - `runtime/include/nirqoba/runtime/gc.h` exposes header size and instance/shared byte counts as allocation facts. Tests assert 48/40/8.
 - `nrq_object_layout` is a public immutable descriptor. Compiler lowering emits reference-offset arrays for root registration; those arrays are not object headers.
