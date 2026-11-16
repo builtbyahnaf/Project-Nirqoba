@@ -493,6 +493,53 @@ TEST(AllocatorTest, SharedRootMetadataHandlesInlineAndOverflowOffsets) {
   }
 }
 
+TEST(AllocatorTest, SharedControlShardsAllowIndependentObjectsToProgress) {
+  constexpr size_t kObjects = 64;
+  std::array<void*, kObjects> pointers{};
+  for (void*& pointer : pointers) {
+    pointer = nrq_memory_shared_allocate(32, 16);
+    ASSERT_NE(pointer, nullptr);
+  }
+  std::atomic<size_t> failures = 0;
+  std::vector<std::thread> workers;
+  for (size_t index = 0; index < kObjects; index += 2) {
+    workers.emplace_back([&, index] {
+      for (size_t round = 0; round < 512; ++round) {
+        if (nrq_memory_shared_retain(pointers[index]) == nullptr) {
+          ++failures;
+          return;
+        }
+        if (nrq_memory_shared_release(pointers[index]) != 1) ++failures;
+        if (nrq_memory_shared_retain(pointers[index + 1]) == nullptr) {
+          ++failures;
+          return;
+        }
+        if (nrq_memory_shared_release(pointers[index + 1]) != 1) ++failures;
+      }
+    });
+  }
+  for (std::thread& worker : workers) worker.join();
+  ASSERT_EQ(failures.load(), size_t{0});
+  for (void* pointer : pointers) {
+    ASSERT_EQ(nrq_memory_shared_count(pointer), uint64_t{1});
+    ASSERT_EQ(nrq_memory_shared_release(pointer), int32_t{1});
+  }
+}
+
+TEST(AllocatorTest, ArenaResetRetainsItsCapacityBoundedInitialChunk) {
+  void* arena = nrq_allocator_create(NRQ_ALLOCATOR_ARENA, 4096);
+  ASSERT_NE(arena, nullptr);
+  void* first = nrq_memory_allocate_from(arena, 64, 16);
+  ASSERT_NE(first, nullptr);
+  nrq_memory_deallocate_checked(first);
+  ASSERT_EQ(nrq_allocator_reset(arena), int32_t{1});
+  void* reused = nrq_memory_allocate_from(arena, 64, 16);
+  ASSERT_NE(reused, nullptr);
+  ASSERT_EQ(reused, first);
+  nrq_memory_deallocate_checked(reused);
+  ASSERT_EQ(nrq_allocator_destroy(arena), int32_t{1});
+}
+
 TEST(AllocatorTest, FinalSharedReleaseDoesNotHoldTheGlobalRegistryLock) {
   BlockingDeallocateState state;
   const NrqCustomAllocatorVTable callbacks{
