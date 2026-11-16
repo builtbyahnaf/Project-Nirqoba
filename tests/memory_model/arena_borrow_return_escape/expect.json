@@ -1,0 +1,5 @@
+{
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": "arena-bound storage cannot escape through a borrowed return"
+}

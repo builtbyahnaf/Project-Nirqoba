@@ -1,0 +1,8 @@
+int function main() {
+    let first_arena = memory.arena(128);
+    let second_arena = memory.arena(128);
+    let first = memory.allocate<int>(4, first_arena);
+    var second = memory.allocate<int>(4, second_arena);
+    second = first;
+    return 42;
+}

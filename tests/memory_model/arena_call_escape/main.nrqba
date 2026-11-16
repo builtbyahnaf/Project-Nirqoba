@@ -1,0 +1,10 @@
+int function retain(int* pointer) {
+    return *pointer;
+}
+
+int function main() {
+    let arena = memory.arena(128);
+    let value = memory.allocate<int>(4, arena);
+    *value = 3;
+    return retain(value);
+}

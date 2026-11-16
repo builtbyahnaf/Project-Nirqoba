@@ -1,0 +1,11 @@
+borrow source int* function view(borrow int* source) {
+    return source;
+}
+
+int function main() {
+    let arena = memory.arena(128);
+    let value = memory.allocate<int>(4, arena);
+    let escaped = view(value);
+    print(*escaped);
+    return 42;
+}

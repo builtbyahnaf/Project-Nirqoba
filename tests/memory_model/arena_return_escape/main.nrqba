@@ -1,0 +1,9 @@
+int* function leak() {
+    let arena = memory.arena(128);
+    let value = memory.allocate<int>(4, arena);
+    return value;
+}
+
+int function main() {
+    return 42;
+}
