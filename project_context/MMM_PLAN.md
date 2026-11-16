@@ -9,7 +9,9 @@
 `reports/memory-model/migration-audit.md`. Pre-MMM Phase 9 closed the audit's  
 three critical prerequisites at `0.515-beta`. Phase 1 — Ownership Representation  
 is complete at `0.531-beta`. Phase 2 — Deterministic Destruction and Move  
-Semantics is complete at `0.539-beta`.  
+Semantics is complete at `0.539-beta`. Phase 3 — Borrowing and Lifetime  
+Enforcement is complete at `0.547-beta`. Phase 4 — Ordinary Non-GC Allocation  
+is complete at `0.551-beta`.  
 **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
 **Primary objective:** Establish deterministic ownership as Nirqoba's default memory-management model, with borrowing, arenas, explicit shared ownership, selective garbage collection, and advanced manual memory management as complementary mechanisms.
 
@@ -1036,6 +1038,21 @@ Acceptance:
 - Owned-only functions do not use GC allocation APIs.
 - Owned-only code has no unnecessary GC metadata or synchronization.
 - GC-managed allocations continue to work.
+
+Completion state at `0.551-beta`: the audit in
+`reports/memory-model/phase-4-audit.md` classifies every allocation category
+and records the existing general/secure/shared allocation paths. No second
+allocator was introduced. Ordinary heap pointers, owned arrays, returned arrays,
+borrowed heap views, reallocated storage, secure allocation and plain shared
+allocation emit no `nrq_gc` reference at `-O0` or `-O2`; stack promotion remains
+in place. GC operations are emitted only for explicit collector allocation, SoA
+or a managed-reference payload, and the previous owned-release unregister leak is
+gated on actual managed-reference content. TIR now verifies the selected
+allocation strategy against its ownership category and storage shape, rejects a
+collector value through an ordinary release, and rejects a `tir.drop` of a
+collector value. `array.allocate`, SoA, managed fields and cyclic collection
+remain fully operational. Arena scopes, weak references, secure rooting and FFI
+remain later phases.
 
 ## Phase 5 — Arena and pool support
 
