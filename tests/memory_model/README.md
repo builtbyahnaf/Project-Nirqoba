@@ -39,6 +39,10 @@ are included automatically by `tests/run_tests.py`.
 | `borrow_after_release` | Releasing an owner with a live borrow is rejected |
 | `borrow_local_return` | Returning an address of a local is rejected |
 | `borrow_aggregate_escape` | Returning an aggregate holding a borrow is rejected |
+| `borrow_mutable_forward` | A mutable borrow is forwarded through two calls |
+| `borrow_disjoint_branch` | A disjoint field write stays legal across a branch |
+| `borrow_immutable_write` | Writing through an immutable borrow is rejected |
+| `borrow_mutable_conflict` | Two mutable arguments for one owner are rejected |
 
 Run the complete suite (integration plus these cases):
 
