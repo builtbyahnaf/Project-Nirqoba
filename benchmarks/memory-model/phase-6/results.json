@@ -1,0 +1,143 @@
+{
+  "compiler": "D:\\Actual Project Files\\Project Nirqoba\\build\\msvc-dev\\bin\\nirqoba.exe",
+  "optimization": "-O2",
+  "timer": "time.cycles() around the language workload only",
+  "runs": 7,
+  "workloads": {
+    "ordinary_alloc": {
+      "checksum": 249996480,
+      "median_cycles": 139740104,
+      "min_cycles": 133860144,
+      "max_cycles": 141090405,
+      "samples": [
+        133860144,
+        141090405,
+        139228212,
+        139740104,
+        140794107,
+        139916576,
+        139645416
+      ]
+    },
+    "shared_alloc": {
+      "checksum": 124998120,
+      "median_cycles": 609315879,
+      "min_cycles": 590192402,
+      "max_cycles": 642843367,
+      "samples": [
+        626073753,
+        642843367,
+        592676844,
+        620980064,
+        609315879,
+        590192402,
+        601466994
+      ],
+      "ratio_vs_ordinary": 4.3604
+    },
+    "shared_retain": {
+      "checksum": 126998120,
+      "median_cycles": 776471126,
+      "min_cycles": 741590752,
+      "max_cycles": 788994599,
+      "samples": [
+        741590752,
+        772447514,
+        788994599,
+        779313158,
+        779309044,
+        776471126,
+        769951755
+      ],
+      "ratio_vs_move": 1.1869
+    },
+    "shared_move": {
+      "checksum": 125998120,
+      "median_cycles": 654207332,
+      "min_cycles": 645581029,
+      "max_cycles": 665484486,
+      "samples": [
+        647709480,
+        652704494,
+        645581029,
+        654207332,
+        655574873,
+        665484486,
+        659650407
+      ]
+    },
+    "shared_aggregate": {
+      "checksum": 25995200,
+      "median_cycles": 153576689,
+      "min_cycles": 149262534,
+      "max_cycles": 154996444,
+      "samples": [
+        149367268,
+        149262534,
+        151511634,
+        153576689,
+        154996444,
+        154796501,
+        154509481
+      ]
+    },
+    "arena_reset": {
+      "checksum": 245969520,
+      "median_cycles": 123212845,
+      "min_cycles": 117253014,
+      "max_cycles": 126650787,
+      "samples": [
+        126650787,
+        117253014,
+        122723109,
+        123212845,
+        123444820,
+        123623737,
+        122734136
+      ]
+    }
+  },
+  "contention": {
+    "uncontended_ns": {
+      "median_ns": 47767200,
+      "min_ns": 43317700,
+      "max_ns": 48449500,
+      "samples": [
+        43317700,
+        47451500,
+        48449500,
+        48313000,
+        47767200
+      ]
+    },
+    "independent_ns": {
+      "median_ns": 33786400,
+      "min_ns": 30633200,
+      "max_ns": 38736400,
+      "samples": [
+        31974200,
+        35100600,
+        33786400,
+        30633200,
+        38736400
+      ]
+    },
+    "contended_ns": {
+      "median_ns": 75782500,
+      "min_ns": 73012000,
+      "max_ns": 77401600,
+      "samples": [
+        77401600,
+        73106100,
+        76074200,
+        75782500,
+        73012000
+      ]
+    },
+    "threads": 4,
+    "ops_per_thread": 250000,
+    "memory_objects": 100000,
+    "memory_bytes_per_object": 251.49,
+    "correct": true
+  }
+}
