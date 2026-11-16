@@ -149,7 +149,7 @@ Nirqoba uses a multi-tier compilation pipeline designed to preserve semantic and
 
 ## Development Status & Roadmap
 
-The language is actively progressing through its architectural milestones. Current active version: **`0.563-beta`** (MMM Phase 5 / Arena and Pool Support).
+The language is actively progressing through its architectural milestones. Current active version: **`0.571-beta`** (MMM Phase 6 / Explicit Shared Ownership).
 
 | Phase | Description | Status |
 |---|---|---|
@@ -169,6 +169,7 @@ The language is actively progressing through its architectural milestones. Curre
 | **MMM Phase 3** | Immutable/mutable borrow enforcement, CFG borrow flow, source-bound returns, escapes and lifetime validation | Completed |
 | **MMM Phase 4** | Ordinary owned allocation separated from GC, checked allocation strategy and owned-only IR isolation | Completed |
 | **MMM Phase 5** | Tracked arena/pool lifetimes, bulk reset and destruction, escape rejection, pool release and GC-free arena/pool IR | Completed |
+| **MMM Phase 6** | Sharded atomic shared counts, final-release safety, borrow/release diagnostics, arena reset reuse and a documented weak-reference/cycle boundary | Completed |
 | **Phase 7–9** | Generics, algebraic data types, advanced pattern matching | Planned |
 | **Phase 10–12** | Structured concurrency, async/await, task scheduling | Planned |
 | **Phase 13–15** | C/C++ FFI interoperability and graphics ecosystem | Planned |
