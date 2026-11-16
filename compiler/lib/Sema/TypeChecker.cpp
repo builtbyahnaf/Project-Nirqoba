@@ -5190,8 +5190,14 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "operation requires a shared allocation");
     if (call.callee() == "memory.shared_release" && !checking_deferred_cleanup_ &&
         source && source->shared_allocation) {
-      const_cast<Expr&>(*call.arguments()[0]).set_transfers_ownership();
-      symbols_.mark_allocation_moved(source->allocation_id);
+      if (symbols_.has_live_borrow(source->allocation_id))
+        diagnostics_.error(
+            diag::kTypeMismatch, call.arguments()[0]->location(),
+            "cannot release a shared owner while a borrow of its storage is live");
+      else {
+        const_cast<Expr&>(*call.arguments()[0]).set_transfers_ownership();
+        symbols_.mark_allocation_moved(source->allocation_id);
+      }
     }
     return call.callee() == "memory.shared_count" ? Type::u64_type()
                                                     : Type::void_type();
