@@ -145,7 +145,22 @@ The field is a 64-bit monotonic stamp. A page-local allocation epoch would work 
 
 **Classification:** Keep for mixed pages; derive for uniform page classes in Phase 3/4. Do not remove before the page-local birth representation is validated against concurrent allocation.
 
-## 7. Consumers outside `gc.cpp`
+## 7. Element-count and array audit
+
+`element_count` is the only per-object size multiplier. `layout->payload_size` describes one record or one array element; `object_payload_bytes` multiplies them. It is read by:
+
+- tracing, to bound reference offsets and array strides;
+- sweep, to size the released span and account reclaimed bytes;
+- allocation profiling and statistics;
+- the public object-layout query, which returns the descriptor but not the count.
+
+Fixed records always store 1. Arrays may store any count that fits 32 bits. A page-class allocator can derive the payload size for a page whose objects have one fixed span, but an array page with variable counts cannot use that derivation.
+
+The layout descriptor already distinguishes `NRQ_OBJECT_LAYOUT_ARRAY`; it does not carry a per-instance count. The count is genuinely per-instance for arrays, so it must stay in an extended representation or in a page-local array table until the compiler can prove a fixed element count.
+
+**Classification:** Keep for arrays and mixed pages; derive for fixed-size uniform pages. Do not assign every array an extended header automatically.
+
+## 8. Consumers outside `gc.cpp`
 
 - `runtime/include/nirqoba/runtime/gc.h` exposes header size and instance/shared byte counts as allocation facts. Tests assert 48/40/8.
 - `nrq_object_layout` is a public immutable descriptor. Compiler lowering emits reference-offset arrays for root registration; those arrays are not object headers.
