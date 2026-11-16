@@ -11,7 +11,7 @@ three critical prerequisites at `0.515-beta`. Phase 1 — Ownership Representati
 is complete at `0.531-beta`. Phase 2 — Deterministic Destruction and Move  
 Semantics is complete at `0.539-beta`. Phase 3 — Borrowing and Lifetime  
 Enforcement is complete at `0.547-beta`. Phase 4 — Ordinary Non-GC Allocation  
-is complete at `0.551-beta`. Phase 5 — Arena and Pool Support is complete at `0.563-beta`.  
+is complete at `0.551-beta`. Phase 5 — Arena and Pool Support is complete at `0.563-beta`. Phase 6 — Explicit Shared Ownership is complete at `0.571-beta`.  
 **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
 **Primary objective:** Establish deterministic ownership as Nirqoba's default memory-management model, with borrowing, arenas, explicit shared ownership, selective garbage collection, and advanced manual memory management as complementary mechanisms.
 
@@ -1109,6 +1109,19 @@ Acceptance:
 - Weak references expire correctly.
 - Cross-thread sharing is correct.
 - Ordinary owned objects do not pay reference-counting costs.
+
+Completion state at `0.571-beta`: shared strong counts use 64 pointer-selected
+control shards with atomic counts; retain, non-final release and count do not
+take the global allocator mutex. Final release removes the control before
+deallocation so a concurrent retain cannot resurrect the object. Copy retains,
+move transfers without retaining, aggregate fields retain/release in order, and
+the final release frees exactly once. Shared release is rejected while a borrow
+of its storage is live, and TIR verifies shared retain/count operands. Arena
+reset now retains only its initial capacity-bounded chunk and frees growth
+chunks. Weak references remain deliberately deferred: there is no source type
+or concrete library requirement, and supported shared payloads reject shared
+fields, so a shared-to-shared owning cycle cannot be constructed. Cyclic graphs
+remain the explicit collector's domain. Phase 7 was not started.
 
 ## Phase 7 — GC isolation and explicit selection
 
