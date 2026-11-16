@@ -1,5 +1,7 @@
 #include "nirqoba/TIR/Verifier.h"
 
+#include "nirqoba/TIR/BorrowFlow.h"
+
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -810,6 +812,11 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
           destroyed.insert(op.operand.id);
       }
     }
+
+    // Borrow state is a CFG property, not a property of the linear operation
+    // stream. The pass below computes active borrows at every block entry so a
+    // merge or loop back-edge cannot hide a conflict.
+    if (!verify_borrow_flow(*function, module, diagnostics)) ok = false;
 
     // Obligation table validation. Phase 2 requires every registered obligation
     // to end somewhere: either discharged at a cleanup point or transferred to a

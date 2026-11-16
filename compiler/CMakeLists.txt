@@ -79,6 +79,7 @@ add_library(nirqoba_compiler_lib STATIC
   lib/TIR/IR.cpp
   lib/TIR/Builder.cpp
   lib/TIR/Printing.cpp
+  lib/TIR/BorrowFlow.cpp
   lib/TIR/Verifier.cpp
 
   # Lowering (nrq dialect + TIR→MLIR + passes)

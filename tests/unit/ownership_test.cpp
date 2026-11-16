@@ -782,3 +782,226 @@ TEST(OwnershipTest, VerifierRejectsDuplicateReleaseAfterDrop) {
   ASSERT_TRUE(diagnostic_contains(verify_diag,
                                   "second 'memory.deallocate' release"));
 }
+
+TEST(OwnershipTest, BorrowFlowRejectsOwnerDestroyedOnOnlyOneBranch) {
+  DiagnosticEngine diagnostics;
+  tir::Module module;
+  auto function = std::make_unique<tir::Function>("branch_drop", Type::int_type());
+  tir::Function& fn = *function;
+  const Type pointer = Type::pointer_type(Type::int_type());
+  const Type address = Type::pointer_type(pointer);
+
+  tir::Value slot = fn.allocate_value(pointer);
+  tir::Op alloca;
+  alloca.kind = tir::OpKind::Alloca;
+  alloca.slot_name = "owner";
+  alloca.result = slot;
+  fn.add_operation(alloca);
+
+  tir::Value owner = fn.allocate_value(pointer, ValueOwnership::Owned);
+  tir::Op load;
+  load.kind = tir::OpKind::Load;
+  load.lhs = slot;
+  load.result = owner;
+  fn.add_operation(load);
+
+  tir::Value condition = fn.allocate_value(Type::bool_type());
+  tir::Op constant;
+  constant.kind = tir::OpKind::ConstantInt;
+  constant.integer_value = 1;
+  constant.result = condition;
+  fn.add_operation(constant);
+
+  tir::Op branch;
+  branch.kind = tir::OpKind::BranchCond;
+  branch.operand = condition;
+  branch.true_label = 0;
+  branch.false_label = 1;
+  fn.add_operation(branch);
+
+  tir::Op then_label;
+  then_label.kind = tir::OpKind::Label;
+  then_label.label_id = 0;
+  fn.add_operation(then_label);
+
+  fn.add_obligation(slot, pointer, "memory.deallocate", {}, SourceLocation{});
+  fn.obligations().back().discharged = true;
+  tir::Op drop;
+  drop.kind = tir::OpKind::Drop;
+  drop.operand = owner;
+  drop.obligation_id = fn.obligations().back().id;
+  drop.string_value = "memory.deallocate";
+  fn.add_operation(drop);
+
+  tir::Op then_to_merge;
+  then_to_merge.kind = tir::OpKind::Branch;
+  then_to_merge.label_id = 2;
+  fn.add_operation(then_to_merge);
+
+  tir::Op else_label;
+  else_label.kind = tir::OpKind::Label;
+  else_label.label_id = 1;
+  fn.add_operation(else_label);
+  tir::Op else_to_merge;
+  else_to_merge.kind = tir::OpKind::Branch;
+  else_to_merge.label_id = 2;
+  fn.add_operation(else_to_merge);
+
+  tir::Op merge_label;
+  merge_label.kind = tir::OpKind::Label;
+  merge_label.label_id = 2;
+  fn.add_operation(merge_label);
+
+  tir::Value address_value = fn.allocate_value(address, ValueOwnership::Borrowed);
+  tir::Op address_of;
+  address_of.kind = tir::OpKind::AddressOf;
+  address_of.operand = slot;
+  address_of.result = address_value;
+  fn.add_operation(address_of);
+
+  tir::Op borrow;
+  borrow.kind = tir::OpKind::Borrow;
+  borrow.operand = address_value;
+  borrow.lhs = slot;
+  fn.add_operation(borrow);
+
+  tir::LifetimeRecord lifetime;
+  lifetime.borrow = address_value;
+  lifetime.source = slot;
+  lifetime.kind = tir::LifetimeKind::Lexical;
+  fn.add_lifetime(lifetime);
+
+  tir::Op end;
+  end.kind = tir::OpKind::EndBorrow;
+  end.operand = address_value;
+  fn.add_operation(end);
+
+  tir::Value zero = fn.allocate_value(Type::int_type());
+  tir::Op zero_op;
+  zero_op.kind = tir::OpKind::ConstantInt;
+  zero_op.result = zero;
+  fn.add_operation(zero_op);
+  tir::Op ret;
+  ret.kind = tir::OpKind::Return;
+  ret.operand = zero;
+  fn.add_operation(ret);
+
+  module.add_function(std::move(function));
+  ASSERT_FALSE(verify_tir_module(module, diagnostics));
+  ASSERT_TRUE(diagnostic_contains(diagnostics,
+                                  "borrows storage after its owner was moved "
+                                  "or destroyed"));
+}
+
+TEST(OwnershipTest, BorrowFlowRejectsConflictingLiveBorrow) {
+  DiagnosticEngine diagnostics;
+  tir::Module module;
+  auto function = std::make_unique<tir::Function>("conflict", Type::int_type());
+  tir::Function& fn = *function;
+  const Type address = Type::pointer_type(Type::int_type());
+
+  tir::Value slot = fn.allocate_value(Type::int_type());
+  tir::Op alloca;
+  alloca.kind = tir::OpKind::Alloca;
+  alloca.slot_name = "owner";
+  alloca.result = slot;
+  fn.add_operation(alloca);
+
+  const auto make_borrow = [&](ValueOwnership ownership, bool mutable_access) {
+    tir::Value address_value = fn.allocate_value(address, ownership);
+    tir::Op address_of;
+    address_of.kind = tir::OpKind::AddressOf;
+    address_of.operand = slot;
+    address_of.result = address_value;
+    fn.add_operation(address_of);
+    tir::Op borrow;
+    borrow.kind = tir::OpKind::Borrow;
+    borrow.operand = address_value;
+    borrow.lhs = slot;
+    borrow.mutable_borrow = mutable_access;
+    fn.add_operation(borrow);
+    tir::LifetimeRecord lifetime;
+    lifetime.borrow = address_value;
+    lifetime.source = slot;
+    lifetime.kind = tir::LifetimeKind::Lexical;
+    lifetime.mutable_access = mutable_access;
+    fn.add_lifetime(lifetime);
+    return address_value;
+  };
+
+  const tir::Value immutable = make_borrow(ValueOwnership::Borrowed, false);
+  make_borrow(ValueOwnership::MutableBorrowed, true);
+
+  // The first pointer is still used after the second borrow, so its restriction
+  // is live at the conflict point.
+  tir::Op print;
+  print.kind = tir::OpKind::Print;
+  print.operand = immutable;
+  fn.add_operation(print);
+
+  tir::Value zero = fn.allocate_value(Type::int_type());
+  tir::Op zero_op;
+  zero_op.kind = tir::OpKind::ConstantInt;
+  zero_op.result = zero;
+  fn.add_operation(zero_op);
+  tir::Op ret;
+  ret.kind = tir::OpKind::Return;
+  ret.operand = zero;
+  fn.add_operation(ret);
+
+  module.add_function(std::move(function));
+  ASSERT_FALSE(verify_tir_module(module, diagnostics));
+  ASSERT_TRUE(diagnostic_contains(diagnostics,
+                                  "conflicting borrow of the same owner"));
+  ASSERT_TRUE(has_note(diagnostics, "conflicting borrow is active here"));
+}
+
+TEST(OwnershipTest, BorrowFlowRejectsInexactLifetimeRecord) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_lifetime_path.nrqba",
+      "struct P { int x; int y; }\n"
+      "int function main() {\n"
+      "  var p = P { x: 1, y: 2 };\n"
+      "  let x = &p.x;\n"
+      "  return *x;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  ASSERT_FALSE(diag.has_errors());
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  for (tir::LifetimeRecord& lifetime : main_fn->lifetimes())
+    if (lifetime.kind == tir::LifetimeKind::Lexical)
+      lifetime.field_path = "p.y";
+  DiagnosticEngine verify_diag;
+  ASSERT_FALSE(verify_tir_module(*module, verify_diag));
+  ASSERT_TRUE(diagnostic_contains(
+      verify_diag, "borrow lifetime record does not describe"));
+}
+
+TEST(OwnershipTest, BorrowFlowRejectsReturnOfWrongBorrowedParameter) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_wrong_borrow_parameter.nrqba",
+      "borrow second int* function select(borrow int* first, borrow int* second) {\n"
+      "  return second;\n"
+      "}\n"
+      "int function main() {\n"
+      "  var a = 1;\n"
+      "  var b = 2;\n"
+      "  let pointer = select(&a, &b);\n"
+      "  return *pointer;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  ASSERT_FALSE(diag.has_errors());
+  tir::Function* select = find_function(*module, "select");
+  ASSERT_TRUE(select != nullptr);
+  select->set_return_borrow_parameter("first");
+  DiagnosticEngine verify_diag;
+  ASSERT_FALSE(verify_tir_module(*module, verify_diag));
+  ASSERT_TRUE(diagnostic_contains(verify_diag,
+                                  "returns a borrow of parameter 'second' but "
+                                  "declares 'first'"));
+}
