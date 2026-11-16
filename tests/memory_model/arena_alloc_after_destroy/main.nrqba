@@ -1,0 +1,6 @@
+int function main() {
+    let arena = memory.arena(128);
+    memory.arena_destroy(arena);
+    let value = memory.allocate<int>(4, arena);
+    return 42;
+}

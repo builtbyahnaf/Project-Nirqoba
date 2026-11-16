@@ -1,0 +1,10 @@
+struct OwnedPayload {
+    owned ptr int data;
+}
+
+int function main() {
+    let arena = memory.arena(128);
+    let value = memory.allocate<OwnedPayload>(16, arena);
+    memory.arena_destroy(arena);
+    return 42;
+}
