@@ -29,6 +29,7 @@ bool contains_owned_array(const Type& type) {
 ValueOwnership ownership_for_release(const std::string& callee) {
   if (callee == "memory.shared_release" || callee == "aggregate.shared_release")
     return ValueOwnership::Shared;
+  if (callee == "memory.manual_release") return ValueOwnership::Manual;
   return ValueOwnership::Owned;
 }
 
@@ -65,7 +66,8 @@ std::string borrow_path_spelling(const Expr& expression) {
 }
 
 static bool is_release_callee(const std::string& callee) {
-  return callee == "memory.deallocate" || callee == "memory.shared_release" ||
+  return callee == "memory.deallocate" || callee == "memory.manual_release" ||
+         callee == "memory.shared_release" ||
          callee == "array.owned_release" || callee == "soa.owned_release" ||
          callee == "aggregate.owned_drop" || callee == "aggregate.shared_release" ||
          callee == "file.close" || callee == "socket.close" ||

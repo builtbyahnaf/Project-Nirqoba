@@ -112,7 +112,8 @@ bool ownership_compatible_with_type(const Type& type, ValueOwnership ownership) 
 
 bool is_consuming_release(const std::string& callee) {
   static const std::unordered_set<std::string> releases = {
-      "memory.deallocate",    "array.owned_release", "soa.owned_release",
+      "memory.deallocate",    "memory.manual_release", "array.owned_release",
+      "soa.owned_release",
       "memory.pool_release",
       "aggregate.owned_drop", "memory.shared_release", "memory.secure_release",
       "file.close",           "socket.close",         "mutex.destroy",
@@ -141,6 +142,8 @@ struct AllocationContract {
 const AllocationContract* allocation_contract(const std::string& callee) {
   static const AllocationContract contracts[] = {
       {"memory.allocate", ValueOwnership::Owned, AllocationStorage::OrdinaryPointer},
+      {"memory.manual_allocate", ValueOwnership::Manual,
+       AllocationStorage::OrdinaryPointer},
       {"memory.reallocate", ValueOwnership::Owned, AllocationStorage::OrdinaryPointer},
       {"memory.secure_allocate", ValueOwnership::Owned,
        AllocationStorage::OrdinaryPointer},
@@ -193,6 +196,7 @@ bool release_matches_type(const std::string& callee, const Type& type) {
   // runtime identity check here is therefore the pointer/array/aggregate shape;
   // the ownership check below distinguishes the release families.
   if (callee == "memory.shared_release" || callee == "memory.secure_release" ||
+      callee == "memory.manual_release" ||
       callee == "file.close" || callee == "socket.close" ||
       callee == "mutex.destroy" || callee == "memory.unmap_file" ||
       callee == "memory.deallocate")
@@ -460,6 +464,30 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
                     "' and non-shared type '" +
                     op.arguments[0].type.mangle() + "'");
             ok = false;
+          }
+        }
+
+        if (op.callee == "memory.manual_release") {
+          if (op.arguments.size() != 1 || !op.arguments[0].is_valid() ||
+              op.arguments[0].ownership != ValueOwnership::Manual) {
+            diagnostics.error(
+                kOwnership, op.location,
+                "internal: manual release requires one manual allocation");
+            ok = false;
+          }
+        } else if (op.callee == "memory.deallocate" ||
+                   op.callee == "memory.reallocate" ||
+                   op.callee == "memory.secure_release" ||
+                   op.callee == "memory.shared_release") {
+          for (const tir::Value argument : op.arguments) {
+            if (argument.is_valid() &&
+                argument.ownership == ValueOwnership::Manual) {
+              diagnostics.error(
+                  kOwnership, op.location,
+                  "internal: manual allocation passed to '" + op.callee +
+                      "'; use memory.manual_release");
+              ok = false;
+            }
           }
         }
 
