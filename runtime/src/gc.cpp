@@ -60,9 +60,23 @@ constexpr size_t kGcPageShift = 16;
 constexpr size_t kGcPageBytes = size_t{1} << kGcPageShift;
 constexpr size_t kObjectStartAlignment = alignof(std::max_align_t);
 
+// The representation a page's metadata is prepared for. Mixed is the current
+// fallback: objects may have different layouts and the header remains
+// authoritative. Uniform pages carry one slot size and layout so later AOR
+// phases can remove those fields from their objects. Large pages have no
+// walkable start bitmap and use the exact object index.
+enum class PageKind : uint8_t { Mixed, Uniform, Large, Fallback };
+
 struct GcPage {
   unsigned char* storage = nullptr;
   size_t capacity = 0;
+  // Page-class metadata. `slot_bytes` is zero for a mixed page; a uniform page
+  // uses one fixed span and one layout for every object. Large and fallback
+  // pages keep `slot_bytes == 0` until a large-object page class is introduced.
+  PageKind kind = PageKind::Mixed;
+  size_t slot_bytes = 0;
+  size_t slot_capacity = 0;
+  const nrq_object_layout* uniform_layout = nullptr;
   size_t used = 0;
   size_t live_objects = 0;
   // Young objects in this page. A minor collection can only reclaim or promote
@@ -3073,6 +3087,13 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
     }
     set_page_max_free_span_locked(*page, 0, 0);
     reset_page_gc_metadata_locked(*page);
+    page->kind = page->capacity > kGcPageBytes
+                     ? PageKind::Large
+                     : (page->object_starts ? PageKind::Mixed
+                                            : PageKind::Fallback);
+    page->slot_bytes = 0;
+    page->slot_capacity = 0;
+    page->uniform_layout = nullptr;
     recycled_page_reuse_count = saturated_add(recycled_page_reuse_count, 1);
     return page;
   }
@@ -3100,6 +3121,7 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
       return nullptr;
     }
     page->mark_words = mark_words;
+    page->kind = capacity > kGcPageBytes ? PageKind::Large : PageKind::Mixed;
     if (capacity <= kGcPageBytes) {
       page->object_starts.reset(new (std::nothrow) uint64_t[mark_words]());
       if (page->object_starts) page->object_start_words = mark_words;
@@ -3562,7 +3584,10 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
     }
     // A page that cannot be indexed by address is still usable; its objects
     // are tracked through the exact object index instead.
-    if (!page_directory.insert(page)) page->use_object_index = true;
+    if (!page_directory.insert(page)) {
+      page->use_object_index = true;
+      page->kind = PageKind::Fallback;
+    }
     index_tail_page_locked(*page);
   }
   unretire_page_locked(*page);
@@ -3737,7 +3762,10 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     }
     // A page that cannot be indexed by address is still usable; its objects
     // are tracked through the exact object index instead.
-    if (!page_directory.insert(page)) page->use_object_index = true;
+    if (!page_directory.insert(page)) {
+      page->use_object_index = true;
+      page->kind = PageKind::Fallback;
+    }
     index_tail_page_locked(*page);
     available = page->capacity;
   }
