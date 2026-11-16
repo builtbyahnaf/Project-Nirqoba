@@ -230,8 +230,15 @@ storage-only arena may not accept values with non-trivial release contracts.
 aggregate retain/release; thread-safe count updates; final-release destruction;
 weak references only if justified.
 
-**Current state:** strong refcount and aggregate support exist; weak refs and
-cross-thread language tests do not.
+**Current state:** strong refcount and aggregate support exist. Phase 6 at
+`0.571-beta` replaces the global count lock with 64 pointer-selected control
+shards and atomic counts, removes the control before final deallocation, and
+rejects shared release while a borrow is live. Weak references remain
+intentionally deferred: there is no source surface or concrete library
+requirement, and supported shared payloads reject shared fields, so a
+shared-to-shared owning cycle is not constructible. Cyclic graphs remain a GC
+concern. Cross-thread sharing is verified through the runtime unit suite and a
+C++ contention benchmark, not through a language thread API.
 
 ### 3.5 Selective GC
 
@@ -262,7 +269,7 @@ restricted; unsafe scopes and FFI do not exist.
 | `memory.allocate<T>` | deterministic explicit owner | Complete; non-GC, with conditional rooting for managed payloads |
 | `memory.owned_array<T>` | deterministic bulk owner | Complete; non-GC, with conditional rooting for managed elements |
 | `memory.owned_soa<T>` | collector-owned SoA | Complete for managed columns; asynchronous reclaim is documented |
-| `memory.shared_allocate<T>` | explicit refcount | Complete for supported payloads |
+| `memory.shared_allocate<T>` | explicit refcount | Complete at `0.571-beta` for supported non-cleanup payloads; sharded atomic counts and final-release safety |
 | `memory.secure_allocate<T>` | secure explicit owner | Partial: no rooted managed payload contract |
 | `memory.map_file` | explicit mapped resource | Complete; unmap is explicit |
 | `file.open`/`socket.connect`/`mutex.create` | deterministic resource owner | Complete; shutdown registry fallback |
@@ -372,8 +379,12 @@ exception.
 
 ### 6.5 Weak references
 
-**Decision:** not implemented in Phase 1. Add only with a concrete standard-library
-requirement and a testable expiration/destruction contract.
+**Decision:** not implemented in Phase 1 or Phase 6. Add only with a concrete
+standard-library requirement and a testable expiration/destruction contract.
+Phase 6 reviewed the condition and found no source type, parser production or
+library container that needs one. A `memory.shared_allocate<T>` payload cannot
+contain a shared field, so the supported shared surface cannot close an owning
+shared-to-shared cycle; cyclic graphs remain the explicit collector's domain.
 
 ### 6.6 Exceptions and panics
 
@@ -398,7 +409,7 @@ in Phase 1. Freeze their contracts before Phases 6–8.
 | 3 | Borrow/lifetime representation | Phase 1 value/borrow metadata |
 | 4 | Ordinary non-GC allocation isolation | Complete at `0.551-beta`; owned-only IR gate and mixed-path regressions pass |
 | 5 | Arena scopes and bulk destruction | Complete at `0.563-beta`; tracked lifetimes, bulk invalidation, escape checks and GC-free IR pass |
-| 6 | Shared completion/weak refs | Phase 2 destruction + Phase 5 if containers are involved |
+| 6 | Shared completion/weak refs | Complete at `0.571-beta`; sharded atomic strong counts, final-release safety, borrow/release diagnostics, weak refs scoped out with GC cycle policy |
 | 7 | GC isolation and mixed strategy | Secure-root decision, Phase 4 gate |
 | 8 | Manual/FFI | FFI boundary design |
 | 9 | Optimization/docs/stabilization | All semantic gates |
