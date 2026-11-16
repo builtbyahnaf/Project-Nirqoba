@@ -19,6 +19,28 @@ recorded below is made under that authority.
 > `0.495-beta`. Only the newest entry carries the working-build label; older
 > `(released)` entries are actual published checkpoints.
 
+## Version 0.543-beta (working build)
+
+### Summary of Changes (since `0.539-beta`):
+
+- **Borrow state is verified over the CFG.** A new TIR pass builds basic
+  blocks, computes active borrows at branch merges and loop back-edges, and
+  rejects conflicting or invalidated borrows that a straight-line scan missed.
+- **Borrow liveness follows aliases.** Address-of results, copies, loads from
+  bindings and borrowed call results form an alias set; a restriction lasts only
+  while one alias is live, so overwritten and expired borrows stop conflicting.
+- **Writes and returns respect live borrows.** A store overlapping a live borrow
+  is rejected while disjoint field writes stay valid, and a return may not leave
+  a local owner still borrowed.
+- **Call permission is the declared contract.** Passing `&x` to an immutable
+  borrow parameter now creates a read-only borrow, allowing compatible immutable
+  borrows that were previously over-rejected.
+- **Borrow contracts are checked at returns and calls.** Mutable return
+  mismatches, aggregate borrow escapes, duplicate lexical lifetime records and
+  stale records without a borrow operation are rejected.
+- Tests: 305 unit tests pass; the full runner has 530 cases, including eleven
+  new positive and negative Phase 3 memory-model cases.
+
 ## Version 0.539-beta (working build)
 
 ### Summary of Changes (since `0.535-beta`):
