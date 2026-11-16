@@ -206,7 +206,15 @@ The following sections are added as the audit proceeds:
 4. Debug instrumentation and production/debug equivalence.
 5. Dependency conclusions and Phase 2 extraction order.
 
-## 11. Large-page and fallback audit
+## 11. Destructor, finalization, and debug audit
+
+`destroy_object_storage` calls only `~ObjectHeader`; `ObjectHeader` has no non-trivial destructor. Managed payloads are zero-initialized and hold either trivial scalars or managed references. There is no finalizer queue and no user destructor to run during sweep. Whole-page reclamation is therefore valid for the managed heap; this does not apply to native/explicit allocations, which are outside the tracing heap.
+
+Debug instrumentation reads the header state word through `nrq_gc_object_state_bits` and emits allocation/sweep/promotion events. It must continue to report equivalent semantics in production and debug builds. Moving a field out of the header therefore requires either updating the debug API or leaving a compatibility bit clear.
+
+Page recycling is a lifecycle boundary: retired pages are removed only when no mutator can hold a cursor, then their start bitmap, mark bitmap, free-span list, generation counts, and tail/span index entries are reset. Metadata extracted to page-local storage must be reset in the same place, or recycled pages leak stale marks/remembered entries into the next cycle.
+
+## 12. Large-page and fallback audit
 
 A page larger than 64 KiB is not page-aligned to its own size, so masking an interior address does not recover its base. It has no object-start bitmap and is marked `use_object_index`. Its objects are:
 
