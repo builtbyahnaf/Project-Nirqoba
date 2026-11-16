@@ -12,6 +12,36 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.592-beta
+
+### Summary of Changes (since `0.591-beta`):
+
+- **AOR Phase 1 completed.** Every `ObjectHeader` field was audited against its
+  allocator, marker, barrier, sweep, page, array, large-object, debug, and
+  recycling consumers. H48 remains the correctness fallback because no field is
+  safe to remove from mixed pages yet.
+- **AOR Phase 2 page-local metadata implemented.** Pages now carry class,
+  slot/layout placeholders, start/mark/remembered bitmaps, and live, live-byte,
+  young, born-this-cycle, marked, marked-young, remembered, and indexed-object
+  counts. A direct-mapped cache accelerates repeated page lookup without
+  replacing the authoritative directory.
+- **Remembered-set membership moved off the object header.** The store barrier
+  updates a page bitmap and count; the public state mask remains reserved for
+  compatibility. Promotion and reclaim clear the page bit, and compaction
+  validates the exact object start before recycling.
+- **Page recycling and validation hardened.** One reset helper clears all derived
+  metadata before reuse; development builds validate count relationships and
+  require no mark to survive the cycle end.
+- **GC marking and reclamation from the preceding optimization are included:**
+  off-heap marks, whole-page dead-page retirement, lazy all-live skip, mark-queue
+  prefetch, and inline narrow-layout offsets.
+- Tests: `335` unit tests and `624` full-run cases pass. Phase 7 isolation, the
+  Phase 9 production/debug matrix, and `67` configuration-equivalence cases pass.
+- No performance claim is made for Phase 2 yet. The measured bitmap overhead is
+  `3072` bytes per ordinary 64 KiB page (start, mark, remembered; 4.7%).
+
+---
+
 ## Version 0.591-beta
 
 ### Summary of Changes (since `0.583-beta`):
