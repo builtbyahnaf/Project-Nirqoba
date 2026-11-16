@@ -90,10 +90,14 @@ The whole-page fast paths intentionally do not apply to large pages: every dead 
 
 ## 8. Verification
 
-- Build passes for production and development runtimes.
-- Unit suite: 335/335.
-- The full suite, Phase 7 isolation, Phase 9 matrix, and configuration equivalence are run after the Phase 2 report is complete.
-- No performance claim is made until the benchmark section records measurements.
+- Production and development builds pass.
+- Unit suite: **335/335**.
+- Full integration/memory-model suite: **624/624**.
+- Phase 7 isolation: passed.
+- Phase 9 production/debug matrix: passed.
+- Configuration equivalence for `*gc*`: **67 agreed, 0 failed**.
+- The two new recycling regressions pass: stale remembered entries do not keep reused addresses alive, and recycled pages clear all derived metadata.
+- No performance claim is made for Phase 2. The only measured number is the page bitmap cost (`3072` bytes per ordinary page), which is deliberately reported as an overhead rather than an improvement.
 
 ## 9. Limitations and next work
 
