@@ -95,6 +95,13 @@ int32_t nrq_allocator_destroy(void* allocator);
 // allocation operation is in flight. Returns zero without invalidating live
 // owners when the allocator is busy.
 int32_t nrq_allocator_reset(void* allocator);
+// Bulk arena/pool reset and destruction. Unlike `nrq_allocator_reset`, these
+// invalidate live allocations belonging to the region and release its backing
+// storage without running per-object destructors. Compiler-side arena checking
+// rejects a reset/destroy while a value or borrow is still live; the runtime
+// still refuses when an allocation operation is in flight.
+int32_t nrq_arena_reset(void* allocator);
+int32_t nrq_arena_destroy(void* allocator);
 int32_t nrq_memory_allocator_kind(uint64_t allocator_handle);
 void* nrq_memory_get_allocator(void);
 void* nrq_memory_use_allocator(void* allocator);
@@ -124,6 +131,11 @@ void* nrq_memory_shared_retain(void* pointer);
 int32_t nrq_memory_shared_release(void* pointer);
 uint64_t nrq_memory_shared_count(void* pointer);
 void* nrq_memory_allocate_from(void* allocator, size_t bytes, size_t alignment);
+// Arena fast path: bump allocation without a per-object ownership record. The
+// value cannot be released individually; reset/destroy owns its whole lifetime.
+// Pool allocations continue to use the registered path because release needs
+// the allocator identity.
+void* nrq_arena_allocate(void* allocator, size_t bytes, size_t alignment);
 void nrq_memory_deallocate_checked(void* pointer);
 // Resizes an explicit allocation, preserving the allocator identity and the
 // alignment recorded at allocation time. Contents survive up to the smaller of

@@ -1091,6 +1091,34 @@ void visit_all_allocations_locked(Visitor&& visitor) {
     shard.allocations.for_each(visitor);
 }
 
+// Removes every registry record owned by `allocator` after checking that no
+// allocation operation is in flight. The caller must hold `allocator_mutex`.
+// Bulk reset/destroy deliberately invalidates the region's storage; object-level
+// cleanup is a compiler/language obligation, not something this path can infer.
+bool erase_arena_allocations_locked(Allocator* allocator) {
+  std::array<std::unique_lock<std::mutex>, kAllocationShardCount> locks;
+  for (size_t index = 0; index < kAllocationShardCount; ++index)
+    locks[index] = std::unique_lock<std::mutex>(allocation_shards[index].mutex);
+  bool in_flight = false;
+  for (const AllocationShard& shard : allocation_shards) {
+    shard.allocations.for_each([&](const auto& entry) {
+      if (entry.owner.allocator == allocator &&
+          entry.owner.operation_in_flight)
+        in_flight = true;
+    });
+  }
+  if (in_flight) return false;
+  for (AllocationShard& shard : allocation_shards) {
+    std::vector<void*> released;
+    shard.allocations.for_each([&](const auto& entry) {
+      if (entry.owner.allocator == allocator) released.push_back(entry.key);
+    });
+    for (void* pointer : released) shard.allocations.erase(pointer);
+    if (!released.empty()) shard.changed.notify_all();
+  }
+  return true;
+}
+
 std::mutex allocator_mutex;
 std::unordered_map<void*, std::unique_ptr<Allocator>> allocator_handles;
 std::unordered_map<Allocator*, size_t> selected_counts;
@@ -1331,6 +1359,36 @@ int32_t nrq_allocator_reset(void* handle) {
   });
   if (owns_live_allocation) return 0;
   if (!allocator->reset_serialized()) return 0;
+  return 1;
+}
+
+int32_t nrq_arena_reset(void* handle) {
+  if (!handle) return 0;
+  std::lock_guard<std::mutex> lock(allocator_mutex);
+  auto found = allocator_handles.find(handle);
+  if (found == allocator_handles.end()) return 0;
+  Allocator* allocator = found->second.get();
+  if (allocator->kind() != NRQ_ALLOCATOR_ARENA &&
+      allocator->kind() != NRQ_ALLOCATOR_POOL)
+    return 0;
+  if (allocator->in_flight_operations() != 0) return 0;
+  if (!erase_arena_allocations_locked(allocator)) return 0;
+  return allocator->reset_serialized() ? 1 : 0;
+}
+
+int32_t nrq_arena_destroy(void* handle) {
+  if (!handle) return 0;
+  std::lock_guard<std::mutex> lock(allocator_mutex);
+  auto found = allocator_handles.find(handle);
+  if (found == allocator_handles.end()) return 0;
+  Allocator* allocator = found->second.get();
+  if (allocator->kind() != NRQ_ALLOCATOR_ARENA &&
+      allocator->kind() != NRQ_ALLOCATOR_POOL)
+    return 0;
+  if (allocator->in_flight_operations() != 0) return 0;
+  if (!erase_arena_allocations_locked(allocator)) return 0;
+  allocator->reset_serialized();
+  allocator_handles.erase(found);
   return 1;
 }
 
@@ -1667,6 +1725,27 @@ void* nrq_memory_allocate_from(void* handle, size_t bytes, size_t alignment) {
     if (!increment_operation_pin_locked(target)) return nullptr;
   }
   return allocate_with_allocator(target, bytes, alignment);
+}
+
+void* nrq_arena_allocate(void* handle, size_t bytes, size_t alignment) {
+  if (!handle) return nullptr;
+  Allocator* allocator = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(allocator_mutex);
+    auto found = allocator_handles.find(handle);
+    if (found == allocator_handles.end()) return nullptr;
+    allocator = found->second.get();
+    if (allocator->kind() != NRQ_ALLOCATOR_ARENA) return nullptr;
+    if (!increment_operation_pin_locked(allocator)) return nullptr;
+  }
+  void* pointer = nullptr;
+  try {
+    pointer = allocator->allocate_serialized(bytes, alignment);
+  } catch (...) {
+    pointer = nullptr;
+  }
+  release_operation_pin(allocator);
+  return pointer;
 }
 
 void nrq_memory_deallocate_checked(void* pointer) {
