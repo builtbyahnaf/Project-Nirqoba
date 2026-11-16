@@ -1,0 +1,12 @@
+int function descend(borrow int* pointer, int depth) {
+    if (depth == 0) {
+        return *pointer;
+    }
+    return descend(pointer, depth - 1);
+}
+
+int function main() {
+    var value = 9;
+    print(descend(&value, 3));
+    return 42;
+}

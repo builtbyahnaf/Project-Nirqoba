@@ -1,0 +1,10 @@
+borrow source byte* function select(borrow byte* first, borrow byte* source) {
+    return source;
+}
+
+byte function main() {
+    var owner = memory.allocate<byte>(1);
+    owner[0] = 47u8;
+    let result = select(owner, owner);
+    return result[0];
+}
