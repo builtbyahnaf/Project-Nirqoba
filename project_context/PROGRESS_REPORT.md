@@ -3779,6 +3779,93 @@ unwinding remains unsupported. Phase 6 was not started.
 
 ---
 
+
+## Entry #035 — MMM Phase 6: Explicit Shared Ownership
+
+**Version:** `0.571-beta`  
+**Phase:** Memory Model Migration Phase 6  
+**Status:** Complete
+
+### 1. Audit
+
+`reports/memory-model/phase-6-audit.md` records the existing strong-count path:
+`ValueOwnership::Shared`, `shared ptr` fields, aggregate retain/release, and a
+single global count map under `allocator_mutex`. Retain/release were thread-safe
+by serialization but imposed a global bottleneck; there was no control block, no
+weak source surface and no source-level borrow/release diagnostic.
+
+### 2. Implementation
+
+- Shared controls now live in 64 pointer-selected shards. Each control has an
+  atomic strong count; retain, non-final release and count take one shard lock.
+  Final release removes the control before deallocation, so a concurrent retain
+  cannot resurrect the object.
+- The final 1→0 transition uses release ordering and acquire/release CAS on
+  retain. `UINT64_MAX` is refused; missing/zero tokens return null/zero.
+- `memory.shared_release` is rejected while a borrow of the storage is live, with
+  the diagnostic at the source release. TIR requires shared ownership or a
+  shared-pointer type for retain/count operands.
+- `memory.arena_reset` retains only its initial capacity-bounded chunk and frees
+  growth chunks; destroy releases the retained chunk. Existing reset
+  invalidation and arena identity remain unchanged.
+- Copy retains, move transfers without retaining, aggregate fields retain and
+  release in reverse order, and final release frees exactly once. Plain shared
+  storage remains GC-free.
+
+### 3. Weak references and cycles
+
+Weak references are deliberately deferred. Nirqoba has no weak source type,
+parser production or concrete library requirement. Supported shared payloads
+reject shared fields, so a shared-to-shared owning cycle cannot be constructed;
+cyclic graphs remain the explicit collector's domain. No cycle collector or GC
+change was added.
+
+### 4. Tests
+
+- `323` unit tests pass.
+- Full runner: `593` cases pass, 0 failed, 0 skipped.
+- Ten new language cases cover multiple owners, aggregate-copy retain, move
+  without retain, parameter release, nested/loop scope, borrow without a token,
+  shared release with a live borrow, double release and shared-cycle payload
+  rejection.
+- Runtime unit coverage includes 64 independent shared controls across worker
+  threads and bounded arena reset reuse.
+- Existing Phase 1–5, shared-field, GC-root, GC-isolation, allocator and borrow
+  suites pass in the same run.
+
+### 5. Benchmarks
+
+`benchmarks/memory-model/phase-6/` measures ordinary versus shared allocation,
+explicit retain versus move, aggregate copy, arena reset reuse, and four-thread
+shared control contention. Seven fresh-process language samples and five
+contention samples were collected:
+
+- shared allocation: median `609,315,879` cycles, **4.36× ordinary**;
+- explicit retain: **1.187×** the move workload at the same allocation count;
+- arena reset: median `123,212,845` cycles, about 4.2% below the Phase 5 median
+  with overlapping ranges;
+- four threads/one object: `75.78 ms` contended versus `47.77 ms` uncontended
+  for 1M retain/release pairs;
+- four independent objects: `33.79 ms` aggregate, showing unrelated objects do
+  not share the global lock;
+- approximately `251.49` working-set bytes per live 32-byte shared object,
+  including payload, control, map node, allocator registry and allocator cost.
+
+No universal speedup is claimed.
+
+### 6. Limitations
+
+Weak references are not implemented, reference counting does not make pointee
+access thread-safe, shared-to-shared cycles are outside supported payloads, and
+no FFI/unsafe surface exists. Shared payloads reject deterministic-cleanup fields,
+so final release does not run field destructors. The retained arena chunk is
+bounded by the declared capacity. No Phase 7 GC work, cycle collector, weak
+syntax or automatic shared promotion was added.
+
+**End of Entry #035**
+
+---
+
 *Technical authority and project ownership remain with Muhammad Tahmid Ahnaf.*
 
 ## Entry #033 — MMM Phase 4: Ordinary Non-GC Allocation
