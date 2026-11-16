@@ -1,0 +1,10 @@
+struct Holder {
+    owned ptr int data;
+}
+
+int function main() {
+    let arena = memory.arena(128);
+    let value = memory.allocate<int>(4, arena);
+    let holder = Holder { data: value };
+    return 42;
+}
