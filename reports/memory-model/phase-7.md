@@ -339,3 +339,9 @@ At report preparation the tree contained only the Phase 7 implementation, test,
 benchmark and documentation changes. Build probes and logs are under the ignored
 `build/` directory; temporary root artifacts were removed. No push, publish or
 release was performed. Phase 8 was not started.
+
+One later cleanup commit restored the pre-existing
+`tests/integration/mlir/arena_gc_independence_o2` fixture after it was
+accidentally overwritten with the O0 workload. The original Phase 4 fixture is
+back in place; the new O2 isolation evidence is carried by the helper, pool and
+debug fixtures. This restoration does not change runtime or compiler behavior.
