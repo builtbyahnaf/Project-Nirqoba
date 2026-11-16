@@ -881,7 +881,8 @@ static bool function_uses_gc(const tir::Function& function) {
     // collect while the owned block is its only root.
     if (op.kind == tir::OpKind::Call && op.result.is_valid() &&
         op.result.type.is_pointer() &&
-        (op.callee == "memory.allocate" || op.callee == "memory.reallocate") &&
+        (op.callee == "memory.allocate" || op.callee == "memory.reallocate" ||
+         op.callee == "memory.shared_allocate") &&
         collect_has_managed_reference(op.result.type.element_type()))
       return true;
     // Only managed values require mutator/root instrumentation. A function that
