@@ -470,6 +470,52 @@ TEST(TirTest, VerifierRejectsForgedResultOwnership) {
   ASSERT_TRUE(diag.has_errors());
 }
 
+TEST(TirTest, ArenaAllocationCarriesIdentityAndHasNoIndividualDrop) {
+  DiagnosticEngine diag;
+  SourceFile src("tir_arena.nrqba",
+                 "int function main() {\n"
+                 "  let arena = memory.arena(256);\n"
+                 "  { let value = memory.allocate<int>(4, arena); *value = 7; }\n"
+                 "  memory.arena_reset(arena);\n"
+                 "  memory.arena_destroy(arena);\n"
+                 "  return 42;\n"
+                 "}");
+  Lexer lexer(src, diag);
+  Parser parser(lexer.tokenize(), diag);
+  auto prog = parser.parse_program();
+  ASSERT_FALSE(diag.has_errors());
+  TypeChecker checker(diag);
+  ASSERT_TRUE(checker.check(*prog));
+  TirBuilder builder(diag);
+  auto module = builder.lower(*prog);
+  ASSERT_TRUE(module != nullptr);
+  ASSERT_TRUE(verify_tir_module(*module, diag));
+  const std::string printed = print_tir(*module);
+  ASSERT_TRUE(printed.find("tir.call @memory.arena") != std::string::npos);
+  ASSERT_TRUE(printed.find("arena=1") != std::string::npos);
+  ASSERT_TRUE(printed.find("own=arena_bound") != std::string::npos);
+  ASSERT_TRUE(printed.find("release=memory.deallocate") == std::string::npos);
+}
+
+TEST(TirTest, VerifierRejectsArenaBoundValueWithoutIdentity) {
+  DiagnosticEngine diag;
+  tir::Module mod;
+  auto fn = std::make_unique<tir::Function>("forged_arena", Type::void_type());
+  const Type pointer = Type::pointer_type(Type::int_type());
+  tir::Value value = fn->allocate_value(pointer, ValueOwnership::ArenaBound, 0);
+  tir::Op op;
+  op.kind = tir::OpKind::ConstantNull;
+  op.result = value;
+  fn->add_operation(op);
+  tir::Op ret;
+  ret.kind = tir::OpKind::Return;
+  fn->add_operation(ret);
+  mod.add_function(std::move(fn));
+
+  ASSERT_FALSE(verify_tir_module(mod, diag));
+  ASSERT_TRUE(diag.has_errors());
+}
+
 TEST(TirTest, VerifierAcceptsOwnedRelease) {
   DiagnosticEngine diag;
   tir::Module mod;

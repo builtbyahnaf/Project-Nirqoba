@@ -86,7 +86,10 @@ const tir::Op* find_drop(const tir::Function& function) {
 TEST(OwnershipTest, CategoriesClassifyOwningBorrowingAndTransfer) {
   ASSERT_TRUE(is_owning_ownership(ValueOwnership::Owned));
   ASSERT_TRUE(is_owning_ownership(ValueOwnership::Shared));
-  ASSERT_TRUE(is_owning_ownership(ValueOwnership::ArenaBound));
+  // Arena-bound storage is owned by its arena in bulk, not by the individual
+  // binding, so it creates neither an owning transfer nor a per-value drop.
+  ASSERT_FALSE(is_owning_ownership(ValueOwnership::ArenaBound));
+  ASSERT_FALSE(requires_destruction(ValueOwnership::ArenaBound));
   ASSERT_FALSE(is_owning_ownership(ValueOwnership::GcManaged));
   ASSERT_FALSE(is_owning_ownership(ValueOwnership::Borrowed));
 

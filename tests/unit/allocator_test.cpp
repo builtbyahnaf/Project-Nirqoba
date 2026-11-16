@@ -547,6 +547,68 @@ TEST(AllocatorTest, PerAllocationAllocatorDoesNotChangeThreadSelection) {
   ASSERT_EQ(nrq_allocator_destroy(allocator), int32_t{1});
 }
 
+TEST(AllocatorTest, ArenaResetInvalidatesLiveAllocationsAndReusesStorage) {
+  void* arena = nrq_allocator_create(NRQ_ALLOCATOR_ARENA, 64);
+  ASSERT_NE(arena, nullptr);
+  void* first = nrq_memory_allocate_from(arena, 32, 8);
+  ASSERT_NE(first, nullptr);
+  void* second = nrq_memory_allocate_from(arena, 32, 8);
+  ASSERT_NE(second, nullptr);
+  // The ordinary reset contract still refuses live owners; the arena bulk reset
+  // deliberately invalidates them and releases the backing chunks.
+  ASSERT_EQ(nrq_allocator_reset(arena), int32_t{0});
+  ASSERT_EQ(nrq_arena_reset(arena), int32_t{1});
+  void* reused = nrq_memory_allocate_from(arena, 32, 8);
+  ASSERT_NE(reused, nullptr);
+  std::memset(reused, 0x5a, 32);
+  ASSERT_EQ(static_cast<unsigned char*>(reused)[31], 0x5a);
+  ASSERT_EQ(nrq_arena_destroy(arena), int32_t{1});
+  ASSERT_EQ(nrq_arena_destroy(arena), int32_t{0});
+}
+
+TEST(AllocatorTest, ArenaAlignsRequestsAndGrowsAdditionalBlocks) {
+  void* arena = nrq_allocator_create(NRQ_ALLOCATOR_ARENA, 16);
+  ASSERT_NE(arena, nullptr);
+  void* small = nrq_memory_allocate_from(arena, 1, 1);
+  ASSERT_NE(small, nullptr);
+  void* large = nrq_memory_allocate_from(arena, 256, 64);
+  ASSERT_NE(large, nullptr);
+  ASSERT_EQ(reinterpret_cast<uintptr_t>(large) % 64, uintptr_t{0});
+  ASSERT_EQ(nrq_arena_reset(arena), int32_t{1});
+  ASSERT_EQ(nrq_arena_destroy(arena), int32_t{1});
+}
+
+TEST(AllocatorTest, PoolReleaseReturnsSlotForReuse) {
+  void* pool = nrq_allocator_create(NRQ_ALLOCATOR_POOL, 64);
+  ASSERT_NE(pool, nullptr);
+  void* first = nrq_memory_allocate_from(pool, 32, 8);
+  ASSERT_NE(first, nullptr);
+  nrq_memory_deallocate_checked(first);
+  void* reused = nrq_memory_allocate_from(pool, 32, 8);
+  ASSERT_EQ(reused, first);
+  nrq_memory_deallocate_checked(reused);
+  ASSERT_EQ(nrq_arena_destroy(pool), int32_t{1});
+}
+
+TEST(AllocatorTest, PoolBulkResetInvalidatesLiveSlots) {
+  void* pool = nrq_allocator_create(NRQ_ALLOCATOR_POOL, 64);
+  ASSERT_NE(pool, nullptr);
+  void* first = nrq_memory_allocate_from(pool, 32, 8);
+  ASSERT_NE(first, nullptr);
+  ASSERT_EQ(nrq_arena_reset(pool), int32_t{1});
+  void* second = nrq_memory_allocate_from(pool, 32, 8);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(nrq_arena_destroy(pool), int32_t{1});
+}
+
+TEST(AllocatorTest, ArenaBulkOperationsRejectNonRegionAllocators) {
+  void* general = nrq_allocator_create(NRQ_ALLOCATOR_GENERAL, 0);
+  ASSERT_NE(general, nullptr);
+  ASSERT_EQ(nrq_arena_reset(general), int32_t{0});
+  ASSERT_EQ(nrq_arena_destroy(general), int32_t{0});
+  ASSERT_EQ(nrq_allocator_destroy(general), int32_t{1});
+}
+
 TEST(AllocatorTest, TlsfReusesAndCoalescesMixedSizeBlocks) {
   void* allocator = nrq_allocator_create(NRQ_ALLOCATOR_TLSF, 64 * 1024);
   ASSERT_NE(allocator, nullptr);
