@@ -1,0 +1,17 @@
+struct Child {
+    int value;
+}
+
+struct Holder {
+    managed<Child> child;
+}
+
+int function main() {
+    var bytes = (memory.cpu_count() * (64 as i32)) as int;
+    var holder = memory.allocate<Holder>(bytes);
+    (*holder).child = array.allocate<Child>(1);
+    (*holder).child[0].value = 7;
+    gc.collect();
+    print((*holder).child[0].value);
+    return 0;
+}
