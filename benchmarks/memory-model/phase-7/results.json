@@ -1,0 +1,403 @@
+{
+  "configuration": {
+    "compiler_version": "0.575-beta",
+    "build": "RelWithDebInfo",
+    "optimization": "-O2",
+    "timer": "steady_clock around the measured loop",
+    "samples": 7,
+    "note": "fresh process per mode; no cross-workload comparison"
+  },
+  "modes": {
+    "managed": {
+      "managed_alloc": {
+        "checksum": 59999700000,
+        "ns_per_op": {
+          "median": 54.476,
+          "mean": 55.482,
+          "min": 53.618,
+          "max": 60.463,
+          "stddev": 2.15,
+          "samples": [
+            55.714,
+            54.476,
+            53.618,
+            54.419,
+            55.574,
+            54.11,
+            60.463
+          ]
+        },
+        "peak_rss_bytes": 44232704,
+        "operations": 600000,
+        "gc_allocated_bytes": 4800000,
+        "gc_collections": 1,
+        "gc_live_objects": 600000,
+        "gc_pages": 513,
+        "gc_layouts": 1
+      },
+      "managed_alloc_collect": {
+        "checksum": 59999700000,
+        "ns_per_op": {
+          "median": 7032600.0,
+          "mean": 6834000.0,
+          "min": 5892800.0,
+          "max": 8229600.0,
+          "stddev": 859870.278,
+          "samples": [
+            8229600.0,
+            5904700.0,
+            7401300.0,
+            5892800.0,
+            7421600.0,
+            5955400.0,
+            7032600.0
+          ]
+        },
+        "peak_rss_bytes": 0,
+        "operations": 1,
+        "gc_allocated_bytes": 4800000,
+        "gc_collections": 1,
+        "gc_live_objects": 600000,
+        "gc_pages": 513,
+        "gc_layouts": 1
+      }
+    },
+    "roots": {
+      "root_register": {
+        "checksum": 0,
+        "ns_per_op": {
+          "median": 64.848,
+          "mean": 64.803,
+          "min": 63.34,
+          "max": 65.972,
+          "stddev": 0.867,
+          "samples": [
+            63.34,
+            65.183,
+            65.793,
+            65.972,
+            64.269,
+            64.848,
+            64.216
+          ]
+        },
+        "peak_rss_bytes": 8970240,
+        "operations": 1000000
+      },
+      "root_frame": {
+        "checksum": 0,
+        "ns_per_op": {
+          "median": 28.101,
+          "mean": 28.453,
+          "min": 27.649,
+          "max": 30.032,
+          "stddev": 0.824,
+          "samples": [
+            29.304,
+            28.101,
+            30.032,
+            27.681,
+            28.341,
+            27.649,
+            28.064
+          ]
+        },
+        "peak_rss_bytes": 9056256,
+        "operations": 1000000
+      }
+    },
+    "safepoint": {
+      "safepoint": {
+        "checksum": 0,
+        "ns_per_op": {
+          "median": 0.377,
+          "mean": 0.398,
+          "min": 0.377,
+          "max": 0.473,
+          "stddev": 0.033,
+          "samples": [
+            0.403,
+            0.377,
+            0.401,
+            0.473,
+            0.377,
+            0.377,
+            0.377
+          ]
+        },
+        "peak_rss_bytes": 9003008,
+        "operations": 5000000
+      }
+    },
+    "barrier": {
+      "write_barrier": {
+        "checksum": 0,
+        "ns_per_op": {
+          "median": 1.782,
+          "mean": 1.762,
+          "min": 1.638,
+          "max": 1.888,
+          "stddev": 0.108,
+          "samples": [
+            1.888,
+            1.638,
+            1.86,
+            1.642,
+            1.876,
+            1.651,
+            1.782
+          ]
+        },
+        "peak_rss_bytes": 9035776,
+        "operations": 5000000
+      }
+    },
+    "collect": {
+      "collection": {
+        "checksum": 0,
+        "ns_per_op": {
+          "median": 6221100.0,
+          "mean": 6146457.143,
+          "min": 5250500.0,
+          "max": 6709300.0,
+          "stddev": 420653.114,
+          "samples": [
+            6441500.0,
+            6709300.0,
+            6012400.0,
+            6238600.0,
+            6221100.0,
+            6151800.0,
+            5250500.0
+          ]
+        },
+        "peak_rss_bytes": 38449152,
+        "operations": 1,
+        "live_before": 500000,
+        "live_after": 0
+      }
+    },
+    "cycles": {
+      "cycle_build": {
+        "checksum": 0,
+        "ns_per_op": {
+          "median": 74.199,
+          "mean": 75.843,
+          "min": 70.694,
+          "max": 92.579,
+          "stddev": 7.159,
+          "samples": [
+            76.571,
+            74.199,
+            92.579,
+            70.694,
+            71.161,
+            74.973,
+            70.722
+          ]
+        },
+        "peak_rss_bytes": 22470656,
+        "operations": 200000,
+        "live_before": 200000,
+        "live_after": 0
+      },
+      "cycle_collect": {
+        "checksum": 0,
+        "ns_per_op": {
+          "median": 2181000.0,
+          "mean": 2336028.571,
+          "min": 2110900.0,
+          "max": 3294100.0,
+          "stddev": 395192.509,
+          "samples": [
+            2159200.0,
+            2181000.0,
+            3294100.0,
+            2297200.0,
+            2188300.0,
+            2110900.0,
+            2121500.0
+          ]
+        },
+        "peak_rss_bytes": 22540288,
+        "operations": 1,
+        "live_before": 200000,
+        "live_after": 0
+      }
+    },
+    "mt": {
+      "multithreaded": {
+        "checksum": 20000400000,
+        "ns_per_op": {
+          "median": 110.662,
+          "mean": 111.915,
+          "min": 105.843,
+          "max": 123.349,
+          "stddev": 5.069,
+          "samples": [
+            123.349,
+            110.662,
+            109.501,
+            109.961,
+            105.843,
+            111.326,
+            112.76
+          ]
+        },
+        "peak_rss_bytes": 32784384,
+        "operations": 400000,
+        "live_after": 0,
+        "threads": 4,
+        "collections": 2,
+        "allocated": 400000
+      }
+    },
+    "isolation": {
+      "isolation_owned": {
+        "checksum": 184999450000,
+        "ns_per_op": {
+          "median": 57.962,
+          "mean": 57.998,
+          "min": 56.138,
+          "max": 61.436,
+          "stddev": 1.626,
+          "samples": [
+            58.441,
+            58.364,
+            56.138,
+            61.436,
+            56.576,
+            57.962,
+            57.069
+          ]
+        },
+        "peak_rss_bytes": 9859072,
+        "operations": 500000,
+        "gc_clean": true,
+        "layouts_before": 0,
+        "layouts_after": 0,
+        "gc_allocated_before": 0,
+        "gc_allocated_after": 0,
+        "gc_collections_before": 0,
+        "gc_collections_after": 0
+      },
+      "isolation_borrowed": {
+        "checksum": 184999450000,
+        "ns_per_op": {
+          "median": 0.072,
+          "mean": 0.072,
+          "min": 0.072,
+          "max": 0.073,
+          "stddev": 0.0,
+          "samples": [
+            0.072,
+            0.072,
+            0.073,
+            0.072,
+            0.072,
+            0.072,
+            0.072
+          ]
+        },
+        "peak_rss_bytes": 9859072,
+        "operations": 1024000,
+        "gc_clean": true,
+        "layouts_before": 0,
+        "layouts_after": 0,
+        "gc_allocated_before": 0,
+        "gc_allocated_after": 0,
+        "gc_collections_before": 0,
+        "gc_collections_after": 0
+      },
+      "isolation_arena": {
+        "checksum": 184999450000,
+        "ns_per_op": {
+          "median": 45.608,
+          "mean": 47.363,
+          "min": 44.929,
+          "max": 51.097,
+          "stddev": 2.6,
+          "samples": [
+            44.929,
+            45.197,
+            45.608,
+            45.008,
+            48.91,
+            51.097,
+            50.792
+          ]
+        },
+        "peak_rss_bytes": 9859072,
+        "operations": 200000,
+        "gc_clean": true,
+        "layouts_before": 0,
+        "layouts_after": 0,
+        "gc_allocated_before": 0,
+        "gc_allocated_after": 0,
+        "gc_collections_before": 0,
+        "gc_collections_after": 0
+      },
+      "isolation_pool": {
+        "checksum": 184999450000,
+        "ns_per_op": {
+          "median": 141.927,
+          "mean": 139.623,
+          "min": 132.474,
+          "max": 143.491,
+          "stddev": 4.168,
+          "samples": [
+            142.641,
+            134.05,
+            142.774,
+            132.474,
+            140.006,
+            143.491,
+            141.927
+          ]
+        },
+        "peak_rss_bytes": 9859072,
+        "operations": 200000,
+        "gc_clean": true,
+        "layouts_before": 0,
+        "layouts_after": 0,
+        "gc_allocated_before": 0,
+        "gc_allocated_after": 0,
+        "gc_collections_before": 0,
+        "gc_collections_after": 0
+      },
+      "isolation_shared": {
+        "checksum": 184999450000,
+        "ns_per_op": {
+          "median": 243.988,
+          "mean": 243.309,
+          "min": 235.202,
+          "max": 250.097,
+          "stddev": 4.691,
+          "samples": [
+            245.192,
+            241.869,
+            239.156,
+            235.202,
+            247.661,
+            243.988,
+            250.097
+          ]
+        },
+        "peak_rss_bytes": 9859072,
+        "operations": 200000,
+        "gc_clean": true,
+        "layouts_before": 0,
+        "layouts_after": 0,
+        "gc_allocated_before": 0,
+        "gc_allocated_after": 0,
+        "gc_collections_before": 0,
+        "gc_collections_after": 0
+      }
+    }
+  },
+  "limitations": [
+    "Collection latency is a single full collection after a fixed garbage load; it is not a worst-case pause distribution.",
+    "Peak resident memory is process-wide and includes runtime metadata.",
+    "The C++ harness measures ABI entry points; language-level optimization effects are covered by the integration fixtures."
+  ]
+}
