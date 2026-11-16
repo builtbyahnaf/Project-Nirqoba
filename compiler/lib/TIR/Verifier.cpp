@@ -76,6 +76,7 @@ bool ownership_compatible_with_type(const Type& type, ValueOwnership ownership) 
 bool is_consuming_release(const std::string& callee) {
   static const std::unordered_set<std::string> releases = {
       "memory.deallocate",    "array.owned_release", "soa.owned_release",
+      "memory.pool_release",
       "aggregate.owned_drop", "memory.shared_release", "memory.secure_release",
       "file.close",           "socket.close",         "mutex.destroy",
       "memory.unmap_file",
@@ -408,7 +409,26 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
                                   "' produced no value");
             ok = false;
           } else {
-            if (op.result.ownership != contract->ownership) {
+            const bool arena_allocation =
+                op.callee == "memory.allocate" &&
+                op.result.ownership == ValueOwnership::ArenaBound;
+            if (arena_allocation) {
+              if (op.result.arena_id == 0) {
+                diagnostics.error(kOwnership, op.location,
+                                  "internal: arena-bound allocation has no arena identity");
+                ok = false;
+              } else if (op.arguments.size() != 2 ||
+                         op.arguments[1].arena_id != op.result.arena_id) {
+                diagnostics.error(kOwnership, op.location,
+                                  "internal: arena-bound allocation does not match its arena handle");
+                ok = false;
+              }
+              if (!op.result.type.is_pointer() || op.result.type.is_managed_pointer()) {
+                diagnostics.error(kOwnership, op.location,
+                                  "internal: arena-bound allocation must produce ordinary pointer storage");
+                ok = false;
+              }
+            } else if (op.result.ownership != contract->ownership) {
               diagnostics.error(
                   kOwnership, op.location,
                   "internal: allocation strategy '" + op.callee +
@@ -447,6 +467,14 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
               diagnostics.error(kType, op.location,
                                 function_value(*function, argument.id) +
                                     "borrowed value passed to owning parameter '" +
+                                    parameter.name + "' of '" + op.callee + "'");
+              ok = false;
+            }
+            if (!parameter_borrows &&
+                argument.ownership == ValueOwnership::ArenaBound) {
+              diagnostics.error(kOwnership, op.location,
+                                function_value(*function, argument.id) +
+                                    "arena-bound value passed to owning parameter '" +
                                     parameter.name + "' of '" + op.callee + "'");
               ok = false;
             }
@@ -515,6 +543,15 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
               op.callee == "memory.deallocate" ||
               op.callee == "memory.secure_release" ||
               op.callee == "array.owned_release";
+          if (ordinary_release && op.callee != "memory.pool_release" &&
+              argument.ownership == ValueOwnership::ArenaBound) {
+            diagnostics.error(
+                kDestruction, op.location,
+                function_value(*function, argument.id) +
+                    "arena-bound value passed to ordinary release '" +
+                    op.callee + "'; release the arena instead");
+            ok = false;
+          }
           if (ordinary_release &&
               argument.ownership == ValueOwnership::GcManaged) {
             diagnostics.error(
@@ -918,6 +955,99 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
           reject_destroyed_use(element, op);
         if (op.kind == tir::OpKind::Drop && op.operand.is_valid())
           destroyed.insert(op.operand.id);
+      }
+    }
+
+    // Arena identity is a TIR property. Every ArenaBound value names the arena
+    // lifetime that owns its storage; a missing id would make reset/destroy
+    // verification impossible. The id must also come from an actual handle
+    // creation, not an arbitrary integer annotation.
+    std::unordered_set<int> declared_arenas;
+    for (const tir::Op& op : operations) {
+      if (op.kind == tir::OpKind::Call &&
+          (op.callee == "memory.arena" || op.callee == "memory.pool") &&
+          op.result.is_valid())
+        declared_arenas.insert(op.result.arena_id);
+    }
+    for (std::size_t index = 0; index < function->value_count(); ++index) {
+      const int value_id = static_cast<int>(index);
+      if (function->value_ownership(value_id) == ValueOwnership::ArenaBound &&
+          function->value_arena_id(value_id) == 0) {
+        diagnostics.error(kOwnership, SourceLocation{},
+                          "internal: value " + std::to_string(value_id) +
+                              " is arena-bound but has no arena identity");
+        ok = false;
+      } else if (function->value_ownership(value_id) ==
+                     ValueOwnership::ArenaBound &&
+                 declared_arenas.count(function->value_arena_id(value_id)) == 0) {
+        diagnostics.error(kOwnership, SourceLocation{},
+                          "internal: value " + std::to_string(value_id) +
+                              " names an arena with no handle in this function");
+        ok = false;
+      }
+    }
+
+    // Reset and destroy invalidate the arena's whole storage. Any ArenaBound
+    // value defined before the call and used after it is a use-after-reset that
+    // no ownership path may hide.
+    {
+      std::unordered_map<int, std::size_t> defined_at;
+      for (std::size_t index = 0; index < operations.size(); ++index)
+        if (operations[index].result.is_valid())
+          defined_at[operations[index].result.id] = index;
+      for (std::size_t index = 0; index < operations.size(); ++index) {
+        const tir::Op& reset = operations[index];
+        if (reset.kind != tir::OpKind::Call ||
+            (reset.callee != "memory.arena_reset" &&
+             reset.callee != "memory.arena_destroy" &&
+             reset.callee != "memory.pool_reset" &&
+             reset.callee != "memory.pool_destroy"))
+          continue;
+        if (reset.arguments.empty() || reset.arguments[0].arena_id == 0) {
+          diagnostics.error(kOwnership, reset.location,
+                            "internal: reset/destroy targets an untracked arena handle");
+          ok = false;
+          continue;
+        }
+        const int arena_id = reset.arguments[0].arena_id;
+        std::unordered_set<int> live_borrows;
+        for (std::size_t prior = 0; prior < index; ++prior) {
+          const tir::Op& earlier = operations[prior];
+          if (earlier.kind == tir::OpKind::Borrow &&
+              (earlier.operand.arena_id == arena_id ||
+               earlier.lhs.arena_id == arena_id)) {
+            live_borrows.insert(earlier.operand.id);
+          } else if (earlier.kind == tir::OpKind::EndBorrow) {
+            live_borrows.erase(earlier.operand.id);
+          }
+        }
+        if (!live_borrows.empty()) {
+          diagnostics.error(kBorrow, reset.location,
+                            "internal: arena is reset or destroyed while a borrow is live");
+          ok = false;
+        }
+        std::unordered_set<int> reported;
+        auto reject = [&](const tir::Value& value) {
+          if (!value.is_valid() || !value_in_range(*function, value)) return;
+          if (function->value_ownership(value.id) != ValueOwnership::ArenaBound ||
+              function->value_arena_id(value.id) != arena_id) return;
+          const auto definition = defined_at.find(value.id);
+          if (definition == defined_at.end() || definition->second >= index) return;
+          if (!reported.insert(value.id).second) return;
+          diagnostics.error(kOwnership, reset.location,
+                            "internal: arena-bound value " +
+                                std::to_string(value.id) +
+                                " is used after its arena was reset or destroyed");
+          ok = false;
+        };
+        for (std::size_t later = index + 1; later < operations.size(); ++later) {
+          const tir::Op& use = operations[later];
+          reject(use.operand);
+          reject(use.lhs);
+          reject(use.rhs);
+          for (const tir::Value argument : use.arguments) reject(argument);
+          for (const tir::Value element : use.aggregate_elements) reject(element);
+        }
       }
     }
 
