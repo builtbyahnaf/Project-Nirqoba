@@ -778,3 +778,31 @@ TEST(MlirPipelineTest, DropLowersToItsReleaseCall) {
   ASSERT_TRUE(module_calls_symbol(*module,
                                   "nrq_memory_deallocate_checked"));
 }
+
+TEST(MlirPipelineTest, BorrowingIntroducesNoRuntimeCalls) {
+  mlir::DialectRegistry registry;
+  nirq::register_all_dialects(registry);
+  mlir::MLIRContext context(registry);
+  context.loadAllAvailableDialects();
+  nirq::DiagnosticEngine diagnostics;
+  auto module = lower_source_to_mlir(
+      "int function main() {\n"
+      "  var value = 5;\n"
+      "  let pointer = &value;\n"
+      "  return *pointer;\n"
+      "}\n",
+      context, diagnostics);
+  ASSERT_FALSE(diagnostics.has_errors());
+  ASSERT_TRUE(static_cast<bool>(module));
+
+  std::vector<std::string> calls;
+  module->walk([&](mlir::func::CallOp call) {
+    calls.push_back(call.getCallee().str());
+  });
+  for (const std::string& callee : calls) {
+    ASSERT_TRUE(callee.find("borrow") == std::string::npos);
+    ASSERT_TRUE(callee.find("gc_") == std::string::npos);
+    ASSERT_TRUE(callee.find("allocate") == std::string::npos);
+  }
+  ASSERT_TRUE(calls.empty());
+}
