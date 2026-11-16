@@ -272,9 +272,14 @@ rejects.
 **Target:** typed explicit allocation/deallocation, reallocation, secure buffers,
 mappings, custom allocators, and a deliberately designed unsafe/FFI escape hatch.
 
-**Current state:** typed explicit allocation, reallocation, secure/mapping and
-custom allocators exist; raw pointer returns and unqualified raw pointer fields are
-restricted; unsafe scopes and FFI do not exist.
+**Current state at `0.583-beta`:** typed explicit allocation, reallocation,
+secure/mapping and custom allocators exist. Manual storage has its own
+`Manual` category, `memory.manual_allocate<T>` / `memory.manual_release`, and
+release-pairing checks. Manual storage is function-local; it cannot cross an
+owned parameter or return because there is no manual pointer type. Raw pointer
+returns and unqualified raw pointer fields remain restricted. Unsafe scopes and
+FFI do not exist; the Phase 8 audit records the absent ABI rather than inventing
+one.
 
 ---
 
@@ -285,6 +290,7 @@ restricted; unsafe scopes and FFI do not exist.
 | Scalar/local | stack/trivial | Complete |
 | Owned aggregate field | deterministic owner | Complete |
 | `memory.allocate<T>` | deterministic explicit owner | Complete; non-GC, with conditional rooting for managed payloads |
+| `memory.manual_allocate<T>` | distinct manual owner | Complete at `0.583-beta`; manual release, function-local, conditional rooting |
 | `memory.owned_array<T>` | deterministic bulk owner | Complete; non-GC, with conditional rooting for managed elements |
 | `memory.owned_soa<T>` | collector-owned SoA | Complete for managed columns; asynchronous reclaim is documented |
 | `memory.shared_allocate<T>` | explicit refcount | Complete at `0.571-beta` for supported non-cleanup payloads; sharded atomic counts and final-release safety |
@@ -294,7 +300,8 @@ restricted; unsafe scopes and FFI do not exist.
 | `file.read_text` | borrowed process-lifetime string | Missing deterministic ownership; explicit exception |
 | `array.allocate<T>` | collector-managed storage | Complete; opt-in |
 | `memory.arena_allocator` / pool / stack | explicit allocator strategy | Complete allocator; missing bulk object destruction/scoped semantics |
-| FFI allocation | deliberate foreign contract | Blocked: no FFI |
+| Manual release | `memory.manual_release` | Complete at `0.583-beta`; ordinary/secure/shared release is rejected |
+| FFI allocation | deliberate foreign contract | Blocked: no FFI surface; documented unsupported boundary |
 | Async/task allocation | deliberate runtime contract | N/A: no async runtime |
 
 ---
@@ -429,7 +436,7 @@ in Phase 1. Freeze their contracts before Phases 6–8.
 | 5 | Arena scopes and bulk destruction | Complete at `0.563-beta`; tracked lifetimes, bulk invalidation, escape checks and GC-free IR pass |
 | 6 | Shared completion/weak refs | Complete at `0.571-beta`; sharded atomic strong counts, final-release safety, borrow/release diagnostics, weak refs scoped out with GC cycle policy |
 | 7 | GC isolation and mixed strategy | Complete at `0.575-beta`; audit, explicit entry-point contract, root/safepoint/barrier/mutator fixtures, mixed-strategy tests, O0/O2 declaration-and-dependency isolation checks and benchmarks pass |
-| 8 | Manual/FFI | FFI boundary design |
+| 8 | Manual/FFI | Complete at `0.583-beta` for the implemented manual surface; FFI is an explicitly unsupported boundary because no source ABI exists |
 | 9 | Optimization/docs/stabilization | All semantic gates |
 
 The order is intentionally not a license to rewrite completed behavior. Phases 2
