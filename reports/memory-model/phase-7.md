@@ -252,6 +252,8 @@ Production and development runtimes share one source list. The development
 runtime adds observation only; `--debug-enabled` does not change allocation
 strategy, roots, barriers or collector semantics. The new debug isolation
 fixture runs at `-O0` with the development library and contains no GC reference.
+`scripts/compare_configuration_equivalence.py --filter '*gc*'` built and ran the
+GC-related corpus in both configurations: **67 agreed, 0 skipped, 0 failed**.
 
 ---
 
@@ -276,6 +278,7 @@ Results:
 | Full runner | **606/606 pass**, 0 failed, 0 skipped |
 | Isolation script | 12 ordinary fixtures × 2 optimization levels + debug run; 0 failures |
 | Managed control | 8 GC object symbols |
+| Production/debug equivalence | 67 GC-related programs agreed, 0 skipped, 0 failed |
 | Benchmark | 7 fresh-process samples per mode |
 
 The full runner preserves all Phase 1–6 cases. New cases cover arena/pool

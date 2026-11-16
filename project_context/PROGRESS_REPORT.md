@@ -3992,6 +3992,8 @@ contained a managed field.
   `-O2`: no `nrq_gc` in emitted LLVM, no `nrq_gc` symbol in the object, expected
   runtime exit, and zero GC symbols for the development runtime. A managed
   control object contains GC symbols, so the check is not vacuous.
+- The GC-related production/debug configuration corpus agrees on 67 programs,
+  0 skipped, 0 failed.
 
 ### 4. Benchmarks
 
