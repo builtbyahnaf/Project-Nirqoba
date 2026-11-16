@@ -43,6 +43,9 @@ are included automatically by `tests/run_tests.py`.
 | `borrow_disjoint_branch` | A disjoint field write stays legal across a branch |
 | `borrow_immutable_write` | Writing through an immutable borrow is rejected |
 | `borrow_mutable_conflict` | Two mutable arguments for one owner are rejected |
+| `borrow_mutable_return` | A mutable borrow returned from its declared source works |
+| `borrow_field_scope` | A mutable borrowed field is usable inside its owner scope |
+| `borrow_owner_access` | A direct owner write while its borrow is live is rejected |
 
 Run the complete suite (integration plus these cases):
 

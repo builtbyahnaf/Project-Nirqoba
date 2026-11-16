@@ -1,0 +1,14 @@
+struct Holder {
+    borrow mut ptr int value;
+}
+
+int function main() {
+    var value = 5;
+    {
+        var holder = Holder { value: &value };
+        holder.value[0] = 9;
+        print(holder.value[0]);
+    }
+    print(value);
+    return 42;
+}

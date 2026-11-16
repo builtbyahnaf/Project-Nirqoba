@@ -1,5 +1,5 @@
 {
   "mode": "check",
   "expect_exit": 1,
-  "expect_stderr_contains": ["cannot replace an aggregate while a borrow of one of its fields is live"]
+  "expect_stderr_contains": ["cannot write to 'p' while borrow 'p.x' is live"]
 }
