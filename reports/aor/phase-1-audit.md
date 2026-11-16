@@ -160,7 +160,22 @@ The layout descriptor already distinguishes `NRQ_OBJECT_LAYOUT_ARRAY`; it does n
 
 **Classification:** Keep for arrays and mixed pages; derive for fixed-size uniform pages. Do not assign every array an extended header automatically.
 
-## 8. Consumers outside `gc.cpp`
+## 8. Mutable-state audit
+
+The mark bit is already off-heap. The remaining mutable state word contains young, remembered, and age. Their consumers are:
+
+| State | Consumers | Extraction risk |
+|---|---|---|
+| young | allocation, minor filtering, promotion, barrier, state API | High: read on every trace and sweep survivor |
+| remembered | remembered-set insertion, compaction, promotion clearing | Medium: one bit per young object; already set-like |
+| age | minor promotion | Low: only the survivor path updates it |
+| mark | marker, sweep, debug state API | Already page-local (Phase 2 precondition) |
+
+The remembered bit is a duplicate of membership in `remembered_young`. Moving it to a page bitmap removes a header read-modify-write from the store barrier and makes the remembered set page-local, which is the Phase 2 direction. The young bit is hotter: moving it to a bitmap would add a page lookup to every marker visit. It stays in the header until a compact representation encodes it directly.
+
+**Classification:** Move remembered to page-local metadata in Phase 2; keep young/age packed in the header for now; preserve the debug masks or update the API deliberately.
+
+## 9. Consumers outside `gc.cpp`
 
 - `runtime/include/nirqoba/runtime/gc.h` exposes header size and instance/shared byte counts as allocation facts. Tests assert 48/40/8.
 - `nrq_object_layout` is a public immutable descriptor. Compiler lowering emits reference-offset arrays for root registration; those arrays are not object headers.
