@@ -1253,3 +1253,35 @@ TEST(OwnershipTest, VerifierRejectsSharedAllocationMarkedOrdinary) {
   ASSERT_TRUE(diagnostic_contains(
       diag, "allocation strategy 'memory.shared_allocate' requires ownership 'shared'"));
 }
+
+TEST(OwnershipTest, VerifierRejectsArenaAllocationOfManagedPayload) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_arena_managed_payload.nrqba",
+      "int function main() {\n"
+      "  let arena = memory.arena(64);\n"
+      "  let value = memory.allocate<int>(4, arena);\n"
+      "  memory.arena_destroy(arena);\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  ASSERT_FALSE(diag.has_errors());
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  const Type holder = Type::struct_type(
+      "Holder", {{"child", Type::managed_pointer_type(Type::int_type())}});
+  bool changed = false;
+  for (tir::Op& op : main_fn->operations())
+    if (op.kind == tir::OpKind::Call && op.callee == "memory.allocate" &&
+        op.result.ownership == ValueOwnership::ArenaBound) {
+      op.result.type = Type::pointer_type(holder);
+      changed = true;
+    }
+  ASSERT_TRUE(changed);
+  DiagnosticEngine verify_diag;
+  ASSERT_FALSE(verify_tir_module(*module, verify_diag));
+  ASSERT_TRUE(diagnostic_contains(
+      verify_diag,
+      "arena-bound allocation payload contains a managed reference"));
+}

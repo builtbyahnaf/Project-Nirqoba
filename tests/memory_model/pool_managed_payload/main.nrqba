@@ -1,0 +1,14 @@
+struct Child {
+    int value;
+}
+
+struct Holder {
+    managed<Child> child;
+}
+
+int function main() {
+    let pool = memory.pool(128);
+    let holder = memory.allocate<Holder>(16, pool);
+    memory.pool_destroy(pool);
+    return 42;
+}

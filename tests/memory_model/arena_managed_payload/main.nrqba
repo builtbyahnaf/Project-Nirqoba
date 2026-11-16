@@ -1,0 +1,14 @@
+struct Child {
+    int value;
+}
+
+struct Holder {
+    managed<Child> child;
+}
+
+int function main() {
+    let arena = memory.arena(128);
+    let holder = memory.allocate<Holder>(16, arena);
+    memory.arena_destroy(arena);
+    return 42;
+}
