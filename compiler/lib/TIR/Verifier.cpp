@@ -43,6 +43,41 @@ bool is_aggregate_type(const Type& type) {
          type.is_struct();
 }
 
+// A TIR allocation contract must reject a tracked arena/pool block whose
+// payload needs collector roots, because bulk reset/destroy has no root
+// unregistration. This mirrors the Sema rule and keeps a malformed or
+// hand-built TIR module from silently reintroducing a stale typed root.
+bool contains_managed_reference(const Type& type,
+                                std::unordered_set<std::string>& active) {
+  if (!type.is_valid()) return false;
+  if (type.is_managed_pointer() || type.is_soa()) return true;
+  if (type.is_array() || type.is_dynamic_array() || type.is_owned_array() ||
+      type.is_array_view())
+    return contains_managed_reference(type.element_type(), active);
+  if (type.is_tuple()) {
+    for (const Type& element : type.tuple_elements())
+      if (contains_managed_reference(element, active)) return true;
+  }
+  if (type.is_struct()) {
+    const std::string& name = type.struct_name();
+    if (!active.insert(name).second) return false;
+    bool found = false;
+    for (const auto& field : type.struct_fields())
+      if (contains_managed_reference(field.second, active)) {
+        found = true;
+        break;
+      }
+    active.erase(name);
+    return found;
+  }
+  return false;
+}
+
+bool contains_managed_reference(const Type& type) {
+  std::unordered_set<std::string> active;
+  return contains_managed_reference(type, active);
+}
+
 bool ownership_compatible_with_type(const Type& type, ValueOwnership ownership) {
   if (!type.is_valid() || ownership == ValueOwnership::Trivial) return true;
   switch (ownership) {
@@ -450,6 +485,15 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
               if (!op.result.type.is_pointer() || op.result.type.is_managed_pointer()) {
                 diagnostics.error(kOwnership, op.location,
                                   "internal: arena-bound allocation must produce ordinary pointer storage");
+                ok = false;
+              }
+              if (op.result.type.is_pointer() &&
+                  contains_managed_reference(op.result.type.element_type())) {
+                diagnostics.error(
+                    kOwnership, op.location,
+                    "internal: arena-bound allocation payload contains a "
+                    "managed reference, but arena reset/destroy cannot "
+                    "unregister its root");
                 ok = false;
               }
             } else if (op.result.ownership != contract->ownership) {

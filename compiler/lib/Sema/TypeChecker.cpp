@@ -5242,6 +5242,19 @@ Type TypeChecker::check_call(CallExpr& call) {
               "': deallocation frees the storage without running field destruction");
       return Type::error();
     }
+    // Arena and pool reset/destroy free payload storage in bulk and have no
+    // root-unregistration operation. A managed field registered by lowering
+    // would therefore leave a typed root pointing into freed storage. Ordinary
+    // allocation, shared allocation and explicit GC containers have a defined
+    // root-release path; tracked arena/pool payloads do not.
+    if (call.arena_kind() != 0 && contains_managed_reference(payload_type)) {
+      diagnostics_.error(
+          diag::kTypeMismatch, call.location(),
+          "arena or pool allocations cannot contain managed references in '" +
+              payload_type.to_string() +
+              "': reset and destroy do not unregister GC roots");
+      return Type::error();
+    }
     return Type::pointer_type(payload_type);
   }
 
