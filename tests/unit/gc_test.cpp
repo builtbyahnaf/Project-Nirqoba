@@ -1577,6 +1577,71 @@ TEST(GcTest, OldToYoungStoreBarrierKeepsYoungObjectAliveDuringMinorCollection) {
   ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
 }
 
+TEST(GcTest, RecycledPagesDoNotResurrectRememberedObjects) {
+  // A remembered entry points at a header address. If a page is recycled and a
+  // new young object lands at the same address, a stale entry would keep that
+  // new object alive during a minor. The page-local remembered bitmap and
+  // compaction validation must make the new object start unremembered.
+  nrq_gc_disable();
+  nrq_gc_set_generational(1);
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+
+  auto* parent = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(parent, nullptr);
+  nrq_gc_root_register(reinterpret_cast<void**>(&parent));
+  nrq_gc_collect_minor();
+  nrq_gc_collect_minor();
+
+  auto* child = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(child, nullptr);
+  nrq_gc_root_store(reinterpret_cast<void**>(&parent->next), child);
+  nrq_gc_collect_minor();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 2);
+
+  nrq_gc_root_store(reinterpret_cast<void**>(&parent->next), nullptr);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 1);
+  // The next boundary recycles the page that held the dead child.
+  nrq_gc_collect();
+
+  void* replacement = nrq_gc_allocate(sizeof(Node), nullptr);
+  ASSERT_NE(replacement, nullptr);
+  nrq_gc_collect_minor();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 1);
+
+  nrq_gc_root_unregister(reinterpret_cast<void**>(&parent));
+  parent = nullptr;
+  nrq_gc_collect();
+  nrq_gc_set_generational(0);
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+}
+
+TEST(GcTest, RecycledPagesClearDerivedMetadata) {
+  // Fill pages, free everything, force the boundary that recycles them, then
+  // reuse the pages. Stale live-byte, mark, remembered, or start metadata would
+  // either retain a dead object or corrupt the first new allocation.
+  nrq_gc_disable();
+  nrq_gc_set_threshold(1024 * 1024 * 1024);
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+  for (size_t index = 0; index < 4096; ++index)
+    ASSERT_NE(nrq_gc_allocate(48, nullptr), nullptr);
+  nrq_gc_collect();
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+
+  auto* survivor = static_cast<Node*>(nrq_gc_allocate(sizeof(Node), trace_node));
+  ASSERT_NE(survivor, nullptr);
+  nrq_gc_root_register(reinterpret_cast<void**>(&survivor));
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 1);
+  nrq_gc_root_unregister(reinterpret_cast<void**>(&survivor));
+  survivor = nullptr;
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+}
+
 TEST(GcTest, AutomaticCollectionStateIsObservable) {
   nrq_gc_disable();
   ASSERT_EQ(nrq_gc_is_enabled(), int32_t{0});
