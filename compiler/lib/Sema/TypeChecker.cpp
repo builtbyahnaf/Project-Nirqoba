@@ -209,7 +209,8 @@ static bool has_untracked_pointer_ownership(const Type& type,
   return ownership == ValueOwnership::Owned ||
          ownership == ValueOwnership::Shared ||
          ownership == ValueOwnership::Borrowed ||
-         ownership == ValueOwnership::MutableBorrowed;
+         ownership == ValueOwnership::MutableBorrowed ||
+         ownership == ValueOwnership::ArenaBound;
 }
 
 static bool statement_can_fall_through(const Stmt& stmt);
@@ -1323,6 +1324,42 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
                          "array views require a tracked owner or borrowed source");
     }
   }
+  // Arena/pool metadata is derived from the checked initializer. Handles keep
+  // their own identity; arena-bound storage carries the same id but never an
+  // individual release obligation.
+  const CallExpr* arena_creator = declaration.initializer().kind() == Expr::Kind::Call
+      ? static_cast<const CallExpr*>(&declaration.initializer()) : nullptr;
+  const bool creates_handle =
+      arena_creator && (arena_creator->callee() == "memory.arena" ||
+                        arena_creator->callee() == "memory.pool");
+  if (creates_handle) {
+    symbol.arena_id = declaration.initializer().arena_id();
+    symbol.arena_kind = declaration.initializer().arena_kind();
+  } else if (declaration.initializer().kind() == Expr::Kind::Name &&
+             declaration.initializer().arena_kind() != 0) {
+    diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
+                       "arena and pool handles cannot be aliased; use the original binding");
+  } else if (declaration.initializer().arena_id() != 0 ||
+             declaration.initializer().ownership() == ValueOwnership::ArenaBound) {
+    symbol.arena_id = declaration.initializer().arena_id();
+    symbol.arena_kind = declaration.initializer().arena_kind();
+    symbol.arena_bound = true;
+    symbol.owns_allocation = false;
+    symbol.cleanup_callee.clear();
+    if (symbol.arena_id == 0)
+      diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
+                         "arena-bound value has no arena lifetime");
+  }
+  if (declaration.initializer().kind() == Expr::Kind::Name) {
+    const Symbol* source = find_root_symbol(declaration.initializer(), symbols_);
+    if (source && source->arena_bound) {
+      symbol.arena_id = source->arena_id;
+      symbol.arena_kind = source->arena_kind;
+      symbol.arena_bound = true;
+      symbol.owns_allocation = false;
+      symbol.cleanup_callee.clear();
+    }
+  }
   if (contains_shared_pointer(binding_type)) {
     symbol.shared_allocation = true;
     if (symbol.cleanup_callee.empty()) symbol.cleanup_callee = "aggregate.owned_drop";
@@ -1977,6 +2014,30 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     return;
   }
 
+  if (assignment.value().ownership() == ValueOwnership::ArenaBound) {
+    if (assignment.target().kind() != Expr::Kind::Name) {
+      diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                         "arena-bound values cannot be stored in aggregate fields or allocated memory");
+      return;
+    }
+    const Symbol* target_symbol = symbols_.lookup(assignment.name());
+    if (!target_symbol || !target_symbol->arena_bound) {
+      diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                         "arena-bound value cannot be assigned to a non-arena owner");
+      return;
+    }
+    if (target_symbol->arena_id != assignment.value().arena_id()) {
+      diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                         "arena-bound values cannot move between arena lifetimes");
+      return;
+    }
+  }
+  if (assignment.value().arena_kind() != 0 &&
+      assignment.target().kind() == Expr::Kind::Name) {
+    diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                       "arena and pool handles cannot be reassigned; use the original binding");
+    return;
+  }
   if (assignment.target().kind() == Expr::Kind::MemberAccess) {
     string target_root;
     string target_path;
@@ -2839,6 +2900,10 @@ void TypeChecker::check_return(ReturnStmt& statement) {
   }
 
   const Type value_type = check_expression(const_cast<Expr&>(*statement.value()));
+  if (statement.value()->ownership() == ValueOwnership::ArenaBound) {
+    diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                       "arena-bound storage cannot escape through a return value");
+  }
   consume_field_move(const_cast<Expr&>(*statement.value()), current_return_type_);
   if (current_return_type_.is_void()) {
     diagnostics_.error(diag::kVoidReturnsValue, statement.location(),
@@ -3025,11 +3090,17 @@ Type TypeChecker::check_expression(Expr& expr) {
                            "use of undeclared variable '" + name.name() + "'");
       } else {
         type = symbol->type;
+        if (symbol->arena_id != 0) {
+          name.set_arena_id(symbol->arena_id);
+          name.set_arena_kind(symbol->arena_kind);
+        }
         if (symbol->borrowed)
           name.set_ownership(symbol->mutable_borrow
               ? ValueOwnership::MutableBorrowed : ValueOwnership::Borrowed);
         else if (symbol->shared_allocation)
           name.set_ownership(ValueOwnership::Shared);
+        else if (symbol->arena_bound)
+          name.set_ownership(ValueOwnership::ArenaBound);
         else if (symbol->owns_allocation)
           name.set_ownership(ValueOwnership::Owned);
         else if (symbol->type.is_managed_pointer())
@@ -3070,8 +3141,12 @@ Type TypeChecker::check_expression(Expr& expr) {
       if (type.is_pointer()) {
         auto& call = static_cast<CallExpr&>(expr);
         const FunctionSignature* signature = find_function(call.callee());
-        if (call.callee() == "memory.shared_allocate" ||
-            call.callee() == "memory.shared_retain")
+        if (call.arena_id() != 0) {
+          // An allocation from a tracked arena/pool keeps its arena identity
+          // instead of falling back to the ordinary owned-pointer category.
+          expr.set_ownership(ValueOwnership::ArenaBound);
+        } else if (call.callee() == "memory.shared_allocate" ||
+                   call.callee() == "memory.shared_retain")
           expr.set_ownership(ValueOwnership::Shared);
         else if (signature && signature->returns_borrowed)
           expr.set_ownership(signature->returns_mutable_borrow
@@ -4869,6 +4944,88 @@ Type TypeChecker::check_call(CallExpr& call) {
     return pointer;
   }
 
+  // Scoped arena/pool creation. These are the tracked strategy constructors;
+  // the raw `memory.arena_allocator`/`memory.pool_allocator` handles remain
+  // untracked allocator resources with their existing explicit reset contract.
+  if (call.callee() == "memory.arena" || call.callee() == "memory.pool") {
+    if (call.arguments().size() != 1)
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "' takes one capacity argument");
+    for (const ExprPtr& argument : call.arguments()) {
+      const Type type = check_expression(const_cast<Expr&>(*argument));
+      if (type.is_valid() && !type.is_integer())
+        diagnostics_.error(diag::kTypeMismatch, argument->location(),
+                           "arena/pool capacity must be an integer");
+    }
+    call.set_arena_id(next_arena_id_++);
+    call.set_arena_kind(call.callee() == "memory.pool" ? 2 : 1);
+    return Type::u64_type();
+  }
+  if (call.callee() == "memory.arena_reset" ||
+      call.callee() == "memory.arena_destroy" ||
+      call.callee() == "memory.pool_reset" ||
+      call.callee() == "memory.pool_destroy") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "' takes one arena or pool handle");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::i32_type();
+    }
+    check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    const Symbol* handle = find_root_symbol(*call.arguments()[0], symbols_);
+    const bool destroying = call.callee().find("destroy") != std::string::npos;
+    const bool pool = call.callee().find("pool") != std::string::npos;
+    if (!handle || handle->arena_kind != (pool ? 2 : 1)) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'" + call.callee() + "' requires a live handled " +
+                             (pool ? "pool" : "arena"));
+    } else if (handle->moved) {
+      diagnostics_.error(diag::kUseAfterFree, call.arguments()[0]->location(),
+                         "" + std::string(pool ? "pool" : "arena") +
+                             " handle is already destroyed");
+    } else if (symbols_.has_live_arena_values(handle->arena_id)) {
+      diagnostics_.error(
+          diag::kTypeMismatch, call.arguments()[0]->location(),
+          std::string(pool ? "pool" : "arena") +
+              " cannot be reset or destroyed while allocated values or borrows are live");
+    } else {
+      symbols_.invalidate_arena(handle->arena_id);
+      if (destroying) symbols_.mark_name_moved(handle->name);
+    }
+    return Type::i32_type();
+  }
+  if (call.callee() == "memory.pool_release") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.pool_release' takes one pooled pointer");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::void_type();
+    }
+    const Type pointer = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    const Symbol* source = find_root_symbol(*call.arguments()[0], symbols_);
+    if (pointer.is_valid() && !pointer.is_pointer())
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "pool release requires a pointer");
+    if (!source || !source->arena_bound || source->arena_kind != 2)
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "pool release requires a value allocated from a tracked pool");
+    else if (source->moved)
+      diagnostics_.error(diag::kUseAfterFree, call.arguments()[0]->location(),
+                         "pool slot was already released");
+    else if (symbols_.has_live_borrow(source->allocation_id))
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "cannot release a pool slot while a borrow is live");
+    else {
+      // A pool release is a consuming operation, but the value is arena-bound,
+      // not individually owned: lowering calls the allocator directly and no
+      // TIR Move (whose source must be Owned/Shared) is emitted.
+      symbols_.mark_allocation_moved(source->allocation_id);
+    }
+    return Type::void_type();
+  }
+
   // Explicit allocator handles are represented as opaque u64 values in the
   // source language; the runtime validates each handle before using it.
   const unordered_map<string, bool> allocator_constructors = {
@@ -5059,6 +5216,16 @@ Type TypeChecker::check_call(CallExpr& call) {
       if (allocator_type.is_valid() && !allocator_type.is_integer())
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
                            "allocator handle must be an integer");
+      if (const Symbol* arena = find_root_symbol(*call.arguments()[1], symbols_)) {
+        if (arena->arena_kind != 0 && !arena->moved) {
+          call.set_arena_id(arena->arena_id);
+          call.set_arena_kind(arena->arena_kind);
+          call.set_ownership(ValueOwnership::ArenaBound);
+        } else if (arena->arena_kind != 0 && arena->moved) {
+          diagnostics_.error(diag::kUseAfterFree, call.arguments()[1]->location(),
+                             "allocation from a destroyed arena or pool");
+        }
+      }
     }
     const Type payload_type =
         resolve_aggregate_type(resolve_generic_type(call.generic_argument()));
@@ -5360,6 +5527,12 @@ Type TypeChecker::check_call(CallExpr& call) {
                              "' must be of type '" + sig.parameter_types[i].to_string() +
                              "', not '" + arg_type.to_string() + "'");
     }
+    if (sig.returns_borrowed &&
+        call.arguments()[i]->ownership() == ValueOwnership::ArenaBound) {
+      diagnostics_.error(
+          diag::kTypeMismatch, call.arguments()[i]->location(),
+          "arena-bound storage cannot escape through a borrowed return");
+    }
     if (sig.parameter_types[i].is_array_view()) {
       const Expr& argument = *call.arguments()[i];
       const Symbol* source = nullptr;
@@ -5474,6 +5647,15 @@ Type TypeChecker::check_call(CallExpr& call) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "borrow of '" + borrow_owner_name(*source) +
                              "' is used after its owner's lifetime");
+      continue;
+    }
+    const bool parameter_borrows =
+        i < sig.parameter_borrowed.size() && sig.parameter_borrowed[i];
+    if (!parameter_borrows &&
+        call.arguments()[i]->ownership() == ValueOwnership::ArenaBound) {
+      diagnostics_.error(
+          diag::kTypeMismatch, call.arguments()[i]->location(),
+          "arena-bound storage can only be passed to a borrowed parameter");
       continue;
     }
     const bool expects_shared = i < sig.parameter_shared.size() && sig.parameter_shared[i];
