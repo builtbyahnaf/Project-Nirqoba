@@ -1,0 +1,14 @@
+int function main() {
+    let first = memory.shared_allocate<int>(4);
+    let second = memory.shared_retain(first);
+    let third = memory.shared_retain(first);
+    *first = 31;
+    print(memory.shared_count(first) as int);
+    print(*second + *third);
+    memory.shared_release(second);
+    print(memory.shared_count(first) as int);
+    memory.shared_release(third);
+    print(memory.shared_count(first) as int);
+    memory.shared_release(first);
+    return 42;
+}
