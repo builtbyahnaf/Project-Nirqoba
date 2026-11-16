@@ -11,7 +11,7 @@ three critical prerequisites at `0.515-beta`. Phase 1 — Ownership Representati
 is complete at `0.531-beta`. Phase 2 — Deterministic Destruction and Move  
 Semantics is complete at `0.539-beta`. Phase 3 — Borrowing and Lifetime  
 Enforcement is complete at `0.547-beta`. Phase 4 — Ordinary Non-GC Allocation  
-is complete at `0.551-beta`.  
+is complete at `0.551-beta`. Phase 5 — Arena and Pool Support is complete at `0.563-beta`.  
 **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)
 **Primary objective:** Establish deterministic ownership as Nirqoba's default memory-management model, with borrowing, arenas, explicit shared ownership, selective garbage collection, and advanced manual memory management as complementary mechanisms.
 
@@ -1074,6 +1074,18 @@ Acceptance:
 - Bulk release is correct.
 - Invalid lifetime escapes are rejected.
 - Allocation and destruction are predictable.
+
+Completion state at `0.563-beta`: tracked `memory.arena` and `memory.pool`
+constructors carry unique ids; allocation from them produces `ArenaBound`
+values, and reset/destroy invalidate all prior values and borrows. Escapes
+through returns, owning parameters, borrowed returns, aggregate fields, arrays,
+cross-arena assignment and ordinary deallocation are rejected. TIR preserves
+arena identity and verifies the allocation/reset/destroy contract. Arena
+allocations use the registry-free `nrq_arena_allocate` path and pools retain the
+registered path for slot release. Bulk release does not run destructors, so
+payloads requiring deterministic cleanup are rejected. Arena/pool programs emit
+no `nrq_gc` reference at `-O0` or `-O2`. The collector, raw allocator handles
+and Phase 1–4 behavior remain unchanged; Phase 6 was not started.
 
 ## Phase 6 — Explicit shared ownership
 
