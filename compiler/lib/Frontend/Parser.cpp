@@ -1357,7 +1357,8 @@ ExprPtr Parser::parse_primary() {
       advance();
       if ((token.text == "memory" || token.text == "array") && check(TokenKind::Dot) &&
           peek(1).kind == TokenKind::Identifier &&
-          (peek(1).text == "allocate" || peek(1).text == "reallocate" ||
+          (peek(1).text == "allocate" || peek(1).text == "manual_allocate" ||
+           peek(1).text == "reallocate" ||
            peek(1).text == "secure_allocate" ||
            peek(1).text == "shared_allocate" ||
            peek(1).text == "owned_array" ||
