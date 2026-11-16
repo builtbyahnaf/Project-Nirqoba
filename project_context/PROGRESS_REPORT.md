@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.551-beta` |
-| Development Stage | `MMM Phase 4 — Ordinary Non-GC Allocation` |
+| Current Working Version | `0.571-beta` |
+| Development Stage | `MMM Phase 5 — Arena and Pool Support` |
 | Last Report Update | `2026-11-16 12:00:00` |
-| Report Entries | `33` |
+| Report Entries | `37` |
 
 ---
 
@@ -825,7 +825,8 @@ is claimed for this milestone.
 - **Implementation Completeness:** First Phase 2 milestone complete; the remaining
   Phase 2 checklist items are intentionally untouched.
 - **Verification Confidence:** High — clean build, full unit suite, and full
-  integration suite passed.
+     integration suite 518/518 passed.
+
 - **Known Risks:** The rule is lexical rather than path-sensitive, so conservative
   rejections remain for safe rebinding and aggregate-field borrows.
 - **Recommended Next Step:** Borrowed returns or mutable-borrow exclusivity across
@@ -3209,7 +3210,7 @@ Final clean `RelWithDebInfo` build: 177/177 targets, runtime parity 104 checks.
 | Suite | Result |
 |---|---|
 | Unit | 258/258 PASS |
-| Integration | 489/489 PASS |
+| Integration | 518/518 PASS |
 | `examples/memory/hybrid_memory.nrqba` | outputs 5, 2, 7, 3 |
 | `examples/memory/cyclic_graph.nrqba` | outputs 22, 11 |
 
@@ -3282,7 +3283,7 @@ strategies. The audit confirms that Pre-MMM completed a large part of the model 
 identifies what is genuinely missing before Phase 1.
 
 The working tree was `0.511-beta` at `d4292aa`; the unit suite passed 258/258 and the
-integration suite 489/489. The 78 pre-existing dirty files under
+integration suite 518/518. The 78 pre-existing dirty files under
 `benchmarks/stress_test_2/*` were left untouched. No version bump, release or push
 was made.
 
@@ -3366,7 +3367,7 @@ Phase 1 starts only after:
 ### 6. Verification
 
 - Full unit suite: 258/258 PASS.
-- Full integration suite: 489/489 PASS.
+- Full integration suite: 518/518 PASS.
 - Generated LLVM/object inspection for scalar, owned pointer, owned array,
   borrowed view, shared scalar, owned aggregate and secure managed programs.
 - No sanitizer run; MSVC toolchain limitation remains.
@@ -3633,9 +3634,10 @@ Phase 2 adds no runtime instruction beyond the release Phase 1 already emitted.
 
 **End of Entry #031**
 
-## Entry #032 — MMM Phase 3: Borrowing and Lifetime Enforcement
+## Entry #033 — MMM Phase 3: Borrowing and Lifetime Enforcement
 
 **Version:** `0.547-beta`  
+  
 **Phase:** Memory Model Migration Phase 3  
 **Status:** Complete
 
@@ -3702,7 +3704,7 @@ benchmark was run; the analysis is compile-time only. Phase 4 was not started.
 ---
 
 
-## Entry #034 — MMM Phase 5: Arena and Pool Support
+## Entry #035 — MMM Phase 5: Arena and Pool Support
 
 **Version:** `0.563-beta`  
 **Phase:** Memory Model Migration Phase 5  
@@ -3780,7 +3782,7 @@ unwinding remains unsupported. Phase 6 was not started.
 ---
 
 
-## Entry #035 — MMM Phase 6: Explicit Shared Ownership
+## Entry #036 — MMM Phase 6: Explicit Shared Ownership
 
 **Version:** `0.571-beta`  
 **Phase:** Memory Model Migration Phase 6  
@@ -3869,9 +3871,10 @@ syntax or automatic shared promotion was added.
 
 *Technical authority and project ownership remain with Muhammad Tahmid Ahnaf.*
 
-## Entry #033 — MMM Phase 4: Ordinary Non-GC Allocation
+## Entry #037 — MMM Phase 4: Ordinary Non-GC Allocation
 
 **Version:** `0.551-beta`  
+  
 **Phase:** Memory Model Migration Phase 4  
 **Status:** Complete
 

@@ -2,12 +2,12 @@
 
 > **Historical audit.** This document records the Phase 6 readiness corpus and
 > measurements at `0.266-beta`; it is not the current language status. At
-> `0.515-beta` (Pre-MMM Phase 9), the supported ownership surface follows the
+> `0.571-beta` (MMM Phase 5), the supported ownership surface follows the
 > storage-boundary policy in [memory management](memory/management.md) and
 > [the Phase 9 hardening notes](migration/phase-9.md).
 
 **Audit date:** 2026-11-01
-**Compiler:** Nirqoba 0.266-beta (Phase 6), LLVM/MLIR 23.1.4, `x86_64-pc-windows-msvc`
+**Compiler:** Nirqoba 0.571-beta (MMM Phase 5), LLVM/MLIR 23.1.4, `x86_64-pc-windows-msvc`
 **Build:** RelWithDebInfo (`build/msvc-dev`)
 **Host:** Windows x64, Intel Family 6 Model 154, 8+ logical cores
 **Corpus:** `tests/readiness/` — 13 programs, 5 gap probes, 4 benchmarks
@@ -111,10 +111,15 @@ syntax. Its current readiness status is:
   metadata, size classes, and free-slot reuse. The collector remains non-moving.
 
 Verification after the collector change: unit suite **107/107**, repeated 15
-consecutive times on Windows x64/MSVC; integration suite **176/176**. No new
-pause-time or throughput benchmark was run, so this section makes no performance
-claim and the §6 numbers should not be read as measurements of the incremental
-collector.
+consecutive times on Windows x64/MSVC; integration suite **176/176**. Later GC
+runtime optimizations (GC 1.1–GC 1.5) added atomic safepoints, thread-local
+mutator lifecycle, thread-local shadow-stack roots, optimized write barriers with
+remembered buffers, and rooted-allocation/TLAB improvements; the compiler now
+instruments mutator/frame/safepoint paths only when a function actually touches
+managed values. No new pause-time or throughput benchmark was run for those GC
+optimizations, so this section makes no performance claim and the §6 numbers should
+not be read as measurements of the incremental collector or the later GC
+optimizations.
 
 ---
 

@@ -1182,6 +1182,561 @@ Only after semantic correctness is established:
 
 Do not optimize by weakening ownership guarantees.
 
+## Phase 10 — Compiler-Directed Memory Management (CDMM)
+
+**Priority: Critical — Flagship compiler feature**
+
+**Goal:** Implement Compiler-Directed Memory Management (CDMM), enabling Nirqoba's compiler to automatically select the most efficient and appropriate memory-management strategy for each allocation, object, data structure, or allocation domain.
+
+CDMM is the intelligence layer of Nirqoba's Hybrid Memory Management Model (HMMM).
+
+Rather than forcing every object through one universal memory-management strategy, Nirqoba must analyze program structure and select the strategy that provides the best combination of performance, memory efficiency, safety, and lifetime correctness.
+
+The strategy-selection logic must be implemented directly within the compiler. It must not depend on runtime guessing, dynamic strategy discovery, or mandatory runtime profiling.
+
+Most CDMM analysis and decision-making must happen during compilation so that generated programs execute with minimal runtime overhead.
+
+### Core Philosophy
+
+**Nirqoba should use the most efficient memory-management strategy that can be proven correct for a particular allocation domain.**
+
+The intended strategy hierarchy is:
+
+1. **Deterministic ownership — Default:** The primary strategy for ordinary values, objects, resources, and allocations with identifiable ownership and manageable lifetimes.
+2. **Borrowing — Non-owning access:** Used whenever an existing object can be accessed safely without transferring ownership, copying, or introducing additional allocation overhead.
+3. **Arena allocation — Grouped lifetimes:** Selected when the compiler can establish that multiple allocations share a sufficiently predictable lifetime and bulk allocation or destruction provides a measurable advantage.
+4. **Pool allocation — Repeated allocation patterns:** Selected when allocation patterns, object sizes, alignment, and reuse characteristics make pooled storage more efficient than ordinary allocation.
+5. **Garbage collection — Dynamic and complex lifetimes:** Selected for cyclic graphs, dynamically connected structures, unpredictable reachability, and other domains where GC provides a more suitable and efficient lifetime-management strategy.
+6. **Shared ownership — Multiple independent owners:** Used when multiple independent owners genuinely require a common object lifetime and deterministic reference counting is appropriate.
+7. **Manual memory management — Explicit low-level control:** Remains available for specialized systems programming and interoperability requirements.
+
+These strategies are complementary. None should be treated as a universal replacement for the others.
+
+Ownership remains the default whenever no stronger reason justifies another strategy.
+
+### 10.1 Compiler-Embedded Strategy Selection
+
+Implement CDMM's strategy-selection engine directly within the Nirqoba compiler.
+
+The compiler must contain an explicit, maintainable set of strategy-selection rules, eligibility conditions, and optimization criteria.
+
+The compiler must not repeatedly guess which strategy to use during program execution.
+
+Tasks:
+
+1. Design the CDMM strategy-selection architecture.
+2. Establish explicit eligibility rules for every supported memory-management strategy.
+3. Implement the strategy-selection logic inside the compiler.
+4. Integrate CDMM with semantic analysis, ownership analysis, lifetime analysis, escape analysis, and relevant optimization passes.
+5. Ensure that strategy decisions are made during compilation whenever sufficient information is available.
+6. Preserve strategy decisions through TIR, MLIR, and LLVM lowering.
+7. Ensure that generated code directly uses the selected memory-management implementation.
+8. Avoid unnecessary runtime strategy dispatch, strategy discovery, or memory-management negotiation.
+9. Make strategy-selection rules deterministic and reproducible for equivalent compilation inputs and configurations.
+10. Keep the strategy-selection architecture extensible so that future compiler improvements can introduce better allocation decisions without redesigning the entire memory model.
+
+The compiler must distinguish between:
+
+- A strategy that is semantically valid.
+- A strategy that is safe under the known ownership and lifetime constraints.
+- A strategy that is expected to provide a performance or memory-efficiency advantage.
+- A strategy that is ultimately selected.
+
+Do not select a strategy merely because it is theoretically available.
+
+### 10.2 Compile-Time Program Analysis
+
+CDMM must make decisions using information already available or derivable during compilation.
+
+Implement or extend the necessary analyses to understand:
+
+- Allocation sites and object categories.
+- Ownership relationships.
+- Object lifetime and destruction boundaries.
+- Borrowing relationships.
+- Escape behavior.
+- Allocation frequency where statically inferable.
+- Object sizes and alignment requirements where known.
+- Aggregate and container relationships.
+- Allocation and deallocation patterns.
+- Repeated allocation and reuse patterns.
+- Object graph structure where statically identifiable.
+- Cyclic relationships where statically identifiable.
+- Interprocedural allocation and ownership effects.
+- Thread-sharing requirements.
+- Whether an object or allocation domain requires dynamic reachability management.
+- Whether allocations share a common lifetime.
+- Whether an allocation strategy introduces unnecessary overhead.
+
+Use CFG-aware and interprocedural analysis where necessary.
+
+Analysis must correctly account for:
+
+- Conditional branches.
+- Loops.
+- Nested scopes.
+- Recursive functions.
+- Function calls and returns.
+- Aggregates and nested objects.
+- Aliasing.
+- Early exits.
+- Ownership transfers.
+- Borrowed references.
+- Cross-function lifetime relationships.
+- Supported asynchronous and concurrent execution paths.
+
+Do not implement CDMM using simplistic allocation-pattern matching or source-level syntax heuristics alone.
+
+The compiler must reason about actual program semantics.
+
+### 10.3 Deterministic Ownership as the Default Strategy
+
+Ownership must remain the default memory-management strategy.
+
+Tasks:
+
+1. Ensure ordinary values and objects use deterministic ownership unless another strategy is demonstrably more appropriate.
+2. Prefer stack or inline storage when escape and lifetime analysis prove it safe and beneficial.
+3. Use ordinary owned heap allocation when dynamic storage is necessary.
+4. Generate deterministic destruction and cleanup.
+5. Preserve existing move and borrowing semantics.
+6. Avoid unnecessary shared ownership and reference counting.
+7. Avoid GC allocation and tracking for ordinary owned objects.
+8. Avoid introducing arena or pool allocation merely because it is technically possible.
+9. Preserve ownership guarantees when optimizing allocation and destruction.
+10. Ensure that fallback decisions remain valid and predictable.
+
+Acceptance:
+
+- Ordinary allocations continue to use deterministic ownership by default.
+- Ownership is never silently replaced by GC.
+- No unnecessary runtime allocation-strategy dispatch is introduced.
+- Existing ownership and destruction guarantees remain intact.
+
+### 10.4 Automatic Arena Selection
+
+CDMM should select arena allocation when it can establish that allocations share a sufficiently predictable lifetime and that arena allocation provides a meaningful advantage.
+
+Potential candidates include:
+
+- Request-scoped objects.
+- Batch-processing allocations.
+- Temporary compiler data.
+- Frame-scoped graphics data.
+- Temporary numerical computation data.
+- Large groups of short-lived objects.
+- Other allocation domains with a provable collective lifetime.
+
+Tasks:
+
+1. Identify allocation groups with compatible lifetime boundaries.
+2. Determine whether the objects can safely share an arena.
+3. Evaluate allocation frequency, object size, alignment, and expected memory retention.
+4. Select arena allocation only when it provides a justified advantage.
+5. Preserve individual object destruction semantics where destructors or resource cleanup are required.
+6. Generate correct bulk-release operations.
+7. Ensure no arena-bound reference escapes its arena lifetime.
+8. Reject unsafe arena promotion or lifetime extension.
+9. Avoid arena selection when individual lifetimes are sufficiently different or bulk retention would increase memory usage unnecessarily.
+
+Acceptance:
+
+- Arena selection is performed at compile time where possible.
+- Arena-bound objects cannot outlive their arena.
+- Destruction and resource cleanup remain correct.
+- Selected arenas provide measurable benefits over ordinary allocation for their intended workloads.
+- Unprofitable arena candidates remain on an appropriate alternative strategy.
+
+### 10.5 Automatic Pool Selection
+
+CDMM should identify allocation domains where repeated allocation and deallocation of similarly sized objects can benefit from reusable pooled storage.
+
+Potential candidates include:
+
+- Repeated fixed-size objects.
+- Frequently created temporary nodes.
+- Reusable internal compiler structures.
+- Repeated allocation patterns in processing loops.
+- Other workloads with predictable size and reuse characteristics.
+
+Tasks:
+
+1. Identify suitable repeated allocation patterns.
+2. Determine size and alignment compatibility.
+3. Evaluate reuse opportunities and expected allocation frequency.
+4. Select an appropriate pool implementation.
+5. Generate correct allocation and release operations.
+6. Ensure safe slot reuse.
+7. Preserve ownership, move, borrowing, and destruction guarantees.
+8. Prevent use-after-release and double release.
+9. Avoid pooling when ordinary allocation is more efficient or when pool retention creates excessive memory overhead.
+
+Acceptance:
+
+- Pool selection is based on compiler analysis and established eligibility rules.
+- Pool reuse does not violate ownership or lifetime guarantees.
+- Pool allocation does not introduce unnecessary GC dependencies.
+- The selected pool provides a measurable benefit for its intended workload.
+
+### 10.6 Automatic GC Selection
+
+GC must remain an important component of the Hybrid Memory Management Model.
+
+CDMM should select GC for allocation domains where dynamic lifetime management is genuinely appropriate.
+
+Potential candidates include:
+
+- Cyclic object graphs.
+- Dynamically connected graph structures.
+- Runtime-generated object relationships.
+- Objects with complex and unpredictable reachability.
+- Other structures where deterministic ownership, borrowing, arenas, pools, or shared ownership are unsuitable or substantially less practical.
+
+Tasks:
+
+1. Identify GC-eligible allocation domains.
+2. Analyze relevant object relationships and lifetime characteristics.
+3. Determine when GC provides a justified advantage over alternative strategies.
+4. Select GC-managed allocation for eligible objects or domains.
+5. Preserve correct root discovery and GC effect propagation.
+6. Ensure required root frames, safepoints, write barriers, and mutator coordination are generated.
+7. Preserve correct interoperability with owned, borrowed, arena-bound, and shared-owned objects.
+8. Avoid unnecessarily extending GC behavior to unrelated allocation domains.
+9. Ensure that GC selection does not silently convert ordinary owned objects into GC-managed objects.
+10. Preserve the existing collector's correctness and functionality.
+
+An inability to prove an arena or pool optimization is not, by itself, sufficient justification for selecting GC.
+
+Acceptance:
+
+- GC is selected for appropriate dynamic-lifetime domains.
+- Cyclic structures remain reclaimable.
+- GC instrumentation is generated only where required.
+- Ordinary owned-only execution remains independent of GC.
+- Mixed-strategy programs remain correct.
+
+### 10.7 Shared Ownership and Manual Memory Integration
+
+CDMM must understand the existing shared-ownership and manual-memory mechanisms.
+
+Tasks:
+
+1. Recognize explicit shared-ownership requirements.
+2. Preserve reference-counting semantics.
+3. Avoid introducing shared ownership when ordinary ownership is sufficient.
+4. Preserve weak-reference behavior where implemented.
+5. Respect thread-safety requirements.
+6. Recognize explicitly manual allocations and their deallocation contracts.
+7. Prevent automatic strategy selection from invalidating external allocation contracts.
+8. Preserve FFI ownership and lifetime guarantees.
+9. Ensure that automatic optimizations never silently transfer ownership or change externally observable destruction behavior.
+
+Acceptance:
+
+- Existing shared-ownership semantics remain correct.
+- Manual allocations retain explicit management contracts.
+- CDMM does not introduce unnecessary reference-counting or manual-management overhead.
+- FFI and external allocator contracts remain intact.
+
+### 10.8 Strategy Selection Across Interacting Allocation Domains
+
+A single program may contain several different memory-management strategies.
+
+CDMM must therefore reason about individual allocations and related allocation domains rather than assigning one universal strategy to an entire program.
+
+Tasks:
+
+1. Support multiple strategies within the same function where semantically valid.
+2. Support different strategies across function boundaries.
+3. Preserve ownership and lifetime relationships between different allocation domains.
+4. Ensure that borrowed references can safely access objects managed by other strategies.
+5. Preserve correct interactions between owned objects and GC-managed objects.
+6. Preserve arena and pool lifetime boundaries.
+7. Handle shared-owned objects referenced by other strategies.
+8. Ensure that strategy changes never invalidate existing references.
+9. Prevent incompatible allocation and deallocation combinations.
+10. Preserve GC effect separation and ordinary owned-only execution guarantees.
+
+Acceptance:
+
+- Multiple memory-management strategies can coexist in one program.
+- Strategy boundaries are represented correctly in compiler IR.
+- Interoperability rules are enforced.
+- No strategy can reclaim or invalidate an object still owned or referenced under another strategy's valid lifetime contract.
+
+### 10.9 Compile-Time Optimization and Runtime Elimination
+
+CDMM's primary performance objective is to move memory-management decision-making out of runtime execution.
+
+The compiler should resolve as much as possible before generating executable code.
+
+Tasks:
+
+1. Resolve eligible memory-management strategies during compilation.
+2. Generate strategy-specific allocation and destruction operations.
+3. Eliminate unnecessary runtime strategy-selection branches.
+4. Eliminate redundant ownership and lifetime checks when statically proven unnecessary.
+5. Avoid runtime lifetime registries when compiler-generated cleanup is sufficient.
+6. Avoid unnecessary allocation metadata.
+7. Remove redundant allocation and destruction operations where safe.
+8. Preserve LLVM optimization opportunities.
+9. Ensure that generated code does not carry unused strategy-specific runtime dependencies.
+10. Retain only the runtime machinery required by the selected strategy.
+
+The following operations should remain compile-time decisions wherever possible:
+
+- Strategy eligibility.
+- Strategy selection.
+- Ownership classification.
+- Lifetime determination.
+- Escape validation.
+- Allocation-domain grouping.
+- Cleanup placement.
+- Arena lifetime boundaries.
+- Pool eligibility.
+- Required GC effect propagation.
+- Selection of strategy-specific runtime APIs.
+
+Runtime work should primarily consist of the actual operations required by the selected strategy, not repeatedly deciding which strategy should have been used.
+
+Do not eliminate necessary runtime operations such as allocation, reference counting, destruction, or GC collection merely to claim that CDMM is compile-time driven.
+
+Acceptance:
+
+- Strategy selection does not require runtime guessing.
+- Generated code contains no unnecessary strategy-dispatch overhead.
+- Compile-time decisions are preserved through lowering.
+- Runtime overhead is proportional to the selected memory-management strategy.
+- Existing memory-safety guarantees remain intact.
+
+### 10.10 Diagnostics and User Control
+
+CDMM must be understandable and debuggable.
+
+Tasks:
+
+1. Provide diagnostics explaining why a strategy could not be selected when relevant.
+2. Identify the allocation or domain involved.
+3. Explain the lifetime, ownership, aliasing, or performance constraint preventing selection.
+4. Distinguish between a safety restriction and a performance-based decision.
+5. Provide useful information about the selected strategy in compiler diagnostic or inspection modes.
+6. Preserve explicit user-directed memory-management declarations.
+7. Define how explicit strategy constraints interact with automatic selection.
+8. Reject explicit strategy requests that violate ownership or lifetime requirements.
+9. Ensure that optimization decisions remain reproducible.
+
+Where useful, provide a compiler inspection facility that can report:
+
+- Selected memory strategy.
+- Original allocation category.
+- Relevant lifetime information.
+- Selection rationale.
+- Rejected alternatives and their reasons.
+- Generated allocation and cleanup operations.
+
+This inspection facility must not impose unnecessary overhead on release builds.
+
+Acceptance:
+
+- Developers can understand important CDMM decisions.
+- Explicit memory-management requirements are respected.
+- Unsafe strategy overrides are rejected.
+- Diagnostics do not claim that a strategy is faster without supporting evidence.
+
+### 10.11 Performance Evaluation
+
+CDMM must demonstrate that automatic strategy selection improves real workloads rather than merely adding compiler complexity.
+
+Create a dedicated benchmark suite:
+
+`benchmarks/cdmm/`
+
+Benchmark:
+
+1. Ordinary owned allocation versus CDMM-selected ownership.
+2. Ordinary allocation versus automatically selected arenas.
+3. Ordinary allocation versus automatically selected pools.
+4. Repeated allocation and destruction workloads.
+5. Batch-processing workloads.
+6. Temporary object-heavy workloads.
+7. Cyclic graph construction and reclamation.
+8. Mixed-strategy workloads.
+9. Compile-time analysis overhead.
+10. Runtime overhead introduced by CDMM.
+11. Peak memory usage and retained memory.
+12. Generated executable size where relevant.
+
+Record:
+
+- Compiler version.
+- Runtime version.
+- Build configuration.
+- Optimization flags.
+- Target architecture.
+- Operating system.
+- CPU.
+- Memory capacity.
+- Benchmark repetitions.
+- Median, minimum, and maximum execution time.
+- Standard deviation where meaningful.
+- Peak resident memory.
+- Allocation and destruction counts.
+- GC collection counts and pause times where applicable.
+- Compilation time and CDMM analysis overhead.
+
+Compare equivalent workload semantics and optimization configurations.
+
+Do not claim that arena, pool, or GC selection is faster without reproducible evidence.
+
+Do not select a strategy solely because it wins one synthetic benchmark. Account for memory retention, allocation patterns, cleanup costs, and workload characteristics.
+
+### 10.12 Testing and Validation
+
+Extend the dedicated memory-model test suite:
+
+`tests/memory_model/`
+
+Create additional CDMM tests where appropriate.
+
+Include:
+
+**Strategy-selection tests**
+- Default ownership selection.
+- Valid arena selection.
+- Invalid arena selection.
+- Valid pool selection.
+- Invalid pool selection.
+- GC selection for cyclic structures.
+- GC selection for dynamic object graphs.
+- Shared-ownership preservation.
+- Manual-allocation preservation.
+- Strategy fallback behavior.
+- Deterministic strategy decisions.
+
+**Lifetime and correctness tests**
+- Arena lifetime boundaries.
+- Pool slot reuse.
+- Destruction order.
+- Partial initialization.
+- Ownership transfer.
+- Borrowed references across strategy boundaries.
+- Escape analysis.
+- Mixed-strategy object graphs.
+- Cross-function allocation domains.
+- Recursive and loop-based allocation patterns.
+
+**Generated-code tests**
+- Correct strategy-specific allocation calls.
+- Correct destruction operations.
+- No unnecessary GC instrumentation in owned-only paths.
+- No unnecessary runtime strategy dispatch.
+- No unnecessary reference counting.
+- No unnecessary allocation metadata.
+- Correct GC instrumentation for selected GC domains.
+- Correct cleanup for automatically selected arenas and pools.
+
+**Regression tests**
+- Existing ownership tests.
+- Existing borrowing tests.
+- Existing arena and pool tests.
+- Existing shared-ownership tests.
+- Existing GC tests.
+- Existing manual-memory tests.
+- Existing FFI tests.
+- Existing concurrency tests.
+
+Inspect TIR, MLIR, LLVM IR, and generated runtime behavior.
+
+Source-level tests alone are insufficient to establish that CDMM decisions are correctly implemented.
+
+### 10.13 Documentation Deliverables
+
+Update relevant documentation:
+
+- `ABOUT.md`
+- `SYNTAX.md`
+- `ROADMAP.md`
+- Memory-model documentation.
+- Compiler architecture documentation.
+- Runtime documentation.
+
+Create:
+
+`docs/memory-model/cdmm.md`
+
+Document:
+
+- What CDMM is.
+- How it relates to HMMM.
+- How the compiler analyzes allocation domains.
+- How strategy eligibility is determined.
+- When ownership is selected.
+- When borrowing is used.
+- When arenas and pools are selected.
+- When GC is selected.
+- How shared ownership and manual memory interact with CDMM.
+- Which decisions happen at compile time.
+- Which operations remain at runtime.
+- How developers can inspect strategy decisions.
+- How explicit memory-management declarations interact with CDMM.
+
+Use examples that compile with the actual implemented language syntax.
+
+Do not document hypothetical behavior as implemented.
+
+### 10.14 Engineering Constraints
+
+The following constraints are mandatory:
+
+1. CDMM must be implemented within the compiler, not as a runtime strategy-selection subsystem.
+2. Strategy-selection rules must be explicit, deterministic, and maintainable.
+3. The compiler must prioritize correctness and safety before performance.
+4. Ownership must remain the default strategy.
+5. Arena and pool allocation must be selected only when justified.
+6. GC must remain available for genuinely appropriate dynamic-lifetime domains.
+7. Do not use GC as a universal fallback for difficult ownership analysis.
+8. Do not introduce unnecessary runtime strategy dispatch.
+9. Do not impose GC infrastructure on ordinary owned-only execution.
+10. Do not silently change ownership or destruction semantics.
+11. Do not sacrifice memory safety for benchmark improvements.
+12. Do not duplicate LLVM optimization functionality unnecessarily.
+13. Do not introduce speculative heuristics without measurable justification.
+14. Do not implement runtime profiling as a mandatory prerequisite for strategy selection.
+15. Preserve the existing compiler and runtime architecture unless a demonstrated limitation requires modification.
+16. Preserve all previously established memory-model invariants.
+17. Do not claim CDMM is complete without generated-code evidence and reproducible benchmarks.
+18. Keep the compiler buildable and testable throughout implementation.
+
+### 10.15 Completion Criteria
+
+Phase 10 is complete only when all of the following are satisfied:
+
+- CDMM is integrated into the compiler.
+- Strategy-selection rules are implemented and deterministic.
+- Program analysis can identify relevant allocation and lifetime characteristics.
+- Deterministic ownership remains the default.
+- Arena selection works where collective lifetimes make it beneficial.
+- Pool selection works where repeated allocation patterns make it beneficial.
+- GC is selected for appropriate dynamic and cyclic lifetime domains.
+- Shared ownership and manual memory contracts remain correct.
+- Multiple strategies coexist safely within the same program.
+- Strategy decisions are preserved through TIR, MLIR, and LLVM lowering.
+- Runtime strategy guessing is unnecessary.
+- Unnecessary runtime strategy dispatch and metadata are eliminated.
+- Owned-only execution remains independent of GC.
+- Existing memory-model tests pass.
+- New CDMM tests pass.
+- Generated-code evidence confirms the intended behavior.
+- Benchmarks demonstrate the effectiveness and overhead of CDMM.
+- Documentation accurately describes the implemented architecture.
+
+**Final architectural objective:**
+
+Nirqoba should not force programmers to manually select a universal memory-management model for every object.
+
+Instead, the compiler should understand the program, evaluate its allocation domains, and select the most efficient memory-management strategy that can be proven correct.
+
+The result should be a language where memory management is largely automated at compile time, while generated programs retain predictable lifetimes, strong safety guarantees, and exceptionally low runtime overhead.
 ---
 
 # 10. Critical Performance Requirements

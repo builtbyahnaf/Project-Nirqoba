@@ -41,8 +41,8 @@ Nirqoba is developed around five fundamental principles:
 | **Escape Analysis** | Interprocedural pointer & array escape analysis; automatic stack promotion (`alloca_at_entry`) with 16-byte SIMD alignment floors |
 | **Vectorization & SIMD** | Loop vectorization, aligned SIMD codegen (`movaps`), opt-in `--fast-math` reductions (`llvm.vector.reduce.fadd`), and `--remarks` diagnostics |
 | **Target Architecture** | Windows x64 MSVC primary; portable/native/explicit target profiles (`--target-profile`, `--target`, `--target-cpu`, `--target-features`, `--native`) |
-| **Runtime ABI** | Lightweight native runtime with direct Win32 I/O, TLABs, safepoints, shadow stack with liveness-based root registration |
-| **Concurrency (Planned)** | Structured concurrency, coroutines, low-overhead thread scheduler, thread-safe memory models |
+| **Runtime ABI** | Lightweight native runtime with direct Win32 I/O, TLABs, cooperative safepoints, thread-local shadow-stack root registration with fast-barrier coordination, per-mutator lifetime fast paths, thread-local remembered buffers, and compiler-instrumented write barriers and root frames |
+| **Concurrency** | Cooperative GC safepoints and thread-local mutator lifecycle; GC-aware root and write-barrier instrumentation in managed code; ordinary managed paths avoid repeated global synchronization |
 | **Numerical & AI (Planned)** | First-class tensors, computational graphs, automatic differentiation, reduced precision formats (FP16, BF16, FP8) |
 | **GPU Execution (Planned)** | Explicit CPU-first execution model: developer-managed device selection, memory transfers, and kernel dispatch |
 
@@ -53,7 +53,7 @@ Nirqoba is developed around five fundamental principles:
 In contrast to pure garbage-collected languages or strictly borrow-checked systems, Nirqoba provides a tiered, developer-controlled memory model:
 
 1. **Deterministic Ownership & Borrowing:** Uniquely owned arrays and allocations (`memory.owned_array<T>(len)`) transfer explicitly on move and deallocate immediately upon leaving lexical scope. Borrowed views (`borrow array_view<T>` and `borrow mut source array_view<T>`) enforce borrow semantics with zero runtime overhead.
-2. **Opt-in Generational & Incremental GC:** Automatic garbage collection starts disabled by default and can be engaged explicitly for dynamic object graphs. The runtime collector features young and old generations, thread-local allocation buffers (TLABs), remembered sets, write barriers, and sliced incremental marking/sweeping overlapping mutator execution. Managed objects carry a 96-byte header, allocation accounting is batched per mutator, and a bounded page-recycle pool keeps steady-state churn off the process heap.
+2. **Opt-in Generational & Incremental GC:** Automatic garbage collection starts disabled by default and can be engaged explicitly for dynamic object graphs. The runtime collector features young and old generations, thread-local allocation buffers (TLABs), remembered sets, write barriers, and sliced incremental marking/sweeping overlapping mutator execution. Managed objects carry a 96-byte header, allocation accounting is batched per mutator, and a bounded page-recycle pool keeps steady-state churn off the process heap. Ordinary managed execution uses atomic safepoints, nested mutator enter/leave with thread-local depth, thread-local shadow-stack roots with fast-barrier coordination, and thread-local remembered buffers so idle paths do not repeatedly synchronize on the collector. The compiler only instruments mutator/frame/safepoint paths when a function actually touches managed values.
 3. **Liveness-Aware Shadow Roots:** The compiler performs backward liveness analysis over managed references so GC root frames and write barriers are emitted exclusively across safepoints where values are live.
 4. **Pluggable Explicit Allocators:** Applications can construct and bind custom allocators per-thread or per-operation (`general`, `arena`, `pool`, `slab`, `stack`, `region`, `buddy`, `tlsf`) with fine-grained alignment and profiling options.
 
@@ -149,7 +149,7 @@ Nirqoba uses a multi-tier compilation pipeline designed to preserve semantic and
 
 ## Development Status & Roadmap
 
-The language is actively progressing through its architectural milestones. Current active version: **`0.571-beta`** (MMM Phase 6 / Explicit Shared Ownership).
+The language is actively progressing through its architectural milestones. Current active version: **`0.571-beta`** (MMM Phase 5 / Arena and Pool Support).
 
 | Phase | Description | Status |
 |---|---|---|

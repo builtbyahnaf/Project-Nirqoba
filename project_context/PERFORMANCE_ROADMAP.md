@@ -292,14 +292,14 @@ Nirqoba's garbage collector must remain a reliable memory-management option with
 
 - [ ] Resolve the inconsistency between default-enabled and opt-in GC semantics across implementation and documentation.
 - [x] Replace per-object dynamic reference-offset vectors with shared immutable type descriptors. _(PO-24: `reference_layout_descriptor()` interns the offset/size array as a `private constant [N x i64]` global per module; multiple call sites share one descriptor; stack alloca eliminated)_
-- [x] Reduce global GC mutex contention. _(PO-23: per-mutator `barrier_depth` removes the shared `barrier_readers` RMW; `SlotIndex` open-addressing table replaces `unordered_map`; shadow-stack mutex gated behind diagnostics flag; transfer-pin deltas buffered per-mutator)_
-- [x] Introduce thread-local allocation buffers (TLABs).
+- [x] Reduce global GC mutex contention. _(GC 1.1–GC 1.4: ordinary safepoints check the atomic collection-request state before acquiring mutator coordination lock; nested mutator enter/exit uses thread-local depth so global registration only happens on outermost transition; thread-local shadow stacks and per-stack locks keep ordinary root-frame operations off `gc_mutex` while the collector reads each stack under its own lock; fast barriers use an atomic reader-count handshake the collector waits for before snapshotting roots; old-to-young stores buffer in a bounded thread-local remembered buffer and are drained/retried before collection completion)_ |__- [x] Introduce thread-local allocation buffers (TLABs).
 - [x] Implement size-class allocation. _(PO-22: per-page free runs with coalescing; short-lived objects reclaimed without bumping into a fresh page)_
 - [x] Implement free-slot reuse. _(PO-22: per-page free runs with coalescing and TLAB reuse; `nrq_gc_span_reuse_count` accessor)_
 - [x] Reuse empty pages and partially occupied page regions.
 - [x] Optimize root-frame registration and cleanup.
 - [x] Avoid root-frame machinery for functions without managed references.
 - [x] Implement liveness-aware root maps where practical.
+- [x] Tighten compiler GC instrumentation gating so GC-state-only API calls without managed values do not force mutator/frame/safepoint instrumentation.
 - [x] Establish explicit safepoints and stop-the-world coordination.
 - [x] Implement write barriers and remembered sets.
 - [x] Implement generational collection with promotion policies.
