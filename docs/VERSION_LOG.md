@@ -44,11 +44,11 @@ recorded below is made under that authority.
   owners, copy retain, move without retain, parameter release, nested/loop scope,
   double release, shared borrow/release conflict and shared-cycle payload
   rejection.
-- Benchmarks: shared allocation is 4.36x ordinary allocation; an explicit
-  retain is 1.187x a move; four-thread independent objects progress without the
-  global lock; one-object contention is 1.59x uncontended. Arena reset median is
-  about 4.2% below the Phase 5 median with overlapping ranges. No universal
-  speedup is claimed.
+- Benchmarks: shared allocation is 4.16x ordinary allocation; an explicit
+  retain is 1.233x a move; four-thread independent objects progress without the
+  global lock; one-object contention is 1.58x uncontended; batch final release
+  costs about 209 ns per object. Arena reset median is about 2.6% below the Phase
+  5 median with overlapping ranges. No universal speedup is claimed.
 - No Phase 7 GC work, cycle collector, weak syntax, automatic shared promotion
   or new GC was added.
 

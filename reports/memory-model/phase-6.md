@@ -249,36 +249,38 @@ Language workloads are compiled at `-O2` and run in fresh processes. Each
 workload prints a checksum and TSC cycles around the measured loop. The runner
 reports median, minimum and maximum over seven runs. The C++ contention harness
 is built with the MSVC x64 developer environment and linked against the
-production runtime; it runs five fresh processes.
+production runtime; it runs five fresh processes and includes a batch of 100,000
+final releases after the allocation phase.
 
 ### 8.3 Language workload results
 
 | Workload | Median cycles | Min–max | Comparison |
 |---|---:|---:|---:|
-| ordinary allocation (1M) | 139,740,104 | 133,860,144–141,090,405 | baseline |
-| shared allocation + release (1M) | 609,315,879 | 590,192,402–642,843,367 | **4.360× ordinary** |
-| shared allocation + explicit retain (1M) | 776,471,126 | 741,590,752–788,994,599 | **1.187× shared move** |
-| shared allocation + move (1M) | 654,207,332 | 645,581,029–665,484,486 | move avoids retain |
-| aggregate shared copy (200k) | 153,576,689 | 149,262,534–154,996,444 | copy retains fields |
-| arena reset reuse (1M allocations) | 123,212,845 | 117,253,014–126,650,787 | Phase 5 median was 128,661,766 |
+| ordinary allocation (1M) | 142,134,426 | 131,070,960–162,221,997 | baseline |
+| shared allocation + release (1M) | 590,615,921 | 585,319,615–599,863,389 | **4.155× ordinary** |
+| shared allocation + explicit retain (1M) | 812,036,237 | 785,932,036–885,286,038 | **1.233× shared move** |
+| shared allocation + move (1M) | 658,357,229 | 639,673,586–724,215,465 | move avoids retain |
+| nested aggregate shared copy (200k) | 153,100,962 | 148,132,177–160,216,142 | copy retains nested fields |
+| arena reset reuse (1M allocations) | 125,266,938 | 118,580,213–129,712,359 | Phase 5 median was 128,661,766 |
 
 Interpretation:
 
-- Shared allocation is **4.36× slower than ordinary allocation** in this
+- Shared allocation is **4.16× slower than ordinary allocation** in this
   workload. The difference is the control entry, shard lock, atomic count and
   root/ownership bookkeeping. This is an honest negative result; shared
   ownership is not claimed to be free.
-- An explicit retain adds about **18.7%** over a move for the same allocation
+- An explicit retain adds about **23.3%** over a move for the same allocation
   count.
-- Aggregate copies are more expensive than a single token operation because each
-  copy retains and each scope exit releases; the workload is reported without a
-  claim of superiority.
-- Arena reset median is about **4.2% lower** than the Phase 5 median, but the
+- Nested aggregate copies are more expensive than a single token operation
+  because each copy retains and each scope exit releases; the workload is
+  reported without a claim of superiority.
+- Arena reset median is about **2.6% lower** than the Phase 5 median, but the
   ranges overlap. The improvement is consistent with reusing the initial chunk;
   it is not presented as a statistically strong speedup.
-- The benchmark does not include destructor execution because supported shared
-  payloads reject deterministic-cleanup fields. Final release cost is therefore
-  the control lookup, root check and deallocation path.
+- The language workloads do not include destructor execution because supported
+  shared payloads reject deterministic-cleanup fields. The final-release harness
+  measures the control lookup, root check, deallocation and ownership-record
+  path separately.
 
 ### 8.4 Contention and memory
 
@@ -286,17 +288,21 @@ Four worker threads, 250,000 retain/release pairs each (1,000,000 total):
 
 | Case | Median | Min–max | Notes |
 |---|---:|---:|---|
-| uncontended (one thread) | 47,767,200 ns | 43,317,700–48,449,500 | one object |
-| independent objects (four threads) | 33,786,400 ns | 30,633,200–38,736,400 | one object per thread |
-| contended (four threads, one object) | 75,782,500 ns | 73,012,000–77,401,600 | one shard |
+| uncontended (one thread) | 46,142,600 ns | 45,975,800–46,529,400 | one object |
+| independent objects (four threads) | 18,484,800 ns | 18,041,200–34,795,600 | one object per thread |
+| contended (four threads, one object) | 73,052,000 ns | 69,186,100–76,292,200 | one shard |
+| final release (100,000 objects) | 20,905,800 ns | 19,627,200–21,375,200 | about 209 ns each |
 
 The independent-object aggregate is faster than the single-thread aggregate,
 showing that unrelated objects progress without a global lock. It does not scale
-fourfold in this environment. Contention on one object costs about 1.59× the
-uncontended path; the shard lock still serializes that object by design.
+fourfold in this environment (and one run was an outlier), but the median is
+clearly below both the uncontended and contended aggregates. Contention on one
+object costs about 1.58× the uncontended path; the shard lock still serializes
+that object by design. Batch final release costs about 209 ns per object in this
+run, including deallocation and ownership-record removal.
 
 The memory probe allocated 100,000 live 32-byte shared objects and measured a
-working-set delta of about **251.49 bytes per object**. This includes the payload,
+working-set delta of about **251.94 bytes per object**. This includes the payload,
 control allocation, map node, allocator registry record and allocator overhead;
 it is an approximate working-set measurement, not a control-block-only size.
 

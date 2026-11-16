@@ -3840,15 +3840,16 @@ explicit retain versus move, aggregate copy, arena reset reuse, and four-thread
 shared control contention. Seven fresh-process language samples and five
 contention samples were collected:
 
-- shared allocation: median `609,315,879` cycles, **4.36× ordinary**;
-- explicit retain: **1.187×** the move workload at the same allocation count;
-- arena reset: median `123,212,845` cycles, about 4.2% below the Phase 5 median
+- shared allocation: median `590,615,921` cycles, **4.16× ordinary**;
+- explicit retain: **1.233×** the move workload at the same allocation count;
+- arena reset: median `125,266,938` cycles, about 2.6% below the Phase 5 median
   with overlapping ranges;
-- four threads/one object: `75.78 ms` contended versus `47.77 ms` uncontended
+- four threads/one object: `73.05 ms` contended versus `46.14 ms` uncontended
   for 1M retain/release pairs;
-- four independent objects: `33.79 ms` aggregate, showing unrelated objects do
+- four independent objects: `18.48 ms` aggregate, showing unrelated objects do
   not share the global lock;
-- approximately `251.49` working-set bytes per live 32-byte shared object,
+- batch final release: `20.91 ms` for 100,000 objects, about 209 ns each;
+- approximately `251.94` working-set bytes per live 32-byte shared object,
   including payload, control, map node, allocator registry and allocator cost.
 
 No universal speedup is claimed.
