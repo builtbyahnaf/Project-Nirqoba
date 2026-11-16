@@ -1,7 +1,8 @@
 # Ownership Representation — Phases 1–3
 
-**Version:** `0.547-beta`  
-**Scope:** Memory Model Migration Phases 1–3. No new language syntax.
+**Version:** `0.583-beta`  
+**Scope:** Memory Model Migration Phases 1–8. The Phase 1–3 rules below remain
+unchanged; Phase 8 adds the `Manual` category and its release pairing.
 
 Phase 1 gave the ownership semantics Nirqoba already enforced in semantic
 analysis an explicit, verifiable representation in TIR. Phase 2 made that
@@ -19,6 +20,7 @@ verifier:
 |---|---|---|
 | `Trivial` | No ownership semantics (integers, booleans, plain aggregates) | None |
 | `Owned` | Deterministic owner; exactly one release is owed | Required |
+| `Manual` | Explicit manual owner; release through `memory.manual_release` | Required |
 | `Borrowed` | Immutable non-owning access bound to a source | None |
 | `MutableBorrowed` | Exclusive non-owning access bound to a source | None |
 | `Shared` | Reference-counted owner | Release once |
@@ -29,8 +31,11 @@ verifier:
 
 The helpers `is_owning_ownership`, `is_borrowing_ownership`,
 `is_transferable_ownership`, `requires_destruction` and `ownership_name` keep
-callers from re-deriving these rules differently. `ArenaBound` and `Weak` are
-representation categories only: no current builder path produces them.
+callers from re-deriving these rules differently. `ArenaBound` and `Weak` were
+representation categories only in this document's original Phase 1–3 scope;
+Phase 5 and the shared-ownership work added their supported paths. `Manual` is
+produced by `memory.manual_allocate` and remains distinct from `Owned` and
+`Raw`, so a release cannot silently change families.
 
 A category is stored on every TIR value, parameter and return. The verifier
 rejects a category that cannot describe its type, for example an `Owned`
@@ -53,7 +58,7 @@ checkable.
 
 Rules enforced by the verifier:
 
-- the source category must be transferable (`Owned` or `Shared`);
+- the source category must be transferable (`Owned`, `Manual` or `Shared`);
 - source and result types must match, and result ownership must equal source
   ownership;
 - the result must be a distinct value number;

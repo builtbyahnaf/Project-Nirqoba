@@ -1,4 +1,120 @@
-# Phase 8 migration notes: ownership by default
+# MMM Phase 8 migration — manual memory and the FFI boundary
+
+**From:** `0.575-beta`  
+**To:** `0.583-beta`  
+**Previous phase:** Phase 7 — GC Isolation and Explicit Selection
+
+## 1. The rule
+
+Ordinary ownership remains the default. Manual storage is an explicit, distinct
+owner, not a raw pointer and not an ordinary `memory.allocate` block:
+
+```nrqoba
+int function main() {
+    var value = memory.manual_allocate<int>(4);
+    *value = 41;
+    print(*value);
+    memory.manual_release(value);
+    return 0;
+}
+```
+
+`memory.manual_allocate<T>(bytes[, allocator])` produces
+`ValueOwnership::Manual`. `memory.manual_release` is the only valid release.
+The compiler still tracks moves, borrows, exactly-once release and the lexical
+fallback; manual code chooses the allocation and release point but does not
+leave the ownership model.
+
+## 2. What changed
+
+| Area | Before `0.583-beta` | At `0.583-beta` |
+|---|---|---|
+| Manual category | No `Manual` category; `Raw` was non-owning | `Manual` is owning, transferable and requires destruction |
+| Surface | No explicit manual allocation distinct from owned allocation | `memory.manual_allocate<T>` / `memory.manual_release` |
+| Release pairing | `memory.deallocate` covered ordinary storage only | Manual storage rejects ordinary/secure/shared/resource releases; manual release rejects other families |
+| TIR | Allocation contracts covered owned/shared/GC | Manual allocation and release contracts are verified |
+| Lowering | Ordinary allocation path only | Manual allocation uses the selected allocator and typed-root handoff; release uses the checked deallocator |
+| Function boundary | Owned pointers could cross signatures | Manual storage is function-local; owned parameters and returns reject it |
+| FFI | Deferred | Still absent; documented and tested as an unsupported boundary |
+
+## 3. Supported manual patterns
+
+- Explicit allocate/write/read/release.
+- Local moves (`var moved = owner`) with the source invalidated.
+- Scoped borrows; release is rejected while a borrow is live.
+- A lexical fallback release when no explicit release is written.
+- An explicit allocator handle (`memory.manual_allocate<T>(bytes, handle)`).
+- Managed payloads under the existing typed-root contract, including collection.
+- Conditional release when every path discharges the owner.
+
+## 4. Rejected patterns
+
+| Pattern | Diagnostic |
+|---|---|
+| `memory.deallocate(manual)` | manual allocations must be released with memory.manual_release |
+| `memory.secure_release(manual)` | secure release cannot destroy a different resource type |
+| `memory.shared_release(manual)` | shared operation requires a shared allocation |
+| `memory.manual_release(ordinary)` | manual release requires a memory.manual_allocate allocation |
+| Double release / use after release | use of '...' after its allocation was deallocated |
+| Release with a live borrow | cannot release a manual owner while a borrow is live |
+| `memory.reallocate(manual, ...)` | manual allocations cannot be resized; release and allocate a replacement |
+| Passing manual to an owned parameter | manual allocations cannot cross a function boundary |
+| Returning manual storage | manual allocations cannot cross a function return |
+| Manual from a tracked arena/pool | manual allocation cannot use a tracked arena or pool |
+| Payload with owned/shared/borrow fields | manual allocations cannot contain ... |
+| `extern`/foreign declaration | parser rejects the declaration; no FFI surface exists |
+
+## 5. GC, shared, arena and native resources
+
+- A manual payload containing `managed<T>` is registered as a typed root and
+  unregistered before release. Plain manual storage emits no `nrq_gc` IR or
+  object symbol.
+- Manual and shared storage stay distinct: no implicit shared retain/release and
+  no manual release of a shared control block.
+- Tracked arena/pool storage stays bulk-owned. Manual allocation rejects those
+  handles; `pool_release` and arena reset/destroy remain the only release paths.
+- File, socket, mutex and mapping owners keep their resource-domain cleanup.
+  They are not manual memory and cannot be released with `memory.manual_release`.
+- `memory.reallocate` keeps its ordinary owned contract. Manual reallocation is
+  deliberately unsupported in this phase.
+
+## 6. FFI boundary
+
+No foreign-function surface is implemented. There is no `extern`, foreign
+pointer type, callback type, ABI annotation or dynamic-library call. The runtime
+C ABI used by generated code is not exposed to source programs.
+
+Therefore the following contracts are **not supported**: borrowed foreign
+pointers, ownership transferred into or out of Nirqoba, foreign allocations
+released by a supplied allocator, retained foreign pointers, callbacks and
+reentrant foreign calls, GC handles across an ABI, shared tokens across an ABI,
+and arena/pool pointers across an ABI. The `extern` parser rejection is covered
+by a regression fixture. See `docs/memory/management.md` for the current
+supported manual contract and `reports/memory-model/phase-8.md` for the full
+completion report.
+
+## 7. Migration checklist
+
+1. Replace any intended manual lifetime with `memory.manual_allocate<T>` and
+   `memory.manual_release`; keep `memory.allocate` for ordinary owned storage.
+2. Do not pass manual storage to owned parameters or returns. Use a `borrow`
+   parameter for temporary access, or release it before the call.
+3. Replace manual reallocation with release + allocate.
+4. Do not use a tracked arena/pool handle for manual allocation.
+5. Keep managed fields rooted through the existing typed-root path; do not
+   assume a foreign pointer is a GC root.
+6. Keep FFI out of source until an ABI and ownership contract are implemented.
+
+## 8. Verification
+
+At `0.583-beta` the clean `RelWithDebInfo` build passes 329 unit tests and 624
+integration/memory-model cases, 0 failed, 0 skipped. Phase 7 GC isolation and
+the production/debug configuration corpus remain green. Benchmarks are in
+`benchmarks/memory-model/phase-8/`.
+
+---
+
+## Historical pre-MMM Phase 8 notes: ownership by default
 
 **From:** `0.499-beta`  
 **To:** `0.511-beta`  
