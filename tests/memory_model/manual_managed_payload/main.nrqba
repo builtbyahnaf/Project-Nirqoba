@@ -1,0 +1,12 @@
+struct Holder {
+    managed<int> value;
+}
+int function main() {
+    var holder = memory.manual_allocate<Holder>(8);
+    holder[0].value = array.allocate<int>(1);
+    holder[0].value[0] = 11;
+    gc.collect();
+    print(holder[0].value[0]);
+    memory.manual_release(holder);
+    return 42;
+}
