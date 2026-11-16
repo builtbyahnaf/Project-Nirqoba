@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.583-beta` |
-| Development Stage | `MMM Phase 8 — Manual Memory and FFI Boundary` |
-| Last Report Update | `2026-11-16 23:30:00` |
-| Report Entries | `39` |
+| Current Working Version | `0.591-beta` |
+| Development Stage | `MMM Phase 9 — Optimization, Compatibility, and Stabilization` |
+| Last Report Update | `2026-11-17 04:30:00` |
+| Report Entries | `40` |
 
 ---
 
@@ -4099,3 +4099,72 @@ handles retain a manual root-lifetime contract. Phase 9 was not started, and the
 Phase 10 CDMM addition was preserved unchanged.
 
 **End of Entry #039**
+
+## Entry #040 — Phase 9: Optimization, Compatibility, and Stabilization
+
+**Version:** `0.591-beta`  
+**Date:** `2026-11-17 04:30:00`  
+**Scope:** `MMM Phase 9 / allocation and cleanup optimization / LLVM compatibility / migration validation / benchmarks`  
+**Status:** `Completed with documented limitations`
+
+### 1. Audit
+
+`reports/memory-model/phase-9-audit.md` inventories ordinary owned, borrowed,
+arena, pool, shared, GC-managed, manual and native-resource paths through Sema,
+TIR, MLIR/LLVM, lowering and the runtime. It records the production/debug split,
+the existing synchronization costs and a reproducible baseline. Every proposed
+change is classified as correctness, performance, metadata/code-generation,
+documentation or deferred.
+
+The audit found three pieces of avoidable work: an alignment prefix on every
+default-aligned block even though the x64 process heap already satisfies
+`max_align_t`; a cached-release condition-variable wakeup with no possible
+waiter; and a null/store cleanup pair immediately before `return`. Borrow
+lowering, arena/pool locks, shared retain/release and GC instrumentation were
+reviewed but not changed because the evidence did not justify a safer/cheaper
+alternative in this phase.
+
+### 2. Implementation
+
+- Default-aligned general allocations use the heap block directly. Over-aligned
+  allocations keep the prefix path. The ownership registry retains allocator,
+  size and alignment and still rejects invalid/repeated releases.
+- Cached release no longer calls `notify_all`; the slow path still does.
+- Lowering removes a dead `ConstantNull` + `Store` pair only when immediately
+  followed by `Return`, after verified TIR and Drop expansion.
+- The default allocation path reads the thread selection and cache switch once.
+- No strategy, ownership category, weak reference, cycle collector, universal
+  header or FFI surface was added.
+
+### 3. Verification
+
+- `332` unit tests pass.
+- Full runner: `624` pass, `0` failed, `0` skipped.
+- `tests/phase9_optimization.py` builds ten ownership-heavy fixtures at `-O0`
+  and `-O2`, with production and debug runtimes, and requires identical
+  behavior. It also checks `-O0` LLVM for duplicate manual releases and unwanted
+  `nrq_gc` dependencies.
+- `tests/phase7_isolation.py` remains green; ordinary paths retain no collector
+  symbols and the managed control still has GC symbols.
+- Configuration equivalence remains green; exact totals are in the Phase 9
+  report.
+
+### 4. Benchmarks
+
+`benchmarks/memory-model/phase-9/` records 15 fresh-process samples after a
+9-sample baseline. Median retained allocation improved `215.9 -> 182.3 ns/op`,
+peak RSS fell `7.3%`, and the retained allocate+release total improved about
+`3.8%`. Release alone regressed `108.3 -> 129.6 ns/op`; this is reported rather
+than hidden. Arena, pool, shared and GC paths were measured, not redesigned.
+No comparison to C++, Rust or Java is claimed.
+
+### 5. Limitations
+
+Arena allocation still pays the handle-lifetime and strategy locks; pool release
+still uses bucket/index lookups; shared retain/release remains shard-lock
+protected. Manual storage is function-local and cannot be reallocated. FFI is
+still unsupported. Phase 10 CDMM was not started. A user commit landed during
+the phase and folded the implementation into one commit, so the requested
+31-commit history could not be preserved without rewriting user history.
+
+**End of Entry #040**
