@@ -1,0 +1,13 @@
+struct Inner { shared ptr int data; }
+struct Outer { Inner inner; int tag; }
+
+int function main() {
+    var first = Outer { inner: Inner { data: memory.shared_allocate<int>(1) }, tag: 3 };
+    {
+        var second = first;
+        print(memory.shared_count(second.inner.data) as int);
+        print(*second.inner.data + second.tag);
+    }
+    print(memory.shared_count(first.inner.data) as int);
+    return 0;
+}
