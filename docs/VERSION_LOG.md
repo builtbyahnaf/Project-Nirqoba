@@ -12,6 +12,53 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.575-beta
+
+### Summary of Changes (since `0.571-beta`):
+
+- **GC allocation is explicitly selected.** `array.allocate<T>` remains the
+  collector allocation, `managed<T>` its reference type, and
+  `memory.owned_soa<T>` an explicitly GC-backed container with a documented
+  legacy name. `memory.allocate<T>`, `memory.shared_allocate<T>`, arenas and
+  pools remain ordinary/shared/bulk storage and do not become collector
+  allocations. No automatic strategy selection or CDMM was added.
+- **The stale-root arena/pool path is rejected.** A tracked arena or pool
+  allocation whose payload contains a managed reference now fails in Sema with
+  a diagnostic explaining that bulk reset/destroy cannot unregister GC roots.
+  The TIR verifier enforces the same contract for malformed or hand-built TIR.
+- **Shared managed payloads propagate a GC effect.** A function that calls
+  `memory.shared_allocate<T>` where `T` contains a managed field now opens the
+  required mutator region instead of being classified as GC-independent.
+- **Root, frame, safepoint, barrier and mutator behavior is verified.** Focused
+  fixtures cover owned storage holding managed fields across a collecting
+  helper, shared root copies and final cleanup, nested/normal roots, transitive
+  helpers, required loop polls, barrier preservation at `-O2`, and repeated
+  unreachable cycle reclamation.
+- **Isolation is checked by declaration and dependency, not only timing.**
+  `tests/phase7_isolation.py` compiles twelve ordinary fixtures at `-O0` and
+  `-O2`, rejects every `nrq_gc` reference in emitted LLVM and every `nrq_gc`
+  symbol in the object, runs each executable, and repeats the check for the
+  development runtime. A managed control must contain GC symbols.
+- Tests: 326 unit tests and 603 full-run cases pass, 0 failed, 0 skipped.
+  Existing Phase 1–6 cases are preserved; the new cases cover the arena/pool
+  rejection, malformed arena TIR, shared managed-effect classification, root
+  lifetime across helpers and shared copies, O0/O2 arena/pool/helper isolation,
+  O2 barrier preservation, debug-runtime isolation and repeated cycles.
+- Benchmarks: `benchmarks/memory-model/phase-7/` records 7 fresh-process
+  samples. Managed allocation median is about 54.5 ns/object, root
+  register/unregister about 64.8 ns, root frame about 28.1 ns, safepoint about
+  0.38 ns, barrier about 1.78 ns, a 500k-object full collection about 6.22 ms,
+  a 200k-object cycle build about 74.2 ns/object with a 2.18 ms collection,
+  and four-thread allocation about 110.7 ns/object. Ordinary isolation
+  medians are about 58.0 ns per owned allocation, 0.072 ns per borrowed read,
+  45.6 ns per arena allocation, 141.9 ns per pool allocation/release and 244.0
+  ns per plain-shared allocation/release, with every GC counter unchanged.
+  No universal speedup is claimed.
+- **Known limitations:** tracked arena/pool payloads cannot hold managed
+  references; manual allocator handles have a manual root contract; indirect
+  calls are conservative collection points; FFI ownership, weak references and
+  a new cycle collector remain deferred. No Phase 8 work was started.
+
 ## Version 0.571-beta
 
 ### Summary of Changes (since `0.563-beta`):
