@@ -1,0 +1,6 @@
+{
+  "mode": "check",
+  "args": ["--emit=tir"],
+  "expect_exit": 0,
+  "expect_stdout_contains": ["own=manual", "release=memory.manual_release"]
+}

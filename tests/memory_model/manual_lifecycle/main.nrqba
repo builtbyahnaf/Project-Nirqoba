@@ -1,0 +1,8 @@
+int function main() {
+    var value = memory.manual_allocate<int>(4);
+    *value = 41;
+    let alias = *value;
+    print(alias);
+    memory.manual_release(value);
+    return 42;
+}

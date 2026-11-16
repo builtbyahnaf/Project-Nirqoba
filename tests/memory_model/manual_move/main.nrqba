@@ -1,0 +1,8 @@
+int function main() {
+    var first = memory.manual_allocate<int>(4);
+    *first = 31;
+    var second = first;
+    print(*second);
+    memory.manual_release(second);
+    return 42;
+}

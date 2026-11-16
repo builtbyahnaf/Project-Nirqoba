@@ -1,0 +1,9 @@
+int function main() {
+    var allocator = memory.general_allocator();
+    var value = memory.manual_allocate<int>(4, allocator);
+    *value = 19;
+    print(*value);
+    memory.manual_release(value);
+    print(memory.destroy_allocator(allocator));
+    return 42;
+}
