@@ -1,0 +1,23 @@
+struct Node {
+    int value;
+    managed<Node> child;
+}
+
+managed<Node> function make_child() {
+    var child = array.allocate<Node>(1);
+    child[0].value = 73;
+    return child;
+}
+
+int function collect_now() {
+    gc.collect();
+    return 0;
+}
+
+int function main() {
+    var holder = memory.allocate<Node>(64);
+    (*holder).child = make_child();
+    let ignored = collect_now();
+    print((*holder).child[0].value);
+    return ignored;
+}
