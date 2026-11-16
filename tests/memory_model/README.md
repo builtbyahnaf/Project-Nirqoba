@@ -23,6 +23,22 @@ are included automatically by `tests/run_tests.py`.
 | `shared_move` | A shared token transfers without changing its count |
 | `defer_rebinding` | A deferred call keeps its captured value while the binding is rebound |
 | `reverse_destruction_order` | Drops follow reverse declaration order in TIR |
+| `borrow_immutable_pair` | Two immutable borrow arguments coexist |
+| `borrow_mutable_write` | Mutation through a mutable borrow is visible in the owner |
+| `borrow_branch_merge` | A borrow stays valid across a branch merge |
+| `borrow_loop_scope` | A borrow is read and written across loop iterations |
+| `borrow_disjoint_fields` | Writing a disjoint field does not conflict with `&p.x` |
+| `borrow_forwarded_call` | A borrowed parameter is forwarded through a call |
+| `borrow_parameter_return` | A returned borrow names and preserves its source parameter |
+| `borrow_nested_scope` | A nested lexical borrow ends with its scope |
+| `borrow_mutable_expiration` | A mutable borrow expires at scope exit |
+| `borrow_loop_expiration` | A loop-local borrow does not mark its scalar owner moved |
+| `borrow_recursive` | A borrowed parameter survives recursive calls |
+| `borrow_conflict` | Two incompatible borrow arguments in one call are rejected |
+| `borrow_owner_move` | Moving an owner with a live borrow is rejected |
+| `borrow_after_release` | Releasing an owner with a live borrow is rejected |
+| `borrow_local_return` | Returning an address of a local is rejected |
+| `borrow_aggregate_escape` | Returning an aggregate holding a borrow is rejected |
 
 Run the complete suite (integration plus these cases):
 
