@@ -1,14 +1,14 @@
-# Ownership Representation — Phase 1
+# Ownership Representation — Phases 1–3
 
-**Version:** `0.539-beta`  
-**Scope:** Memory Model Migration Phases 1–2. No new language syntax.
+**Version:** `0.547-beta`  
+**Scope:** Memory Model Migration Phases 1–3. No new language syntax.
 
 Phase 1 gave the ownership semantics Nirqoba already enforced in semantic
-analysis an explicit, verifiable representation in TIR. Phase 2 makes that
-representation operational: `tir.drop` now generates the release, owner
-overwrites destroy the old value first, obligations must resolve, and explicit
-`defer`/release paths participate in the same bookkeeping. Full borrow
-enforcement remains Phase 3.
+analysis an explicit, verifiable representation in TIR. Phase 2 made that
+representation operational: `tir.drop` generates the release, owner overwrites
+destroy the old value first, obligations must resolve, and explicit
+`defer`/release paths participate in the same bookkeeping. Phase 3 adds
+control-flow borrow and lifetime enforcement over TIR.
 
 ## 1. Ownership categories
 
@@ -90,9 +90,12 @@ Verifier rules:
 - `end_borrow` must name a live borrow and may not end it twice;
 - parameter and return lifetime records must name borrowed parameters.
 
-This is representation and structural checking. Full lifetime inference,
-exclusivity enforcement across all control flow and escape analysis remain
-Phase 3.
+The operation stream, lifetime table and function metadata are checked
+structurally. Phase 3 adds a CFG analysis (`verify_borrow_flow`) that computes
+active borrows at branch merges and loop back-edges, tracks alias liveness and
+rejects conflicting or invalidated borrows. It also requires the lifetime record
+to agree with the borrow source, path and mutability and to have exactly one
+lexical entry per borrow.
 
 ## 4. Destruction obligations
 
@@ -207,12 +210,13 @@ offending expression.
 
 ## 7. Non-goals
 
-Phases 1–2 do not add:
+Phases 1–3 do not add:
 
-- move or destruction syntax;
+- move, destruction or borrow syntax;
 - exception or panic unwinding cleanup;
 - full path-sensitive obligation proofs for arbitrary branch graphs;
-- lifetime inference or full borrow enforcement;
+- user-facing lifetime annotations or a general borrow-container type;
+- runtime borrow tracking;
 - arena allocation or weak references;
 - ordinary-allocation migration (Phase 4) or GC changes.
 

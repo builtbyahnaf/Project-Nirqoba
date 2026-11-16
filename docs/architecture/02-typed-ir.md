@@ -27,7 +27,7 @@ The `Verifier` (`verify_tir_module`) enforces structural invariants:
 - Load/Store slot types must match the loaded/stored value types.
 - Return operand types must match the declared function return type.
 
-## 4. Ownership Representation and Destruction (MMM Phases 1–2)
+## 4. Ownership Representation and Destruction (MMM Phases 1–3)
 
 Every value, parameter and return carries a `ValueOwnership` category. Four
 ownership operations make the semantic relationships verifiable without changing
@@ -55,7 +55,33 @@ borrows, unknown or twice-discharged obligations, an obligation whose owner is n
 a storage location, a drop without its release or with a duplicate release, a
 release family mismatch, an obligation that is never discharged or transferred,
 use of a value after its destruction, and a reserved (`Weak`/`ArenaBound`) return
-category. The analysis is structural and straight-line; full path-sensitive
-discharge proofs for arbitrary branch graphs remain future work, as does Phase 3
-lifetime inference.
+category. The structural checks run over the operation stream; Phase 3 adds a
+separate control-flow borrow analysis for the rules that are not local to one
+operation.
+
+## 5. Borrow Flow over the CFG (MMM Phase 3)
+
+`verify_borrow_flow` builds basic blocks from `label`, `branch` and
+`branch_cond`, then computes a fixed point of active borrows and invalid owner
+storage roots at each block entry. A merge unions every restriction that may
+still be active on an incoming path, and loop back-edges participate in the same
+fixed point. This is what rejects a borrow after an owner was moved or destroyed
+on only one branch.
+
+A backward liveness pass over the same CFG decides whether a borrow still
+restricts later code. Aliases include the address-of value, copies, loads from
+local bindings that hold the pointer, and borrowed call results forwarded from a
+declared source parameter. A borrow whose aliases are all dead stops conflicting,
+which avoids treating a scope-end marker as a borrow that is live until the
+lexical boundary.
+
+The pass also checks the persistent lifetime table: source, path and mutability
+must match the `tir.borrow` operation; a borrow has one lexical record; a record
+without an operation is stale. Writes overlapping a live borrow, moves or drops
+of a borrowed owner, aggregate borrow escapes through returns or calls, and
+mutable/immutable borrowed-return mismatches are rejected with `NRQ4007`.
+
+`tir.borrow` and `tir.end_borrow` still lower to nothing. The pass adds
+compile-time analysis only; it does not add a runtime borrow flag, allocation,
+GC root, safepoint or write barrier.
 
