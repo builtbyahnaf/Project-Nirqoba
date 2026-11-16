@@ -18,6 +18,7 @@ It is a verification tool, not a benchmark. It writes only under build/.
 import argparse
 import json
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -83,6 +84,16 @@ def gc_symbol_count(nm, object_file):
     return sum(1 for line in result.stdout.splitlines() if "nrq_gc" in line.lower())
 
 
+def function_body(ir, name):
+    match = re.search(r"define[^\n]*@" + re.escape(name) + r"\([^\n]*\{\n", ir)
+    if match is None:
+        raise RuntimeError(f"function '{name}' not found in IR")
+    end = ir.find("\n}\n", match.end())
+    if end < 0:
+        raise RuntimeError(f"unterminated function '{name}' in IR")
+    return ir[match.end():end]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", default=str(DEFAULT_COMPILER))
@@ -135,6 +146,23 @@ def main():
     report["managed_control"] = {
         "ir_mentions_nrq_gc": "nrq_gc" in managed_ir,
         "object_gc_symbols": managed_symbols,
+    }
+
+    # A GC-independent helper called from a managed function must not acquire
+    # the caller's mutator region. Check the function bodies, not the whole
+    # module, so the caller's required protocol cannot mask a helper regression.
+    effect_ir = compile_ir(
+        compiler, "tests/integration/positive/gc_plain_helper_no_region/main.nrqba",
+        "-O0", [])
+    plain_body = function_body(effect_ir, "add_one")
+    managed_body = function_body(effect_ir, "make_node")
+    if "nrq_gc" in plain_body:
+        failures.append("plain helper body contains a GC reference")
+    if "nrq_gc" not in managed_body:
+        failures.append("managed helper body has no GC reference")
+    report["function_effects"] = {
+        "plain_helper_has_gc": "nrq_gc" in plain_body,
+        "managed_helper_has_gc": "nrq_gc" in managed_body,
     }
 
     report["failures"] = failures

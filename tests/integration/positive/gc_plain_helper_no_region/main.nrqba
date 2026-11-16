@@ -1,0 +1,25 @@
+struct Node {
+    int value;
+}
+
+int function add_one(int value) {
+    var bytes = (memory.cpu_count() * (4 as i32)) as int;
+    var buffer = memory.allocate<int>(bytes);
+    *buffer = value + 1;
+    let result = *buffer;
+    memory.deallocate(buffer);
+    return result;
+}
+
+managed<Node> function make_node(int value) {
+    var node = array.allocate<Node>(1);
+    node[0].value = value;
+    return node;
+}
+
+int function main() {
+    var node = make_node(add_one(1));
+    gc.collect();
+    print(node[0].value);
+    return 0;
+}

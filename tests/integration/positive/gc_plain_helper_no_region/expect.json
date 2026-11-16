@@ -1,0 +1,6 @@
+{
+  "mode": "build_and_run",
+  "args": ["-O0"],
+  "expect_stdout": "2\n",
+  "expect_exit": 0
+}
