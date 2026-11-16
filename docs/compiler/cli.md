@@ -157,6 +157,11 @@ int function main() {
 | `NRQ4006` | Error | Internal compiler error: invalid ownership transfer or metadata |
 | `NRQ4007` | Error | Internal compiler error: invalid borrow or lifetime relationship |
 | `NRQ4008` | Error | Internal compiler error: invalid or unresolved destruction obligation |
+
+`NRQ4007` also covers the Phase 3 CFG borrow checks: a conflict preserved at a
+branch merge or loop back-edge, a borrow of storage invalidated by a move/drop,
+a write overlapping a live borrow, a stale or duplicate lifetime record, and a
+borrowed return or aggregate escape that violates the declared source parameter.
 | `NRQ5001` | Error | Cannot open source file |
 | `NRQ5002` | Error | Invalid command line argument |
 | `NRQ5003` | Error | A required toolchain component is missing (configuration or the compiler-rt profile runtime) |
