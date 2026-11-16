@@ -1076,3 +1076,21 @@ TEST(OwnershipTest, LoopBorrowDoesNotMarkScalarMoved) {
   ASSERT_FALSE(diag.has_errors());
   ASSERT_TRUE(verify_tir_module(*module, diag));
 }
+
+TEST(OwnershipTest, SemaRejectsDirectWriteWhileBorrowed) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_owner_write.nrqba",
+      "int function main() {\n"
+      "  var value = 0;\n"
+      "  var view = &value;\n"
+      "  value = 1;\n"
+      "  print(*view);\n"
+      "  return 42;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module == nullptr);
+  ASSERT_TRUE(diag.has_errors());
+  ASSERT_TRUE(diagnostic_contains(diag, "cannot write to 'value' while borrow"));
+  ASSERT_TRUE(has_note(diag, "conflicting borrow is active here"));
+}
