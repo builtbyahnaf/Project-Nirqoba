@@ -196,12 +196,14 @@ class PageDirectory {
       if (!rehash(next)) return false;
     }
     const uintptr_t key = key_for(page->storage);
-    direct_[key & (kDirectEntries - 1)] = DirectEntry{key, page};
     size_t index = hash(key) & (entries_.size() - 1);
     size_t tombstone = entries_.size();
     for (size_t probes = 0; probes < entries_.size(); ++probes) {
       Entry& entry = entries_[index];
-      if (entry.key == key) return entry.page == page;
+      if (entry.key == key) {
+        direct_[key & (kDirectEntries - 1)] = DirectEntry{key, entry.page};
+        return entry.page == page;
+      }
       if (entry.key == kTombstone && tombstone == entries_.size())
         tombstone = index;
       if (entry.key == kEmpty) {
@@ -211,6 +213,7 @@ class PageDirectory {
         }
         entries_[index] = Entry{key, page};
         ++size_;
+        direct_[key & (kDirectEntries - 1)] = DirectEntry{key, page};
         return true;
       }
       index = (index + 1) & (entries_.size() - 1);
@@ -219,6 +222,7 @@ class PageDirectory {
       entries_[tombstone] = Entry{key, page};
       --tombstones_;
       ++size_;
+      direct_[key & (kDirectEntries - 1)] = DirectEntry{key, page};
       return true;
     }
     return false;
