@@ -71,6 +71,21 @@ struct GcPage {
   // (enqueue_header_locked refuses it), so there is nothing in such a page for
   // the minor to change.
   size_t young_objects = 0;
+  // Payload bytes currently represented by `live_objects`. A whole-page
+  // reclamation needs the amount without walking the page, the same way the
+  // live-object count lets it skip the walk entirely.
+  size_t live_payload_bytes = 0;
+  // Objects allocated after the current cycle began. They are retained by the
+  // sweep's birth-epoch test rather than marked, so a page's survivor count is
+  // `marked_objects + born_this_cycle`. Reset at every cycle boundary.
+  size_t born_this_cycle = 0;
+  // Per-page mark metadata. Marks are off-heap: a header write is no longer
+  // needed to set or test one, and the counts let sweep decide a page's fate
+  // without reading every header in it.
+  std::unique_ptr<uint64_t[]> mark_bits;
+  size_t mark_words = 0;
+  size_t marked_objects = 0;
+  size_t marked_young_objects = 0;
   // Page-local object-start metadata. One bit per max_align_t-sized slot lets
   // reference resolution validate an address and derive its header without a
   // global hash probe. Pages larger than kGcPageBytes are not indexed; their
@@ -307,10 +322,9 @@ struct alignas(std::max_align_t) ObjectHeader {
   // the shifts below rather than by the compiler's allocation strategy.
   //
   // `young`, `remembered` and `age` share the word because they change together
-  // in a sweep; only `marked` is written on its own, and it is still one
-  // read-modify-write of a word the marker already has in cache.
+  // in a sweep. The mark bit lives in the owning page's off-heap bitmap, so
+  // marking no longer dirties a header cache line at all.
   uint32_t state = kYoungBit;
-  static constexpr uint32_t kMarkedBit = 1u << 0;
   static constexpr uint32_t kYoungBit = 1u << 1;
   static constexpr uint32_t kRememberedBit = 1u << 2;
   // Promotion age occupies the next byte; 255 collections without promotion is
@@ -318,10 +332,6 @@ struct alignas(std::max_align_t) ObjectHeader {
   static constexpr uint32_t kAgeShift = 8;
   static constexpr uint32_t kAgeMask = 0xFFu << kAgeShift;
 
-  bool marked() const { return (state & kMarkedBit) != 0; }
-  void set_marked(bool value) {
-    state = value ? (state | kMarkedBit) : (state & ~kMarkedBit);
-  }
   bool young() const { return (state & kYoungBit) != 0; }
   void set_young(bool value) {
     state = value ? (state | kYoungBit) : (state & ~kYoungBit);
@@ -334,10 +344,7 @@ struct alignas(std::max_align_t) ObjectHeader {
   // The encoding is a contract, so it is asserted rather than described: the
   // fields may not overlap, the age may not run past the word, and the whole
   // thing has to fit in the field the header gives it.
-  static_assert((kMarkedBit & kYoungBit) == 0, "state fields overlap");
-  static_assert((kMarkedBit & kRememberedBit) == 0, "state fields overlap");
   static_assert((kYoungBit & kRememberedBit) == 0, "state fields overlap");
-  static_assert((kMarkedBit & kAgeMask) == 0, "state fields overlap");
   static_assert((kYoungBit & kAgeMask) == 0, "state fields overlap");
   static_assert((kRememberedBit & kAgeMask) == 0, "state fields overlap");
   static_assert(kAgeShift + 8 <= 32, "the age does not fit the state word");
@@ -381,6 +388,77 @@ struct alignas(std::max_align_t) ObjectHeader {
     return const_cast<ObjectHeader*>(this) + 1;
   }
 };
+
+// Off-heap mark bitmap address for an object. A mark bit indexes the same
+// max_align_t-sized slot grid as the object-start bitmap, so it is pure pointer
+// arithmetic from the header and never changes the object's state word.
+inline size_t mark_bit_index(const ObjectHeader& header, const GcPage& page) {
+  const size_t offset = static_cast<size_t>(
+      static_cast<const unsigned char*>(header.payload()) - page.storage);
+  return offset / kObjectStartAlignment;
+}
+
+inline bool header_marked(const ObjectHeader& header) {
+  const GcPage* page = header.page;
+  if (!page || !page->mark_bits) return false;
+  const size_t index = mark_bit_index(header, *page);
+  if (index / 64 >= page->mark_words) return false;
+  return (page->mark_bits[index / 64] >> (index % 64)) & 1;
+}
+
+// Sets or clears a mark and keeps the page's survivor counts exact. The counts
+// are what let sweep classify a whole page without reading its headers.
+inline void set_header_marked(ObjectHeader& header, bool value) {
+  GcPage* page = header.page;
+  if (!page || !page->mark_bits)
+    nrq_runtime_fatal("GC object has no page mark bitmap");
+  const size_t index = mark_bit_index(header, *page);
+  if (index / 64 >= page->mark_words)
+    nrq_runtime_fatal("GC object mark bit is outside its page");
+  uint64_t& word = page->mark_bits[index / 64];
+  const uint64_t bit = uint64_t{1} << (index % 64);
+  const bool was_marked = (word & bit) != 0;
+  if (value == was_marked) return;
+  if (value) {
+    word |= bit;
+    ++page->marked_objects;
+    if (header.young()) ++page->marked_young_objects;
+  } else {
+    word &= ~bit;
+    if (page->marked_objects == 0)
+      nrq_runtime_fatal("GC page marked-object count underflow");
+    --page->marked_objects;
+    if (header.young()) {
+      if (page->marked_young_objects == 0)
+        nrq_runtime_fatal("GC page marked-young count underflow");
+      --page->marked_young_objects;
+    }
+  }
+}
+
+// A page whose objects are all live (or all dead) needs no per-object walk. The
+// one write that remains is clearing its marks so the next cycle starts clean.
+inline void clear_page_marks(GcPage& page) {
+  if (page.mark_bits && page.mark_words != 0) {
+    std::memset(page.mark_bits.get(), 0, page.mark_words * sizeof(uint64_t));
+  }
+  page.marked_objects = 0;
+  page.marked_young_objects = 0;
+}
+
+// Pull the next object's header and payload into cache while the current one is
+// traced. The worklist already has the pointer; this only changes when the
+// cache line arrives.
+inline void prefetch_object(const ObjectHeader* header) {
+  if (!header) return;
+#if defined(_MSC_VER) && defined(_M_X64)
+  _mm_prefetch(reinterpret_cast<const char*>(header), _MM_HINT_T0);
+  _mm_prefetch(reinterpret_cast<const char*>(header->payload()), _MM_HINT_T0);
+#elif defined(__GNUC__) || defined(__clang__)
+  __builtin_prefetch(header);
+  __builtin_prefetch(header->payload());
+#endif
+}
 
 // Managed allocation cost includes one header per object. The reference map,
 // payload size, element size and trace callback now live in the shared layout
@@ -579,6 +657,7 @@ const nrq_object_layout* layout_for_allocation(size_t bytes,
 // Reclaimed storage is tracked per page so later allocations can reuse it;
 // defined with the page pool below, declared here because sweeping reaches them.
 void release_span_locked(GcPage& page, size_t offset, size_t span);
+void set_page_max_free_span_locked(GcPage& page, size_t span, size_t count);
 GcPage* take_free_span_locked(size_t span, size_t& offset);
 
 // Marking keeps a FIFO ring of pending headers. Contiguous storage avoids
@@ -609,12 +688,18 @@ class MarkWorklist {
       ObjectHeader* header = inline_[head_];
       head_ = (head_ + 1) % kInlineCapacity;
       --count_;
+      if (count_ != 0) {
+        prefetch_object(inline_[head_]);
+      } else if (overflow_) {
+        prefetch_object(overflow_);
+      }
       return header;
     }
     if (!overflow_) return nullptr;
     ObjectHeader* header = overflow_;
     overflow_ = header->mark_next;
     header->mark_next = nullptr;
+    prefetch_object(overflow_);
     return header;
   }
 
@@ -1457,6 +1542,17 @@ void publish_tlab_locked(MutatorState& mutator) {
     if (!header->page || header->page->live_objects == SIZE_MAX)
       nrq_runtime_fatal("GC page live-object count overflow");
     ++header->page->live_objects;
+    const size_t payload_bytes = object_payload_bytes(*header);
+    if (header->page->live_payload_bytes > SIZE_MAX - payload_bytes)
+      nrq_runtime_fatal("GC page live-byte count overflow");
+    header->page->live_payload_bytes += payload_bytes;
+    if (collection_phase.load(std::memory_order_acquire) !=
+            CollectionPhase::Idle &&
+        header->birth_epoch >= active_cycle_epoch) {
+      if (header->page->born_this_cycle == SIZE_MAX)
+        nrq_runtime_fatal("GC page born-object count overflow");
+      ++header->page->born_this_cycle;
+    }
     if (header->young()) {
       ++header->page->young_objects;
     } else {
@@ -1465,7 +1561,6 @@ void publish_tlab_locked(MutatorState& mutator) {
       // per allocation, which keeps a locked instruction off the fast path.
       old_object_count.fetch_add(1, std::memory_order_relaxed);
     }
-    const size_t payload_bytes = object_payload_bytes(*header);
     statistics.allocated_bytes =
         saturated_add(statistics.allocated_bytes, payload_bytes);
     statistics.live_objects = saturated_add(statistics.live_objects, 1);
@@ -1659,14 +1754,14 @@ void enqueue_header_locked(ObjectHeader* header, MarkContext& context) {
   // for an already-marked object, and the store below only happens once the
   // object is known to be entering the worklist.
   const uint32_t state = header->state_word();
-  if ((state & ObjectHeader::kMarkedBit) != 0) return;
+  if (header_marked(*header)) return;
   // Objects born during this cycle are retained by the sweep's birth-epoch
-  // check. Marking them would leave a mark bit that the snapshot never clears.
-  // The epoch comes from the context, so the hot path never loads the shared
-  // cycle state.
+  // check. Marking them would add a survivor count that this cycle does not
+  // need and cannot attribute to the snapshot. The epoch comes from the
+  // context, so the hot path never loads the shared cycle state.
   if (header->birth_epoch >= context.epoch) return;
   if (context.young_only && (state & ObjectHeader::kYoungBit) == 0) return;
-  header->set_marked(true);
+  set_header_marked(*header, true);
   context.worklist.push(header);
 }
 
@@ -1801,7 +1896,12 @@ void compact_remembered_locked() {
   remembered_young.erase(
       std::remove_if(remembered_young.begin(), remembered_young.end(),
                      [](ObjectHeader* header) {
-                       return !header || !header->remembered();
+                       // The flag alone is not proof of life: a reclaimed object's
+                       // storage is not rewritten, and a whole-page reclaim can
+                       // leave the old word readable. Require the header to still
+                       // be the exact published start its address resolves to.
+                       return !header || !header->remembered() ||
+                              find_object_locked(header->payload()) != header;
                      }),
       remembered_young.end());
   if (remembered_young.capacity() > 1024 &&
@@ -1953,8 +2053,15 @@ void buffer_remembered(void* object) {
 void enqueue_narrow_children_locked(ObjectHeader* header, MarkContext& context) {
   const auto* bytes = static_cast<const unsigned char*>(header->payload());
   const nrq_object_layout* layout = header->layout;
+  // Hot narrow records keep their two offsets inside the descriptor. That turns
+  // the common case into one load from the descriptor line the marker already
+  // read for `reference_count`, instead of a dependent load of the offset table.
+  const bool inline_map =
+      (layout->flags & NRQ_OBJECT_LAYOUT_INLINE_MAP) != 0;
   for (uint32_t index = 0; index < layout->reference_count; ++index) {
-    const size_t offset = layout->reference_offsets[index];
+    const size_t offset = inline_map
+                              ? layout->inline_reference_offsets[index]
+                              : layout->reference_offsets[index];
     if (offset > object_payload_bytes(*header) ||
         sizeof(void*) > object_payload_bytes(*header) - offset)
       continue;
@@ -1968,6 +2075,7 @@ bool mark_slice_locked(size_t budget_bytes) {
   size_t touched = 0;
   while (!active_mark.worklist.empty() && touched < budget_bytes) {
     ObjectHeader* header = active_mark.worklist.pop();
+    prefetch_object(header);
     touched += object_payload_bytes(*header) + sizeof(ObjectHeader);
     if (active_mark.young_only && !header->young()) continue;
     const size_t reference_count = header->layout->reference_count;
@@ -2027,7 +2135,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
     // three times per object, once per question.
     const uint32_t state = header->state_word();
     const bool young = (state & ObjectHeader::kYoungBit) != 0;
-    const bool marked = (state & ObjectHeader::kMarkedBit) != 0;
+    const bool marked = header_marked(*header);
     const bool collectable = !active_collection_is_minor || young;
     if (!marked && collectable) {
       // The page and the payload size are both loop-invariant for this object and
@@ -2057,6 +2165,9 @@ bool sweep_chunk_locked(size_t budget_bytes) {
                             : 0;
       if (!page || page->live_objects == 0)
         nrq_runtime_fatal("GC page live-object count underflow");
+      if (page->live_payload_bytes < payload_bytes)
+        nrq_runtime_fatal("GC page live-byte count underflow");
+      page->live_payload_bytes -= payload_bytes;
       --page->live_objects;
       if (young) --page->young_objects;
       if (page->live_objects == 0) {
@@ -2068,11 +2179,13 @@ bool sweep_chunk_locked(size_t budget_bytes) {
     }
 
     if (marked) {
-      // Everything the survivor needs to become one word: the mark is always
-      // cleared, and an aging or promoting object also rewrites its age. The
-      // fields left untouched keep their bits, which a mask guarantees and a
-      // sequence of separate flag stores cannot.
-      uint32_t survived = state & ~ObjectHeader::kMarkedBit;
+      // The off-heap mark is cleared before any early return, so a promoted
+      // object never leaves a stale survivor count behind.
+      set_header_marked(*header, false);
+      // Everything the survivor needs to become one word: an aging or promoting
+      // object rewrites its age. The fields left untouched keep their bits,
+      // which a mask guarantees and a sequence of separate flag stores cannot.
+      uint32_t survived = state;
       const bool was_young =
           (survived & ObjectHeader::kYoungBit) != 0;
       GcPage* const page = header->page;
@@ -2135,6 +2248,76 @@ bool sweep_chunk_locked(size_t budget_bytes) {
       sweep_cursor.mask = 0;
       continue;
     }
+    // A fresh page can be classified from its counts. This is the whole-page
+    // form of lazy sweep: either every object survives, in which case only the
+    // page's marks need clearing, or none does, in which case the page can be
+    // retired without reading a single header. Pages already part-way through
+    // their bitmap keep using the per-object path below.
+    if (sweep_cursor.word == 0 && sweep_cursor.mask == 0) {
+      const size_t live = page->live_objects;
+      const size_t young = page->young_objects;
+      const size_t survivors = page->marked_objects + page->born_this_cycle;
+      const bool all_live = active_collection_is_minor
+          ? (page->marked_young_objects == 0 &&
+             (young == 0 || page->born_this_cycle >= young))
+          : (survivors >= live && page->marked_young_objects == 0);
+      if (all_live) {
+        clear_page_marks(*page);
+        bitmap_words += page->object_start_words;
+        ++sweep_cursor.page;
+        sweep_cursor.word = 0;
+        continue;
+      }
+      const bool all_dead = active_collection_is_minor
+          ? (live == young && page->marked_objects == 0 &&
+             page->born_this_cycle == 0)
+          : (page->marked_objects == 0 && page->born_this_cycle == 0);
+      if (all_dead) {
+        // Managed payloads have no destructors, so there is nothing to run per
+        // object. The page keeps its storage until the next cycle boundary, but
+        // its start bits and marks are cleared now; an allocation can reuse the
+        // page immediately.
+        const size_t payload_bytes = page->live_payload_bytes;
+        statistics.collected_bytes = saturated_add(
+            statistics.collected_bytes, static_cast<uint64_t>(payload_bytes));
+        if (statistics.live_objects >= live) {
+          statistics.live_objects -= live;
+        } else {
+          statistics.live_objects = 0;
+        }
+        live_heap_bytes = live_heap_bytes > payload_bytes
+                              ? live_heap_bytes - payload_bytes
+                              : 0;
+        reclaimed_old += live - young;
+        page->live_objects = 0;
+        page->young_objects = 0;
+        page->live_payload_bytes = 0;
+        page->born_this_cycle = 0;
+        clear_page_marks(*page);
+        if (page->object_starts && page->object_start_words != 0) {
+          std::memset(page->object_starts.get(), 0,
+                      page->object_start_words * sizeof(uint64_t));
+        }
+        // The whole bump area is now reusable. Existing runs are all inside
+        // that area, so discard them before recording one covering run; adding
+        // it beside them would leave overlapping runs and break the free-span
+        // invariant.
+        if (page->free_span_count != 0) {
+          unindex_span_page_locked(*page);
+          total_free_spans -= page->free_span_count;
+          page->free_span_count = 0;
+          page->free_span_bytes = 0;
+        }
+        set_page_max_free_span_locked(*page, 0, 0);
+        if (page->used != 0) release_span_locked(*page, 0, page->used);
+        page->retired = true;
+        ++retired_page_count;
+        bitmap_words += page->object_start_words;
+        ++sweep_cursor.page;
+        sweep_cursor.word = 0;
+        continue;
+      }
+    }
     if (sweep_cursor.mask == 0) {
       if (sweep_cursor.word >= page->object_start_words) {
         bitmap_words += page->object_start_words;
@@ -2171,7 +2354,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
     // reachability analysis. It stays where it is for this cycle - there is no
     // list to keep it out of - and the next cycle considers it.
     if (header->birth_epoch >= active_cycle_epoch) {
-      header->set_marked(false);
+      set_header_marked(*header, false);
       continue;
     }
     sweep_object(header);
@@ -2184,7 +2367,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
     ++steps;
     touched += object_span_bytes(object_payload_bytes(*header));
     if (header->birth_epoch >= active_cycle_epoch) {
-      header->set_marked(false);
+      set_header_marked(*header, false);
       header->next = unindexed_objects;
       unindexed_objects = header;
       continue;
@@ -2847,6 +3030,8 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
     recycled_pages.erase(entry);
     page->used = 0;
     page->live_objects = 0;
+    page->live_payload_bytes = 0;
+    page->born_this_cycle = 0;
     page->retired = false;
     if (page->free_span_count != 0) {
       unindex_span_page_locked(*page);
@@ -2856,6 +3041,7 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
     }
     set_page_max_free_span_locked(*page, 0, 0);
     page->young_objects = 0;
+    clear_page_marks(*page);
     if (page->object_starts && page->object_start_words != 0) {
       std::memset(page->object_starts.get(), 0,
                   page->object_start_words * sizeof(uint64_t));
@@ -2879,11 +3065,17 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
           (reinterpret_cast<uintptr_t>(storage) & (kGcPageBytes - 1)) != 0)
         nrq_runtime_fatal("GC page is not aligned to its own size");
     }
+    const size_t slots = capacity / kObjectStartAlignment;
+    const size_t mark_words = (slots + 63) / 64;
+    page->mark_bits.reset(new (std::nothrow) uint64_t[mark_words]());
+    if (!page->mark_bits) {
+      release_page_storage(storage, capacity);
+      return nullptr;
+    }
+    page->mark_words = mark_words;
     if (capacity <= kGcPageBytes) {
-      const size_t slots = capacity / kObjectStartAlignment;
-      const size_t words = (slots + 63) / 64;
-      page->object_starts.reset(new (std::nothrow) uint64_t[words]());
-      if (page->object_starts) page->object_start_words = words;
+      page->object_starts.reset(new (std::nothrow) uint64_t[mark_words]());
+      if (page->object_starts) page->object_start_words = mark_words;
     }
     return page;
   } catch (...) {
@@ -3073,6 +3265,10 @@ void prepare_cycle_locked(bool young_only) {
   // the page set is only walked when there is something to reclaim. Every page
   // that becomes empty is counted where it becomes empty: the sweep that frees
   // its last object, or an allocation that reserved space and then failed.
+  // Drop stale remembered entries before a retired page can be recycled and
+  // its storage released. Validation uses the page directory and start bits,
+  // which are still authoritative at this point.
+  compact_remembered_locked();
   ++gc_page_generation;
   if (retired_page_count != 0) {
     for (auto page = gc_pages.begin(); page != gc_pages.end();) {
@@ -3096,13 +3292,15 @@ void prepare_cycle_locked(bool young_only) {
   cycle_start_live_bytes = live_heap_bytes;
   active_cycle_epoch = next_cycle_epoch.fetch_add(1) + 1;
   active_collection_is_minor = young_only;
+  // Birth counts describe only the cycle that is starting. The previous cycle's
+  // sweep already retained those objects; this reset makes every page's
+  // survivor count meaningful for the new snapshot.
+  for (auto& entry : gc_pages) {
+    if (entry) entry->born_this_cycle = 0;
+  }
   active_mark = MarkContext{};
   active_mark.young_only = young_only;
   active_mark.epoch = active_cycle_epoch;
-  // Reclaimed and promoted objects cleared their own flag during the previous
-  // cycle. Drop those entries now, before anything traverses the list, so the
-  // traversal never observes an address whose object is gone.
-  compact_remembered_locked();
   enqueue_roots_locked(active_mark);
   collection_phase.store(CollectionPhase::Marking, std::memory_order_release);
 }
@@ -3402,6 +3600,16 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
     unindexed_objects = header;
   }
   ++page->live_objects;
+  if (page->live_payload_bytes > SIZE_MAX - bytes)
+    nrq_runtime_fatal("GC page live-byte count overflow");
+  page->live_payload_bytes += bytes;
+  if (collection_phase.load(std::memory_order_acquire) !=
+          CollectionPhase::Idle &&
+      header->birth_epoch >= active_cycle_epoch) {
+    if (page->born_this_cycle == SIZE_MAX)
+      nrq_runtime_fatal("GC page born-object count overflow");
+    ++page->born_this_cycle;
+  }
   if (header->young()) ++page->young_objects;
   statistics.allocated_bytes = saturated_add(
       statistics.allocated_bytes, static_cast<uint64_t>(bytes));
@@ -3671,14 +3879,23 @@ bool is_pointer_root(const RootInfo& root) {
 // addresses whose identity the runtime owns.
 bool layout_is_consistent(const nrq_object_layout& layout) {
   if (layout.payload_size == 0) return false;
-  if ((layout.flags & ~static_cast<uint32_t>(NRQ_OBJECT_LAYOUT_ARRAY)) != 0)
+  if ((layout.flags & ~static_cast<uint32_t>(NRQ_OBJECT_LAYOUT_ARRAY |
+                                              NRQ_OBJECT_LAYOUT_INLINE_MAP)) != 0)
     return false;
   if (layout.reference_count == 0) return true;
   if (!layout.reference_offsets) return false;
+  const bool inline_map =
+      (layout.flags & NRQ_OBJECT_LAYOUT_INLINE_MAP) != 0;
+  if (inline_map &&
+      (layout.reference_count > 2 ||
+       (layout.flags & NRQ_OBJECT_LAYOUT_ARRAY) != 0))
+    return false;
   for (uint32_t index = 0; index < layout.reference_count; ++index) {
     const size_t offset = layout.reference_offsets[index];
     if (offset > layout.payload_size ||
         sizeof(void*) > layout.payload_size - offset)
+      return false;
+    if (inline_map && layout.inline_reference_offsets[index] != offset)
       return false;
   }
   return true;
@@ -4714,6 +4931,12 @@ const nrq_object_layout* nrq_gc_layout_intern(
   if (!descriptor) {
     delete[] offsets;
     return nullptr;
+  }
+  if ((descriptor->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0 &&
+      descriptor->reference_count != 0 && descriptor->reference_count <= 2) {
+    descriptor->flags |= NRQ_OBJECT_LAYOUT_INLINE_MAP;
+    for (uint32_t index = 0; index < descriptor->reference_count; ++index)
+      descriptor->inline_reference_offsets[index] = offsets[index];
   }
   try {
     layout_bytes_total += sizeof(nrq_object_layout) + key.offsets.size() * sizeof(uint32_t);
