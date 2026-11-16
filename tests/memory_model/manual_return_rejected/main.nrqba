@@ -1,0 +1,6 @@
+int* function make() {
+    return memory.manual_allocate<int>(4);
+}
+int function main() {
+    return 42;
+}

@@ -1,0 +1,4 @@
+extern int function foreign(int value);
+int function main() {
+    return foreign(1);
+}
