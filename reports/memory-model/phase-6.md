@@ -380,6 +380,17 @@ fb4a2e5 bench: measure shared control contention and per-object memory
 The Phase 6 completion-report commit is the 27th commit in this list; a commit
 cannot contain its own hash.
 
+### Post-report documentation and benchmark addenda
+
+```
+9d8d77a docs: document shared shards, move/copy and cycle boundaries
+bcaf069 bench: cover nested aggregate copies and batch final release
+3a2b87e docs: update Phase 6 results for nested copy and final release
+```
+
+These bring the Phase 6 total to 30 commits. This addendum commit is the 31st;
+it records documentation-only follow-up, not additional implementation scope.
+
 ---
 
 **Phase 7 was not started.**
