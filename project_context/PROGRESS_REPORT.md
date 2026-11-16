@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.539-beta` |
-| Development Stage | `MMM Phase 2 — Deterministic Destruction and Move Semantics` |
-| Last Report Update | `2026-11-15 18:10:00` |
-| Report Entries | `31` |
+| Current Working Version | `0.551-beta` |
+| Development Stage | `MMM Phase 4 — Ordinary Non-GC Allocation` |
+| Last Report Update | `2026-11-16 12:00:00` |
+| Report Entries | `33` |
 
 ---
 
@@ -3702,3 +3702,69 @@ benchmark was run; the analysis is compile-time only. Phase 4 was not started.
 ---
 
 *Technical authority and project ownership remain with Muhammad Tahmid Ahnaf.*
+
+## Entry #033 — MMM Phase 4: Ordinary Non-GC Allocation
+
+**Version:** `0.551-beta`  
+**Phase:** Memory Model Migration Phase 4  
+**Status:** Complete
+
+### 1. Audit and Classification
+
+`reports/memory-model/phase-4-audit.md` traces every allocation category from
+Sema through TIR, MLIR, LLVM and the runtime. Ordinary owned pointers, arrays,
+aggregates, stack/inline storage, reallocated storage, secure storage and plain
+shared storage use the existing general/explicit/secure/shared allocators.
+Borrowed pointers and views allocate nothing. `array.allocate`, SoA containers
+and storage containing a managed-reference payload are the explicit mixed or
+collector-backed cases. No second allocator was introduced.
+
+The audit confirmed the ordinary runtime path was already non-GC: the
+unconditional owned-release unregister identified in the original migration
+audit had been removed during the pre-MMM Phase 9 hardening. `nrq_runtime_init`
+is empty, ordinary startup registers no mutator, and `nrq_memory_allocate` /
+`nrq_memory_deallocate_checked` never call the collector.
+
+### 2. Implementation
+
+- TIR now verifies the selected allocation strategy. `memory.allocate`,
+  `memory.reallocate` and `memory.secure_allocate` require `owned` plain-pointer
+  storage; owned arrays require `owned` array storage; `array.allocate` requires
+  `gc_managed`; shared allocation requires `shared`.
+- Ordinary release (`memory.deallocate`, `memory.secure_release`,
+  `array.owned_release`) rejects collector-managed values. `tir.drop` accepts only
+  genuinely owning categories, so a collector value cannot acquire a lexical
+  destruction obligation.
+- Stack promotion, address-of exclusion, return transfer and deterministic
+  cleanup are unchanged. GC registration remains conditional on an actual managed
+  reference in the released payload.
+
+### 3. IR Evidence
+
+New fixtures cover owned heap pointers, returned owned arrays and borrowed heap
+views at `-O0` and `-O2`, plus ordinary reallocation, secure allocation and plain
+shared allocation. Each asserts zero occurrences of `nrq_gc` in the emitted LLVM.
+Existing owned pointer, array, aggregate, stack-array, view and root-elision
+fixtures now assert the same whole-namespace absence. A heap pointer/array/view
+still emits exactly one `nrq_memory_deallocate_checked`; secure uses
+`nrq_memory_secure_release`; shared uses the refcount runtime.
+
+### 4. Verification
+
+- `313` unit tests pass, including malformed allocation contracts, a collector
+  value through ordinary deallocation and a drop of a collector value.
+- Full runner: `554` cases pass, 0 failed, 0 skipped.
+- The GC, allocator, secure-storage, mixed managed-payload, ownership,
+  destruction and borrow suites all pass in the same run.
+- The audit probes found no `nrq_gc` reference in the owned-only modules.
+
+### 5. Limitations
+
+The collector remains the strategy for explicit managed arrays, SoA containers,
+managed references inside ordinary/shared storage, and cyclic graphs. Secure
+storage still rejects managed payloads. No arena lifetime semantics, weak
+references, FFI, exception unwinding or runtime allocation strategy check was
+added. No benchmark was run; Phase 4 adds verifier checks only, and the runtime
+allocation path is unchanged. Phase 5 was not started.
+
+**End of Entry #033**
