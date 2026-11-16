@@ -88,7 +88,31 @@ The header has two cache lines of metadata before the payload. `layout` is decla
 - Every traced object needs a layout lookup. The pointer is the cheapest current form: one load from the header.
 - Page-local uniform-layout metadata can remove it only for pages whose objects all share one descriptor.
 
-## 4. Consumers outside `gc.cpp`
+## 4. Intrusive-link audit
+
+### 4.1 TLAB publication
+
+`allocate_tlab` constructs an object and pushes it on `thread_mutator.pending_objects` through `tlab_next`. `publish_tlab_locked` walks that list, inserts ordinary objects into their page start bitmap or the exact object index, then rebuilds the unindexed list through `next`.
+
+The link is therefore a **batch cursor**, not object identity. A page can publish a contiguous allocation range without a per-object link if it records the range and the objects are visited in allocation order. The current link is cheap because it reuses the same pointer-sized slot as the published large-object list.
+
+**Classification:** Move to page/span publication metadata in Phase 3; keep as the migration fallback until then.
+
+### 4.2 Unindexed and sweep lists
+
+Large-object pages and pages whose directory insertion failed are linked through `next`. The sweep freezes this list at mark completion and walks it after the bitmap pages. An object on that list has no page start bitmap to discover it.
+
+This is the only case where `next` is required for reachability of the object set. Ordinary pages never use it after publication.
+
+**Classification:** Keep for unindexed/large pages until the large-object directory owns their enumeration.
+
+### 4.3 Mark overflow
+
+`MarkWorklist::push` writes `mark_next` only when the 256-entry inline ring is full. `pop` reads and clears it. The link is not needed for objects that fit in the ring, which is the common case.
+
+**Classification:** Replace with a preallocated/segmented external worklist in Phase 3. No object-specific storage is needed once the worklist is not intrusive.
+
+## 5. Consumers outside `gc.cpp`
 
 - `runtime/include/nirqoba/runtime/gc.h` exposes header size and instance/shared byte counts as allocation facts. Tests assert 48/40/8.
 - `nrq_object_layout` is a public immutable descriptor. Compiler lowering emits reference-offset arrays for root registration; those arrays are not object headers.
