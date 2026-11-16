@@ -3701,6 +3701,84 @@ benchmark was run; the analysis is compile-time only. Phase 4 was not started.
 
 ---
 
+
+## Entry #034 — MMM Phase 5: Arena and Pool Support
+
+**Version:** `0.563-beta`  
+**Phase:** Memory Model Migration Phase 5  
+**Status:** Complete
+
+### 1. Audit
+
+`reports/memory-model/phase-5-audit.md` records the starting state: the
+`ArenaBound` category existed but no allocation produced it; the arena/pool
+allocator runtime already supported alignment, growth and reset; and the
+existing ownership registry refused reset while allocations were live. The
+missing work was a tracked lifetime, bulk invalidation, source escape rules and
+TIR preservation.
+
+### 2. Implementation
+
+- `memory.arena(capacity)` and `memory.pool(max_object_size)` create tracked
+  handles with unique ids and kinds. Raw `memory.arena_allocator` and
+  `memory.pool_allocator` keep their previous semantics.
+- Allocation from a tracked handle produces an `ArenaBound` value carrying the
+  arena id. It receives no per-object cleanup.
+- `memory.arena_reset`/`destroy` and `memory.pool_reset`/`destroy` reject live
+  values or borrows, then invalidate every prior binding. Destroy also
+  invalidates the handle. `memory.pool_release` returns one slot and rejects a
+  second release, a live borrow or a different allocator.
+- Returns, owning parameters, borrowed returns, aggregate fields, array
+  literals, cross-arena assignment and ordinary deallocation reject arena-bound
+  storage.
+- TIR values preserve arena id/kind through loads, calls, moves, projections and
+  address-of. The verifier checks identity, allocation match, reset/destroy
+  liveness, ordinary-release rejection and owning escapes.
+- Arena allocations lower to the registry-free `nrq_arena_allocate`; pools keep
+  `nrq_memory_allocate_from` so release can recover the slot. Runtime reset and
+  destroy check kind and in-flight operations, erase region records and release
+  backing chunks.
+- Bulk release does not run destructors. Payloads requiring deterministic
+  cleanup are rejected at compile time instead of leaking.
+
+### 3. Verification
+
+- `320` unit tests pass.
+- Full runner: `583` cases pass, 0 failed, 0 skipped.
+- 26 new `tests/memory_model` cases cover lifecycle, growth, repeated reset,
+  borrow scopes, branches, loops, reset/destroy with live values, moves,
+  returns, calls, borrowed returns, fields, arrays, ordinary deallocation,
+  cleanup payloads, double destroy, allocation after destroy, pool reuse,
+  double release, use-after-release, borrow release and wrong release.
+- Three IR fixtures assert arena/pool programs contain zero `nrq_gc` references
+  at `-O0` and `-O2`, while asserting `nrq_arena_allocate`, reset/destroy and the
+  pool allocation/release calls are present.
+
+### 4. Benchmarks
+
+Five `-O2` workloads compare ordinary allocation, pool release and arena bulk
+reset over repeated fresh processes. The pool is consistently slower than the
+ordinary allocator (median ratio 2.428). The small arena median is 0.907 of
+ordinary, but its range includes slower runs; the mixed arena is bimodal
+(median 1.782, minimum 0.879). Results are reported with median, minimum and
+maximum, and no universal speedup is claimed. Ranges and samples are in
+`benchmarks/phase5_arena/results.json`.
+
+### 5. Limitations
+
+Arena identity is Sema/TIR metadata plus the runtime handle contract; MLIR/LLVM
+do not carry per-object arena tags. Bulk release cannot run object destructors,
+so payloads needing deterministic cleanup are rejected. Reset releases backing
+chunks rather than retaining them. Raw pointers laundered through FFI cannot be
+tracked. The collector remains operational for managed arrays, SoA, managed
+fields and cyclic graphs. No Phase 6 weak/shared completion, automatic arena
+selection, FFI, runtime borrow tracking or new GC was added. Exception/panic
+unwinding remains unsupported. Phase 6 was not started.
+
+**End of Entry #034**
+
+---
+
 *Technical authority and project ownership remain with Muhammad Tahmid Ahnaf.*
 
 ## Entry #033 — MMM Phase 4: Ordinary Non-GC Allocation
