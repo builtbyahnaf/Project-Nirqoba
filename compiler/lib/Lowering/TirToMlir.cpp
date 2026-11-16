@@ -881,7 +881,9 @@ static bool function_uses_gc(const tir::Function& function) {
     // collect while the owned block is its only root.
     if (op.kind == tir::OpKind::Call && op.result.is_valid() &&
         op.result.type.is_pointer() &&
-        (op.callee == "memory.allocate" || op.callee == "memory.reallocate" ||
+        (op.callee == "memory.allocate" ||
+         op.callee == "memory.manual_allocate" ||
+         op.callee == "memory.reallocate" ||
          op.callee == "memory.shared_allocate") &&
         collect_has_managed_reference(op.result.type.element_type()))
       return true;
@@ -971,7 +973,8 @@ static bool callee_is_collection_free(llvm::StringRef callee) {
       // and socket APIs never enter the collector: only nrq_gc_allocate* runs
       // maybe_collect_automatically, and only gc.collect* runs a cycle.
       "memory.owned_array", "memory.owned_array_aligned", "memory.allocate",
-      "memory.deallocate", "memory.reallocate", "memory.shared_allocate",
+      "memory.manual_allocate", "memory.deallocate", "memory.manual_release",
+      "memory.reallocate", "memory.shared_allocate",
       "memory.shared_retain",
       "memory.shared_release", "memory.shared_count", "memory.secure_allocate",
       "memory.secure_release", "memory.secure_zero", "memory.start_ref_count",
@@ -1279,7 +1282,9 @@ static GcRootPlan analyze_gc_root_plan(const tir::Function& function,
     // even when the function has no managed local of its own.
     if (op.kind == tir::OpKind::Call && op.result.is_valid() &&
         op.result.type.is_pointer() &&
-        (op.callee == "memory.allocate" || op.callee == "memory.reallocate") &&
+        (op.callee == "memory.allocate" ||
+         op.callee == "memory.manual_allocate" ||
+         op.callee == "memory.reallocate") &&
         collect_has_managed_reference(op.result.type.element_type()))
       has_owned_storage_roots = true;
   }
@@ -3448,6 +3453,49 @@ class FunctionTranslator {
           }
           return true;
         }
+        if (op.callee == "memory.manual_allocate" && op.result.is_valid() &&
+            op.result.type.is_pointer()) {
+          mlir::Value bytes = args.empty() ? mlir::Value{} : args[0];
+          if (!bytes) {
+            diag_.error("NRQ4005", op.location,
+                        "internal: memory.manual_allocate<T> has no byte-count operand");
+            return false;
+          }
+          if (bytes.getType() != builder_.getI64Type()) {
+            const unsigned bits = bytes.getType().getIntOrFloatBitWidth();
+            bytes = bits < 64
+                ? builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), bytes).getResult()
+                : builder_.create<mlir::LLVM::TruncOp>(loc, builder_.getI64Type(), bytes).getResult();
+          }
+          mlir::Value alignment = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, builder_.getI64Type(),
+              builder_.getI64IntegerAttr(type_alignment(op.result.type.element_type()))).getResult();
+          mlir::Value result;
+          if (args.size() == 2) {
+            mlir::Value allocator = args[1];
+            if (allocator.getType() != builder_.getI64Type()) {
+              const unsigned bits = allocator.getType().getIntOrFloatBitWidth();
+              allocator = bits < 64
+                  ? builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), allocator).getResult()
+                  : builder_.create<mlir::LLVM::TruncOp>(loc, builder_.getI64Type(), allocator).getResult();
+            }
+            allocator = builder_.create<mlir::LLVM::IntToPtrOp>(
+                loc, llvm_ptr_type(ctx_), allocator).getResult();
+            auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_allocate_from",
+                llvm_ptr_type(ctx_),
+                {llvm_ptr_type(ctx_), builder_.getI64Type(), builder_.getI64Type()});
+            result = builder_.create<mlir::LLVM::CallOp>(
+                loc, fn, mlir::ValueRange{allocator, bytes, alignment}).getResult();
+          } else {
+            auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_allocate",
+                llvm_ptr_type(ctx_), {builder_.getI64Type(), builder_.getI64Type()});
+            result = builder_.create<mlir::LLVM::CallOp>(
+                loc, fn, mlir::ValueRange{bytes, alignment}).getResult();
+          }
+          emit_gc_root_registration(result, op.result.type.element_type(), loc);
+          set(op.result, result);
+          return true;
+        }
         if (op.callee == "memory.allocate" && op.result.is_valid() &&
             op.result.type.is_pointer()) {
           const auto stack_alloc = stack_allocations_.find(op.result.id);
@@ -3958,8 +4006,9 @@ class FunctionTranslator {
           set(op.result, result);
           return true;
         }
-        if (op.callee == "memory.deallocate") {
-          if (!op.arguments.empty() &&
+        if (op.callee == "memory.deallocate" ||
+            op.callee == "memory.manual_release") {
+          if (op.callee == "memory.deallocate" && !op.arguments.empty() &&
               stack_allocations_.find(op.arguments[0].id) !=
                   stack_allocations_.end()) {
             return true;
