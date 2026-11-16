@@ -205,3 +205,23 @@ The following sections are added as the audit proceeds:
 3. Page recycling and metadata reset.
 4. Debug instrumentation and production/debug equivalence.
 5. Dependency conclusions and Phase 2 extraction order.
+
+## 11. Large-page and fallback audit
+
+A page larger than 64 KiB is not page-aligned to its own size, so masking an interior address does not recover its base. It has no object-start bitmap and is marked `use_object_index`. Its objects are:
+
+- enumerated through `unindexed_objects` during sweep;
+- found through `ObjectIndex` for reference resolution;
+- marked through the same page mark bitmap as ordinary pages;
+- unable to use the whole-page fast path because each dead object's index entry must be erased individually.
+
+The same fallback is used when `PageDirectory::insert` fails for an ordinary page. That is intentional: the page remains usable even if the directory cannot index it.
+
+Phase 2 must preserve three separate concerns:
+
+1. Page lookup for ordinary pages (mask plus directory).
+2. Exact-object lookup for large pages (`ObjectIndex`).
+3. Enumeration of objects on pages with no start bitmap (`unindexed_objects`).
+
+A future large-object directory can own (2) and (3), but it must not make (1) slower. The current `PageDirectory` hash is the only lookup path for pages whose masking is insufficient, so Phase 2 adds a direct fast path rather than removing it.
+
