@@ -12,14 +12,7 @@ recorded below is made under that authority.
 
 ---
 
-> **Phase 7 intermediate-label note.** `0.480-beta`, `0.484-beta` and
-> `0.487-beta` are retrospective milestone entries: the work was implemented
-> and shipped, but no release commit was made at those labels. They are kept as
-> separate upgrade records instead of being compressed into `0.483-beta` or
-> `0.495-beta`. Only the newest entry carries the working-build label; older
-> `(released)` entries are actual published checkpoints.
-
-## Version 0.571-beta (working build)
+## Version 0.571-beta
 
 ### Summary of Changes (since `0.563-beta`):
 
@@ -58,7 +51,7 @@ Two Phase 6 upgrades: the sharded shared-control runtime with final-release
 safety, and bounded arena reset capacity reuse. The complete Phase 6 summary is
 recorded under `0.571-beta`.
 
-## Version 0.563-beta (working build)
+## Version 0.563-beta
 
 ### Summary of Changes (since `0.551-beta`):
 
@@ -105,7 +98,7 @@ Two Phase 5 upgrades: tracked arena/pool constructors with unique identities in
 Sema, and enforced lifecycle, escape and pool-release rules. The complete Phase 5
 summary is recorded under `0.563-beta`.
 
-## Version 0.551-beta (working build)
+## Version 0.551-beta
 
 ### Summary of Changes (since `0.547-beta`):
 
@@ -123,7 +116,7 @@ summary is recorded under `0.563-beta`.
 - No second allocator, syntax change or runtime borrow/GC flag was introduced.
 - Tests: 313 unit tests and 554 full-run cases pass.
 
-## Version 0.547-beta (working build)
+## Version 0.547-beta
 
 ### Summary of Changes (since `0.543-beta`):
 
@@ -140,7 +133,7 @@ summary is recorded under `0.563-beta`.
 - Tests: 308 unit tests and 542 full-run cases pass; the memory-model borrow
   suite now has 40 cases.
 
-## Version 0.543-beta (working build)
+## Version 0.543-beta
 
 ### Summary of Changes (since `0.539-beta`):
 
@@ -162,7 +155,7 @@ summary is recorded under `0.563-beta`.
 - Tests: 305 unit tests pass; the full runner has 530 cases, including eleven
   new positive and negative Phase 3 memory-model cases.
 
-## Version 0.539-beta (working build)
+## Version 0.539-beta
 
 ### Summary of Changes (since `0.535-beta`):
 
@@ -178,7 +171,7 @@ summary is recorded under `0.563-beta`.
 - Tests: 299 unit tests pass; the memory-model suite adds overwrite and
   conditional-release runtime coverage.
 
-## Version 0.535-beta (working build)
+## Version 0.535-beta
 
 ### Summary of Changes (since `0.531-beta`):
 
@@ -192,7 +185,7 @@ summary is recorded under `0.563-beta`.
   a dangling obligation is verified as a leak.
 - Tests: 295 unit tests pass with the new ownership cases.
 
-## Version 0.531-beta (working build)
+## Version 0.531-beta
 
 ### Summary of Changes (since `0.527-beta`):
 
@@ -208,7 +201,7 @@ summary is recorded under `0.563-beta`.
 - **Tests:** 294 unit tests and 502 integration tests pass; the new runtime
   regression covers a return-to-local-to-release transfer chain with a live borrow.
 
-## Version 0.527-beta (working build)
+## Version 0.527-beta
 
 ### Summary of Changes (since `0.523-beta`):
 
@@ -431,6 +424,12 @@ summary is recorded under `0.563-beta`.
   The aggregate traversal change was measured separately in Part 4; the Part 3
   record does not claim it as a runtime speedup.
 - **Validation:** 258 unit tests and 466 integration tests pass.
+
+> **Phase 7 intermediate-label note.** `0.487-beta`, `0.484-beta` and
+> `0.480-beta` are retrospective milestone entries: the work was implemented
+> and shipped, but no release commit was made at those labels. They are kept as
+> separate upgrade records instead of being compressed into `0.483-beta` or
+> `0.495-beta`. Older `(released)` entries are actual published checkpoints.
 
 ## Version 0.487-beta (retrospective milestone)
 
