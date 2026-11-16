@@ -1,6 +1,6 @@
 # AOR Phase 1 — Object Metadata Dependency Audit
 
-Status: in progress  
+Status: complete  
 Baseline: H48 (`sizeof(ObjectHeader) == 48`)  
 Audited tree: `d9941f8` plus this report  
 Scope: `runtime/src/gc.cpp`, the public GC layout ABI, compiler layout emission, TLAB publication, barriers, sweeping, page recycling, debug instrumentation, arrays, and large objects.
