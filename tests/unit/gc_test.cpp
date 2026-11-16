@@ -106,6 +106,20 @@ TEST(GcTest, ObjectHeaderStaysWithinItsMetadataBudget) {
             uintptr_t{0});
 }
 
+TEST(GcTest, PageMetadataFactsMatchTheBitmaps) {
+  // A 64 KiB page has 8192 max_align_t slots on this target. Each bitmap
+  // therefore needs 128 64-bit words, or 1024 bytes; Phase 2 carries three of
+  // them (start, mark, remembered). Measuring the total stops page metadata
+  // from being hidden in the header-reduction accounting.
+  const nrq_gc_page_metadata_facts facts = nrq_gc_get_page_metadata_facts();
+  ASSERT_EQ(facts.page_bytes, size_t{65536});
+  ASSERT_EQ(facts.object_start_bitmap_bytes, size_t{1024});
+  ASSERT_EQ(facts.mark_bitmap_bytes, size_t{1024});
+  ASSERT_EQ(facts.remembered_bitmap_bytes, size_t{1024});
+  ASSERT_EQ(facts.total_bitmap_bytes, size_t{3072});
+  ASSERT_EQ(facts.total_bitmap_bytes * 100 / facts.page_bytes, size_t{4});
+}
+
 TEST(GcTest, OneLayoutServesEveryCompatibleInstance) {
   // A repeated request must return the descriptor that already exists: that is
   // the whole point of sharing, and the address is used as an identity.

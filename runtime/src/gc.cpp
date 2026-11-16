@@ -5110,6 +5110,19 @@ nrq_gc_allocation_facts nrq_gc_get_allocation_facts(void) {
   return facts;
 }
 
+nrq_gc_page_metadata_facts nrq_gc_get_page_metadata_facts(void) {
+  nrq_gc_page_metadata_facts facts{};
+  facts.page_bytes = kGcPageBytes;
+  const size_t slots = kGcPageBytes / kObjectStartAlignment;
+  const size_t words = (slots + 63) / 64;
+  const size_t bitmap_bytes = words * sizeof(uint64_t);
+  facts.object_start_bitmap_bytes = bitmap_bytes;
+  facts.mark_bitmap_bytes = bitmap_bytes;
+  facts.remembered_bitmap_bytes = bitmap_bytes;
+  facts.total_bitmap_bytes = bitmap_bytes * 3;
+  return facts;
+}
+
 int32_t nrq_gc_get_allocation_profile(size_t payload_bytes,
                                   nrq_gc_allocation_profile* out) {
   if (!out) return 0;
