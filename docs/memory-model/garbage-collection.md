@@ -37,6 +37,22 @@ script still checks twelve ordinary fixtures at `-O0` and `-O2`; manual-only
 fixtures extend the same rule. A managed control retains GC symbols, so the
 check is not vacuous.
 
+## AOR page metadata
+
+Phase 2 of the Adaptive Object Representation work keeps precise collection while
+moving mutable state out of the object header. Mark and remembered membership are
+page-local bitmaps; young and promotion age stay in the header for now. Ordinary
+pages also carry live, live-byte, young, born-this-cycle, marked, marked-young,
+remembered, and indexed-object counts. Sweep uses those counts to skip all-live
+pages and retire all-dead pages without visiting their headers.
+
+A large page or a page whose directory insertion failed keeps using the exact
+object index and the unindexed sweep list. The page metadata is reset before a
+recycled page can serve another allocation, and development builds validate the
+counts at cycle end. This does not change the collector contract: managed storage
+is still precise, non-moving, and separate from ordinary/shared/arena/pool/manual
+storage.
+
 ## No FFI rooting
 
 A foreign pointer is never automatically registered as a GC root. Because no FFI
