@@ -154,9 +154,17 @@ Struct fields declare their ownership contract: `owned`, `owned <resource>`, `sh
 
 `memory.shared_allocate<T>(bytes)` creates a reference-counted allocation. `memory.shared_retain(pointer)` creates another release token, `memory.shared_release(pointer)` consumes one token, and `memory.shared_count(pointer)` reports the current count. Use `defer memory.shared_release(reference)` for explicit lexical cleanup; shared parameters are released automatically when the callee exits.
 
-A function parameter may declare `shared T* name`, and a function returning a shared pointer declares `shared T* function create()`. Calls transfer one token into or out of the function. Shared pointers cannot be passed to unique-owner parameters or released with unique deallocation APIs. Reference-count updates are synchronized; access to the pointed-to data is not made thread-safe.
+A function parameter may declare `shared T* name`, and a function returning a shared pointer declares `shared T* function create()`. Calls transfer one token into or out of the function. Shared pointers cannot be passed to unique-owner parameters or released with unique deallocation APIs.
 
-A lexical struct may hold `shared` fields. Construction and aggregate-to-aggregate copies retain the token, destruction releases it, and managed fields inside the shared pointee are registered as typed roots while the containing value is live. Tuples still reject owned, shared and borrowed pointer elements. Bulk containers do not run per-field reference-count cleanup and therefore reject shared fields, as described in the storage-boundary policy below.
+Reference counts live in 64 pointer-selected control shards. Each control has an atomic strong count; retain, non-final release and count take only that shard's lock. Final release removes the control before deallocation, so a concurrent retain cannot resurrect the object. Different shared objects therefore do not serialize on the global allocator mutex, while operations on one object are still ordered. Access to the pointed-to data is not made thread-safe; use a mutex resource when the payload is shared mutably.
+
+A shared payload may not contain a shared field. This prevents a supported
+strongly-owned shared-to-shared cycle, because final release cannot walk field
+destructors. Weak references are not implemented: there is no weak source type
+or promotion API. Cyclic graphs remain the explicit collector's domain. Releasing
+a shared owner while a borrow of its storage is live is rejected.
+
+A lexical struct may hold `shared` fields. Construction takes the initial token without an extra retain; aggregate-to-aggregate copies retain each shared field, including nested fields, and destruction releases them in reverse field order. A move transfers the token without retaining. Managed fields inside the shared pointee are registered as typed roots while the containing value is live. Tuples still reject owned, shared and borrowed pointer elements. Bulk containers do not run per-field reference-count cleanup and therefore reject shared fields, as described in the storage-boundary policy below.
 
 ## Native mutex resources
 
