@@ -1,0 +1,8 @@
+int function main() {
+    let pool = memory.pool(64);
+    let value = memory.allocate<int>(4, pool);
+    *value = 1;
+    memory.pool_release(value);
+    print(*value);
+    return 42;
+}
