@@ -3509,7 +3509,12 @@ class FunctionTranslator {
             }
             allocator = builder_.create<mlir::LLVM::IntToPtrOp>(
                 loc, llvm_ptr_type(ctx_), allocator).getResult();
-            auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_allocate_from",
+            const bool arena_fast_path =
+                op.result.ownership == ValueOwnership::ArenaBound &&
+                op.result.arena_kind == 1;
+            auto fn = ensure_runtime_fn(module_, builder_,
+                arena_fast_path ? "nrq_arena_allocate"
+                                : "nrq_memory_allocate_from",
                 llvm_ptr_type(ctx_),
                 {llvm_ptr_type(ctx_), builder_.getI64Type(), builder_.getI64Type()});
             result = builder_.create<mlir::LLVM::CallOp>(
@@ -3814,7 +3819,9 @@ class FunctionTranslator {
         {
           static const std::unordered_map<std::string, int> allocator_kinds = {
               {"memory.general_allocator", 0}, {"memory.pool_allocator", 1},
+              {"memory.pool", 1},
               {"memory.arena_allocator", 2}, {"memory.region", 2},
+              {"memory.arena", 2},
               {"memory.stack_allocator", 3},
               {"memory.slab_allocator", 4}, {"memory.buddy_allocator", 5},
               {"memory.free_list_allocator", 6}, {"memory.tlsf_allocator", 7}};
@@ -3843,6 +3850,38 @@ class FunctionTranslator {
                 loc, builder_.getI64Type(), result).getResult());
             return true;
           }
+        }
+        if (op.callee == "memory.arena_reset" ||
+            op.callee == "memory.pool_reset" ||
+            op.callee == "memory.arena_destroy" ||
+            op.callee == "memory.pool_destroy") {
+          if (args.empty()) return false;
+          mlir::Value handle = args[0];
+          if (handle.getType() != builder_.getI64Type()) {
+            const unsigned bits = handle.getType().getIntOrFloatBitWidth();
+            handle = bits < 64
+                ? builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), handle).getResult()
+                : builder_.create<mlir::LLVM::TruncOp>(loc, builder_.getI64Type(), handle).getResult();
+          }
+          auto pointer = builder_.create<mlir::LLVM::IntToPtrOp>(
+              loc, llvm_ptr_type(ctx_), handle).getResult();
+          const bool destroy = op.callee.find("destroy") != std::string::npos;
+          auto fn = ensure_runtime_fn(module_, builder_,
+              destroy ? "nrq_arena_destroy" : "nrq_arena_reset",
+              builder_.getI32Type(), {llvm_ptr_type(ctx_)});
+          auto result = builder_.create<mlir::LLVM::CallOp>(
+              loc, fn, mlir::ValueRange{pointer}).getResult();
+          if (op.result.is_valid())
+            set(op.result, result);
+          return true;
+        }
+        if (op.callee == "memory.pool_release") {
+          if (args.empty()) return false;
+          auto fn = ensure_runtime_fn(module_, builder_,
+              "nrq_memory_deallocate_checked",
+              mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
+          builder_.create<mlir::LLVM::CallOp>(loc, fn, mlir::ValueRange{args[0]});
+          return true;
         }
         if (op.callee == "memory.get_allocator" ||
             op.callee == "memory.use_allocator" ||
