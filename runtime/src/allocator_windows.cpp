@@ -75,9 +75,20 @@ size_t next_power_of_two(size_t value) {
   return value + 1;
 }
 
+// The Windows process heap already returns max_align_t-aligned storage. A
+// request within that alignment therefore needs no prefix, slack or saved raw
+// pointer: the returned address is the heap block itself. Only over-aligned
+// requests pay for a header and the alignment adjustment.
+constexpr size_t kHeapNaturalAlignment = alignof(std::max_align_t);
+static_assert(kHeapNaturalAlignment >= 8,
+              "the process heap must satisfy fundamental alignment");
+
 void* heap_alloc_aligned(size_t bytes, size_t alignment) {
-  if (bytes == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0 ||
-      alignment > std::numeric_limits<size_t>::max() - sizeof(void*) ||
+  if (bytes == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0)
+    return nullptr;
+  if (alignment <= kHeapNaturalAlignment)
+    return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes);
+  if (alignment > std::numeric_limits<size_t>::max() - sizeof(void*) ||
       bytes > std::numeric_limits<size_t>::max() - alignment - sizeof(void*))
     return nullptr;
   const size_t total = bytes + alignment - 1 + sizeof(void*);
@@ -94,12 +105,28 @@ void heap_free_aligned(void* pointer) {
   if (pointer) HeapFree(GetProcessHeap(), 0, reinterpret_cast<void**>(pointer)[-1]);
 }
 
+void heap_free_pointer(void* pointer, size_t alignment) {
+  if (!pointer) return;
+  if (alignment <= kHeapNaturalAlignment) {
+    HeapFree(GetProcessHeap(), 0, pointer);
+    return;
+  }
+  heap_free_aligned(pointer);
+}
+
 class Allocator {
  public:
   explicit Allocator(size_t capacity) : capacity_(capacity) {}
   virtual ~Allocator() = default;
   virtual void* allocate(size_t bytes, size_t alignment) = 0;
   virtual void deallocate(void* pointer) = 0;
+  // General storage needs the recorded alignment to know whether the block has
+  // a raw-pointer prefix. Other strategies ignore it and keep their existing
+  // deallocate implementation.
+  virtual void deallocate_aligned(void* pointer, size_t alignment) {
+    (void)alignment;
+    deallocate(pointer);
+  }
   virtual bool can_deallocate(void*) const { return true; }
   virtual bool reset() = 0;
   virtual bool can_destroy() const { return true; }
@@ -136,23 +163,23 @@ class Allocator {
     std::lock_guard<std::mutex> lock(operation_mutex_);
     return allocate(bytes, alignment);
   }
-  void deallocate_serialized(void* pointer) {
+  void deallocate_serialized(void* pointer, size_t alignment) {
     if (!requires_operation_serialization()) {
-      deallocate(pointer);
+      deallocate_aligned(pointer, alignment);
       return;
     }
     std::lock_guard<std::mutex> lock(operation_mutex_);
-    deallocate(pointer);
+    deallocate_aligned(pointer, alignment);
   }
-  bool try_deallocate_serialized(void* pointer) {
+  bool try_deallocate_serialized(void* pointer, size_t alignment) {
     if (!requires_operation_serialization()) {
       if (!can_deallocate(pointer)) return false;
-      deallocate(pointer);
+      deallocate_aligned(pointer, alignment);
       return true;
     }
     std::lock_guard<std::mutex> lock(operation_mutex_);
     if (!can_deallocate(pointer)) return false;
-    deallocate(pointer);
+    deallocate_aligned(pointer, alignment);
     return true;
   }
   bool reset_serialized() {
@@ -197,7 +224,7 @@ class Allocator {
     void* replacement = allocate(bytes, alignment);
     if (!replacement) return nullptr;
     std::memcpy(replacement, pointer, std::min(old_bytes, bytes));
-    deallocate(pointer);
+    deallocate_aligned(pointer, alignment);
     return replacement;
   }
 
@@ -224,7 +251,12 @@ class GeneralAllocator final : public Allocator {
   void* allocate(size_t bytes, size_t alignment) override {
     return heap_alloc_aligned(bytes, alignment);
   }
-  void deallocate(void* pointer) override { heap_free_aligned(pointer); }
+  void deallocate(void*) override {
+    nrq_runtime_fatal("general allocation requires its recorded alignment");
+  }
+  void deallocate_aligned(void* pointer, size_t alignment) override {
+    heap_free_pointer(pointer, alignment);
+  }
   bool reset() override { return true; }
 };
 
@@ -1230,7 +1262,7 @@ class ThreadDefaultAllocationCache {
  public:
   ~ThreadDefaultAllocationCache() {
     for (size_t index = 0; index < size_; ++index)
-      heap_free_aligned(blocks_[index].pointer);
+      heap_free_pointer(blocks_[index].pointer, blocks_[index].alignment);
   }
 
   bool can_store(size_t bytes, size_t alignment) const {
@@ -1514,7 +1546,7 @@ static void* allocate_with_allocator(Allocator* allocator, size_t bytes,
       nrq_runtime_fatal("allocator returned an address that is already live");
     record_allocation_profile(bytes);
   } catch (...) {
-    allocator->deallocate_serialized(pointer);
+    allocator->deallocate_serialized(pointer, alignment);
     if (pinned) release_operation_pin(allocator);
     return nullptr;
   }
@@ -1529,9 +1561,13 @@ static bool increment_operation_pin_locked(Allocator* allocator) {
 void* nrq_memory_allocate(size_t bytes, size_t alignment) {
   // The cache is only valid for the process default general allocator. A
   // thread-selected allocator and a process default override must both keep
-  // their normal registry and pinning path.
-  if (!thread_selection.allocator &&
-      default_general_cache_enabled.load(std::memory_order_acquire)) {
+  // their normal registry and pinning path. Read the thread selection and the
+  // cache switch once: both are stable for the duration of this call, and the
+  // previous fallthrough re-read them after every cache miss.
+  const bool default_path =
+      !thread_selection.allocator &&
+      default_general_cache_enabled.load(std::memory_order_acquire);
+  if (default_path) {
     if (void* cached =
             thread_default_allocation_cache.take(bytes, alignment)) {
       AllocationShard& shard = shard_for(cached);
@@ -1543,17 +1579,15 @@ void* nrq_memory_allocate(size_t bytes, size_t alignment) {
         record_allocation_profile(bytes);
         return cached;
       } catch (...) {
-        heap_free_aligned(cached);
+        heap_free_pointer(cached, alignment);
         return nullptr;
       }
     }
-  }
-  // The process-default general allocator has static lifetime, so a normal
-  // allocation needs neither the registry mutex nor an operation pin. Large
-  // blocks bypass the cache but still take this lock-free path.
-  if (!thread_selection.allocator &&
-      default_general_cache_enabled.load(std::memory_order_acquire))
+    // The process-default general allocator has static lifetime, so a normal
+    // allocation needs neither the registry mutex nor an operation pin. Large
+    // blocks bypass the cache but still take this lock-free path.
     return allocate_with_allocator(&default_allocator, bytes, alignment, false);
+  }
 
   Allocator* allocator = nullptr;
   {
@@ -1683,6 +1717,7 @@ int32_t nrq_memory_shared_release(void* pointer) {
 
   AllocationShard& shard = shard_for(pointer);
   Allocator* allocator = nullptr;
+  size_t alignment = 0;
   {
     std::lock_guard<std::mutex> shard_lock(shard.mutex);
     auto* owner = shard.allocations.find(pointer);
@@ -1702,6 +1737,7 @@ int32_t nrq_memory_shared_release(void* pointer) {
       return 0;
     }
     allocator = owner->owner.allocator;
+    alignment = owner->owner.alignment;
     // The live ownership record keeps the allocator alive until the callback
     // and record erase complete; destroy and reset scan that record and refuse
     // while it is in flight.
@@ -1716,7 +1752,7 @@ int32_t nrq_memory_shared_release(void* pointer) {
   bool released = false;
   bool callback_failed = false;
   try {
-    released = allocator->try_deallocate_serialized(pointer);
+    released = allocator->try_deallocate_serialized(pointer, alignment);
   } catch (...) {
     callback_failed = true;
   }
@@ -1840,6 +1876,7 @@ void nrq_memory_deallocate_checked(void* pointer) {
   bool cached = false;
   size_t cached_bytes = 0;
   size_t cached_alignment = 0;
+  size_t alignment = 0;
   AllocationShard& shard = shard_for(pointer);
   {
     std::lock_guard<std::mutex> lock(shard.mutex);
@@ -1855,10 +1892,14 @@ void nrq_memory_deallocate_checked(void* pointer) {
       cached_bytes = found->owner.bytes;
       cached_alignment = found->owner.alignment;
       record_deallocation_profile(cached_bytes);
+      // No waiter observes this erase. Allocation waits only while a record
+      // exists with operation_in_flight set, and this cached path handles
+      // records that were never marked in flight. Avoid a condition-variable
+      // wakeup on every cached release.
       shard.allocations.erase(pointer);
-      shard.changed.notify_all();
     } else {
       allocator = found->owner.allocator;
+      alignment = found->owner.alignment;
       found->owner.operation_in_flight = true;
     }
   }
@@ -1877,7 +1918,7 @@ void nrq_memory_deallocate_checked(void* pointer) {
   bool released = false;
   bool callback_failed = false;
   try {
-    released = allocator->try_deallocate_serialized(pointer);
+    released = allocator->try_deallocate_serialized(pointer, alignment);
   } catch (...) {
     callback_failed = true;
   }
@@ -2219,6 +2260,7 @@ void nrq_memory_secure_release(void* pointer) {
   if (!pointer) return;
   Allocator* allocator = nullptr;
   size_t bytes = 0;
+  size_t alignment = 0;
   AllocationShard& shard = shard_for(pointer);
   {
     std::lock_guard<std::mutex> lock(allocator_mutex);
@@ -2232,6 +2274,7 @@ void nrq_memory_secure_release(void* pointer) {
       nrq_runtime_fatal("memory.secure_release raced with another operation on the same pointer");
     allocator = found->owner.allocator;
     bytes = found->owner.bytes;
+    alignment = found->owner.alignment;
     if (!increment_operation_pin_locked(allocator))
       nrq_runtime_fatal("memory.secure_release could not pin the owning allocator");
     found->owner.operation_in_flight = true;
@@ -2241,7 +2284,7 @@ void nrq_memory_secure_release(void* pointer) {
   bool released = false;
   bool callback_failed = false;
   try {
-    released = allocator->try_deallocate_serialized(pointer);
+    released = allocator->try_deallocate_serialized(pointer, alignment);
   } catch (...) {
     callback_failed = true;
   }

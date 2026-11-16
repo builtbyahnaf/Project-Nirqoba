@@ -293,6 +293,42 @@ class Function {
     operations_ = std::move(expanded);
   }
 
+  // Cleanup nulls an owner slot after discharging it so a later cleanup at an
+  // outer scope cannot reload the same owner. At a return there is no later
+  // operation in the activation, so that constant and store are dead. Removing
+  // them is a code-generation simplification, not a change to destruction:
+  // the release call has already run and the obligation remains discharged.
+  void remove_dead_slot_clears_before_return() {
+    for (std::size_t index = 0; index + 2 < operations_.size(); ++index) {
+      Op& null_op = operations_[index];
+      Op& clear = operations_[index + 1];
+      Op& next = operations_[index + 2];
+      if (null_op.kind != OpKind::ConstantNull ||
+          clear.kind != OpKind::Store || next.kind != OpKind::Return)
+        continue;
+      if (clear.operand.id != null_op.result.id) continue;
+      bool null_used_elsewhere = false;
+      for (std::size_t other = 0; other < operations_.size(); ++other) {
+        if (other == index || other == index + 1) continue;
+        const Op& op = operations_[other];
+        if (op.result.id == null_op.result.id || op.operand.id == null_op.result.id ||
+            op.lhs.id == null_op.result.id || op.rhs.id == null_op.result.id) {
+          null_used_elsewhere = true;
+          break;
+        }
+        for (const Value argument : op.arguments)
+          if (argument.id == null_op.result.id) null_used_elsewhere = true;
+        for (const Value element : op.aggregate_elements)
+          if (element.id == null_op.result.id) null_used_elsewhere = true;
+        if (null_used_elsewhere) break;
+      }
+      if (null_used_elsewhere) continue;
+      operations_.erase(operations_.begin() + static_cast<std::ptrdiff_t>(index),
+                        operations_.begin() + static_cast<std::ptrdiff_t>(index + 2));
+      index = index == 0 ? 0 : index - 1;
+    }
+  }
+
   const std::vector<Parameter>& parameters() const { return parameters_; }
   void add_parameter(std::string name, Type type, Value value,
                      ValueOwnership ownership = ValueOwnership::Trivial,

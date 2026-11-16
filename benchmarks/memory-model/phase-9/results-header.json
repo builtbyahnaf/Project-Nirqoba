@@ -1,0 +1,333 @@
+{
+  "configuration": {
+    "compiler_version": [
+      "nirqoba compiler version 0.583-beta (Phase 8)",
+      "LLVM/MLIR: 23.1.4",
+      "Target: x86_64-pc-windows-msvc",
+      "Build: RelWithDebInfo"
+    ],
+    "build": "RelWithDebInfo runtime, MSVC /O2 harness",
+    "timer": "steady_clock around the measured loop",
+    "samples": 7,
+    "platform": "Windows-11-10.0.26300-SP0",
+    "machine": "AMD64",
+    "processor": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+    "logical_cpus": 12,
+    "physical_cpus": 10,
+    "total_memory_bytes": 16890978304,
+    "note": "fresh process per mode; checksum equality is checked per record"
+  },
+  "modes": {
+    "owned": {
+      "owned_alloc": {
+        "checksum": 499999500000,
+        "ns_per_op": {
+          "median": 57.739,
+          "mean": 57.644,
+          "min": 54.923,
+          "max": 59.72,
+          "stddev": 1.417,
+          "samples": [
+            58.132,
+            57.739,
+            58.757,
+            54.923,
+            57.51,
+            59.72,
+            56.724
+          ]
+        },
+        "peak_rss_bytes": 8978432,
+        "current_rss_bytes": 8978432,
+        "operations": 1000000
+      },
+      "owned_retained": {
+        "checksum": 19999900000,
+        "ns_per_op": {
+          "median": 187.33,
+          "mean": 184.486,
+          "min": 152.632,
+          "max": 211.321,
+          "stddev": 17.229,
+          "samples": [
+            192.224,
+            211.321,
+            195.854,
+            177.136,
+            174.903,
+            187.33,
+            152.632
+          ]
+        },
+        "peak_rss_bytes": 41885696,
+        "current_rss_bytes": 41439232,
+        "operations": 200000
+      },
+      "owned_release": {
+        "checksum": 19999900000,
+        "ns_per_op": {
+          "median": 134.94,
+          "mean": 142.914,
+          "min": 123.697,
+          "max": 191.553,
+          "stddev": 21.564,
+          "samples": [
+            135.994,
+            152.583,
+            191.553,
+            134.161,
+            134.94,
+            127.469,
+            123.697
+          ]
+        },
+        "peak_rss_bytes": 41885696,
+        "current_rss_bytes": 31838208,
+        "operations": 200000
+      },
+      "manual_alloc": {
+        "checksum": 499999500000,
+        "ns_per_op": {
+          "median": 59.35,
+          "mean": 59.83,
+          "min": 57.409,
+          "max": 64.471,
+          "stddev": 2.153,
+          "samples": [
+            59.679,
+            57.409,
+            64.471,
+            59.35,
+            58.757,
+            60.894,
+            58.248
+          ]
+        },
+        "peak_rss_bytes": 41885696,
+        "current_rss_bytes": 27615232,
+        "operations": 1000000
+      },
+      "borrowed_read": {
+        "checksum": 8386560000,
+        "ns_per_op": {
+          "median": 0.073,
+          "mean": 0.076,
+          "min": 0.07,
+          "max": 0.095,
+          "stddev": 0.008,
+          "samples": [
+            0.07,
+            0.073,
+            0.077,
+            0.095,
+            0.073,
+            0.07,
+            0.071
+          ]
+        },
+        "peak_rss_bytes": 41885696,
+        "current_rss_bytes": 27615232,
+        "operations": 4096000
+      }
+    },
+    "arena": {
+      "arena_alloc": {
+        "checksum": 499999500000,
+        "ns_per_op": {
+          "median": 49.279,
+          "mean": 50.162,
+          "min": 47.362,
+          "max": 54.522,
+          "stddev": 2.475,
+          "samples": [
+            53.285,
+            48.364,
+            49.279,
+            47.362,
+            54.522,
+            49.521,
+            48.799
+          ]
+        },
+        "peak_rss_bytes": 16998400,
+        "current_rss_bytes": 16998400,
+        "operations": 1000000
+      },
+      "arena_reset": {
+        "checksum": 499999500000,
+        "ns_per_op": {
+          "median": 198.8,
+          "mean": 221.943,
+          "min": 190.3,
+          "max": 306.4,
+          "stddev": 42.293,
+          "samples": [
+            198.8,
+            190.3,
+            196.2,
+            306.4,
+            194.0,
+            266.5,
+            201.4
+          ]
+        },
+        "peak_rss_bytes": 17076224,
+        "current_rss_bytes": 17076224,
+        "operations": 1000
+      }
+    },
+    "pool": {
+      "pool_alloc": {
+        "checksum": 499999500000,
+        "ns_per_op": {
+          "median": 142.487,
+          "mean": 142.462,
+          "min": 140.775,
+          "max": 144.775,
+          "stddev": 1.306,
+          "samples": [
+            140.775,
+            142.487,
+            143.532,
+            142.052,
+            142.697,
+            144.775,
+            140.919
+          ]
+        },
+        "peak_rss_bytes": 9117696,
+        "current_rss_bytes": 9117696,
+        "operations": 1000000
+      }
+    },
+    "shared": {
+      "shared_alloc": {
+        "checksum": 19999900000,
+        "ns_per_op": {
+          "median": 648.855,
+          "mean": 645.645,
+          "min": 624.542,
+          "max": 654.109,
+          "stddev": 9.263,
+          "samples": [
+            645.15,
+            643.775,
+            651.606,
+            624.542,
+            648.855,
+            654.109,
+            651.48
+          ]
+        },
+        "peak_rss_bytes": 8998912,
+        "current_rss_bytes": 8998912,
+        "operations": 200000
+      },
+      "shared_contention": {
+        "checksum": 7000000,
+        "ns_per_op": {
+          "median": 76.124,
+          "mean": 74.766,
+          "min": 65.09,
+          "max": 79.033,
+          "stddev": 4.45,
+          "samples": [
+            76.124,
+            65.09,
+            76.868,
+            78.97,
+            79.033,
+            73.262,
+            74.014
+          ]
+        },
+        "peak_rss_bytes": 9285632,
+        "current_rss_bytes": 9220096,
+        "operations": 1000000
+      }
+    },
+    "gc": {
+      "gc_alloc": {
+        "checksum": 124999750000,
+        "ns_per_op": {
+          "median": 55.657,
+          "mean": 56.342,
+          "min": 52.633,
+          "max": 65.089,
+          "stddev": 3.785,
+          "samples": [
+            53.466,
+            65.089,
+            52.633,
+            55.657,
+            55.739,
+            55.399,
+            56.41
+          ]
+        },
+        "peak_rss_bytes": 50925568,
+        "current_rss_bytes": 50925568,
+        "operations": 500000,
+        "live_before": 500000,
+        "live_after": 0
+      },
+      "gc_collect": {
+        "checksum": 124999750000,
+        "ns_per_op": {
+          "median": 5861800.0,
+          "mean": 5912071.429,
+          "min": 5107900.0,
+          "max": 6598800.0,
+          "stddev": 501974.87,
+          "samples": [
+            5861800.0,
+            5436500.0,
+            5107900.0,
+            6089200.0,
+            6517200.0,
+            6598800.0,
+            5773100.0
+          ]
+        },
+        "peak_rss_bytes": 50987008,
+        "current_rss_bytes": 50987008,
+        "operations": 1,
+        "live_before": 500000,
+        "live_after": 0
+      }
+    },
+    "mixed": {
+      "mixed": {
+        "checksum": 99999500000,
+        "ns_per_op": {
+          "median": 111.887,
+          "mean": 116.211,
+          "min": 105.792,
+          "max": 135.187,
+          "stddev": 9.751,
+          "samples": [
+            109.348,
+            105.792,
+            110.832,
+            135.187,
+            126.138,
+            114.295,
+            111.887
+          ]
+        },
+        "peak_rss_bytes": 10780672,
+        "current_rss_bytes": 10780672,
+        "operations": 1000000
+      }
+    }
+  },
+  "limitations": [
+    "The harness measures ABI entry points, not language syntax; compiler cleanup lowering is covered by TIR/LLVM fixtures.",
+    "The manual mode uses the same checked allocation entry point because manual storage has no separate heap; it measures runtime path overhead, not a distinct allocator.",
+    "Arena reset is measured separately from arena allocation and retains only the initial chunk.",
+    "Shared contention depends on the host scheduler and is not a real-time guarantee.",
+    "Peak RSS is process-wide and includes runtime metadata and the benchmark executable.",
+    "Collection latency is one full collection after a fixed garbage load, not a pause distribution.",
+    "No FFI mode exists because the language has no FFI surface."
+  ]
+}

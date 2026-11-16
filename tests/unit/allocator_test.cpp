@@ -737,6 +737,40 @@ TEST(AllocatorTest, SecureBuffersAreZeroedAndProfilerTracksLifetime) {
   nrq_memory_profiler_stop();
 }
 
+TEST(AllocatorTest, NaturalAndOverAlignedDefaultAllocationsKeepTheirContract) {
+  // Natural-aligned blocks no longer carry a private prefix, so this test
+  // writes every byte of each block and verifies alignment before release. An
+  // over-aligned block still takes the prefix path and must round-trip too.
+  for (size_t alignment : {size_t{1}, size_t{2}, size_t{4}, size_t{8},
+                           size_t{16}, size_t{32}, size_t{64}, size_t{4096}}) {
+    constexpr size_t kBytes = 8192;
+    auto* block = static_cast<unsigned char*>(
+        nrq_memory_allocate(kBytes, alignment));
+    ASSERT_NE(block, nullptr);
+    ASSERT_EQ(reinterpret_cast<std::uintptr_t>(block) % alignment, 0u);
+    std::memset(block, 0x5a, kBytes);
+    ASSERT_EQ(block[0], 0x5a);
+    ASSERT_EQ(block[kBytes - 1], 0x5a);
+    nrq_memory_deallocate_checked(block);
+  }
+}
+
+TEST(AllocatorTest, DefaultCachePreservesAlignmentAcrossReuse) {
+  for (size_t alignment : {size_t{1}, size_t{8}, size_t{16}, size_t{64}}) {
+    auto* first = static_cast<unsigned char*>(nrq_memory_allocate(48, alignment));
+    ASSERT_NE(first, nullptr);
+    ASSERT_EQ(reinterpret_cast<std::uintptr_t>(first) % alignment, 0u);
+    std::memset(first, 0x3c, 48);
+    nrq_memory_deallocate_checked(first);
+
+    auto* second = static_cast<unsigned char*>(nrq_memory_allocate(48, alignment));
+    ASSERT_EQ(second, first);
+    ASSERT_EQ(reinterpret_cast<std::uintptr_t>(second) % alignment, 0u);
+    ASSERT_EQ(second[47], 0x3c);
+    nrq_memory_deallocate_checked(second);
+  }
+}
+
 TEST(AllocatorTest, DefaultSmallAllocationCacheReusesAndKeepsProfilingAccurate) {
   nrq_memory_profiler_start();
   void* first = nrq_memory_allocate(64, 1);

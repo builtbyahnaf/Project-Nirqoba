@@ -4971,6 +4971,7 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     // The copy keeps the verified module unchanged for later diagnostics.
     tir::Function lowered_fn = *tir_fn;
     lowered_fn.expand_drop_operations_to_calls();
+    lowered_fn.remove_dead_slot_clears_before_return();
     FunctionTranslator translator(
         *module, lowered_fn, borrowed_summary, collections, func_op, builder,
         &context, diagnostics, fast_math, configuration, string_literals,

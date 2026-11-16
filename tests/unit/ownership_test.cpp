@@ -1318,6 +1318,30 @@ TEST(OwnershipTest, VerifierRejectsDropOfGcManagedAllocation) {
       diag, "drop operand must be owning, not 'gc_managed'"));
 }
 
+TEST(OwnershipTest, DeadSlotClearAfterFinalDropIsRemovedBeforeLowering) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_dead_clear.nrqba",
+      "int function main() {\n"
+      "  var value = memory.allocate<int>(1);\n"
+      "  *value = 9;\n"
+      "  return *value;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  ASSERT_EQ(count_kind(*main_fn, tir::OpKind::Drop), 1);
+  const size_t nulls_before = count_kind(*main_fn, tir::OpKind::ConstantNull);
+  main_fn->expand_drop_operations_to_calls();
+  main_fn->remove_dead_slot_clears_before_return();
+  ASSERT_EQ(count_kind(*main_fn, tir::OpKind::Drop), 0);
+  ASSERT_EQ(count_kind(*main_fn, tir::OpKind::ConstantNull), nulls_before - 1);
+  // The allocation and the expanded release remain calls; only the dead clear
+  // was removed.
+  ASSERT_EQ(count_kind(*main_fn, tir::OpKind::Call), 2);
+}
+
 TEST(OwnershipTest, VerifierRejectsSharedAllocationMarkedOrdinary) {
   DiagnosticEngine diag;
   auto module = lower_source(
