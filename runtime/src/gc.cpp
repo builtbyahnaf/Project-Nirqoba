@@ -3449,7 +3449,32 @@ void begin_cycle(bool young_only) {
   resume_mutators();
 }
 
+// Development-only invariant check for the page metadata the collector now
+// derives from. It runs at the end of a cycle, when marks must be gone and every
+// per-page count is final, and catches a missed reset before a recycled page can
+// carry stale state into the next cycle.
+void validate_page_metadata_locked() {
+  if constexpr (!nirq::runtime_debug_enabled) return;
+  for (const auto& entry : gc_pages) {
+    const GcPage* page = entry.get();
+    if (!page) continue;
+    if (page->young_objects > page->live_objects ||
+        page->marked_objects > page->live_objects ||
+        page->marked_young_objects > page->young_objects ||
+        page->remembered_objects > page->young_objects)
+      nrq_runtime_fatal("GC page metadata count is inconsistent");
+    if (page->live_objects == 0 &&
+        (page->young_objects != 0 || page->live_payload_bytes != 0 ||
+         page->marked_objects != 0 || page->marked_young_objects != 0 ||
+         page->remembered_objects != 0))
+      nrq_runtime_fatal("GC empty page retained live metadata");
+    if (page->marked_objects != 0 || page->marked_young_objects != 0)
+      nrq_runtime_fatal("GC cycle ended with a page mark outstanding");
+  }
+}
+
 void finish_cycle_locked(bool young_only) {
+  validate_page_metadata_locked();
   statistics.collections = saturated_add(statistics.collections, 1);
   if (young_only) {
     minor_collections = saturated_add(minor_collections, 1);
