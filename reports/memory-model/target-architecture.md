@@ -96,6 +96,13 @@ frames, write barriers and safepoints. Automatic collection starts disabled;
 `array.allocate<T>` is the explicit collector allocation and `gc.collect()` is an
 explicit cycle.
 
+**Phase 7 status:** verified at `0.575-beta`. `array.allocate<T>` remains the
+only explicit collector allocation; `managed<T>` is its reference type and
+`memory.owned_soa<T>` is an explicitly GC-backed container with a legacy name.
+The audit in `reports/memory-model/phase-7-audit.md` traces each entry point
+through Sema, TIR, MLIR/LLVM and the runtime. No automatic compiler-selected GC
+or CDMM is present.
+
 ### I10 — Owned-only execution contains no GC infrastructure
 
 An ordinary owned/borrowed program must not contain, at `-O0` or `-O2`:
@@ -123,6 +130,14 @@ registered path so `memory.pool_release` can return the slot. Bulk reset and
 destroy invalidate the region without running object destructors, and payloads
 whose cleanup bulk release cannot perform are rejected at compile time.
 
+**Phase 7 status:** verified at `0.575-beta`. The ordinary-fixture set now
+includes owned pointers, owned arrays, nested owned aggregates, borrowed heap
+views, reallocation, secure allocation, plain shared allocation, helper chains,
+arenas, pools and the development runtime. A declaration-aware check compiles
+each at `-O0` and `-O2`, inspects emitted LLVM and the object symbol table, and
+requires zero `nrq_gc` names; a managed control object must contain GC symbols.
+The check is `tests/phase7_isolation.py`.
+
 ### I11 — Mixed-strategy interoperability is deliberate
 
 Any storage outside the collector that contains a managed reference must have:
@@ -132,8 +147,11 @@ Any storage outside the collector that contains a managed reference must have:
 - a defined final-release/cleanup rule.
 
 If a path cannot provide all three, it rejects the managed payload. Secure
-allocation currently has no rooted path; this is resolved before Phase 7, and
-Phase 1 takes the conservative route described in §6.
+allocation has no rooted path and rejects managed payloads. **Phase 7 status:**
+tracked arena and pool allocation now also rejects managed payloads, because
+bulk reset/destroy has no unregistration point; the Sema diagnostic and TIR
+verifier rule are both enforced. Ordinary and shared storage containing managed
+fields register typed roots and release them on deallocation/final release.
 
 ### I12 — Ownership is represented and verified in TIR
 
@@ -410,7 +428,7 @@ in Phase 1. Freeze their contracts before Phases 6–8.
 | 4 | Ordinary non-GC allocation isolation | Complete at `0.551-beta`; owned-only IR gate and mixed-path regressions pass |
 | 5 | Arena scopes and bulk destruction | Complete at `0.563-beta`; tracked lifetimes, bulk invalidation, escape checks and GC-free IR pass |
 | 6 | Shared completion/weak refs | Complete at `0.571-beta`; sharded atomic strong counts, final-release safety, borrow/release diagnostics, weak refs scoped out with GC cycle policy |
-| 7 | GC isolation and mixed strategy | Secure-root decision, Phase 4 gate |
+| 7 | GC isolation and mixed strategy | Complete at `0.575-beta`; audit, explicit entry-point contract, root/safepoint/barrier/mutator fixtures, mixed-strategy tests, O0/O2 declaration-and-dependency isolation checks and benchmarks pass |
 | 8 | Manual/FFI | FFI boundary design |
 | 9 | Optimization/docs/stabilization | All semantic gates |
 
