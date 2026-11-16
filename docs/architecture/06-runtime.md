@@ -330,3 +330,21 @@ run already paid for itself: it found a lowering defect that made every
 development build of a module with two literal-using functions fail, which is
 fixed in `TirToMlir.cpp` by giving the literal table to the module instead of to
 each function.
+
+### 4.6 Phase 7 isolation evidence
+
+`tests/phase7_isolation.py` narrows the ordinary-path claim to the generated
+object, not only the IR. It compiles twelve fixtures at `-O0` and `-O2`, rejects
+every `nrq_gc` name in LLVM (declarations included), rejects every `nrq_gc`
+symbol in the object, runs the resulting executable, and repeats the check with
+the development runtime. A managed control object must contain GC symbols, so a
+compiler that emitted nothing at all cannot pass. The fixtures cover owned
+pointers and arrays, nested owned aggregates, borrowed heap views,
+reallocation, secure storage, plain shared storage, helper chains, arena, pool
+and the debug configuration. Function-body checks also require a GC-independent
+helper to stay outside the mutator region while its managed caller enters it.
+
+The Phase 7 audit, completion report and benchmark analysis are
+`reports/memory-model/phase-7-audit.md`, `reports/memory-model/phase-7.md` and
+`reports/memory-model/phase-7-benchmarks.md`. The migration guide is
+`docs/migration/phase-7.md`.
