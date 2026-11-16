@@ -130,7 +130,22 @@ The stored pointer saves a page-directory probe on every mark and publication. R
 
 **Classification:** Derive for ordinary pages once a direct page table exists; keep a large-page fallback. Do not remove the pointer while it is the cheapest correct path.
 
-## 6. Consumers outside `gc.cpp`
+## 6. Birth-epoch audit
+
+Allocation stores `next_cycle_epoch`; the cycle increments it before marking. A header is "born during the cycle" when its epoch is greater than or equal to the active cycle epoch.
+
+Uses:
+
+- `enqueue_header_locked` refuses to mark such an object, because the sweep retains it by the same comparison. Marking it would also add a survivor count that the snapshot cannot attribute.
+- The bitmap sweep clears a barrier mark on such an object and leaves it in place.
+- The unindexed sweep does the same before re-linking it.
+- Publication increments `born_this_cycle` on the page when the phase is not idle and the epoch matches.
+
+The field is a 64-bit monotonic stamp. A page-local allocation epoch would work only if every object on a page shares the page's birth cycle; mixed pages and span reuse break that assumption today. A per-page birth bitmap would need one bit per slot and allocation-time marking, which is larger than the current 8 bytes for sparse pages but smaller for dense ones; it is not a safe drop-in until the page-class allocator exists.
+
+**Classification:** Keep for mixed pages; derive for uniform page classes in Phase 3/4. Do not remove before the page-local birth representation is validated against concurrent allocation.
+
+## 7. Consumers outside `gc.cpp`
 
 - `runtime/include/nirqoba/runtime/gc.h` exposes header size and instance/shared byte counts as allocation facts. Tests assert 48/40/8.
 - `nrq_object_layout` is a public immutable descriptor. Compiler lowering emits reference-offset arrays for root registration; those arrays are not object headers.
