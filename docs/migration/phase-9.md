@@ -1,75 +1,107 @@
-# Phase 9 — Ownership Hardening Notes
+# Phase 9 migration guide — optimization and stabilization
 
-**Version:** `0.515-beta`  
-**Scope:** Pre-MMM Phase 9 hardening. No new syntax.
+**Version:** `0.591-beta`  
+**Previous phase:** Phase 8 — manual memory and the FFI boundary  
+**Scope:** existing memory model only; Phase 10 CDMM is not implemented
 
-Phase 9 fixes three contracts that Phase 0 identified as prerequisites for the
-dedicated memory-model migration. Existing valid programs keep working except for
-one storage rule described below.
+---
 
-## 1. Owned-only destruction is collector-free
+## 1. Is my program affected?
 
-Destroying an owned aggregate, owned array, owned pointer or borrowed view no longer
-unregisters a collector root when the released type contains no managed reference.
-This changes generated code only. No source change is required.
+Most programs need no source change. Phase 9 optimized runtime and lowering paths
+without adding or removing a memory strategy.
 
-Types that do contain a managed reference keep their existing register/unregister
-pair. The collector remains required for `managed<T>` and `array.allocate<T>`; it is
-not removed or redesigned.
+| Existing code | Status |
+|---|---|
+| `memory.allocate` / `memory.deallocate` | Unchanged surface and lifetime |
+| Borrows and mutable borrows | Unchanged; still direct access |
+| `memory.arena` / `memory.pool` | Unchanged lifetime/release rules |
+| `memory.shared_allocate` / `memory.shared_release` | Unchanged retain/release semantics |
+| `array.allocate`, `managed<T>`, `gc.collect` | Unchanged roots/barriers/safepoints |
+| `memory.manual_allocate` / `memory.manual_release` | Unchanged manual contract |
+| Native file/socket/mutex/mapping/secure owners | Unchanged |
+| FFI | Still unsupported; no `extern` surface exists |
 
-## 2. Secure storage rejects managed fields
+If a program relied on an implementation detail that the documentation did not
+promise (for example, a particular hidden allocation prefix), it must not. The
+only observable ordinary-allocation change is lower peak memory and slightly
+different release timing; ownership, alignment and invalid-free diagnostics are
+preserved.
 
-`memory.secure_allocate<T>` now rejects a payload that contains a managed reference
-at any depth:
+---
 
-```nirqoba
-struct Node { managed<Node> next; }
+## 2. What changed
 
-var node = memory.secure_allocate<Node>(64);
-// error[NRQ3015]: secure allocations cannot contain a managed field in 'Node':
-// secure release has no rooted managed-reference contract
-```
+### 2.1 Natural-aligned heap blocks no longer use a prefix
 
-Secure storage zeroes and releases raw bytes. It has no rooted allocation path, so a
-managed field would not be traced. This rejection is intentional; there is no
-fallback to normal allocation or to the collector.
+On x64 the Windows process heap returns `max_align_t`-aligned storage. Requests
+at or below that alignment now use the heap block directly. Over-aligned
+requests still allocate a prefix and adjust the address. The ownership registry
+records the requested alignment, so release chooses the matching path.
 
-Plain secure payloads remain supported:
+No universal header was added. The registry still detects invalid and repeated
+releases and preserves allocator identity.
 
-```nirqoba
-struct Secret { int value; }
+### 2.2 Cached releases no longer wake a condition variable
 
-var secret = memory.secure_allocate<Secret>(16);
-secret.value = 42;
-memory.secure_release(secret);
-```
+Allocation waits only while an ownership record is marked in flight. The
+thread-local cache release path only erases records that were never marked in
+flight. Removing the wakeup is therefore invisible to correct programs. The
+slow release path still notifies after clearing an in-flight record.
 
-Managed allocation remains available through `array.allocate<T>` and the documented
-`managed<T>` forms.
+### 2.3 Dead cleanup clears are removed before return
 
-## 3. TIR ownership verification
+TIR still records one destruction obligation and one `Drop` per owner. Lowering
+expands the drop to the runtime release and then removes a null constant/store
+pair only when it is immediately before `tir.return`. The release and
+reverse-order field destruction are untouched, and the slot has no later user.
 
-The compiler's internal TIR verifier now checks ownership, release and borrowing
-invariants before lowering. This is an internal compiler contract; it adds no syntax
-and no runtime checks. Programs that Sema accepts should not observe a difference.
+### 2.4 No strategy or FFI was added
 
-The verifier rejects malformed compiler input such as borrowed values passed to owned
-parameters, invalid return ownership, mismatched release families and double
-consumption. Passing an owned value to a borrowed parameter remains valid as an
-implicit temporary borrow.
+Phase 9 did not add CDMM, automatic strategy selection, weak references, a new
+cycle collector, a foreign ABI, or a universal object header. Arena, pool,
+shared and GC implementations were measured but not redesigned because the
+evidence did not justify a safer/cheaper alternative within this phase.
 
-## 4. Compatibility
+---
 
-- No new syntax or runtime API.
-- Managed fields in secure storage were previously accepted but not rooted; they are
-  now compile-time errors.
-- The collector remains opt-in and is still available for supported cyclic/dynamic
-  object graphs.
-- Full verification at this label: 270 unit tests and 500 integration tests pass on
-  Windows x64/MSVC (RelWithDebInfo).
+## 3. Compatibility checks
 
-## 5. What Phase 9 does not do
+The Phase 9 matrix builds representative ownership fixtures at `-O0` and `-O2`,
+with the production and debug runtimes, and requires identical exit status and
+stdout. It also inspects generated LLVM at `-O0` for duplicated releases and
+unwanted `nrq_gc` dependencies.
 
-Phase 9 does not implement first-class TIR move/drop operations, path-sensitive
-destruction proofs, arena objects, secure managed rooting, exception cleanup, owned
-strings or FFI/thread ownership. Those remain Phase 1 or later work.
+Existing examples still check successfully, including the ordinary, GC-managed
+and multi-file programs. The full runner and Phase 7 isolation script remain
+green.
+
+---
+
+## 4. Migration actions
+
+- **Ordinary/borrowed/arena/pool/shared/GC programs:** rebuild; no source edit.
+- **Manual programs:** no change; the function-local restriction and explicit
+  release pairing still apply.
+- **Programs using explicit over-alignment:** no change; the over-aligned path
+  is retained.
+- **Programs expecting foreign interoperability:** still unsupported. Do not
+  assume a foreign pointer, callback or ownership transfer exists.
+- **Programs measuring release latency:** retained-set release alone may be
+  slower even though allocation and total retained-set cost improved. Measure
+  the actual workload rather than assuming a universal speedup.
+
+---
+
+## 5. Known limitations
+
+- Retained-set release median regressed in the Phase 9 benchmark; the combined
+  allocate+release total and peak RSS improved. This is documented in
+  `reports/memory-model/phase-9-benchmarks.md`.
+- Arena and pool each still take the handle-lifetime and strategy locks on every
+  operation; removing them needs a new lifetime protocol.
+- Shared retain/release remains shard-lock protected; no weak references or new
+  cycle collector were added.
+- Manual storage remains function-local and cannot be reallocated.
+- FFI remains unsupported.
+- Phase 10 CDMM has not started.
