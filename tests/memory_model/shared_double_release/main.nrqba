@@ -1,0 +1,6 @@
+int function main() {
+    let value = memory.shared_allocate<int>(4);
+    memory.shared_release(value);
+    memory.shared_release(value);
+    return 0;
+}
