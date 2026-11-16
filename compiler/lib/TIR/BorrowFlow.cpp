@@ -89,6 +89,9 @@ struct FunctionMaps {
   // Parameter name for the value and for the alloca slot that holds it.
   unordered_map<int, string> parameter_value;
   unordered_map<int, string> parameter_slot;
+  // Dotted storage path of a slot or projection, used to distinguish a write
+  // to a borrowed field from a write to a disjoint field of the same owner.
+  unordered_map<int, string> storage_path;
   // Values that carry a borrowed reference, directly or inside an aggregate.
   unordered_set<int> contains_borrow;
   // Pointer values derived from each borrow: the address-of result, copies,
@@ -184,19 +187,37 @@ void collect_maps(const tir::Function& function, FunctionMaps& maps) {
     if (op.kind == tir::OpKind::Alloca) {
       if (op.result.is_valid()) {
         maps.root[op.result.id] = op.result.id;
+        maps.storage_path[op.result.id] = op.slot_name;
         for (const tir::Function::Parameter& parameter : function.parameters())
           if (parameter.name == op.slot_name)
             maps.parameter_slot[op.result.id] = parameter.name;
       }
     } else if (op.kind == tir::OpKind::ArrayAlloca) {
-      if (op.result.is_valid()) maps.root[op.result.id] = op.result.id;
+      if (op.result.is_valid()) {
+        maps.root[op.result.id] = op.result.id;
+        maps.storage_path[op.result.id] = op.slot_name;
+      }
     } else if (op.kind == tir::OpKind::GetElementPtr ||
                op.kind == tir::OpKind::SoaColumnPtr) {
-      if (op.result.is_valid())
+      if (op.result.is_valid()) {
         maps.root[op.result.id] = root_of(maps, op.lhs.id);
+        const auto parent = maps.storage_path.find(op.lhs.id);
+        if (parent != maps.storage_path.end()) {
+          string path = parent->second;
+          if (!op.string_value.empty())
+            path += (path.empty() ? "" : ".") + op.string_value;
+          else
+            path += "[]";
+          maps.storage_path[op.result.id] = std::move(path);
+        }
+      }
     } else if (op.kind == tir::OpKind::AddressOf) {
-      if (op.result.is_valid())
+      if (op.result.is_valid()) {
         maps.root[op.result.id] = root_of(maps, op.operand.id);
+        const auto source = maps.storage_path.find(op.operand.id);
+        if (source != maps.storage_path.end())
+          maps.storage_path[op.result.id] = source->second;
+      }
     } else if (op.kind == tir::OpKind::Load) {
       if (op.result.is_valid())
         maps.loaded_from[op.result.id] = root_of(maps, op.lhs.id);
@@ -642,6 +663,28 @@ bool verify_borrow_flow(const tir::Function& function, const tir::Module& module
           state.active.erase(found);
           break;
         }
+        case tir::OpKind::Store: {
+          if (!op.lhs.is_valid()) break;
+          const int root = root_of(maps, op.lhs.id);
+          const auto target = maps.storage_path.find(op.lhs.id);
+          if (target == maps.storage_path.end()) break;
+          for (const auto& active : state.active) {
+            if (active.second.owner_root != root) continue;
+            if (!borrow_is_live(maps, liveness.before[index],
+                                active.second.value))
+              continue;
+            if (!paths_overlap(active.second.path, target->second)) continue;
+            diagnostics.error(kBorrow, op.location,
+                              "storage is written while a borrow of it is "
+                              "active");
+            diagnostics.note(kBorrow, active.second.location,
+                             "borrow requiring read-only access is active "
+                             "here");
+            ok = false;
+            break;
+          }
+          break;
+        }
         case tir::OpKind::Move: {
           const int root = root_of(maps, op.operand.id);
           for (const auto& active : state.active) {
@@ -699,9 +742,25 @@ bool verify_borrow_flow(const tir::Function& function, const tir::Module& module
           }
           break;
         }
-        case tir::OpKind::Return:
+        case tir::OpKind::Return: {
+          const int returned_root =
+              op.operand.is_valid() ? root_of(maps, op.operand.id) : -1;
+          for (const auto& active : state.active) {
+            if (active.second.owner_root == returned_root) continue;
+            if (!borrow_is_live(maps, liveness.before[index],
+                                active.second.value))
+              continue;
+            diagnostics.error(kBorrow, op.location,
+                              "function returns while a local owner is still "
+                              "borrowed");
+            diagnostics.note(kBorrow, active.second.location,
+                             "borrow is active here");
+            ok = false;
+            break;
+          }
           verify_return(function, maps, op, diagnostics, ok);
           break;
+        }
         case tir::OpKind::Call:
           verify_call(function, module, maps, state, liveness.before[index],
                       op, diagnostics, ok);
