@@ -3,9 +3,11 @@
 namespace nirq {
 
 bool is_owning_ownership(ValueOwnership ownership) {
+  // ArenaBound storage is owned by its arena, not by the individual binding.
+  // It therefore creates no per-value drop obligation; reset/destroy releases
+  // the whole region in bulk.
   return ownership == ValueOwnership::Owned ||
-         ownership == ValueOwnership::Shared ||
-         ownership == ValueOwnership::ArenaBound;
+         ownership == ValueOwnership::Shared;
 }
 
 bool is_borrowing_ownership(ValueOwnership ownership) {
@@ -21,8 +23,7 @@ bool is_transferable_ownership(ValueOwnership ownership) {
 
 bool requires_destruction(ValueOwnership ownership) {
   return ownership == ValueOwnership::Owned ||
-         ownership == ValueOwnership::Shared ||
-         ownership == ValueOwnership::ArenaBound;
+         ownership == ValueOwnership::Shared;
 }
 
 std::string_view ownership_name(ValueOwnership ownership) {
