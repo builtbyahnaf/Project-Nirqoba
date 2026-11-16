@@ -1,18 +1,22 @@
-// Aggregate copy retains each shared field. The copy is scoped so its
+// Nested aggregate copy retains each shared field. The copy is scoped so its
 // release is part of the measured workload.
-struct Holder { shared ptr int data; int tag; }
+struct Inner { shared ptr int data; }
+struct Outer { Inner inner; int tag; }
 
 int function main() {
     var iterations = 200000;
     var checksum = 0;
     var start = time.cycles();
     for (var index = 0; index < iterations; index += 1) {
-        var owner = Holder { data: memory.shared_allocate<int>(1), tag: index % 7 };
-        *owner.data = (index % 251);
+        var owner = Outer {
+            inner: Inner { data: memory.shared_allocate<int>(1) },
+            tag: index % 7
+        };
+        *owner.inner.data = (index % 251);
         {
             var copy = owner;
-            checksum += memory.shared_count(copy.data) as int;
-            checksum += *copy.data + copy.tag;
+            checksum += memory.shared_count(copy.inner.data) as int;
+            checksum += *copy.inner.data + copy.tag;
         }
     }
     var stop = time.cycles();

@@ -119,7 +119,8 @@ def main():
         result = subprocess.run([str(executable)], cwd=PROJECT, check=True,
                                 capture_output=True, text=True)
         contention_samples.append(json.loads(result.stdout))
-    for key in ("uncontended_ns", "independent_ns", "contended_ns"):
+    for key in ("uncontended_ns", "independent_ns", "contended_ns",
+                "final_release_ns"):
         values = [sample[key] for sample in contention_samples]
         report["contention"][key] = {
             "median_ns": int(statistics.median(values)),
@@ -129,6 +130,8 @@ def main():
         }
     report["contention"]["threads"] = contention_samples[0]["threads"]
     report["contention"]["ops_per_thread"] = contention_samples[0]["ops_per_thread"]
+    report["contention"]["final_release_objects"] = contention_samples[0][
+        "final_release_objects"]
     report["contention"]["memory_objects"] = contention_samples[0]["memory_objects"]
     report["contention"]["memory_bytes_per_object"] = contention_samples[0][
         "memory_bytes_per_object"]

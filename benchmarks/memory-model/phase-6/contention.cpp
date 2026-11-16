@@ -17,6 +17,7 @@
 namespace {
 constexpr size_t kThreads = 4;
 constexpr size_t kOpsPerThread = 250000;
+constexpr size_t kFinalObjects = 100000;
 
 uint64_t now_ns() {
   return static_cast<uint64_t>(
@@ -117,6 +118,23 @@ Result run_uncontended() {
   if (nrq_memory_shared_release(object) != 1) ok = false;
   return {elapsed, ok};
 }
+
+Result run_final_release() {
+  std::vector<void*> objects;
+  objects.reserve(kFinalObjects);
+  for (size_t index = 0; index < kFinalObjects; ++index) {
+    void* object = nrq_memory_shared_allocate(64, 16);
+    if (!object) return {0, false};
+    objects.push_back(object);
+  }
+  bool ok = true;
+  const uint64_t begin = now_ns();
+  for (void* object : objects) {
+    if (nrq_memory_shared_release(object) != 1) ok = false;
+  }
+  const uint64_t elapsed = now_ns() - begin;
+  return {elapsed, ok};
+}
 }  // namespace
 
 int main() {
@@ -124,20 +142,25 @@ int main() {
   const Result uncontended = run_uncontended();
   const Result independent = run_shared(true);
   const Result contended = run_shared(false);
+  const Result final_release = run_final_release();
   const long long delta = static_cast<long long>(memory.after) -
                           static_cast<long long>(memory.before);
   const double bytes_per_object = memory.objects == 0
       ? 0.0
       : static_cast<double>(delta) / static_cast<double>(memory.objects);
-  const bool ok = memory.ok && uncontended.ok && independent.ok && contended.ok;
-  std::printf("{\"uncontended_ns\":%llu,\"independent_ns\":%llu,"
-              "\"contended_ns\":%llu,\"ops_per_thread\":%zu,\"threads\":%zu,"
+  const bool ok = memory.ok && uncontended.ok && independent.ok && contended.ok &&
+                  final_release.ok;
+    std::printf("{\"uncontended_ns\":%llu,\"independent_ns\":%llu,"
+              "\"contended_ns\":%llu,\"final_release_ns\":%llu,"
+              "\"final_release_objects\":%zu,"
+              "\"ops_per_thread\":%zu,\"threads\":%zu,"
               "\"memory_objects\":%zu,\"memory_delta_bytes\":%lld,"
               "\"memory_bytes_per_object\":%.2f,\"ok\":%s}\n",
               static_cast<unsigned long long>(uncontended.ns),
               static_cast<unsigned long long>(independent.ns),
-              static_cast<unsigned long long>(contended.ns), kOpsPerThread,
-              kThreads, memory.objects, delta, bytes_per_object,
+              static_cast<unsigned long long>(contended.ns),
+              static_cast<unsigned long long>(final_release.ns), kFinalObjects,
+              kOpsPerThread, kThreads, memory.objects, delta, bytes_per_object,
               ok ? "true" : "false");
   return ok ? 0 : 1;
 }
