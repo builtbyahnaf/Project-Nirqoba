@@ -3205,6 +3205,9 @@ Type TypeChecker::check_expression(Expr& expr) {
                   "cannot create a borrow of '" +
                       borrow_display(borrow_owner_name(*origin), paths) +
                       "' while a mutable borrow is live");
+              if (conflict)
+                diagnostics_.note(diag::kTypeMismatch, conflict->location,
+                                  "conflicting borrow is active here");
               type = Type::error();
             } else {
               type = Type::pointer_type(operand_type);
@@ -5584,6 +5587,8 @@ Type TypeChecker::check_call(CallExpr& call) {
                 : "borrow of '" + requested_display +
                       "' conflicts with live mutable borrow '" +
                       borrow_display(*conflict) + "'");
+        diagnostics_.note(diag::kTypeMismatch, conflict->location,
+                          "conflicting borrow is active here");
         continue;
       }
       if (active_borrow_conflicts(source->allocation_id, borrowed_paths,
