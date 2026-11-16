@@ -1,0 +1,20 @@
+// A GC-independent call chain: stack values, an ordinary heap buffer, a loop
+// and a helper call. None of these operations may enter the collector merely
+// because the runtime library is available.
+int function add_one(int value) {
+    var buffer = memory.allocate<int>(4);
+    *buffer = value + 1;
+    let result = *buffer;
+    memory.deallocate(buffer);
+    return result;
+}
+
+int function main() {
+    var total = 0;
+    var index = 0;
+    while (index < 3) {
+        total = add_one(total);
+        index = index + 1;
+    }
+    return total + 39;
+}

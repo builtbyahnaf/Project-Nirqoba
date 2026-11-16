@@ -2,6 +2,6 @@
   "mode": "build",
   "args": ["--emit=llvm", "-O2"],
   "expect_exit": 0,
-  "expect_stdout_contains": ["nrq_arena_allocate", "nrq_arena_reset"],
+  "expect_stdout_contains": ["nrq_arena_allocate", "nrq_arena_reset", "nrq_arena_destroy"],
   "expect_stdout_not_contains": ["nrq_gc"]
 }
