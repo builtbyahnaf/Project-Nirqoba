@@ -1,0 +1,19 @@
+int function main() {
+    let outer = memory.arena(128);
+    {
+        let outer_value = memory.allocate<int>(4, outer);
+        *outer_value = 5;
+        print(*outer_value);
+    }
+    {
+        let inner = memory.arena(128);
+        {
+            let inner_value = memory.allocate<int>(4, inner);
+            *inner_value = 9;
+            print(*inner_value);
+        }
+        memory.arena_destroy(inner);
+    }
+    memory.arena_destroy(outer);
+    return 42;
+}

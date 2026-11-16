@@ -1,0 +1,13 @@
+int function main() {
+    let arena = memory.arena(128);
+    var index = 0;
+    while (index < 3) {
+        let value = memory.allocate<int>(4, arena);
+        *value = index + 1;
+        print(*value);
+        index = index + 1;
+    }
+    memory.arena_reset(arena);
+    memory.arena_destroy(arena);
+    return 42;
+}

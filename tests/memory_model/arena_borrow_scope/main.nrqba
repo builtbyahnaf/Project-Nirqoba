@@ -1,0 +1,14 @@
+int function main() {
+    let arena = memory.arena(128);
+    {
+        let value = memory.allocate<int>(4, arena);
+        *value = 13;
+        let view = &value[0];
+        *view = 17;
+        print(*value);
+        print(*view);
+    }
+    memory.arena_reset(arena);
+    memory.arena_destroy(arena);
+    return 42;
+}

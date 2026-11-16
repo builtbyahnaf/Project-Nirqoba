@@ -1,0 +1,21 @@
+int function choose(bool left) {
+    let arena = memory.arena(128);
+    if (left) {
+        let value = memory.allocate<int>(4, arena);
+        *value = 1;
+        print(*value);
+    } else {
+        let value = memory.allocate<int>(4, arena);
+        *value = 2;
+        print(*value);
+    }
+    memory.arena_reset(arena);
+    memory.arena_destroy(arena);
+    return 42;
+}
+
+int function main() {
+    choose(true);
+    choose(false);
+    return 42;
+}
