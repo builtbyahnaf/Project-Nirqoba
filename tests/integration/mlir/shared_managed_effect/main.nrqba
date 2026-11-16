@@ -1,0 +1,17 @@
+struct Child {
+    int value;
+}
+
+struct Node {
+    managed<Child> child;
+}
+
+shared Node* function make_holder() {
+    return memory.shared_allocate<Node>(16);
+}
+
+int function main() {
+    let holder = make_holder();
+    memory.shared_release(holder);
+    return 0;
+}
