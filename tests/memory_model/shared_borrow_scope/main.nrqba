@@ -1,0 +1,11 @@
+int function main() {
+    let owner = memory.shared_allocate<int>(4);
+    {
+        let borrow = &*owner;
+        *borrow = 23;
+    }
+    print(*owner);
+    print(memory.shared_count(owner) as int);
+    memory.shared_release(owner);
+    return 0;
+}
