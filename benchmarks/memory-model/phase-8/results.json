@@ -1,0 +1,689 @@
+{
+  "configuration": {
+    "compiler_version": [
+      "nirqoba compiler version 0.583-beta (Phase 8)",
+      "LLVM/MLIR: 23.1.4",
+      "Target: x86_64-pc-windows-msvc",
+      "Build: RelWithDebInfo"
+    ],
+    "build": "RelWithDebInfo compiler, -O2 workloads",
+    "optimization": "-O2",
+    "debug_runtime": "-O2 --debug-enabled",
+    "timer": "time.cycles() around the measured language loop",
+    "samples": 7,
+    "platform": "Windows-11-10.0.26300-SP0",
+    "machine": "AMD64",
+    "processor": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+    "logical_cpus": 12,
+    "physical_cpus": 10,
+    "total_memory_bytes": 16890978304,
+    "note": "fresh process per sample; checksum equality is checked per workload"
+  },
+  "workloads": {
+    "ordinary_alloc": {
+      "iterations": 1000000,
+      "production": {
+        "checksum": 249996480,
+        "cycles_per_operation": {
+          "median": 142.231,
+          "mean": 141.791,
+          "min": 134.896,
+          "max": 144.292,
+          "stddev": 3.063,
+          "samples": [
+            134.896,
+            140.843,
+            144.292,
+            144.096,
+            142.231,
+            142.07,
+            144.11
+          ]
+        },
+        "total_cycles": {
+          "median": 142230893.0,
+          "mean": 141791168.571,
+          "min": 134895830.0,
+          "max": 144292009.0,
+          "stddev": 3062725.064,
+          "samples": [
+            134895830.0,
+            140842881.0,
+            144292009.0,
+            144096276.0,
+            142230893.0,
+            142070026.0,
+            144110265.0
+          ]
+        },
+        "process_elapsed_ns": {
+          "median": 75921200.0,
+          "mean": 74267514.286,
+          "min": 70973300.0,
+          "max": 77376200.0,
+          "stddev": 2557626.306,
+          "samples": [
+            71462600.0,
+            70973300.0,
+            76513000.0,
+            71666400.0,
+            77376200.0,
+            75921200.0,
+            75959900.0
+          ]
+        },
+        "peak_rss_bytes": 9859072
+      },
+      "debug": {
+        "checksum": 249996480,
+        "cycles_per_operation": {
+          "median": 143.355,
+          "mean": 142.921,
+          "min": 133.677,
+          "max": 162.191,
+          "stddev": 8.849,
+          "samples": [
+            133.677,
+            135.342,
+            143.355,
+            144.224,
+            162.191,
+            144.238,
+            137.417
+          ]
+        },
+        "total_cycles": {
+          "median": 143355448.0,
+          "mean": 142920732.714,
+          "min": 133677458.0,
+          "max": 162190676.0,
+          "stddev": 8848878.795,
+          "samples": [
+            133677458.0,
+            135342103.0,
+            143355448.0,
+            144224251.0,
+            162190676.0,
+            144238135.0,
+            137417058.0
+          ]
+        },
+        "process_elapsed_ns": {
+          "median": 75442700.0,
+          "mean": 74827400.0,
+          "min": 70657400.0,
+          "max": 81206900.0,
+          "stddev": 3561857.221,
+          "samples": [
+            70657400.0,
+            71844300.0,
+            77208400.0,
+            75442700.0,
+            81206900.0,
+            76295200.0,
+            71136900.0
+          ]
+        },
+        "peak_rss_bytes": 9846784
+      },
+      "checksum": 249996480
+    },
+    "manual_alloc": {
+      "iterations": 1000000,
+      "production": {
+        "checksum": 249996480,
+        "cycles_per_operation": {
+          "median": 144.432,
+          "mean": 149.79,
+          "min": 136.401,
+          "max": 165.505,
+          "stddev": 10.78,
+          "samples": [
+            136.401,
+            138.694,
+            161.253,
+            158.211,
+            165.505,
+            144.432,
+            144.034
+          ]
+        },
+        "total_cycles": {
+          "median": 144431810.0,
+          "mean": 149789885.286,
+          "min": 136401051.0,
+          "max": 165504805.0,
+          "stddev": 10780205.105,
+          "samples": [
+            136401051.0,
+            138694150.0,
+            161252811.0,
+            158210889.0,
+            165504805.0,
+            144431810.0,
+            144033681.0
+          ]
+        },
+        "process_elapsed_ns": {
+          "median": 77525600.0,
+          "mean": 78138742.857,
+          "min": 71780500.0,
+          "max": 85611100.0,
+          "stddev": 4721412.918,
+          "samples": [
+            71780500.0,
+            72298000.0,
+            80421000.0,
+            82442900.0,
+            85611100.0,
+            76892100.0,
+            77525600.0
+          ]
+        },
+        "peak_rss_bytes": 9863168
+      },
+      "debug": {
+        "checksum": 249996480,
+        "cycles_per_operation": {
+          "median": 139.643,
+          "mean": 145.259,
+          "min": 133.71,
+          "max": 161.297,
+          "stddev": 10.454,
+          "samples": [
+            133.71,
+            138.021,
+            139.643,
+            139.201,
+            161.297,
+            161.125,
+            143.814
+          ]
+        },
+        "total_cycles": {
+          "median": 139643162.0,
+          "mean": 145258728.286,
+          "min": 133709824.0,
+          "max": 161296959.0,
+          "stddev": 10454235.014,
+          "samples": [
+            133709824.0,
+            138021308.0,
+            139643162.0,
+            139200534.0,
+            161296959.0,
+            161124818.0,
+            143814493.0
+          ]
+        },
+        "process_elapsed_ns": {
+          "median": 77494000.0,
+          "mean": 76490428.571,
+          "min": 70926000.0,
+          "max": 83543800.0,
+          "stddev": 4825514.759,
+          "samples": [
+            70926000.0,
+            71785600.0,
+            78424700.0,
+            77494000.0,
+            81890800.0,
+            83543800.0,
+            71368100.0
+          ]
+        },
+        "peak_rss_bytes": 9838592
+      },
+      "checksum": 249996480,
+      "ratio_vs_ordinary": 1.0155,
+      "debug_overhead_ratio": 0.9668
+    },
+    "manual_alloc_from": {
+      "iterations": 1000000,
+      "production": {
+        "checksum": 124998120,
+        "cycles_per_operation": {
+          "median": 340.48,
+          "mean": 337.643,
+          "min": 322.896,
+          "max": 344.83,
+          "stddev": 6.847,
+          "samples": [
+            344.83,
+            322.896,
+            342.009,
+            341.305,
+            333.44,
+            338.54,
+            340.48
+          ]
+        },
+        "total_cycles": {
+          "median": 340480318.0,
+          "mean": 337642837.857,
+          "min": 322895825.0,
+          "max": 344829794.0,
+          "stddev": 6846560.875,
+          "samples": [
+            344829794.0,
+            322895825.0,
+            342009371.0,
+            341304827.0,
+            333439538.0,
+            338540192.0,
+            340480318.0
+          ]
+        },
+        "process_elapsed_ns": {
+          "median": 154142800.0,
+          "mean": 154185171.429,
+          "min": 149096900.0,
+          "max": 163251800.0,
+          "stddev": 4345385.502,
+          "samples": [
+            155731700.0,
+            149096900.0,
+            154762300.0,
+            154142800.0,
+            149931400.0,
+            163251800.0,
+            152379300.0
+          ]
+        },
+        "peak_rss_bytes": 9871360
+      },
+      "debug": {
+        "checksum": 124998120,
+        "cycles_per_operation": {
+          "median": 341.453,
+          "mean": 343.541,
+          "min": 330.468,
+          "max": 363.813,
+          "stddev": 10.123,
+          "samples": [
+            330.468,
+            336.54,
+            345.151,
+            341.453,
+            337.375,
+            363.813,
+            349.984
+          ]
+        },
+        "total_cycles": {
+          "median": 341453259.0,
+          "mean": 343540651.429,
+          "min": 330468195.0,
+          "max": 363813269.0,
+          "stddev": 10123248.442,
+          "samples": [
+            330468195.0,
+            336540318.0,
+            345150810.0,
+            341453259.0,
+            337374594.0,
+            363813269.0,
+            349984115.0
+          ]
+        },
+        "process_elapsed_ns": {
+          "median": 154420600.0,
+          "mean": 155841357.143,
+          "min": 149527400.0,
+          "max": 164976700.0,
+          "stddev": 4600838.711,
+          "samples": [
+            149527400.0,
+            154120000.0,
+            155471700.0,
+            153064300.0,
+            154420600.0,
+            164976700.0,
+            159308800.0
+          ]
+        },
+        "peak_rss_bytes": 9871360
+      },
+      "checksum": 124998120,
+      "ratio_vs_ordinary": 2.3939,
+      "debug_overhead_ratio": 1.0029
+    },
+    "manual_fallback": {
+      "iterations": 1000000,
+      "production": {
+        "checksum": 124998120,
+        "cycles_per_operation": {
+          "median": 142.417,
+          "mean": 141.724,
+          "min": 136.729,
+          "max": 144.386,
+          "stddev": 2.463,
+          "samples": [
+            136.729,
+            143.649,
+            139.655,
+            142.187,
+            143.045,
+            142.417,
+            144.386
+          ]
+        },
+        "total_cycles": {
+          "median": 142417459.0,
+          "mean": 141723829.0,
+          "min": 136728956.0,
+          "max": 144385604.0,
+          "stddev": 2462889.805,
+          "samples": [
+            136728956.0,
+            143648757.0,
+            139654584.0,
+            142186891.0,
+            143044552.0,
+            142417459.0,
+            144385604.0
+          ]
+        },
+        "process_elapsed_ns": {
+          "median": 73125800.0,
+          "mean": 74561257.143,
+          "min": 72794600.0,
+          "max": 78339500.0,
+          "stddev": 2211056.763,
+          "samples": [
+            73018600.0,
+            77617100.0,
+            73125800.0,
+            78339500.0,
+            72859300.0,
+            72794600.0,
+            74173900.0
+          ]
+        },
+        "peak_rss_bytes": 9846784
+      },
+      "debug": {
+        "checksum": 124998120,
+        "cycles_per_operation": {
+          "median": 143.628,
+          "mean": 143.431,
+          "min": 137.201,
+          "max": 148.855,
+          "stddev": 3.547,
+          "samples": [
+            143.49,
+            137.201,
+            140.254,
+            146.469,
+            144.122,
+            148.855,
+            143.628
+          ]
+        },
+        "total_cycles": {
+          "median": 143628282.0,
+          "mean": 143431264.286,
+          "min": 137201173.0,
+          "max": 148854688.0,
+          "stddev": 3547057.092,
+          "samples": [
+            143490129.0,
+            137201173.0,
+            140253574.0,
+            146468740.0,
+            144122264.0,
+            148854688.0,
+            143628282.0
+          ]
+        },
+        "process_elapsed_ns": {
+          "median": 76896900.0,
+          "mean": 75631214.286,
+          "min": 72290400.0,
+          "max": 78359900.0,
+          "stddev": 2507237.256,
+          "samples": [
+            78359900.0,
+            73773600.0,
+            77855700.0,
+            76896900.0,
+            72290400.0,
+            77848200.0,
+            72393800.0
+          ]
+        },
+        "peak_rss_bytes": 9854976
+      },
+      "checksum": 124998120,
+      "ratio_vs_ordinary": 1.0013,
+      "debug_overhead_ratio": 1.0085
+    },
+    "manual_borrow": {
+      "iterations": 10000000,
+      "production": {
+        "checksum": 1249998760,
+        "cycles_per_operation": {
+          "median": 1.704,
+          "mean": 1.646,
+          "min": 1.535,
+          "max": 1.724,
+          "stddev": 0.077,
+          "samples": [
+            1.535,
+            1.704,
+            1.724,
+            1.568,
+            1.572,
+            1.708,
+            1.713
+          ]
+        },
+        "total_cycles": {
+          "median": 17043385.0,
+          "mean": 16463128.0,
+          "min": 15351002.0,
+          "max": 17240360.0,
+          "stddev": 772546.87,
+          "samples": [
+            15351002.0,
+            17043385.0,
+            17240360.0,
+            15676840.0,
+            15718566.0,
+            17080095.0,
+            17131648.0
+          ]
+        },
+        "process_elapsed_ns": {
+          "median": 23309200.0,
+          "mean": 25127757.143,
+          "min": 22389500.0,
+          "max": 28795300.0,
+          "stddev": 2816672.492,
+          "samples": [
+            22433600.0,
+            28795300.0,
+            22389500.0,
+            27888500.0,
+            23309200.0,
+            22705300.0,
+            28372900.0
+          ]
+        },
+        "peak_rss_bytes": 9875456
+      },
+      "debug": {
+        "checksum": 1249998760,
+        "cycles_per_operation": {
+          "median": 1.626,
+          "mean": 1.625,
+          "min": 1.569,
+          "max": 1.703,
+          "stddev": 0.045,
+          "samples": [
+            1.703,
+            1.569,
+            1.657,
+            1.647,
+            1.583,
+            1.587,
+            1.626
+          ]
+        },
+        "total_cycles": {
+          "median": 16259044.0,
+          "mean": 16245641.286,
+          "min": 15691134.0,
+          "max": 17032639.0,
+          "stddev": 446687.759,
+          "samples": [
+            17032639.0,
+            15691134.0,
+            16570975.0,
+            16466672.0,
+            15825495.0,
+            15873530.0,
+            16259044.0
+          ]
+        },
+        "process_elapsed_ns": {
+          "median": 23165700.0,
+          "mean": 23746171.429,
+          "min": 22581200.0,
+          "max": 28150900.0,
+          "stddev": 1833699.034,
+          "samples": [
+            22694000.0,
+            23702000.0,
+            28150900.0,
+            23200300.0,
+            22729100.0,
+            22581200.0,
+            23165700.0
+          ]
+        },
+        "peak_rss_bytes": 8974336
+      },
+      "checksum": 1249998760,
+      "debug_overhead_ratio": 0.9542
+    },
+    "manual_managed_root": {
+      "iterations": 100000,
+      "production": {
+        "checksum": 4799685,
+        "cycles_per_operation": {
+          "median": 345.422,
+          "mean": 344.408,
+          "min": 338.557,
+          "max": 349.782,
+          "stddev": 3.753,
+          "samples": [
+            343.971,
+            346.959,
+            346.564,
+            338.557,
+            349.782,
+            345.422,
+            339.603
+          ]
+        },
+        "total_cycles": {
+          "median": 34542207.0,
+          "mean": 34440840.571,
+          "min": 33855713.0,
+          "max": 34978211.0,
+          "stddev": 375265.731,
+          "samples": [
+            34397121.0,
+            34695949.0,
+            34656372.0,
+            33855713.0,
+            34978211.0,
+            34542207.0,
+            33960311.0
+          ]
+        },
+        "process_elapsed_ns": {
+          "median": 33562000.0,
+          "mean": 32913385.714,
+          "min": 28685200.0,
+          "max": 34665500.0,
+          "stddev": 1805304.537,
+          "samples": [
+            33869100.0,
+            28685200.0,
+            33562000.0,
+            33126000.0,
+            32875600.0,
+            34665500.0,
+            33610300.0
+          ]
+        },
+        "peak_rss_bytes": 15650816
+      },
+      "debug": {
+        "checksum": 4799685,
+        "cycles_per_operation": {
+          "median": 361.555,
+          "mean": 369.098,
+          "min": 355.062,
+          "max": 403.0,
+          "stddev": 14.995,
+          "samples": [
+            361.555,
+            403.0,
+            355.062,
+            372.832,
+            361.274,
+            370.532,
+            359.43
+          ]
+        },
+        "total_cycles": {
+          "median": 36155470.0,
+          "mean": 36909781.857,
+          "min": 35506188.0,
+          "max": 40299982.0,
+          "stddev": 1499485.914,
+          "samples": [
+            36155470.0,
+            40299982.0,
+            35506188.0,
+            37283193.0,
+            36127424.0,
+            37053183.0,
+            35943033.0
+          ]
+        },
+        "process_elapsed_ns": {
+          "median": 33741100.0,
+          "mean": 33240242.857,
+          "min": 28420600.0,
+          "max": 34895200.0,
+          "stddev": 2012718.384,
+          "samples": [
+            33719400.0,
+            34216800.0,
+            33741100.0,
+            34895200.0,
+            34180100.0,
+            33508500.0,
+            28420600.0
+          ]
+        },
+        "peak_rss_bytes": 15925248
+      },
+      "checksum": 4799685,
+      "debug_overhead_ratio": 1.0467
+    }
+  },
+  "limitations": [
+    "Manual and ordinary explicit allocation use the same runtime allocator and ownership registry; the measured difference is language/lowering overhead, not a different heap.",
+    "The timer is the process steady counter exposed by time.cycles(); it is not converted to nanoseconds because its frequency is platform-defined.",
+    "Peak RSS is sampled while the process is alive and can miss a shorter peak.",
+    "Manual reallocation is rejected by the supported contract; no reallocation benchmark is reported.",
+    "Aligned manual allocation is not a separate API; the payload type's natural alignment is used.",
+    "Native file/socket/resource timing is excluded because it measures the host filesystem and network, not ownership dispatch.",
+    "There is no FFI surface, so no FFI ownership-transfer benchmark is possible."
+  ]
+}
