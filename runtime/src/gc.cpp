@@ -100,6 +100,12 @@ struct GcPage {
   size_t mark_words = 0;
   size_t marked_objects = 0;
   size_t marked_young_objects = 0;
+  // Remembered-set membership is a property of a young object, but it is
+  // maintained as a page bitmap so the store barrier does not rewrite the
+  // object's state word. `remembered_objects` is exact while the page is live.
+  std::unique_ptr<uint64_t[]> remembered_bits;
+  size_t remembered_words = 0;
+  size_t remembered_objects = 0;
   // Page-local object-start metadata. One bit per max_align_t-sized slot lets
   // reference resolution validate an address and derive its header without a
   // global hash probe. Pages larger than kGcPageBytes are not indexed; their
@@ -477,6 +483,44 @@ inline void clear_page_marks(GcPage& page) {
   }
   page.marked_objects = 0;
   page.marked_young_objects = 0;
+}
+
+inline bool header_remembered(const ObjectHeader& header) {
+  const GcPage* page = header.page;
+  if (!page || !page->remembered_bits) return false;
+  const size_t index = mark_bit_index(header, *page);
+  if (index / 64 >= page->remembered_words) return false;
+  return (page->remembered_bits[index / 64] >> (index % 64)) & 1;
+}
+
+inline void set_header_remembered(ObjectHeader& header, bool value) {
+  GcPage* page = header.page;
+  if (!page || !page->remembered_bits)
+    nrq_runtime_fatal("GC object has no page remembered bitmap");
+  const size_t index = mark_bit_index(header, *page);
+  if (index / 64 >= page->remembered_words)
+    nrq_runtime_fatal("GC object remembered bit is outside its page");
+  uint64_t& word = page->remembered_bits[index / 64];
+  const uint64_t bit = uint64_t{1} << (index % 64);
+  const bool was_remembered = (word & bit) != 0;
+  if (value == was_remembered) return;
+  if (value) {
+    word |= bit;
+    ++page->remembered_objects;
+  } else {
+    word &= ~bit;
+    if (page->remembered_objects == 0)
+      nrq_runtime_fatal("GC page remembered count underflow");
+    --page->remembered_objects;
+  }
+}
+
+inline void clear_page_remembered(GcPage& page) {
+  if (page.remembered_bits && page.remembered_words != 0) {
+    std::memset(page.remembered_bits.get(), 0,
+                page.remembered_words * sizeof(uint64_t));
+  }
+  page.remembered_objects = 0;
 }
 
 // Pull the next object's header and payload into cache while the current one is
@@ -1910,13 +1954,14 @@ void enqueue_roots_locked(MarkContext& context) {
 // old-to-young store costs one bool test instead of a hash probe.
 void add_remembered_locked(ObjectHeader* header) {
   if (!header) return;
-  // The flag is the deduplication test, so it is one masked read of the word.
-  if ((header->state_word() & ObjectHeader::kRememberedBit) != 0) return;
-  header->set_remembered(true);
+  // The page bitmap is the deduplication test and no longer rewrites the
+  // object's state word on every old-to-young store.
+  if (header_remembered(*header)) return;
+  set_header_remembered(*header, true);
   try {
     remembered_young.push_back(header);
   } catch (...) {
-    header->set_remembered(false);
+    set_header_remembered(*header, false);
     nrq_runtime_fatal("GC remembered-set insertion failed");
   }
 }
@@ -1933,7 +1978,7 @@ void compact_remembered_locked() {
                        // storage is not rewritten, and a whole-page reclaim can
                        // leave the old word readable. Require the header to still
                        // be the exact published start its address resolves to.
-                       return !header || !header->remembered() ||
+                       return !header || !header_remembered(*header) ||
                               find_object_locked(header->payload()) != header;
                      }),
       remembered_young.end());
@@ -2203,6 +2248,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
       page->live_payload_bytes -= payload_bytes;
       --page->live_objects;
       if (young) --page->young_objects;
+      set_header_remembered(*header, false);
       if (page->live_objects == 0) {
         page->retired = true;
         ++retired_page_count;
@@ -2228,8 +2274,8 @@ bool sweep_chunk_locked(size_t budget_bytes) {
                          ObjectHeader::kAgeShift;
           if (age < UINT8_MAX) ++age;
           if (age >= kPromotionAge) {
-            survived &= ~(ObjectHeader::kYoungBit | ObjectHeader::kAgeMask |
-                          ObjectHeader::kRememberedBit);
+            survived &= ~(ObjectHeader::kYoungBit | ObjectHeader::kAgeMask);
+            set_header_remembered(*header, false);
             header->set_state(survived);
             --page->young_objects;
             ++promoted_young;
@@ -2249,8 +2295,8 @@ bool sweep_chunk_locked(size_t budget_bytes) {
           ++promoted_young;
           promotion_raised_barrier = true;
         }
-        survived &= ~(ObjectHeader::kYoungBit | ObjectHeader::kAgeMask |
-                      ObjectHeader::kRememberedBit);
+        survived &= ~(ObjectHeader::kYoungBit | ObjectHeader::kAgeMask);
+        set_header_remembered(*header, false);
         header->set_state(survived);
         if (was_young)
           debug_emit(NRQ_GC_EVENT_PROMOTE, 0, 0, static_cast<void*>(header + 1));
@@ -2327,6 +2373,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
         page->live_payload_bytes = 0;
         page->born_this_cycle = 0;
         clear_page_marks(*page);
+        clear_page_remembered(*page);
         if (page->object_starts && page->object_start_words != 0) {
           std::memset(page->object_starts.get(), 0,
                       page->object_start_words * sizeof(uint64_t));
@@ -3066,6 +3113,7 @@ void reset_page_gc_metadata_locked(GcPage& page) {
   page.born_this_cycle = 0;
   page.young_objects = 0;
   clear_page_marks(page);
+  clear_page_remembered(page);
   if (page.object_starts && page.object_start_words != 0) {
     std::memset(page.object_starts.get(), 0,
                 page.object_start_words * sizeof(uint64_t));
@@ -3116,11 +3164,13 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
     const size_t slots = capacity / kObjectStartAlignment;
     const size_t mark_words = (slots + 63) / 64;
     page->mark_bits.reset(new (std::nothrow) uint64_t[mark_words]());
-    if (!page->mark_bits) {
+    page->remembered_bits.reset(new (std::nothrow) uint64_t[mark_words]());
+    if (!page->mark_bits || !page->remembered_bits) {
       release_page_storage(storage, capacity);
       return nullptr;
     }
     page->mark_words = mark_words;
+    page->remembered_words = mark_words;
     page->kind = capacity > kGcPageBytes ? PageKind::Large : PageKind::Mixed;
     if (capacity <= kGcPageBytes) {
       page->object_starts.reset(new (std::nothrow) uint64_t[mark_words]());
