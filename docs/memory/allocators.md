@@ -42,6 +42,13 @@ stacks for strict LIFO lifetimes, buddy for power-of-two blocks, and free-list
 or TLSF for variable-size reuse. Stack allocations must be freed in LIFO order.
 These strategies are correctness choices, not measured performance claims.
 
+For alignments up to the process heap's natural `max_align_t` alignment, the
+general path stores the block at the address the heap returned; no alignment
+prefix or slack is added. Larger alignments retain the prefix. Deallocation
+still consults the ownership registry, so the recorded allocator and alignment
+select the correct free path and an invalid or repeated free is rejected. The
+thread-local default cache preserves the alignment in each entry.
+
 Selection is thread-local by default. Per-allocation selection is supported;
 function and block selection can be paired with `defer` to restore the prior
 handle. `memory.set_default_allocator(handle)` installs a process-wide default

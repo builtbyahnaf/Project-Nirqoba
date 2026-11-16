@@ -51,6 +51,15 @@ runtime tracks allocation ownership and rejects invalid and repeated frees.
 The compiler detects use after supported deallocation through tracked aliases
 in a function, but general raw-pointer use is not dynamically checked.
 
+Since `0.591-beta`, a default-aligned block on the Windows x64 process heap is
+returned directly rather than through a private prefix. The heap already
+satisfies `max_align_t`; the ownership registry keeps the exact requested
+alignment, and over-aligned requests still use the prefix path. This removes
+metadata and slack from ordinary blocks without weakening release checks or
+allocator identity. A cached release also no longer signals a condition
+variable: allocation only waits for a record marked in flight, which the cache
+path never produces.
+
 Manual storage is a separate escape hatch:
 
 ```nrqoba

@@ -128,6 +128,13 @@ function. Verified TIR therefore has one destruction record, and MLIR still
 receives an ordinary runtime release. A separate release call is only emitted
 when the source explicitly writes one (`memory.deallocate(x)` or `defer ...`).
 
+The builder normally nulls the owner slot after discharge so an outer scope
+cannot reload the same value. Since `0.591-beta`, lowering removes that null
+constant and store when they immediately precede `tir.return`: no operation in
+the activation can read the slot afterwards. This is a dead-store
+simplification on the lowering copy; the release, obligation discharge and
+reverse-order field destruction are unchanged.
+
 Verifier rules:
 
 - a drop operand must be owning and may not be borrowed;
