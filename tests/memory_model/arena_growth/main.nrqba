@@ -1,0 +1,13 @@
+int function main() {
+    let arena = memory.arena(8);
+    {
+        var small = memory.allocate<byte>(4, arena);
+        var large = memory.allocate<int>(64, arena);
+        small[0] = 7 as byte;
+        large[0] = 99;
+        print(small[0] as int);
+        print(large[0]);
+    }
+    memory.arena_destroy(arena);
+    return 42;
+}
