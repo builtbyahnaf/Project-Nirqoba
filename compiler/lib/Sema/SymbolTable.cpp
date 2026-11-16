@@ -447,7 +447,18 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
         // or null binding on the other path. The borrow path is still a real
         // possibility, so retain it; ownership of an inactive owner cannot be
         // merged away silently.
-        if (!(branch_dependent_owners ||
+        // An untracked id on one path only means that path never took the
+        // binding's address. It is not a different owner: a scalar that gained
+        // an id inside a branch or loop body is still the same storage after
+        // the merge. Distinct tracked owners remain unsafe.
+        const bool untracked_id_pair =
+            (then_symbol->allocation_id == 0 ||
+             else_symbol->allocation_id == 0) &&
+            !then_symbol->owns_allocation &&
+            !then_symbol->shared_allocation && !then_symbol->borrowed &&
+            !else_symbol->owns_allocation &&
+            !else_symbol->shared_allocation && !else_symbol->borrowed;
+        if (!(branch_dependent_owners || untracked_id_pair ||
               (one_sided_borrow && !inactive.borrowed &&
                !inactive.owns_allocation && !inactive.shared_allocation))) {
           // Distinct owners cannot be represented safely after this merge.
