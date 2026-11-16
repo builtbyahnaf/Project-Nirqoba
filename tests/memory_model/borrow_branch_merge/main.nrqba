@@ -1,0 +1,11 @@
+int function main() {
+    var value = 5;
+    let pointer = &value;
+    if (value > 0) {
+        print(*pointer);
+    } else {
+        print(*pointer + 1);
+    }
+    print(*pointer + 2);
+    return 42;
+}

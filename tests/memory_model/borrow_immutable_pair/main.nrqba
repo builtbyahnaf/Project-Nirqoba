@@ -1,0 +1,9 @@
+int function read_pair(borrow int* first, borrow int* second) {
+    return *first + *second;
+}
+
+int function main() {
+    var value = 21;
+    print(read_pair(&value, &value));
+    return 42;
+}
