@@ -1,0 +1,7 @@
+struct Node { shared ptr Node next; }
+
+int function main() {
+    let node = memory.shared_allocate<Node>(16);
+    memory.shared_release(node);
+    return 0;
+}
