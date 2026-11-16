@@ -34,6 +34,7 @@ namespace nirq {
 enum class ValueOwnership {
   Trivial,
   Owned,             // deterministic owner: this value must be destroyed once
+  Manual,            // explicit manual owner released through manual_release
   Borrowed,          // immutable non-owning access, lifetime-bound to its source
   MutableBorrowed,   // exclusive non-owning access, lifetime-bound to its source
   Shared,            // explicit reference-counted owner
@@ -44,8 +45,10 @@ enum class ValueOwnership {
 };
 
 // True for categories that carry a destruction or release obligation.
-// `GcManaged` is excluded deliberately: the collector, not lexical cleanup, is
-// responsible for reclaiming managed objects.
+// `Manual` is owning: its release is explicit, with a compiler-scheduled
+// fallback, and it never converts to `Owned`. `GcManaged` is excluded
+// deliberately: the collector, not lexical cleanup, is responsible for
+// reclaiming managed objects.
 bool is_owning_ownership(ValueOwnership ownership);
 
 // True for non-owning access categories, including weak references.

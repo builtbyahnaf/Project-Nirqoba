@@ -7,6 +7,7 @@ bool is_owning_ownership(ValueOwnership ownership) {
   // It therefore creates no per-value drop obligation; reset/destroy releases
   // the whole region in bulk.
   return ownership == ValueOwnership::Owned ||
+         ownership == ValueOwnership::Manual ||
          ownership == ValueOwnership::Shared;
 }
 
@@ -18,11 +19,13 @@ bool is_borrowing_ownership(ValueOwnership ownership) {
 
 bool is_transferable_ownership(ValueOwnership ownership) {
   return ownership == ValueOwnership::Owned ||
+         ownership == ValueOwnership::Manual ||
          ownership == ValueOwnership::Shared;
 }
 
 bool requires_destruction(ValueOwnership ownership) {
   return ownership == ValueOwnership::Owned ||
+         ownership == ValueOwnership::Manual ||
          ownership == ValueOwnership::Shared;
 }
 
@@ -30,6 +33,7 @@ std::string_view ownership_name(ValueOwnership ownership) {
   switch (ownership) {
     case ValueOwnership::Trivial: return "trivial";
     case ValueOwnership::Owned: return "owned";
+    case ValueOwnership::Manual: return "manual";
     case ValueOwnership::Borrowed: return "borrowed";
     case ValueOwnership::MutableBorrowed: return "mutable_borrowed";
     case ValueOwnership::Shared: return "shared";

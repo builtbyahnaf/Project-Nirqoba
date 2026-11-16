@@ -86,6 +86,8 @@ bool ownership_compatible_with_type(const Type& type, ValueOwnership ownership) 
     case ValueOwnership::Owned:
       return type.is_pointer() || type.is_owned_array() || type.is_soa() ||
              is_aggregate_type(type);
+    case ValueOwnership::Manual:
+      return type.is_pointer();
     case ValueOwnership::Borrowed:
     case ValueOwnership::MutableBorrowed:
       return type.is_pointer() || type.is_array_view() || type.is_string();
