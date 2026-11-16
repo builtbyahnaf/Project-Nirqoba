@@ -85,3 +85,28 @@ mutable/immutable borrowed-return mismatches are rejected with `NRQ4007`.
 compile-time analysis only; it does not add a runtime borrow flag, allocation,
 GC root, safepoint or write barrier.
 
+## 6. Allocation Strategy (MMM Phase 4)
+
+Allocation calls carry a strategy contract in TIR. The verifier derives the
+strategy from the callee and checks both the value's `ValueOwnership` and its
+storage shape:
+
+- `memory.allocate`, `memory.reallocate` and `memory.secure_allocate` require
+  `owned` ownership and a plain pointer;
+- `memory.owned_array` and `memory.owned_array_aligned` require `owned` ownership
+  and an owned-array descriptor;
+- `array.allocate` requires `gc_managed` ownership and a managed pointer;
+- `memory.shared_allocate` and `memory.shared_retain` require `shared` ownership
+  and a pointer.
+
+Ordinary release calls (`memory.deallocate`, `memory.secure_release` and
+`array.owned_release`) reject a `gc_managed` value, and an owned-array release
+requires an owned array. A `tir.drop` now accepts only a genuinely owning
+category; collector-managed values have no lexical destruction obligation.
+
+The contract changes no generated code. It prevents a later transformation from
+rewriting an allocation name or ownership record into a different memory
+strategy without a verifier failure. The ordinary path remains
+`nrq_memory_allocate` / `nrq_memory_deallocate_checked`; only explicit
+`array.allocate`, managed-reference payloads and SoA remain collector-backed.
+
