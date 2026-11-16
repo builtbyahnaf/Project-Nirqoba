@@ -1,0 +1,8 @@
+int function main() {
+    var buffer = memory.allocate<byte>(2);
+    buffer[0] = 1u8;
+    buffer = memory.reallocate<byte>(buffer, 4);
+    buffer[3] = 7u8;
+    print(buffer[3] as int);
+    return 0;
+}
