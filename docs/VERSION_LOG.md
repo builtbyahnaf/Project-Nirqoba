@@ -12,6 +12,61 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.583-beta
+
+### Summary of Changes (since `0.575-beta`):
+
+- **Manual storage has a distinct ownership category.** `ValueOwnership::Manual`
+  is owning, transferable and requires destruction, but it is not `Owned`,
+  `Raw`, `Shared`, `ArenaBound` or `GcManaged`. TIR preserves the category on
+  allocation, loads and moves, so lowering and verification cannot silently
+  turn manual storage into ordinary owned storage.
+- **New explicit surface:** `memory.manual_allocate<T>(bytes[, allocator])`
+  and `memory.manual_release(pointer)`. Manual allocation uses the existing
+  allocator registry and natural payload alignment; no second heap or universal
+  object header was added.
+- **Release pairing is enforced.** `memory.deallocate`, `memory.secure_release`,
+  `memory.shared_release` and resource close calls reject manual storage;
+  `memory.manual_release` rejects ordinary storage. The TIR verifier rejects a
+  malformed category or release even when Sema is bypassed.
+- **Manual lifetime rules:** moves invalidate the old binding, borrows do not
+  transfer ownership, releasing with a live borrow is rejected, double release
+  and use-after-release are rejected, and reallocation is refused in favour of
+  release-and-reallocate. A lexical fallback release keeps unsupported exits
+  safe while allowing explicit release.
+- **Scope boundary:** manual storage cannot cross an owned function parameter or
+  return, because the language has no manual pointer type to carry provenance.
+  Borrow parameters remain available. Tracked arena/pool handles and payloads
+  requiring deterministic field cleanup are rejected.
+- **Managed payloads and GC:** manual storage containing `managed<T>` receives
+  the existing typed-root registration and unregistration; plain manual storage
+  emits no `nrq_gc` IR or object dependency. Phase 7 isolation still passes.
+- **FFI remains unsupported and is now stated as a boundary.** There is no
+  `extern`, foreign pointer type, callback type or source ABI. No C ABI was
+  invented; an `extern` declaration remains a compile-time error, and the
+  ownership contracts that a future FFI must satisfy are documented as
+  unimplemented.
+- Tests: 329 unit tests and 624 full-run cases pass, 0 failed, 0 skipped. The
+  Phase 1–7 suites are preserved; new cases cover lifecycle, fallback cleanup,
+  moves, scoped borrows, allocator handles, managed rooting, conditional
+  release, wrong/double release, use-after-release, live-borrow release,
+  reallocation, function escape, arena rejection, deterministic-cleanup payloads
+  and FFI rejection.
+- Benchmarks: `benchmarks/memory-model/phase-8/` records 7 fresh-process samples
+  for ordinary and manual allocation, explicit allocator handles, fallback
+  cleanup, borrowed access and a managed payload. Production medians:
+  ordinary `142.2` cycles/op, manual `144.4`, manual with an explicit handle
+  `340.5`, fallback `142.4`, borrowed access `1.70` cycles/read, managed-root
+  manual storage `345.4` cycles/op. Manual/ordinary ratio is `1.0155`; no
+  speedup is claimed. Debug overhead on the managed root workload is `1.0467×`.
+- **Known limitations:** manual storage is function-local; manual reallocation
+  and arbitrary alignment selection are not provided; no FFI bridge, foreign
+  ownership transfer, retained foreign pointer or callback contract exists;
+  manual allocator handles still have a manual root-lifetime contract. Phase 9
+  was not started, and the Phase 10 CDMM proposal is untouched.
+
+---
+
 ## Version 0.575-beta
 
 ### Summary of Changes (since `0.571-beta`):
