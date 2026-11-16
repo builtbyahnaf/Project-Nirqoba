@@ -279,6 +279,7 @@ static bool expression_creates_owned_pointer(const Expr& expr) {
   if (expr.kind() != Expr::Kind::Call) return false;
   const std::string& callee = static_cast<const CallExpr&>(expr).callee();
   return callee == "file.open" || callee == "memory.allocate" ||
+         callee == "memory.manual_allocate" ||
          callee == "memory.secure_allocate" || callee == "memory.reallocate" ||
          callee == "memory.map_file" || callee == "memory.shared_allocate" ||
          callee == "memory.shared_retain" || callee == "mutex.create" ||
@@ -294,6 +295,7 @@ static std::string cleanup_for_owner_producer(const std::string& callee,
   if (callee == "file.open") return "file.close";
   if (callee == "memory.map_file") return "memory.unmap_file";
   if (callee == "memory.secure_allocate") return "memory.secure_release";
+  if (callee == "memory.manual_allocate") return "memory.manual_release";
   if (callee == "memory.allocate" || callee == "memory.reallocate")
     return "memory.deallocate";
   if (callee == "mutex.create") return "mutex.destroy";
@@ -314,6 +316,13 @@ static std::string cleanup_for_owned_expression(const Expr& expression,
   if (!source || source->borrowed || source->shared_allocation) return {};
   return source->cleanup_callee.empty() && source->owns_allocation
              ? "memory.deallocate" : source->cleanup_callee;
+}
+
+// Explicit memory releases are both ordinary memory, not opaque resource
+// handles. Manual storage keeps its own release spelling but participates in
+// indexing, borrowing and return checks exactly like explicit owned storage.
+static bool is_plain_memory_cleanup(const std::string& callee) {
+  return callee == "memory.deallocate" || callee == "memory.manual_release";
 }
 
 static std::string cleanup_for_borrow_domain(const std::string& domain) {
@@ -1162,6 +1171,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
       const auto& call = static_cast<const CallExpr&>(declaration.initializer());
       symbol.shared_allocation = call.callee() == "memory.shared_allocate" ||
                                  call.callee() == "memory.shared_retain";
+      symbol.manual_allocation = call.callee() == "memory.manual_allocate";
       if (const FunctionSignature* signature = find_function(call.callee())) {
         symbol.shared_allocation = symbol.shared_allocation || signature->returns_shared;
         if (!signature->returns_borrowed &&
@@ -1265,6 +1275,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
           symbol.borrow_targets = source->borrow_targets;
         }
         symbol.shared_allocation = source->shared_allocation;
+        symbol.manual_allocation = source->manual_allocation;
         symbol.cleanup_callee = source->cleanup_callee;
         if (source->owns_allocation && !source->moved) {
           if (reject_move_after_defer(*source, declaration.initializer().location(),
@@ -2405,6 +2416,7 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       requested_mutable = value_signature && value_signature->returns_mutable_borrow;
     }
     bool shared_allocation = source && source->shared_allocation;
+    bool manual_allocation = source && source->manual_allocation;
     std::string cleanup_callee = source ? source->cleanup_callee : std::string{};
     std::string borrow_owner;
     BorrowPathSet borrow_paths;
@@ -2420,6 +2432,7 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       shared_allocation = call.callee() == "memory.shared_allocate" ||
                           call.callee() == "memory.shared_retain" ||
                           (signature && signature->returns_shared);
+      manual_allocation = call.callee() == "memory.manual_allocate";
       if (owns_allocation)
         cleanup_callee = signature && !signature->return_resource_domain.empty()
             ? cleanup_for_return_domain(signature->return_resource_domain)
@@ -2499,7 +2512,8 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     }
     symbols_.set_pointer_ownership(assignment.name(), owns_allocation, borrowed,
                                    mutable_borrow, shared_allocation, cleanup_callee,
-                                   borrow_owner, borrow_paths, explicit_borrow);
+                                   borrow_owner, borrow_paths, explicit_borrow,
+                                   manual_allocation);
     symbols_.set_definitely_null(
         assignment.name(), is_null_pointer_literal(assignment.value()));
     assignment.set_cleanup_callee(cleanup_callee);
@@ -2904,6 +2918,11 @@ void TypeChecker::check_return(ReturnStmt& statement) {
     diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                        "arena-bound storage cannot escape through a return value");
   }
+  if (statement.value()->ownership() == ValueOwnership::Manual) {
+    diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                       "manual allocations cannot cross a function return; "
+                       "release the allocation before returning");
+  }
   consume_field_move(const_cast<Expr&>(*statement.value()), current_return_type_);
   if (current_return_type_.is_void()) {
     diagnostics_.error(diag::kVoidReturnsValue, statement.location(),
@@ -2970,11 +2989,12 @@ void TypeChecker::check_return(ReturnStmt& statement) {
     }
     const std::string expected_cleanup =
         cleanup_for_return_domain(current_return_resource_domain_);
-    if (!cleanup_callee.empty() && cleanup_callee != "memory.deallocate" &&
+    if (!cleanup_callee.empty() && !is_plain_memory_cleanup(cleanup_callee) &&
         cleanup_callee != expected_cleanup) {
       diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                          "returned resource does not match the function's owned resource domain");
-    } else if (!cleanup_callee.empty() && cleanup_callee != "memory.deallocate" &&
+    } else if (!cleanup_callee.empty() &&
+               !is_plain_memory_cleanup(cleanup_callee) &&
                current_return_resource_domain_.empty()) {
       diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                          "specialized owned resources require an 'owned <resource>' return type");
@@ -3007,7 +3027,10 @@ void TypeChecker::check_return(ReturnStmt& statement) {
        contains_owned_array(current_return_type_)) &&
       statement.value()->kind() == Expr::Kind::Name && !returns_borrowed) {
     const Symbol* source = find_root_symbol(*statement.value(), symbols_);
-    if (source && source->type != current_return_type_) {
+    if (source && source->manual_allocation) {
+      diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
+                         "manual allocations cannot escape through a return value");
+    } else if (source && source->type != current_return_type_) {
       diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                          "an owned field cannot escape an aggregate individually");
     } else if (source && source->borrowed) {
@@ -3101,6 +3124,8 @@ Type TypeChecker::check_expression(Expr& expr) {
           name.set_ownership(ValueOwnership::Shared);
         else if (symbol->arena_bound)
           name.set_ownership(ValueOwnership::ArenaBound);
+        else if (symbol->manual_allocation)
+          name.set_ownership(ValueOwnership::Manual);
         else if (symbol->owns_allocation)
           name.set_ownership(ValueOwnership::Owned);
         else if (symbol->type.is_managed_pointer())
@@ -3145,8 +3170,10 @@ Type TypeChecker::check_expression(Expr& expr) {
           // An allocation from a tracked arena/pool keeps its arena identity
           // instead of falling back to the ordinary owned-pointer category.
           expr.set_ownership(ValueOwnership::ArenaBound);
-        } else if (call.callee() == "memory.shared_allocate" ||
-                   call.callee() == "memory.shared_retain")
+        } else if (call.callee() == "memory.manual_allocate")
+          expr.set_ownership(ValueOwnership::Manual);
+        else if (call.callee() == "memory.shared_allocate" ||
+                 call.callee() == "memory.shared_retain")
           expr.set_ownership(ValueOwnership::Shared);
         else if (signature && signature->returns_borrowed)
           expr.set_ownership(signature->returns_mutable_borrow
@@ -3715,7 +3742,7 @@ Type TypeChecker::check_index_expr(IndexExpr& expr) {
               signature->return_resource_domain);
       }
     }
-    if (!cleanup_callee.empty() && cleanup_callee != "memory.deallocate" &&
+    if (!cleanup_callee.empty() && !is_plain_memory_cleanup(cleanup_callee) &&
         cleanup_callee != "memory.secure_release") {
       diagnostics_.error(diag::kTypeMismatch, expr.base().location(),
                          "opaque resource handles cannot be indexed; use the "
@@ -4501,7 +4528,7 @@ Type TypeChecker::check_call(CallExpr& call) {
             static_cast<const CallExpr&>(destination_expr).callee());
       }
       if (!destination_cleanup.empty() &&
-          destination_cleanup != "memory.deallocate" &&
+          !is_plain_memory_cleanup(destination_cleanup) &&
           destination_cleanup != "memory.secure_release")
         diagnostics_.error(diag::kTypeMismatch, destination_expr.location(),
                            "socket.receive destination cannot be an opaque resource handle");
@@ -5110,6 +5137,9 @@ Type TypeChecker::check_call(CallExpr& call) {
     } else if (source && source->shared_allocation) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "shared allocations cannot be resized");
+    } else if (source && source->manual_allocation) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "manual allocations cannot be resized; release and allocate a replacement");
     } else if (source && source->owns_allocation && !source->moved) {
       const_cast<Expr&>(*call.arguments()[0]).set_transfers_ownership();
       symbols_.mark_allocation_moved(source->allocation_id);
@@ -5203,10 +5233,15 @@ Type TypeChecker::check_call(CallExpr& call) {
                                                     : Type::void_type();
   }
 
-  if (call.callee() == "memory.allocate" && call.has_generic_argument()) {
+    const bool manual_allocation_call = call.callee() == "memory.manual_allocate";
+  const std::string allocation_spelling = manual_allocation_call
+      ? "memory.manual_allocate<T>" : "memory.allocate<T>";
+  if ((call.callee() == "memory.allocate" || manual_allocation_call) &&
+      call.has_generic_argument()) {
     if (call.arguments().size() != 1 && call.arguments().size() != 2) {
       diagnostics_.error(diag::kPrintArity, call.location(),
-                         "'memory.allocate<T>' takes a byte count and optional allocator handle");
+                         "'" + allocation_spelling +
+                             "' takes a byte count and optional allocator handle");
       for (const ExprPtr& argument : call.arguments())
         check_expression(const_cast<Expr&>(*argument));
       return Type::pointer_type(resolve_generic_type(call.generic_argument()));
@@ -5214,7 +5249,8 @@ Type TypeChecker::check_call(CallExpr& call) {
     const Type size_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
     if (size_type.is_valid() && !size_type.is_integer()) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
-                         "'memory.allocate<T>' requires an integer byte count");
+                         "'" + allocation_spelling +
+                             "' requires an integer byte count");
     }
     if (call.arguments().size() == 2) {
       const Type allocator_type = check_expression(
@@ -5223,7 +5259,12 @@ Type TypeChecker::check_call(CallExpr& call) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
                            "allocator handle must be an integer");
       if (const Symbol* arena = find_root_symbol(*call.arguments()[1], symbols_)) {
-        if (arena->arena_kind != 0 && !arena->moved) {
+        if (manual_allocation_call && arena->arena_kind != 0) {
+          diagnostics_.error(
+              diag::kTypeMismatch, call.arguments()[1]->location(),
+              "manual allocation cannot use a tracked arena or pool; "
+              "arena and pool storage is released in bulk");
+        } else if (arena->arena_kind != 0 && !arena->moved) {
           call.set_arena_id(arena->arena_id);
           call.set_arena_kind(arena->arena_kind);
           call.set_ownership(ValueOwnership::ArenaBound);
@@ -5238,7 +5279,8 @@ Type TypeChecker::check_call(CallExpr& call) {
     if (requires_deterministic_cleanup(payload_type)) {
       diagnostics_.error(
           diag::kTypeMismatch, call.location(),
-          "explicit allocations cannot contain '" + payload_type.to_string() +
+          (manual_allocation_call ? "manual allocations" : "explicit allocations") +
+              std::string(" cannot contain '") + payload_type.to_string() +
               "': deallocation frees the storage without running field destruction");
       return Type::error();
     }
@@ -5286,6 +5328,36 @@ Type TypeChecker::check_call(CallExpr& call) {
     return Type::managed_pointer_type(element_type);
   }
 
+  if (call.callee() == "memory.manual_release") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.manual_release' takes exactly one pointer argument");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::void_type();
+    }
+    const Type pointer_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (pointer_type.is_valid() && !pointer_type.is_pointer()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'memory.manual_release' requires a manual pointer");
+    }
+    const Symbol* pointer_symbol = find_root_symbol(*call.arguments()[0], symbols_);
+    if (!pointer_symbol || !pointer_symbol->manual_allocation) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "manual release requires a memory.manual_allocate allocation");
+    } else if (pointer_symbol->moved) {
+      diagnostics_.error(diag::kUseAfterFree, call.arguments()[0]->location(),
+                         "manual allocation was already released");
+    } else if (symbols_.has_live_borrow(pointer_symbol->allocation_id)) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "cannot release a manual owner while a borrow is live");
+    } else if (!checking_deferred_cleanup_) {
+      const_cast<Expr&>(*call.arguments()[0]).set_transfers_ownership();
+      symbols_.mark_allocation_moved(pointer_symbol->allocation_id);
+    }
+    return Type::void_type();
+  }
+
   if (call.callee() == "memory.deallocate") {
     if (call.arguments().size() != 1) {
       diagnostics_.error(diag::kPrintArity, call.location(),
@@ -5300,7 +5372,10 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "'memory.deallocate' requires an explicitly allocated pointer");
     }
     const Symbol* pointer_symbol = find_root_symbol(*call.arguments()[0], symbols_);
-    if (pointer_symbol && pointer_symbol->shared_allocation) {
+    if (pointer_symbol && pointer_symbol->manual_allocation) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "manual allocations must be released with memory.manual_release");
+    } else if (pointer_symbol && pointer_symbol->shared_allocation) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "shared allocations must be released with memory.shared_release");
     } else if (pointer_symbol && pointer_symbol->borrowed) {
@@ -5724,7 +5799,7 @@ Type TypeChecker::check_call(CallExpr& call) {
     }
     if (!expects_shared && expected_owned_resource.empty() &&
         !(i < sig.parameter_borrowed.size() && sig.parameter_borrowed[i]) &&
-        !actual_resource.empty() && actual_resource != "memory.deallocate") {
+        !actual_resource.empty() && !is_plain_memory_cleanup(actual_resource)) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "owned resource requires cleanup with '" +
                              actual_resource +
@@ -5768,7 +5843,7 @@ Type TypeChecker::check_call(CallExpr& call) {
         continue;
       }
       if (expected_resource.empty() && !actual_resource.empty() &&
-          actual_resource != "memory.deallocate") {
+          !is_plain_memory_cleanup(actual_resource)) {
         diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                            "opaque resources require a resource-qualified borrow parameter");
         continue;
@@ -5826,12 +5901,17 @@ Type TypeChecker::check_call(CallExpr& call) {
                            })) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
                          "cannot transfer an owner while another argument borrows it");
-    } else if (source && source->owns_allocation && !source->moved &&
-               std::find(ownership_transfers.begin(), ownership_transfers.end(),
-                         source->allocation_id) != ownership_transfers.end()) {
-      diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
-                         "the same owner cannot be transferred to multiple parameters in one call");
-    } else if (!expects_shared &&
+          } else if (source && source->manual_allocation && !source->borrowed) {
+        diagnostics_.error(
+            diag::kTypeMismatch, call.arguments()[i]->location(),
+            "manual allocations cannot cross a function boundary; pass a borrow "
+            "or release the allocation first");
+      } else if (source && source->owns_allocation && !source->moved &&
+                 std::find(ownership_transfers.begin(), ownership_transfers.end(),
+                           source->allocation_id) != ownership_transfers.end()) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),
+                           "the same owner cannot be transferred to multiple parameters in one call");
+      } else if (!expects_shared &&
                !(source && source->owns_allocation && !source->moved) &&
                call.arguments()[i]->ownership() != ValueOwnership::Owned) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[i]->location(),

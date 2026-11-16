@@ -285,7 +285,8 @@ void SymbolTable::set_pointer_ownership(const string& name,
                                         std::string cleanup_callee,
                                         std::string borrow_owner,
                                         BorrowPathSet borrow_paths,
-                                        bool explicit_borrow) {
+                                        bool explicit_borrow,
+                                        bool manual_allocation) {
   for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
     auto found = scope->find(name);
     if (found != scope->end()) {
@@ -297,6 +298,7 @@ void SymbolTable::set_pointer_ownership(const string& name,
       found->second.definitely_null = false;
       found->second.borrow_targets.clear();
       found->second.shared_allocation = shared_allocation;
+      found->second.manual_allocation = manual_allocation;
       found->second.cleanup_callee = std::move(cleanup_callee);
       found->second.borrow_owner = std::move(borrow_owner);
       found->second.borrow_paths = std::move(borrow_paths);
@@ -512,6 +514,8 @@ void SymbolTable::merge_conditional_ownership(const SymbolTable& then_state,
       destination.moved = then_symbol->moved || else_symbol->moved;
       destination.owns_allocation = then_symbol->owns_allocation &&
                                     else_symbol->owns_allocation;
+      destination.manual_allocation = then_symbol->manual_allocation &&
+                                      else_symbol->manual_allocation;
       destination.borrowed = then_symbol->borrowed || else_symbol->borrowed;
       destination.mutable_borrow = then_symbol->mutable_borrow ||
                                    else_symbol->mutable_borrow;

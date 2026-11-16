@@ -70,6 +70,11 @@ struct Symbol {
   // True when the binding uniquely owns an explicit runtime allocation/resource.
   bool owns_allocation = false;
   bool shared_allocation = false;
+  // True when the allocation came from memory.manual_allocate<T>. Manual
+  // storage is released only through memory.manual_release and cannot be
+  // transferred across a function boundary while the language has no manual
+  // pointer type to carry that provenance.
+  bool manual_allocation = false;
   // Arena/pool lifetime metadata. A handle symbol carries arena_kind 1 (arena)
   // or 2 (pool) and owns the id; storage allocated from it is arena_bound and
   // carries the same id without an individual release obligation.
@@ -177,7 +182,8 @@ class SymbolTable {
                              std::string cleanup_callee = {},
                              std::string borrow_owner = {},
                              BorrowPathSet borrow_paths = {},
-                             bool explicit_borrow = false);
+                             bool explicit_borrow = false,
+                             bool manual_allocation = false);
   void set_borrowed_resource_domain(const std::string& name,
                                     std::string cleanup_callee);
   bool field_is_moved(const std::string& name, const std::string& path) const;
