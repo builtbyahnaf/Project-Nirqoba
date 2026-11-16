@@ -51,6 +51,19 @@ runtime tracks allocation ownership and rejects invalid and repeated frees.
 The compiler detects use after supported deallocation through tracked aliases
 in a function, but general raw-pointer use is not dynamically checked.
 
+Ordinary owned allocation is not collector allocation. `memory.allocate`,
+`memory.reallocate`, `memory.owned_array`, `memory.owned_array_aligned` and
+`memory.secure_allocate` use the selected general, arena/pool or secure
+allocator and release through their ordinary destructor. They carry no GC object
+header, root frame, mutator region, safepoint or write barrier. A bounded value
+that does not escape can be placed in the frame instead. A payload containing
+`managed<T>` is the deliberate mixed case: its storage remains ordinary but its
+managed references are registered as typed roots, and only that case uses GC
+root operations. `array.allocate<T>` and SoA containers remain explicitly
+collector-backed. The TIR verifier rejects an allocation whose ownership or
+storage shape disagrees with its selected strategy, and rejects collector values
+passed to an ordinary release.
+
 Explicit allocator profiling can be enabled with
 `memory.profiler.start()`, sampled with `memory.profiler.capture()`, and
 disabled with `memory.profiler.stop()`. Explicit allocation fields report
