@@ -3041,16 +3041,29 @@ void release_page_storage(unsigned char* storage, size_t bytes) {
   ::VirtualFree(storage, 0, MEM_RELEASE);
 }
 
+// Every field the collector derives from a page is reset here, at the one point
+// where a page's storage can be handed out again. Keeping initialization and
+// recycling on the same helper prevents a new page class from forgetting a
+// bitmap or counter that the sweep fast paths rely on.
+void reset_page_gc_metadata_locked(GcPage& page) {
+  page.used = 0;
+  page.live_objects = 0;
+  page.live_payload_bytes = 0;
+  page.born_this_cycle = 0;
+  page.young_objects = 0;
+  clear_page_marks(page);
+  if (page.object_starts && page.object_start_words != 0) {
+    std::memset(page.object_starts.get(), 0,
+                page.object_start_words * sizeof(uint64_t));
+  }
+}
+
 std::unique_ptr<GcPage> acquire_page(size_t capacity) {
   for (auto entry = recycled_pages.begin(); entry != recycled_pages.end();
        ++entry) {
     if ((*entry)->capacity < capacity) continue;
     std::unique_ptr<GcPage> page = std::move(*entry);
     recycled_pages.erase(entry);
-    page->used = 0;
-    page->live_objects = 0;
-    page->live_payload_bytes = 0;
-    page->born_this_cycle = 0;
     page->retired = false;
     if (page->free_span_count != 0) {
       unindex_span_page_locked(*page);
@@ -3059,12 +3072,7 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
       page->free_span_bytes = 0;
     }
     set_page_max_free_span_locked(*page, 0, 0);
-    page->young_objects = 0;
-    clear_page_marks(*page);
-    if (page->object_starts && page->object_start_words != 0) {
-      std::memset(page->object_starts.get(), 0,
-                  page->object_start_words * sizeof(uint64_t));
-    }
+    reset_page_gc_metadata_locked(*page);
     recycled_page_reuse_count = saturated_add(recycled_page_reuse_count, 1);
     return page;
   }
@@ -3121,12 +3129,10 @@ void recycle_page(std::unique_ptr<GcPage> page) {
     release_page_storage(page->storage, page->capacity);
     return;
   }
-  page->used = 0;
-  page->live_objects = 0;
-  page->young_objects = 0;
   page->retired = false;
   page->free_span_count = 0;
   page->free_span_bytes = 0;
+  reset_page_gc_metadata_locked(*page);
   GcPage* raw = page.get();
   try {
     recycled_pages.push_back(std::move(page));
