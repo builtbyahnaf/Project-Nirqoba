@@ -1,0 +1,13 @@
+int function main() {
+    let arena = memory.arena(512);
+    {
+        let first = memory.allocate<int>(4, arena);
+        let second = memory.allocate<int>(4, arena);
+        *first = 5;
+        *second = 6;
+        print(*first + *second);
+    }
+    memory.arena_reset(arena);
+    memory.arena_destroy(arena);
+    return 42;
+}

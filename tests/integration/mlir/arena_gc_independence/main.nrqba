@@ -1,0 +1,20 @@
+int function main() {
+    let arena = memory.arena(1024);
+    {
+        var values = memory.allocate<int>(128, arena);
+        var index = 0;
+        while (index < 32) {
+            values[index] = index;
+            index = index + 1;
+        }
+        print(values[31]);
+    }
+    memory.arena_reset(arena);
+    {
+        var reused = memory.allocate<int>(128, arena);
+        reused[0] = 77;
+        print(reused[0]);
+    }
+    memory.arena_destroy(arena);
+    return 42;
+}

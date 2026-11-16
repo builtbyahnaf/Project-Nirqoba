@@ -1,0 +1,13 @@
+int function main() {
+    let pool = memory.pool(64);
+    var first = memory.allocate<int>(4, pool);
+    *first = 123;
+    print(*first);
+    memory.pool_release(first);
+    var second = memory.allocate<int>(4, pool);
+    *second = 456;
+    print(*second);
+    memory.pool_release(second);
+    memory.pool_destroy(pool);
+    return 42;
+}
