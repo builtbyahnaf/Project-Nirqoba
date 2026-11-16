@@ -1055,3 +1055,24 @@ TEST(OwnershipTest, BorrowFlowRejectsMutableReturnFromImmutableBorrow) {
                                   "immutable borrowed return cannot alias a "
                                   "mutable borrow"));
 }
+
+TEST(OwnershipTest, LoopBorrowDoesNotMarkScalarMoved) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_loop_borrow.nrqba",
+      "int function main() {\n"
+      "  var value = 0;\n"
+      "  var index = 0;\n"
+      "  while (index < 2) {\n"
+      "    let pointer = &value;\n"
+      "    print(*pointer);\n"
+      "    index = index + 1;\n"
+      "  }\n"
+      "  print(value);\n"
+      "  return 42;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  ASSERT_FALSE(diag.has_errors());
+  ASSERT_TRUE(verify_tir_module(*module, diag));
+}
