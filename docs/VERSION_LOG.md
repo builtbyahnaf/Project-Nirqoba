@@ -19,6 +19,45 @@ recorded below is made under that authority.
 > `0.495-beta`. Only the newest entry carries the working-build label; older
 > `(released)` entries are actual published checkpoints.
 
+## Version 0.571-beta (working build)
+
+### Summary of Changes (since `0.563-beta`):
+
+- **Shared control is sharded and atomic.** Each shared pointer has a control
+  with an atomic strong count in one of 64 pointer-selected shards. Retain,
+  non-final release and count no longer take the global allocator mutex. Final
+  release removes the control before deallocation so a concurrent retain cannot
+  resurrect the object.
+- **Release and borrow interaction is checked.** `memory.shared_release` is
+  rejected while a borrow of the storage is live. TIR requires a shared token or
+  shared-pointer type for `memory.shared_retain` and `memory.shared_count`.
+- **Arena reset reuses bounded capacity.** Reset retains only the initial
+  capacity-bounded chunk and frees growth chunks; destroy frees the retained
+  chunk. Existing arena invalidation is unchanged.
+- **Strong ownership semantics are unchanged.** Copy retains, move does not,
+  aggregate fields retain/release in order, and the final release frees once.
+- **Weak references are deliberately deferred.** The reserved `Weak` category
+  remains unused. Supported shared payloads reject shared fields, so a supported
+  shared-to-shared owning cycle cannot be constructed; cyclic graphs remain a
+  GC concern.
+- Tests: 323 unit tests and 593 full-run cases pass. New cases cover multiple
+  owners, copy retain, move without retain, parameter release, nested/loop scope,
+  double release, shared borrow/release conflict and shared-cycle payload
+  rejection.
+- Benchmarks: shared allocation is 4.36x ordinary allocation; an explicit
+  retain is 1.187x a move; four-thread independent objects progress without the
+  global lock; one-object contention is 1.59x uncontended. Arena reset median is
+  about 4.2% below the Phase 5 median with overlapping ranges. No universal
+  speedup is claimed.
+- No Phase 7 GC work, cycle collector, weak syntax, automatic shared promotion
+  or new GC was added.
+
+## Version 0.567-beta (intermediate checkpoint)
+
+Two Phase 6 upgrades: the sharded shared-control runtime with final-release
+safety, and bounded arena reset capacity reuse. The complete Phase 6 summary is
+recorded under `0.571-beta`.
+
 ## Version 0.563-beta (working build)
 
 ### Summary of Changes (since `0.551-beta`):
