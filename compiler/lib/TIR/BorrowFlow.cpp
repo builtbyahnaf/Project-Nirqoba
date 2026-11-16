@@ -447,6 +447,21 @@ void verify_return(const tir::Function& function, const FunctionMaps& maps,
     ok = false;
   }
   if (operand_borrowed && declares_borrow) {
+    if (function.return_ownership() == ValueOwnership::MutableBorrowed &&
+        op.operand.ownership != ValueOwnership::MutableBorrowed) {
+      diagnostics.error(kBorrow, op.location,
+                        "internal: mutable borrowed return requires a mutable "
+                        "borrow operand");
+      ok = false;
+    } else if (function.return_ownership() == ValueOwnership::Borrowed &&
+               op.operand.ownership == ValueOwnership::MutableBorrowed) {
+      diagnostics.error(kBorrow, op.location,
+                        "internal: immutable borrowed return cannot alias a "
+                        "mutable borrow");
+      ok = false;
+    }
+  }
+  if (operand_borrowed && declares_borrow) {
     const int root = root_of(maps, op.operand.id);
     const auto parameter = maps.parameter_slot.find(root);
     if (parameter == maps.parameter_slot.end()) {
@@ -490,7 +505,17 @@ void verify_call(const tir::Function& function, const tir::Module& module,
   for (size_t index = 0;
        index < op.arguments.size() && index < parameters.size(); ++index) {
     const tir::Value argument = op.arguments[index];
-    if (!argument.is_valid() || is_borrowed(argument.ownership)) continue;
+    if (!argument.is_valid()) continue;
+    if (!is_borrowed(argument.ownership) &&
+        maps.contains_borrow.count(argument.id) != 0) {
+      diagnostics.error(kBorrow, op.location,
+                        function_value(function, argument.id) +
+                            "aggregate holding a borrow escapes through call '" +
+                            op.callee + "'");
+      ok = false;
+      continue;
+    }
+    if (is_borrowed(argument.ownership)) continue;
     const int root = root_of(maps, argument.id);
     ActiveBorrow conflicting;
     bool found = false;
@@ -773,13 +798,21 @@ bool verify_borrow_flow(const tir::Function& function, const tir::Module& module
 
   // The lifetime table is the persistent form of the borrow relationship. Every
   // lexical record must be backed by an actual Borrow operation, otherwise a
-  // transformation could leave a stale lifetime that still looks valid.
+  // transformation could leave a stale lifetime that still looks valid. A
+  // borrow also has exactly one lexical record; duplicates make later
+  // transformations choose by accident, not by contract.
+  map<int, int> lexical_records;
   for (const tir::LifetimeRecord& lifetime : function.lifetimes()) {
     if (lifetime.kind != tir::LifetimeKind::Lexical) continue;
     if (borrow_operations.count(lifetime.borrow.id) == 0) {
       diagnostics.error(kBorrow, lifetime.location,
                         "lexical lifetime record has no matching borrow "
                         "operation");
+      ok = false;
+    }
+    if (++lexical_records[lifetime.borrow.id] > 1) {
+      diagnostics.error(kBorrow, lifetime.location,
+                        "borrow has more than one lexical lifetime record");
       ok = false;
     }
   }
