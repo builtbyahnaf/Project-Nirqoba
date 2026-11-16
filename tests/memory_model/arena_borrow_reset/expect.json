@@ -1,0 +1,5 @@
+{
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": "arena cannot be reset or destroyed while allocated values or borrows are live"
+}
