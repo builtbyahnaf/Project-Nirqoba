@@ -19,6 +19,23 @@ recorded below is made under that authority.
 > `0.495-beta`. Only the newest entry carries the working-build label; older
 > `(released)` entries are actual published checkpoints.
 
+## Version 0.547-beta (working build)
+
+### Summary of Changes (since `0.543-beta`):
+
+- **Borrow contracts are checked at calls and returns.** Mutable return
+  mismatches, aggregate borrow escapes through calls, duplicate lexical lifetime
+  records and stale records without a borrow operation are rejected.
+- **Diagnostics point at the conflict.** Source borrow conflicts carry a note at
+  the live borrow that caused the rejection.
+- **Loop merge correction.** A newly discovered allocation id on one path is no
+  longer mistaken for a different owner, so borrowing a scalar inside a loop does
+  not make it unusable after the loop.
+- **No runtime cost.** MLIR evidence asserts that an address-of/read program
+  contains no borrow, allocation or GC call.
+- Tests: 307 unit tests and 535 full-run cases pass; the memory-model borrow
+  suite now has 33 cases.
+
 ## Version 0.543-beta (working build)
 
 ### Summary of Changes (since `0.539-beta`):

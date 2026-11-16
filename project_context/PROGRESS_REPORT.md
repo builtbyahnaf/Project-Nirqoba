@@ -3633,6 +3633,70 @@ Phase 2 adds no runtime instruction beyond the release Phase 1 already emitted.
 
 **End of Entry #031**
 
+## Entry #032 — MMM Phase 3: Borrowing and Lifetime Enforcement
+
+**Version:** `0.547-beta`  
+**Phase:** Memory Model Migration Phase 3  
+**Status:** Complete
+
+### 1. Implemented Semantics
+
+- **Immutable borrows:** several may coexist; they cannot write or be passed to
+  mutable-borrow parameters. The owner cannot be moved, released or overwritten
+  while a live immutable alias needs it.
+- **Mutable borrows:** exclusive against any overlapping borrow. Reads and writes
+  through the borrow are allowed; owner access, moves and releases are rejected.
+- **Call-boundary permission:** `&owner` passed to an immutable `borrow`
+  parameter becomes a read-only borrow; `borrow mut` remains exclusive. This
+  removes a false conflict between two immutable arguments.
+- **Paths:** dotted owner paths distinguish disjoint fields from overlapping
+  writes. Sibling fields stay independently borrowable.
+- **Lifetimes:** source-bound returns must match the declared parameter. Local
+  borrows and aggregates holding borrows cannot escape. The lifetime table must
+  match borrow source, path and mutability, with exactly one lexical record.
+
+### 2. CFG and Interprocedural Analysis
+
+`compiler/lib/TIR/BorrowFlow.cpp` builds basic blocks, computes active borrows
+and invalid owners at every block entry, preserves possible restrictions at
+merges and loop back-edges, and runs backward alias liveness so an overwritten or
+unused borrow stops blocking. Aliases include address-of values, copies, loads
+from borrow bindings and borrowed call results forwarded from a declared source
+parameter. Calls are checked against callee parameter ownership and return
+contracts. Diagnostics use `NRQ4007`; source conflicts remain `NRQ3015` with a
+note at the live borrow.
+
+### 3. Phase 1/2 Corrections
+
+- Call arguments now narrow `&` to the callee's declared borrow permission.
+- A zero/non-owner allocation id discovered on one path is no longer treated as
+  a different owner at a merge, so a scalar borrowed inside a loop remains usable
+  after the loop. Distinct tracked owners still merge conservatively.
+
+### 4. Verification
+
+- `307` unit tests pass.
+- Full runner: `535` cases (`502` integration + `33` memory model), all pass.
+- New positive coverage: immutable pairs, mutable writes, branch merges, loop
+  scopes, disjoint fields, forwarded calls, parameter-bound returns, nested
+  scopes, mutable expiration, loop-local borrows and recursion.
+- New negative coverage: conflicting borrows, moving or releasing a borrowed
+  owner, returning a local borrow and returning a borrowed aggregate.
+- MLIR evidence: a borrow/read program lowers with zero runtime calls, including
+  no allocation or GC call. TIR corruption tests cover branch-only destruction,
+  live conflicts, inexact/duplicate lifetime records and return mismatches.
+
+### 5. Limitations
+
+The TIR alias model does not cover arbitrary pointer arithmetic or aliases hidden
+inside external calls. General user-defined lifetime parameters and borrowed
+container elements are not implemented. Where death cannot be proven, the merge
+keeps the restriction conservatively. No runtime borrow tracking was added.
+Exception/panic unwinding and `system.exit` cleanup remain unsupported. No
+benchmark was run; the analysis is compile-time only. Phase 4 was not started.
+
+**End of Entry #032**
+
 <!-- REPORT ENTRIES END -->
 
 ---
