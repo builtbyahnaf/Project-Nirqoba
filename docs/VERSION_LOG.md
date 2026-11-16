@@ -19,6 +19,24 @@ recorded below is made under that authority.
 > `0.495-beta`. Only the newest entry carries the working-build label; older
 > `(released)` entries are actual published checkpoints.
 
+## Version 0.551-beta (working build)
+
+### Summary of Changes (since `0.547-beta`):
+
+- **Ordinary allocation is verified as non-GC.** The Phase 4 audit classifies
+  every allocation path; ordinary pointer, array, aggregate, stack, reallocated,
+  secure and plain shared storage use the existing non-collector allocators.
+- **Allocation strategy is a TIR contract.** Ordinary allocation requires
+  `owned` plain-pointer or owned-array storage, collector allocation requires
+  `gc_managed`, and shared allocation requires `shared`. Ordinary releases and
+  `tir.drop` reject collector-managed values.
+- **Owned-only IR is empty of `nrq_gc` references.** New and existing fixtures
+  cover heap pointers, returned arrays, borrowed views, reallocation, secure and
+  shared allocation at `-O0` and `-O2`. Managed payloads, explicit collector
+  arrays and SoA remain rooted and operational.
+- No second allocator, syntax change or runtime borrow/GC flag was introduced.
+- Tests: 313 unit tests and 554 full-run cases pass.
+
 ## Version 0.547-beta (working build)
 
 ### Summary of Changes (since `0.543-beta`):
