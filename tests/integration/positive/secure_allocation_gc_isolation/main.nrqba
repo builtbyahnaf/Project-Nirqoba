@@ -1,0 +1,7 @@
+int function main() {
+    var buffer = memory.secure_allocate<byte>(8);
+    buffer[0] = 7u8;
+    print(buffer[0] as int);
+    memory.secure_release(buffer);
+    return 0;
+}
