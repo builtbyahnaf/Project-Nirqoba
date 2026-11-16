@@ -109,8 +109,12 @@ An ordinary owned/borrowed program must not contain, at `-O0` or `-O2`:
 - GC object headers/metadata;
 - GC collection bookkeeping or locks.
 
-**Current exception to fix:** unconditional `nrq_gc_root_unregister` in owned
-aggregate/array release. Phase 1 may not treat that call as acceptable.
+**Phase 4 status:** verified at `0.551-beta`. Owned pointer, returned owned
+array, borrowed heap view, owned aggregate, reallocation, secure allocation and
+plain shared allocation fixtures emit no `nrq_gc` reference at `-O0` or `-O2`.
+Registration and unregistration remain only for storage whose payload actually
+contains a managed reference. The TIR verifier now ties each allocation strategy
+to its ownership category and storage shape.
 
 ### I11 — Mixed-strategy interoperability is deliberate
 
@@ -248,8 +252,8 @@ restricted; unsafe scopes and FFI do not exist.
 |---|---|---|
 | Scalar/local | stack/trivial | Complete |
 | Owned aggregate field | deterministic owner | Complete |
-| `memory.allocate<T>` | deterministic explicit owner | Complete, except GC unregister leak for payloads with no managed refs |
-| `memory.owned_array<T>` | deterministic bulk owner | Complete, same release leak |
+| `memory.allocate<T>` | deterministic explicit owner | Complete; non-GC, with conditional rooting for managed payloads |
+| `memory.owned_array<T>` | deterministic bulk owner | Complete; non-GC, with conditional rooting for managed elements |
 | `memory.owned_soa<T>` | collector-owned SoA | Complete for managed columns; asynchronous reclaim is documented |
 | `memory.shared_allocate<T>` | explicit refcount | Complete for supported payloads |
 | `memory.secure_allocate<T>` | secure explicit owner | Partial: no rooted managed payload contract |
@@ -385,7 +389,7 @@ in Phase 1. Freeze their contracts before Phases 6–8.
 | 1 | Ownership representation and verifier | This document; GC-isolation gate |
 | 2 | Destruction/move validation | Phase 1 TIR contract |
 | 3 | Borrow/lifetime representation | Phase 1 value/borrow metadata |
-| 4 | Ordinary non-GC allocation isolation | Owned-only GC gate passed |
+| 4 | Ordinary non-GC allocation isolation | Complete at `0.551-beta`; owned-only IR gate and mixed-path regressions pass |
 | 5 | Arena scopes and bulk destruction | Phase 4 allocator isolation |
 | 6 | Shared completion/weak refs | Phase 2 destruction + Phase 5 if containers are involved |
 | 7 | GC isolation and mixed strategy | Secure-root decision, Phase 4 gate |
