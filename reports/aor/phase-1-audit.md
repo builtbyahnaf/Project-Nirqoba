@@ -196,16 +196,6 @@ A page-local uniform page class can replace the per-object pointer with a page d
 - `tests/unit/gc_test.cpp` asserts the state masks and header facts; these assertions must move with any representation change rather than being weakened.
 - No finalizer or destructor runs for managed payloads. `destroy_object_storage` only invokes the trivial `ObjectHeader` destructor.
 
-## 5. Remaining audit sections
-
-The following sections are added as the audit proceeds:
-
-1. Large-page handling and fallback.
-2. Array and variable-size layouts.
-3. Page recycling and metadata reset.
-4. Debug instrumentation and production/debug equivalence.
-5. Dependency conclusions and Phase 2 extraction order.
-
 ## 11. Destructor, finalization, and debug audit
 
 `destroy_object_storage` calls only `~ObjectHeader`; `ObjectHeader` has no non-trivial destructor. Managed payloads are zero-initialized and hold either trivial scalars or managed references. There is no finalizer queue and no user destructor to run during sweep. Whole-page reclamation is therefore valid for the managed heap; this does not apply to native/explicit allocations, which are outside the tracing heap.
@@ -232,4 +222,31 @@ Phase 2 must preserve three separate concerns:
 3. Enumeration of objects on pages with no start bitmap (`unindexed_objects`).
 
 A future large-object directory can own (2) and (3), but it must not make (1) slower. The current `PageDirectory` hash is the only lookup path for pages whose masking is insufficient, so Phase 2 adds a direct fast path rather than removing it.
+
+## 13. Dependency conclusions
+
+| Field | Classification | Phase 2 action |
+|---|---|---|
+| `next` / `tlab_next` | Derive for uniform pages; keep for large/unindexed until Phase 3 | Preserve; add page-local publication metadata without changing semantics |
+| `mark_next` | Move to external worklist in Phase 3 | Preserve as fallback; keep page mark bitmap authoritative |
+| `page` | Derive for ordinary pages once direct lookup exists | Keep; add direct page lookup cache |
+| `birth_epoch` | Keep for mixed pages; derive for uniform pages | Keep; reset page birth counts with the cycle |
+| `element_count` | Keep for arrays/mixed; derive for fixed uniform pages | Add uniform page-class metadata for later use |
+| `state` (young/remembered/age) | Remembered can move now; young/age stay packed | Move remembered to page bitmap in Phase 2 |
+| `layout` | Keep for mixed; move to page class later | Add page-class layout slot without removing the header field |
+
+No field can be removed safely from the H48 header in Phase 2 alone. The safe Phase 2 deliverable is the **page-local metadata that will replace fields**, while the header remains the fallback and correctness reference.
+
+## 14. Phase 2 extraction order
+
+1. Add a direct-mapped page lookup cache while keeping the hash table.
+2. Centralize page metadata initialization and reset.
+3. Add page-class fields (kind, slot bytes, slot count, layout) and initialize them for mixed pages.
+4. Move the remembered flag to a per-page bitmap and keep the header bit reserved.
+5. Add page-local generation counters and debug validation.
+6. Add large-page metadata counters and preserve exact-index fallback.
+7. Add tests for lookup, recycling, remembered metadata, and uniform page metadata.
+8. Measure allocation, marking, and sweep before claiming a benefit.
+
+The rest of this report is the evidence for those steps; Phase 2 is implemented in `reports/aor/phase-2.md`.
 
