@@ -42,7 +42,9 @@ note at the conflicting borrow. Internal malformed TIR reports `NRQ4007`.
   or write barriers.
 - `tir.borrow` and `tir.end_borrow` remain zero-cost markers; `tir.move` remains a
   zero-copy alias; `tir.drop` still lowers to the same release call.
-- Ordinary allocation remains GC-backed. Phase 4 and later work were not started.
+- Ordinary allocation was already on the general allocator; the remaining
+  unconditional owned-release unregister had been removed in pre-MMM Phase 9.
+  Phase 4 audits and verifies that separation and was not started here.
 
 ## Limits
 
