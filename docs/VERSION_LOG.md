@@ -19,6 +19,53 @@ recorded below is made under that authority.
 > `0.495-beta`. Only the newest entry carries the working-build label; older
 > `(released)` entries are actual published checkpoints.
 
+## Version 0.563-beta (working build)
+
+### Summary of Changes (since `0.551-beta`):
+
+- **Arena and pool lifetimes are tracked.** `memory.arena(capacity)` and
+  `memory.pool(max_object_size)` create typed handles; allocation from one
+  produces an `ArenaBound` value with a unique arena id. Raw
+  `memory.arena_allocator`/`memory.pool_allocator` handles keep their previous
+  semantics.
+- **Bulk release is explicit and safe.** `memory.arena_reset`/`destroy` and
+  `memory.pool_reset`/`destroy` reject live values or borrows, then invalidate
+  every prior binding. The runtime checks handle kind and in-flight operations,
+  erases region records and releases backing chunks. `memory.pool_release`
+  returns one slot and rejects double release, live borrows and wrong allocators.
+- **Arena escapes are compile-time errors.** Returns, owning parameters,
+  borrowed returns, aggregate fields, array literals, cross-arena assignment and
+  ordinary deallocation are rejected. TIR preserves arena identity through
+  loads, calls, moves, projections and address-of, and verifies the reset/destroy
+  contract.
+- **Arena allocation bypasses the registry.** Tracked arena allocations lower to
+  `nrq_arena_allocate`; pools retain `nrq_memory_allocate_from` for slot
+  release. Neither path emits GC allocation, roots, barriers or safepoints.
+- **Bulk release does not run destructors.** Payloads requiring deterministic
+  cleanup are rejected instead of silently leaking; this is the documented
+  limitation.
+- Tests: 320 unit tests and 583 full-run cases pass. New cases cover lifecycle,
+  growth, repeated reset, borrow scopes, branches, loops, escapes, invalid bulk
+  release and pool lifetimes; three IR fixtures assert no `nrq_gc` reference at
+  `-O0`/`-O2`.
+- Benchmarks: the pool path is consistently slower than ordinary allocation;
+  arena results are workload-specific and noisy. Full ranges are reported in
+  `reports/memory-model/phase-5.md`; no universal speedup is claimed.
+- No Phase 6 weak/shared completion, automatic arena selection, FFI, runtime
+  borrow tracking or new GC was added.
+
+## Version 0.559-beta (intermediate checkpoint)
+
+Two Phase 5 upgrades: arena id/kind propagation through TIR values and verifier
+enforcement of allocation, reset/destroy, release and owning-escape contracts.
+The complete Phase 5 summary is recorded under `0.563-beta`.
+
+## Version 0.555-beta (intermediate checkpoint)
+
+Two Phase 5 upgrades: tracked arena/pool constructors with unique identities in
+Sema, and enforced lifecycle, escape and pool-release rules. The complete Phase 5
+summary is recorded under `0.563-beta`.
+
 ## Version 0.551-beta (working build)
 
 ### Summary of Changes (since `0.547-beta`):

@@ -116,6 +116,13 @@ Registration and unregistration remain only for storage whose payload actually
 contains a managed reference. The TIR verifier now ties each allocation strategy
 to its ownership category and storage shape.
 
+**Phase 5 status:** verified at `0.563-beta`. Tracked arena and pool programs
+emit no `nrq_gc` reference at `-O0` or `-O2`. Arena-bound allocation uses
+`nrq_arena_allocate` with no per-pointer registry record; pools keep the
+registered path so `memory.pool_release` can return the slot. Bulk reset and
+destroy invalidate the region without running object destructors, and payloads
+whose cleanup bulk release cannot perform are rejected at compile time.
+
 ### I11 — Mixed-strategy interoperability is deliberate
 
 Any storage outside the collector that contains a managed reference must have:
@@ -390,7 +397,7 @@ in Phase 1. Freeze their contracts before Phases 6–8.
 | 2 | Destruction/move validation | Phase 1 TIR contract |
 | 3 | Borrow/lifetime representation | Phase 1 value/borrow metadata |
 | 4 | Ordinary non-GC allocation isolation | Complete at `0.551-beta`; owned-only IR gate and mixed-path regressions pass |
-| 5 | Arena scopes and bulk destruction | Phase 4 allocator isolation |
+| 5 | Arena scopes and bulk destruction | Complete at `0.563-beta`; tracked lifetimes, bulk invalidation, escape checks and GC-free IR pass |
 | 6 | Shared completion/weak refs | Phase 2 destruction + Phase 5 if containers are involved |
 | 7 | GC isolation and mixed strategy | Secure-root decision, Phase 4 gate |
 | 8 | Manual/FFI | FFI boundary design |
