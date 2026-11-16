@@ -442,6 +442,92 @@ TEST(OwnershipTest, VerifierRejectsDoubleDrop) {
   ASSERT_TRUE(diagnostic_contains(verify_diag, "discharged more than once"));
 }
 
+TEST(OwnershipTest, ManualAllocationCarriesManualOwnershipAndRelease) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "manual_ownership.nrqba",
+      "int function main() {\n"
+      "  var value = memory.manual_allocate<int>(4);\n"
+      "  *value = 3;\n"
+      "  memory.manual_release(value);\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  ASSERT_FALSE(diag.has_errors());
+  ASSERT_TRUE(verify_tir_module(*module, diag));
+  const tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  bool saw_allocation = false;
+  bool saw_release = false;
+  for (const tir::Op& op : main_fn->operations()) {
+    if (op.kind != tir::OpKind::Call) continue;
+    if (op.callee == "memory.manual_allocate") {
+      ASSERT_EQ(op.result.ownership, ValueOwnership::Manual);
+      saw_allocation = true;
+    }
+    if (op.callee == "memory.manual_release") {
+      ASSERT_EQ(op.arguments.size(), 1u);
+      ASSERT_EQ(op.arguments[0].ownership, ValueOwnership::Manual);
+      saw_release = true;
+    }
+  }
+  ASSERT_TRUE(saw_allocation);
+  ASSERT_TRUE(saw_release);
+  ASSERT_TRUE(print_tir(*module).find("own=manual") != string::npos);
+  ASSERT_TRUE(print_tir(*module).find("memory.manual_release") != string::npos);
+}
+
+TEST(OwnershipTest, VerifierRejectsManualAllocationAsOrdinaryOwned) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "manual_bad_allocation.nrqba",
+      "int function main() {\n"
+      "  var value = memory.manual_allocate<int>(4);\n"
+      "  memory.manual_release(value);\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  for (tir::Op& op : main_fn->operations())
+    if (op.kind == tir::OpKind::Call &&
+        op.callee == "memory.manual_allocate") {
+      op.result.ownership = ValueOwnership::Owned;
+      break;
+    }
+  DiagnosticEngine verify_diag;
+  ASSERT_FALSE(verify_tir_module(*module, verify_diag));
+  ASSERT_TRUE(diagnostic_contains(verify_diag,
+                                  "requires ownership 'manual'"));
+}
+
+TEST(OwnershipTest, VerifierRejectsOrdinaryReleaseOfManualValue) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "manual_bad_release.nrqba",
+      "int function main() {\n"
+      "  var value = memory.manual_allocate<int>(4);\n"
+      "  memory.manual_release(value);\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  for (tir::Op& op : main_fn->operations())
+    if (op.kind == tir::OpKind::Call &&
+        op.callee == "memory.manual_release") {
+      op.arguments[0].ownership = ValueOwnership::Owned;
+      break;
+    }
+  DiagnosticEngine verify_diag;
+  ASSERT_FALSE(verify_tir_module(*module, verify_diag));
+  ASSERT_TRUE(diagnostic_contains(verify_diag,
+                                  "manual release requires one manual allocation"));
+}
+
 TEST(OwnershipTest, BorrowRecordsSelectedFieldPath) {
   DiagnosticEngine diag;
   auto module = lower_source(
