@@ -5524,6 +5524,15 @@ Type TypeChecker::check_call(CallExpr& call) {
           (i < sig.parameter_mutable_borrow.size() &&
            sig.parameter_mutable_borrow[i]) ||
           (borrow_effect & BorrowEffectWrite) != 0;
+      // Borrow permission is the callee's contract, not the spelling of `&`.
+      // Passing `&x` to an immutable borrow parameter narrows the borrow to
+      // read-only, so two such arguments can coexist while a mutable parameter
+      // still requires exclusivity.
+      if (direct_address_of) {
+        const_cast<Expr&>(*call.arguments()[i])
+            .set_ownership(mutable_borrow ? ValueOwnership::MutableBorrowed
+                                          : ValueOwnership::Borrowed);
+      }
       const std::string expected_resource =
           i < sig.parameter_resource_domains.size()
               ? cleanup_for_borrow_domain(sig.parameter_resource_domains[i])
