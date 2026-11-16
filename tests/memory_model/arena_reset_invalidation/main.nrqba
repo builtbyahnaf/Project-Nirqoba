@@ -1,0 +1,12 @@
+int function main() {
+    let arena = memory.arena(128);
+    var value = memory.allocate<int>(4, arena);
+    *value = 1;
+    {
+        let scoped = memory.allocate<int>(4, arena);
+        *scoped = 2;
+    }
+    memory.arena_reset(arena);
+    print(*value);
+    return 42;
+}
