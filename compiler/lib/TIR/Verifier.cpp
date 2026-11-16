@@ -402,6 +402,30 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
         check_value(element, op.location, "aggregate element");
 
       if (op.kind == tir::OpKind::Call) {
+        // A shared retain or count query is meaningful only on a shared token.
+        // Allowing an ordinary or borrowed operand here would make the runtime
+        // lookup decide ownership by accident, bypassing Sema's contract.
+        if (op.callee == "memory.shared_retain" ||
+            op.callee == "memory.shared_count") {
+          if (op.arguments.size() != 1 || !op.arguments[0].is_valid()) {
+            diagnostics.error(kType, op.location,
+                              "internal: '" + op.callee +
+                                  "' requires one shared argument");
+            ok = false;
+          } else if (op.arguments[0].ownership != ValueOwnership::Shared &&
+                     !op.arguments[0].type.is_shared_pointer()) {
+            diagnostics.error(
+                kOwnership, op.location,
+                function_value(*function, op.arguments[0].id) +
+                    " is passed to '" + op.callee +
+                    "' with ownership '" +
+                    std::string(ownership_name(op.arguments[0].ownership)) +
+                    "' and non-shared type '" +
+                    op.arguments[0].type.mangle() + "'");
+            ok = false;
+          }
+        }
+
         if (const AllocationContract* contract = allocation_contract(op.callee)) {
           if (!op.result.is_valid()) {
             diagnostics.error(kOwnership, op.location,

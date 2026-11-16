@@ -655,6 +655,34 @@ TEST(OwnershipTest, SharedOwnershipStaysTransferable) {
   ASSERT_TRUE(verify_tir_module(*module, diag));
 }
 
+TEST(OwnershipTest, VerifierRejectsSharedRetainOfOrdinaryOwnership) {
+  DiagnosticEngine diag;
+  auto module = lower_source(
+      "ownership_shared_retain_contract.nrqba",
+      "int function main() {\n"
+      "  let first = memory.shared_allocate<byte>(8);\n"
+      "  let second = memory.shared_retain(first);\n"
+      "  memory.shared_release(second);\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  bool changed = false;
+  for (tir::Op& op : main_fn->operations())
+    if (op.kind == tir::OpKind::Call && op.callee == "memory.shared_retain" &&
+        !op.arguments.empty()) {
+      op.arguments[0].ownership = ValueOwnership::Owned;
+      changed = true;
+    }
+  ASSERT_TRUE(changed);
+  DiagnosticEngine verify_diag;
+  ASSERT_FALSE(verify_tir_module(*module, verify_diag));
+  ASSERT_TRUE(diagnostic_contains(verify_diag,
+                                  "non-shared type"));
+}
+
 TEST(OwnershipTest, VerifierRejectsReturnedBorrowWithoutSourceParameter) {
   DiagnosticEngine diag;
   auto module = lower_source(
