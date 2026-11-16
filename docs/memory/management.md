@@ -51,6 +51,38 @@ runtime tracks allocation ownership and rejects invalid and repeated frees.
 The compiler detects use after supported deallocation through tracked aliases
 in a function, but general raw-pointer use is not dynamically checked.
 
+Manual storage is a separate escape hatch:
+
+```nrqoba
+int function main() {
+    var value = memory.manual_allocate<int>(4);
+    *value = 41;
+    print(*value);
+    memory.manual_release(value);
+    return 0;
+}
+```
+
+`memory.manual_allocate<T>(bytes[, allocator])` produces
+`ValueOwnership::Manual`; it is owned, transferable and released through
+`memory.manual_release`. Ordinary `memory.deallocate`, secure release, shared
+release and resource close functions reject manual storage, and manual release
+rejects every other allocation family. Moves invalidate the old binding,
+borrows do not transfer ownership, releasing with a live borrow is rejected,
+and double release/use-after-release are rejected by the tracked-binding rules.
+A lexical fallback release runs when the programmer does not release explicitly.
+The TIR verifier enforces the same category and pairing for hand-built modules.
+Manual reallocation is not provided; release and allocate a replacement.
+
+Manual storage is deliberately function-local: it cannot be passed to an owned
+parameter or returned, because the language has no manual pointer type to carry
+its provenance across a signature. Pass a `borrow` parameter for temporary
+access. Manual allocation rejects tracked arena/pool handles and payloads whose
+fields require deterministic cleanup. A payload containing `managed<T>` keeps
+the same typed-root contract as ordinary explicit storage; plain manual storage
+has no GC dependency. There is no FFI or unsafe scope in the language, so manual
+storage cannot be passed to foreign code.
+
 Ordinary owned allocation is not collector allocation. `memory.allocate`,
 `memory.reallocate`, `memory.owned_array`, `memory.owned_array_aligned` and
 `memory.secure_allocate` use the selected general, arena/pool or secure

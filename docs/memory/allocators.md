@@ -51,6 +51,15 @@ general-purpose default. `memory.get_default_allocator()` reads it. Selection
 for collector-managed containers is not implemented, because those arrays are
 owned by the tracing heap rather than by an explicit allocator.
 
+`memory.manual_allocate<T>(bytes[, allocator])` uses the same allocator
+selection and ownership registry as ordinary explicit allocation, but its
+release spelling is `memory.manual_release`. It cannot use a tracked
+`memory.arena`/`memory.pool` handle because those lifetimes are bulk-owned, and
+it cannot be resized with `memory.reallocate`; release it and allocate a
+replacement. The runtime records the selected allocator and rejects a mismatched
+or repeated release. Manual allocator handles retain the manual root-lifetime
+contract documented above.
+
 `memory.reallocate<T>(pointer, new_bytes)` resizes an explicit allocation. The
 block keeps its allocator and alignment, and the surviving bytes are copied up
 to the smaller of the two sizes. Growth of the most recent arena or stack block
