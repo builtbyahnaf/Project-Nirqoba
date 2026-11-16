@@ -1,0 +1,15 @@
+void function write(borrow mut byte* pointer) {
+    pointer[0] = 9u8;
+}
+
+void function forward(borrow mut byte* pointer) {
+    write(pointer);
+}
+
+int function main() {
+    var buffer = memory.allocate<byte>(1);
+    buffer[0] = 1u8;
+    forward(buffer);
+    print(buffer[0] as int);
+    return 42;
+}
