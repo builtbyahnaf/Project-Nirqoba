@@ -172,6 +172,7 @@ class PageDirectory {
       if (!rehash(next)) return false;
     }
     const uintptr_t key = key_for(page->storage);
+    direct_[key & (kDirectEntries - 1)] = DirectEntry{key, page};
     size_t index = hash(key) & (entries_.size() - 1);
     size_t tombstone = entries_.size();
     for (size_t probes = 0; probes < entries_.size(); ++probes) {
@@ -210,6 +211,8 @@ class PageDirectory {
       if (entry.key == key) {
         if (entry.page != page) return;
         entry = Entry{kTombstone, nullptr};
+        DirectEntry& direct = direct_[key & (kDirectEntries - 1)];
+        if (direct.key == key) direct = DirectEntry{};
         --size_;
         ++tombstones_;
         return;
@@ -221,12 +224,20 @@ class PageDirectory {
   GcPage* find(void* object) const {
     if (!object || entries_.empty()) return nullptr;
     const uintptr_t key = key_for(object);
+    // Page-local metadata is read far more often than the directory changes.
+    // A one-entry direct map answers the common case with one compare; the hash
+    // table below remains authoritative and handles collisions and large pages.
+    const DirectEntry& direct = direct_[key & (kDirectEntries - 1)];
+    if (direct.key == key) return direct.page;
     const size_t mask = entries_.size() - 1;
     size_t index = hash(key) & mask;
     for (size_t probes = 0; probes < entries_.size(); ++probes) {
       const Entry& entry = entries_[index];
       if (entry.key == kEmpty) return nullptr;
-      if (entry.key == key) return entry.page;
+      if (entry.key == key) {
+        direct_[key & (kDirectEntries - 1)] = DirectEntry{key, entry.page};
+        return entry.page;
+      }
       index = (index + 1) & mask;
     }
     return nullptr;
@@ -235,7 +246,12 @@ class PageDirectory {
  private:
   static constexpr uintptr_t kEmpty = UINTPTR_MAX;
   static constexpr uintptr_t kTombstone = UINTPTR_MAX - 1;
+  static constexpr size_t kDirectEntries = 256;
   struct Entry {
+    uintptr_t key = kEmpty;
+    GcPage* page = nullptr;
+  };
+  struct DirectEntry {
     uintptr_t key = kEmpty;
     GcPage* page = nullptr;
   };
@@ -274,6 +290,9 @@ class PageDirectory {
   }
 
   std::vector<Entry> entries_;
+  // mutable because a const lookup may fill the cache; every caller holds
+  // gc_mutex, so this is not shared mutable state across collectors.
+  mutable std::array<DirectEntry, kDirectEntries> direct_{};
   size_t size_ = 0;
   size_t tombstones_ = 0;
 };
