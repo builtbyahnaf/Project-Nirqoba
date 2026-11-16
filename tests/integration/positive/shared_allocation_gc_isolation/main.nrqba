@@ -1,0 +1,6 @@
+int function main() {
+    var buffer = memory.shared_allocate<int>(8);
+    print(memory.shared_count(buffer) as int);
+    memory.shared_release(buffer);
+    return 0;
+}

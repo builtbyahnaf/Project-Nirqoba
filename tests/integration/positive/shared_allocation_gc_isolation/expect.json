@@ -1,0 +1,9 @@
+{
+  "mode": "build_and_run",
+  "expect_stdout": "1\n",
+  "expect_exit": 0,
+  "expect_ir_counts": {
+    "nrq_gc": 0,
+    "call i32 @nrq_memory_shared_release": 1
+  }
+}
