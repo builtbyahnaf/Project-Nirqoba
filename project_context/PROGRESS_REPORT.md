@@ -11,10 +11,10 @@
 | Property | Value |
 |---|---|
 | Project | Nirqoba |
-| Current Working Version | `0.575-beta` |
-| Development Stage | `MMM Phase 7 — GC Isolation and Explicit Selection` |
-| Last Report Update | `2026-11-16 20:00:00` |
-| Report Entries | `38` |
+| Current Working Version | `0.583-beta` |
+| Development Stage | `MMM Phase 8 — Manual Memory and FFI Boundary` |
+| Last Report Update | `2026-11-16 23:30:00` |
+| Report Entries | `39` |
 
 ---
 
@@ -4017,3 +4017,85 @@ language has no source-level thread-spawn surface, so concurrency evidence is
 from runtime tests and the benchmark harness.
 
 **End of Entry #038**
+
+---
+
+## Entry #039 — MMM Phase 8: Manual Memory and FFI Boundary
+
+**Version:** `0.583-beta`  
+**Date:** `2026-11-16 23:30:00`  
+**Phase:** Memory Model Migration Phase 8  
+**Status:** Complete for the implemented manual surface; FFI remains an explicit unsupported boundary
+
+### 1. Audit and Classification
+
+`reports/memory-model/phase-8-audit.md` inventories typed explicit allocation,
+reallocation, secure storage, mappings, allocator handles, custom allocator
+callbacks and native resource owners. It traces each through Sema, TIR, MLIR,
+LLVM and the runtime. The audit found no source-level FFI: no `extern`, foreign
+pointer type, callback type, unsafe scope or ABI annotation exists. The runtime
+C ABI is an internal generated-code boundary, not a language surface. The audit
+therefore classified foreign ownership transfer, retained foreign pointers and
+callbacks as unsupported and did not invent an ABI for Phase 8.
+
+The manual-memory gap was real: `Raw` is non-owning and non-transferable, and
+`memory.allocate` produces ordinary `Owned` storage. There was no distinguishable
+manual category, no manual release spelling and no TIR contract that could
+prevent an ordinary deallocator from being paired with manual storage.
+
+### 2. Implementation
+
+- Added `ValueOwnership::Manual`, owning/transferable/destruction-bearing but
+  distinct from `Owned`, `Raw`, `Shared`, `ArenaBound` and `GcManaged`.
+- Added `memory.manual_allocate<T>(bytes[, allocator])` and
+  `memory.manual_release(pointer)`.
+- Sema tracks manual provenance, rejects ordinary/secure/shared/resource
+  releases, double release, use-after-release, release with a live borrow,
+  reallocation, arena/pool handles and deterministic-cleanup payloads.
+- Manual storage cannot cross an owned parameter or return because the language
+  has no manual pointer type; borrow parameters remain supported.
+- TIR carries the category through allocation, loads and moves, verifies the
+  manual allocation contract and rejects malformed manual release.
+- Lowering uses the existing allocator registry, alignment rules and typed-root
+  handoff; plain manual storage emits no `nrq_gc` reference.
+- The parser accepts the typed manual allocation form, and `extern` remains a
+  compile-time error.
+
+### 3. Verification
+
+- `329` unit tests pass.
+- Full runner: `624` cases pass, `0` failed, `0` skipped. All Phase 1–7 cases
+  are preserved.
+- New fixtures cover lifecycle, fallback cleanup, moves, scoped borrows,
+  explicit allocator handles, managed-payload collection, conditional release,
+  ordinary/secure release rejection, double release, use-after-release,
+  live-borrow release, reallocation, function argument/return escape, arena
+  rejection, deterministic-cleanup payloads and FFI rejection.
+- Manual lifecycle and managed-payload fixtures also build and run at `-O0`.
+- `tests/phase7_isolation.py` still passes: twelve ordinary fixtures at `-O0`
+  and `-O2` contain no `nrq_gc` IR or object symbols; the managed control still
+  contains 8 GC symbols.
+- Production/debug configuration equivalence remains green; the exact totals are
+  recorded in the Phase 8 completion report.
+
+### 4. Benchmarks
+
+`benchmarks/memory-model/phase-8/` uses seven fresh-process samples per workload
+and configuration. Production medians: ordinary allocation `142.2` cycles/op,
+manual allocation `144.4`, manual with an explicit general allocator handle
+`340.5`, fallback cleanup `142.4`, borrowed access `1.70` cycles/read, and
+managed-root manual storage `345.4` cycles/op. The manual/ordinary ratio is
+`1.0155`; no speedup is claimed because the runtime allocator and ownership
+registry are the same. Debug/production overhead on the managed-root workload
+is `1.0467×`.
+
+### 5. Limitations
+
+Manual storage is function-local. Manual reallocation and arbitrary alignment
+selection are not provided. There is no FFI, so no foreign ownership transfer,
+borrowed foreign pointer, retained pointer, callback, foreign allocator contract
+or foreign GC/shared/arena interaction is supported or claimed. Manual allocator
+handles retain a manual root-lifetime contract. Phase 9 was not started, and the
+Phase 10 CDMM addition was preserved unchanged.
+
+**End of Entry #039**
