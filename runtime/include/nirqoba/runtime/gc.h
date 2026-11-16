@@ -24,7 +24,12 @@ typedef void (*nrq_gc_trace_fn)(void* object, size_t object_bytes,
 enum {
   // The payload repeats `payload_size` byte elements and the element count is
   // recorded per instance. Without this bit the payload is a single record.
-  NRQ_OBJECT_LAYOUT_ARRAY = 1u << 0
+  NRQ_OBJECT_LAYOUT_ARRAY = 1u << 0,
+  // A record with at most two references carries those offsets in the
+  // descriptor itself. The marker's narrow-record path reads them without a
+  // second dependent load through `reference_offsets`. Producers other than
+  // nrq_gc_layout_intern leave this clear and keep using the table.
+  NRQ_OBJECT_LAYOUT_INLINE_MAP = 1u << 1
 };
 
 struct nrq_object_layout {
@@ -45,6 +50,10 @@ struct nrq_object_layout {
   // so the flat offset table cannot describe it. Null when there are none.
   const uint32_t* soa_columns;
   uint32_t soa_column_pairs;
+  // Inline map for a hot record layout (`NRQ_OBJECT_LAYOUT_INLINE_MAP`). The
+  // count is `reference_count`; entries beyond it are zero. This is part of the
+  // descriptor's immutable data, so it costs no per-object storage.
+  uint32_t inline_reference_offsets[2];
 };
 
 // Returns the descriptor for a layout, creating it the first time it is seen.
