@@ -1,0 +1,19 @@
+// Mixed-size ordinary allocation: sizes cycle through five size classes.
+int function main() {
+    var sizes = [16, 32, 64, 128, 256];
+    var iterations = 500000;
+    var checksum = 0;
+    var start = time.cycles();
+    for (var index = 0; index < iterations; index += 1) {
+        var width = sizes[index % 5];
+        var block = memory.allocate<byte>(width);
+        block[0] = (index % 251) as byte;
+        block[width - 1] = ((index * 7) % 251) as byte;
+        checksum += block[0] as int + block[width - 1] as int;
+        memory.deallocate(block);
+    }
+    var stop = time.cycles();
+    print(checksum);
+    print(stop - start);
+    return 0;
+}

@@ -1,0 +1,24 @@
+// Arena workload: bump allocation with a bulk reset every 1024 objects. The
+// allocation rate is the same as the ordinary/pool workloads, but lifetime is
+// grouped rather than per-object.
+int function main() {
+    let arena = memory.arena(65536);
+    var iterations = 1000000;
+    var width = (memory.cpu_count() as int) + 48;
+    var checksum = 0;
+    var start = time.cycles();
+    for (var batch = 0; batch < 977; batch += 1) {
+        for (var index = 0; index < 1024; index += 1) {
+            var block = memory.allocate<byte>(width, arena);
+            block[0] = (index % 251) as byte;
+            block[width - 1] = ((index * 3) % 251) as byte;
+            checksum += block[0] as int + block[width - 1] as int;
+        }
+        memory.arena_reset(arena);
+    }
+    var stop = time.cycles();
+    memory.arena_destroy(arena);
+    print(checksum);
+    print(stop - start);
+    return 0;
+}

@@ -1,0 +1,21 @@
+// Pool workload: the same 64-byte allocation/release pattern. The pool keeps
+// its slot and reuses it instead of returning storage to the general heap.
+int function main() {
+    let pool = memory.pool(128);
+    var iterations = 1000000;
+    var width = (memory.cpu_count() as int) + 48;
+    var checksum = 0;
+    var start = time.cycles();
+    for (var index = 0; index < iterations; index += 1) {
+        var block = memory.allocate<byte>(width, pool);
+        block[0] = (index % 251) as byte;
+        block[width - 1] = ((index * 3) % 251) as byte;
+        checksum += block[0] as int + block[width - 1] as int;
+        memory.pool_release(block);
+    }
+    var stop = time.cycles();
+    memory.pool_destroy(pool);
+    print(checksum);
+    print(stop - start);
+    return 0;
+}
