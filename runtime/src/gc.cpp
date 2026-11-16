@@ -79,6 +79,10 @@ struct GcPage {
   const nrq_object_layout* uniform_layout = nullptr;
   size_t used = 0;
   size_t live_objects = 0;
+  // Objects on this page that are found through ObjectIndex rather than the
+  // start bitmap. Large pages use this count to keep their fallback metadata
+  // separate from the ordinary page counters.
+  size_t indexed_objects = 0;
   // Young objects in this page. A minor collection can only reclaim or promote
   // young objects, so a page where this count is zero is passed straight over:
   // a minor never sets a mark bit on an old object
@@ -1600,6 +1604,7 @@ void publish_tlab_locked(MutatorState& mutator) {
     if (indexed) {
       if (!object_index.insert(header->payload(), header))
         nrq_runtime_fatal("GC failed to publish a thread-local allocation");
+      ++header->page->indexed_objects;
     } else {
       const size_t offset = static_cast<size_t>(
           static_cast<unsigned char*>(header->payload()) -
@@ -2226,6 +2231,9 @@ bool sweep_chunk_locked(size_t budget_bytes) {
           static_cast<unsigned char*>(header->payload()) - page->storage);
       if (page_uses_index(page)) {
         object_index.erase(header->payload());
+        if (page->indexed_objects == 0)
+          nrq_runtime_fatal("GC page indexed-object count underflow");
+        --page->indexed_objects;
       } else {
         clear_object_start(*page, object_offset);
       }
@@ -3109,6 +3117,7 @@ void release_page_storage(unsigned char* storage, size_t bytes) {
 void reset_page_gc_metadata_locked(GcPage& page) {
   page.used = 0;
   page.live_objects = 0;
+  page.indexed_objects = 0;
   page.live_payload_bytes = 0;
   page.born_this_cycle = 0;
   page.young_objects = 0;
@@ -3459,12 +3468,14 @@ void validate_page_metadata_locked() {
     const GcPage* page = entry.get();
     if (!page) continue;
     if (page->young_objects > page->live_objects ||
+        page->indexed_objects > page->live_objects ||
         page->marked_objects > page->live_objects ||
         page->marked_young_objects > page->young_objects ||
         page->remembered_objects > page->young_objects)
       nrq_runtime_fatal("GC page metadata count is inconsistent");
     if (page->live_objects == 0 &&
-        (page->young_objects != 0 || page->live_payload_bytes != 0 ||
+        (page->young_objects != 0 || page->indexed_objects != 0 ||
+         page->live_payload_bytes != 0 ||
          page->marked_objects != 0 || page->marked_young_objects != 0 ||
          page->remembered_objects != 0))
       nrq_runtime_fatal("GC empty page retained live metadata");
@@ -3723,6 +3734,7 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
   if (page_uses_index(page)) {
     header->next = unindexed_objects;
     unindexed_objects = header;
+    ++page->indexed_objects;
   }
   ++page->live_objects;
   if (page->live_payload_bytes > SIZE_MAX - bytes)
