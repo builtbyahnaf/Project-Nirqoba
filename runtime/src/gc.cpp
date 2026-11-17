@@ -850,7 +850,7 @@ thread_local uint64_t layout_memo_misses = 0;
 
 bool layout_memo_matches(const nrq_object_layout* layout, size_t bytes,
                          size_t element_size, nrq_gc_trace_fn trace,
-                         const size_t* offsets, size_t count) {
+                         const size_t* offsets, size_t count, bool repeated) {
   if (!layout) return false;
   // The descriptor describes exactly this shape, or it does not: same element
   // size, same tracing, same reference count, same array/record kind.
@@ -859,7 +859,7 @@ bool layout_memo_matches(const nrq_object_layout* layout, size_t bytes,
   if (layout->reference_count != count) return false;
   const bool describes_an_array =
       (layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) != 0;
-  if (describes_an_array != (element_size != bytes)) return false;
+  if (describes_an_array != repeated) return false;
   if (count == 0) return true;
   const uint32_t* owned = layout->reference_offsets;
   if (!owned || !offsets) return false;
@@ -880,13 +880,16 @@ const nrq_object_layout* layout_for_allocation(size_t bytes,
                                                size_t element_size,
                                                nrq_gc_trace_fn trace,
                                                const size_t* offsets,
-                                               size_t count) {
+                                               size_t count, bool repeated) {
   const size_t payload_bytes = element_size;
-  const size_t element_bytes = element_size == bytes ? 0 : element_size;
+  // `repeated` is stated by the entry point, not inferred from the byte counts:
+  // a one-element container has bytes == element_size exactly like a fixed
+  // record, and describing it as one would hide its element count.
+  const size_t element_bytes = repeated ? element_size : 0;
   for (size_t index = 0; index < LayoutMemo::kCapacity; ++index) {
     const nrq_object_layout* cached = layout_memo.layouts[index];
     if (cached && layout_memo_matches(cached, bytes, element_size, trace,
-                                      offsets, count)) {
+                                      offsets, count, repeated)) {
       ++layout_memo_hits;
       return cached;
     }
@@ -4053,7 +4056,7 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
                       nrq_gc_trace_fn trace, const size_t* reference_offsets,
                       size_t reference_count,
                       const nrq_object_layout* resolved,
-                      GcRepresentation hint) {
+                      GcRepresentation hint, bool repeated = false) {
   if (bytes == 0 || element_size == 0 || elements == 0) return nullptr;
   // A caller that already owns an immutable descriptor hands it over directly:
   // it is the identity the object stores, so this path neither interns nor
@@ -4061,7 +4064,8 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
   const nrq_object_layout* layout =
       resolved ? resolved
                : layout_for_allocation(bytes, element_size, trace,
-                                       reference_offsets, reference_count);
+                                       reference_offsets, reference_count,
+                                       repeated);
   if (!layout) return nullptr;
   bool valid = true;
   const GcRepresentation representation = select_representation(
@@ -4439,13 +4443,14 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
                     nrq_gc_trace_fn trace, const size_t* reference_offsets,
                     size_t reference_count, bool& handled,
                     const nrq_object_layout* resolved,
-                    GcRepresentation hint) {
+                    GcRepresentation hint, bool repeated = false) {
   handled = false;
   if (thread_mutator.depth == 0) return nullptr;
   const nrq_object_layout* layout =
       resolved ? resolved
                : layout_for_allocation(bytes, element_size, trace,
-                                       reference_offsets, reference_count);
+                                       reference_offsets, reference_count,
+                                       repeated);
   if (!layout) return nullptr;
   bool valid = true;
   const GcRepresentation representation = select_representation(
@@ -4656,9 +4661,9 @@ const nrq_object_layout* root_layout(size_t object_size, size_t element_size,
   // them by pointer.
   if (repeated_count != 0)
     return layout_for_allocation(object_size, element_size, nullptr,
-                                 reference_offsets, reference_count);
+                                 reference_offsets, reference_count, true);
   return layout_for_allocation(object_size, object_size, nullptr,
-                               reference_offsets, reference_count);
+                               reference_offsets, reference_count, false);
 }
 
 void add_slot_state(ShadowStack& stack, void* slot, const RootInfo& info,
@@ -4877,11 +4882,11 @@ void* nrq_gc_allocate_array(size_t count, size_t element_size,
   maybe_collect_automatically();
   bool handled = false;
   void* object = allocate_tlab(bytes, element_size, count, trace, nullptr, 0,
-                               handled, nullptr, GcRepresentation::Auto);
+                               handled, nullptr, GcRepresentation::Auto, true);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
   return allocate_locked(bytes, element_size, count, trace, nullptr, 0, nullptr,
-                         GcRepresentation::Auto);
+                         GcRepresentation::Auto, true);
 }
 
 void* nrq_gc_allocate_array_typed(size_t count, size_t element_size,
@@ -4897,12 +4902,12 @@ void* nrq_gc_allocate_array_typed(size_t count, size_t element_size,
   bool handled = false;
   void* object = allocate_tlab(bytes, element_size, count, nullptr,
                                reference_offsets, reference_count, handled,
-                               nullptr, GcRepresentation::Auto);
+                               nullptr, GcRepresentation::Auto, true);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
   return allocate_locked(bytes, element_size, count, nullptr,
                          reference_offsets, reference_count, nullptr,
-                         GcRepresentation::Auto);
+                         GcRepresentation::Auto, true);
 }
 
 void* allocate_array_rooted_impl(void** root_slot, size_t count,
@@ -4986,7 +4991,7 @@ void* allocate_array_rooted_impl(void** root_slot, size_t count,
       bool handled = false;
       void* object = allocate_tlab(bytes, element_size, count, nullptr,
                                    reference_offsets, reference_count, handled,
-                                   resolved, GcRepresentation::Auto);
+                                   resolved, GcRepresentation::Auto, true);
       if (handled) {
         *root_slot = object;
         end_fast_barrier();
@@ -5003,7 +5008,7 @@ void* allocate_array_rooted_impl(void** root_slot, size_t count,
         "rooted GC allocation requires a registered pointer root slot");
   void* object = allocate_locked(bytes, element_size, count, nullptr,
                                  reference_offsets, reference_count, resolved,
-                                 GcRepresentation::Auto);
+                                 GcRepresentation::Auto, true);
   store_root_value_locked(root_slot, object);
   return object;
 }
