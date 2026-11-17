@@ -100,6 +100,65 @@ struct nrq_gc_stats {
   uint64_t live_objects;
 };
 
+// Adaptive object representations. Every managed object belongs to exactly one:
+//
+//   headerless  no per-object header; layout, size and state come from the page
+//   compact     8-byte header (state + layout id); one element
+//   extended    16-byte header (element count, state, layout id, flags)
+//
+// The allocator chooses by shape: arrays are extended, a fixed record up to 256
+// bytes is headerless, and a larger fixed record is compact. A caller may state a
+// requirement with nrq_gc_allocate_repr; an impossible combination (an array as
+// headerless, for example) is rejected rather than silently coerced.
+typedef enum nrq_gc_representation {
+  NRQ_GC_REPR_AUTO = 0,
+  NRQ_GC_REPR_HEADERLESS = 1,
+  NRQ_GC_REPR_COMPACT = 2,
+  NRQ_GC_REPR_EXTENDED = 3
+} nrq_gc_representation;
+
+// Allocates with a representation requirement. `representation` is one of
+// nrq_gc_representation; AUTO behaves exactly like nrq_gc_allocate.
+void* nrq_gc_allocate_repr(size_t bytes, nrq_gc_trace_fn trace,
+                           int32_t representation);
+// Reports the representation of a live object, or NRQ_GC_REPR_AUTO when the
+// address is not a live managed object.
+int32_t nrq_gc_object_representation(void* object);
+// Reports the bytes that object actually spends on its header: 0, 8 or 16.
+// Returns 0 for an address that is not a live managed object.
+size_t nrq_gc_object_header_size(void* object);
+
+// The fixed per-representation costs, for auditing and tests. `payload_alignment`
+// is the alignment the representation's payload keeps: a headerless or extended
+// object starts its payload on the span grid, a compact one eight bytes after it.
+struct nrq_gc_representation_facts {
+  size_t headerless_header_bytes;
+  size_t compact_header_bytes;
+  size_t extended_header_bytes;
+  size_t max_header_bytes;
+  size_t headerless_payload_alignment;
+  size_t compact_payload_alignment;
+  size_t extended_payload_alignment;
+};
+struct nrq_gc_representation_facts nrq_gc_get_representation_facts(void);
+
+// Live counts by representation, page counts by page class, and the header bytes
+// the two smaller representations save against an extended header for the same
+// live set. This is the measurement the phase report quotes; it is computed from
+// the page set, not cached.
+struct nrq_gc_representation_stats {
+  uint64_t headerless_objects;
+  uint64_t compact_objects;
+  uint64_t extended_objects;
+  size_t headerless_pages;
+  size_t compact_pages;
+  size_t extended_pages;
+  size_t large_pages;
+  size_t fallback_pages;
+  uint64_t header_bytes_saved_vs_extended;
+};
+struct nrq_gc_representation_stats nrq_gc_get_representation_stats(void);
+
 // Allocates a zero-initialized managed object. The trace callback visits only
 // fields which contain managed references; scalar fields must not be visited.
 // A null callback describes an object with no managed references.

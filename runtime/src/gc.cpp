@@ -60,20 +60,49 @@ constexpr size_t kGcPageShift = 16;
 constexpr size_t kGcPageBytes = size_t{1} << kGcPageShift;
 constexpr size_t kObjectStartAlignment = alignof(std::max_align_t);
 
-// The representation a page's metadata is prepared for. Mixed is the current
-// fallback: objects may have different layouts and the header remains
-// authoritative. Uniform pages carry one slot size and layout so later AOR
-// phases can remove those fields from their objects. Large pages have no
-// walkable start bitmap and use the exact object index.
-enum class PageKind : uint8_t { Mixed, Uniform, Large, Fallback };
+// The representation every object on a page uses. A page is dedicated to one
+// representation so an object never has to describe its own header size: the
+// page already does, and discovery is one subtraction from the span start.
+//
+//   Headerless  H0: no per-object header; one layout and one slot size
+//   Compact     H8: state word + layout id
+//   Extended    H16: element count + state + layout id + page-relative link
+//   Large       H16, no walkable start bitmap, exact object index
+//   Fallback    H16, directory insertion failed, exact object index
+//
+// Large and fallback pages are the only ones whose objects use the link word.
+enum class PageKind : uint8_t {
+  Headerless,
+  Compact,
+  Extended,
+  Large,
+  Fallback
+};
+
+constexpr size_t page_header_bytes(PageKind kind) {
+  switch (kind) {
+    case PageKind::Headerless: return 0;
+    case PageKind::Compact: return 8;
+    case PageKind::Extended:
+    case PageKind::Large:
+    case PageKind::Fallback: return 16;
+  }
+  return 16;
+}
+
+inline bool page_is_representable(PageKind kind) {
+  return kind == PageKind::Headerless || kind == PageKind::Compact ||
+         kind == PageKind::Extended;
+}
 
 struct GcPage {
   unsigned char* storage = nullptr;
   size_t capacity = 0;
-  // Page-class metadata. `slot_bytes` is zero for a mixed page; a uniform page
-  // uses one fixed span and one layout for every object. Large and fallback
-  // pages keep `slot_bytes == 0` until a large-object page class is introduced.
-  PageKind kind = PageKind::Mixed;
+  // Representation metadata. A headerless page uses one fixed span
+  // (`slot_bytes`) and one layout (`uniform_layout`) for every object, which is
+  // what lets the object carry no header at all. Compact and extended pages
+  // leave `slot_bytes == 0`; their objects find their layout through the header.
+  PageKind kind = PageKind::Extended;
   size_t slot_bytes = 0;
   size_t slot_capacity = 0;
   const nrq_object_layout* uniform_layout = nullptr;
@@ -94,9 +123,17 @@ struct GcPage {
   // live-object count lets it skip the walk entirely.
   size_t live_payload_bytes = 0;
   // Objects allocated after the current cycle began. They are retained by the
-  // sweep's birth-epoch test rather than marked, so a page's survivor count is
-  // `marked_objects + born_this_cycle`. Reset at every cycle boundary.
+  // sweep rather than marked, so a page's survivor count is
+  // `marked_objects + born_this_cycle`.
+  //
+  // Birth used to be an 8-byte field in every object. It is now one bit per
+  // span slot, valid only while `born_epoch` equals the active cycle: the first
+  // allocation of a cycle clears the bitmap and stamps the page, so a stale bit
+  // from an older cycle is never read and no page walk is needed to reset it.
   size_t born_this_cycle = 0;
+  std::unique_ptr<uint64_t[]> born_bits;
+  size_t born_words = 0;
+  uint64_t born_epoch = 0;
   // Per-page mark metadata. Marks are off-heap: a header write is no longer
   // needed to set or test one, and the counts let sweep decide a page's fate
   // without reading every header in it.
@@ -116,6 +153,11 @@ struct GcPage {
   // references keep using ObjectIndex.
   std::unique_ptr<uint64_t[]> object_starts;
   size_t object_start_words = 0;
+  // Per-object state for headerless pages. With no object word to hold young and
+  // promotion age, one byte per 16-byte slot carries them: bit 0 young, bits 1-7
+  // age. It costs 1 byte per maximum-density object, which still leaves the
+  // headerless representation far below the 8 bytes an H8 object spends.
+  std::unique_ptr<uint8_t[]> h0_states;
   // Pages emptied by a concurrent sweep are retained until the next
   // stop-the-world cycle boundary, when no mutator can still be inside an
   // allocator or holding a TLAB cursor into the page.
@@ -141,7 +183,13 @@ struct GcPage {
     uint32_t offset = 0;
     uint32_t span = 0;
   };
-  static constexpr size_t kMaxFreeSpans = 192;
+  // A headerless page packs twice as many objects into a 64 KiB page as an H32
+  // page did, so a workload that frees every other object produces twice as many
+  // runs before they merge. The list is sized for that density: dropping a run
+  // does not corrupt anything, but it makes the page unable to answer a request
+  // and forces a fresh page, which is the fragmentation drift this bound exists
+  // to avoid.
+  static constexpr size_t kMaxFreeSpans = 384;
   static constexpr size_t kNoSpanIndex = SIZE_MAX;
   std::array<FreeSpan, kMaxFreeSpans> free_spans{};
   size_t free_span_count = 0;
@@ -169,6 +217,10 @@ struct GcPage {
   size_t tail_index = kNoSpanIndex;
 };
 
+
+inline size_t page_header_bytes(const GcPage& page) {
+  return page_header_bytes(page.kind);
+}
 
 // Small pages are discoverable from their own start bitmap, so their objects
 // never touch the global index. Only pages without start metadata (large-object
@@ -346,112 +398,194 @@ void clear_object_start(GcPage& page, size_t offset) {
   page.object_starts[index / 64] &= ~(uint64_t{1} << (index % 64));
 }
 
-struct alignas(std::max_align_t) ObjectHeader {
-  // Only an object on a page without a start bitmap is linked, into the
-  // collector's `unindexed_objects` list. Ordinary objects are found through
-  // their page and TLAB publication uses range descriptors, so an ordinary
-  // object never writes this field.
-  ObjectHeader* next = nullptr;
-  // Wall-clock-free cycle epoch the object was born in; the sweep retains every
-  // object born during the cycle it is collecting.
-  uint64_t birth_epoch = 0;
-  // How many elements the payload repeats. One for a fixed record; the only
-  // per-instance thing an array has beyond its descriptor. The payload size
-  // itself is `element_count * layout->payload_size`, so no instance stores it.
-  uint32_t element_count = 1;
-  // Everything that changes about an instance, packed into one word with
-  // explicit masks rather than C++ bitfields: the collector reads one word and
-  // updates one flag without touching a neighbour, and the encoding is defined by
-  // the shifts below rather than by the compiler's allocation strategy.
-  //
-  // `young`, `remembered` and `age` share the word because they change together
-  // in a sweep. The mark bit lives in the owning page's off-heap bitmap, so
-  // marking no longer dirties a header cache line at all.
-  uint32_t state = kYoungBit;
-  static constexpr uint32_t kYoungBit = 1u << 1;
-  static constexpr uint32_t kRememberedBit = 1u << 2;
-  // Promotion age occupies the next byte; 255 collections without promotion is
-  // past anything the policy reaches.
-  static constexpr uint32_t kAgeShift = 8;
-  static constexpr uint32_t kAgeMask = 0xFFu << kAgeShift;
+// ---------------------------------------------------------------------------
+// Adaptive object representations
+//
+// The page kind names the representation, which fixes the header size and
+// therefore where the payload begins:
+//
+//   H0   headerless   payload at the span start; layout and slot from the page
+//   H8   compact      {state, layout_id}; one element by definition
+//   H16  extended     {element_count, state, layout_id, link}; arrays and large
+//
+// The object-start bitmap indexes span starts, which are always 16-aligned. A
+// payload is `span_start + header_bytes`, so an H8 payload keeps an 8-byte
+// alignment and an H0 or H16 payload keeps the full 16.
+// ---------------------------------------------------------------------------
 
-  bool young() const { return (state & kYoungBit) != 0; }
-  void set_young(bool value) {
-    state = value ? (state | kYoungBit) : (state & ~kYoungBit);
-  }
-  bool remembered() const { return (state & kRememberedBit) != 0; }
-  void set_remembered(bool value) {
-    state = value ? (state | kRememberedBit) : (state & ~kRememberedBit);
-  }
-  uint32_t age() const { return (state & kAgeMask) >> kAgeShift; }
-  // The encoding is a contract, so it is asserted rather than described: the
-  // fields may not overlap, the age may not run past the word, and the whole
-  // thing has to fit in the field the header gives it.
-  static_assert((kYoungBit & kRememberedBit) == 0, "state fields overlap");
-  static_assert((kYoungBit & kAgeMask) == 0, "state fields overlap");
-  static_assert((kRememberedBit & kAgeMask) == 0, "state fields overlap");
-  static_assert(kAgeShift + 8 <= 32, "the age does not fit the state word");
-  static_assert(kAgeMask <= 0xFFFFFFFFu, "the age mask leaves the word");
-  static_assert(sizeof(uint32_t) * 8 >= kAgeShift + 8, "state word too narrow");
-  // The whole word, for a transition that changes several fields at once: the
-  // survivor path computes its next state locally and stores it once, instead of
-  // three read-modify-writes of the same cache line.
-  uint32_t state_word() const { return state; }
-  void set_state(uint32_t value) { state = value; }
-  void set_age(uint32_t value) {
-    state = (state & ~kAgeMask) | ((value << kAgeShift) & kAgeMask);
-  }
-  // The shared, immutable description of this object's payload: its size and
-  // shape, how to visit its references, and its custom trace callback. It is
-  // declared last so the per-instance fields stay in the first cache line, and
-  // it replaces the payload size, element size and trace callback each instance
-  // used to carry.
-  const nrq_object_layout* layout = nullptr;
+// Mutable state encoding, shared by H8 and H16 and composed for H0. Bit 1 is
+// young, bit 2 is remembered (reserved: membership is page-local), bits 8-15 are
+// the promotion age. The words are asserted rather than described.
+constexpr uint32_t kYoungBit = 1u << 1;
+constexpr uint32_t kRememberedBit = 1u << 2;
+constexpr uint32_t kAgeShift = 8;
+constexpr uint32_t kAgeMask = 0xFFu << kAgeShift;
+static_assert((kYoungBit & kRememberedBit) == 0, "state fields overlap");
+static_assert((kYoungBit & kAgeMask) == 0, "state fields overlap");
+static_assert((kRememberedBit & kAgeMask) == 0, "state fields overlap");
+static_assert(kAgeShift + 8 <= 32, "the age does not fit the state word");
+static_assert(kAgeMask <= 0xFFFFFFFFu, "the age mask leaves the word");
 
-  // Field-wise construction. Value-initialising the whole header and then
-  // overwriting most of it touched the object twice, on a path that runs once
-  // per managed object; this writes each member once.
-  ObjectHeader(uint32_t elements, const nrq_object_layout* object_layout,
-               bool is_young, uint64_t epoch)
-      : next(nullptr),
-        birth_epoch(epoch),
-        element_count(elements),
-        state(is_young ? kYoungBit : 0),
-        layout(object_layout) {}
-
-  // The payload immediately follows the header. It is not stored: the page
-  // bump allocator always places a header `sizeof(ObjectHeader)` bytes before
-  // its object, so the address is pure arithmetic.
-  void* payload() const {
-    return const_cast<ObjectHeader*>(this) + 1;
-  }
+// H8. A fixed record that needs its own state word and its layout name, and
+// nothing else: the element count is always one and birth lives on the page.
+struct CompactHeader {
+  uint32_t state = 0;
+  uint32_t layout_id = 0;
 };
 
-// Off-heap mark bitmap address for an object. A mark bit indexes the same
-// max_align_t-sized slot grid as the object-start bitmap, so it is pure pointer
-// arithmetic from the header and never changes the object's state word.
-inline size_t mark_bit_index(const ObjectHeader& header, const GcPage& page) {
-  const size_t offset = static_cast<size_t>(
-      static_cast<const unsigned char*>(header.payload()) - page.storage);
-  return offset / kObjectStartAlignment;
+// H16. Arrays need the element count back, and a large or fallback page needs a
+// way to chain its objects without an intrusive pointer in every object. The
+// count is first so the payload is at offset 16 and the SoA lowering's
+// `payload - 16` read keeps working unchanged.
+struct ExtendedHeader {
+  uint32_t element_count = 0;
+  uint32_t state = 0;
+  uint32_t layout_id = 0;
+  // Representation flags. Zero today; kept as the fourth word so the header is
+  // exactly 16 bytes and an array-specific flag has a home in Phase 5 without a
+  // header resize.
+  uint32_t flags = 0;
+};
+
+static_assert(sizeof(CompactHeader) == 8, "the compact header must stay 8 bytes");
+static_assert(sizeof(ExtendedHeader) == 16,
+              "the extended header must stay 16 bytes");
+static_assert(alignof(CompactHeader) <= sizeof(uint32_t),
+              "the compact header must not demand more alignment than it needs");
+
+// A resolved object: its span start (the header's address) and its page. The
+// collector carries both because the representation, geometry, and bitmaps all
+// come from the page; re-probing the directory per field is exactly the
+// indirection this phase exists to avoid.
+struct ObjectRef {
+  unsigned char* header = nullptr;
+  GcPage* page = nullptr;
+  bool valid() const { return header != nullptr && page != nullptr; }
+};
+
+inline size_t span_slot(const ObjectRef& ref) {
+  return static_cast<size_t>(ref.header - ref.page->storage) /
+         kObjectStartAlignment;
 }
 
-GcPage* page_for_header(const ObjectHeader* header);
+inline size_t object_header_bytes(const ObjectRef& ref) {
+  return page_header_bytes(ref.page->kind);
+}
 
-inline bool header_marked(const ObjectHeader& header, const GcPage& page) {
+inline void* object_payload(const ObjectRef& ref) {
+  return ref.header + object_header_bytes(ref);
+}
+
+inline bool object_young(const ObjectRef& ref);
+inline const nrq_object_layout* object_layout(const ObjectRef& ref);
+
+// One word of mutable state, wherever this representation keeps it. A headerless
+// object has no word of its own, so the page's per-slot byte carries the same
+// young bit and a 7-bit age.
+inline uint32_t object_state(const ObjectRef& ref) {
+  switch (ref.page->kind) {
+    case PageKind::Headerless: {
+      const uint8_t packed = ref.page->h0_states
+                                 ? ref.page->h0_states[span_slot(ref)]
+                                 : uint8_t{0};
+      uint32_t state = (packed & uint8_t{1}) ? kYoungBit : 0u;
+      state |= (static_cast<uint32_t>(packed >> 1) << kAgeShift) & kAgeMask;
+      return state;
+    }
+    case PageKind::Compact:
+      return reinterpret_cast<const CompactHeader*>(ref.header)->state;
+    default:
+      return reinterpret_cast<const ExtendedHeader*>(ref.header)->state;
+  }
+}
+
+inline void set_object_state(const ObjectRef& ref, uint32_t state) {
+  switch (ref.page->kind) {
+    case PageKind::Headerless: {
+      if (!ref.page->h0_states)
+        nrq_runtime_fatal("headerless page has no state table");
+      const uint32_t age = (state & kAgeMask) >> kAgeShift;
+      ref.page->h0_states[span_slot(ref)] = static_cast<uint8_t>(
+          ((state & kYoungBit) ? 1u : 0u) | ((age & 0x7Fu) << 1));
+      return;
+    }
+    case PageKind::Compact:
+      reinterpret_cast<CompactHeader*>(ref.header)->state = state;
+      return;
+    default:
+      reinterpret_cast<ExtendedHeader*>(ref.header)->state = state;
+      return;
+  }
+}
+
+inline uint32_t object_age(const ObjectRef& ref) {
+  return (object_state(ref) & kAgeMask) >> kAgeShift;
+}
+
+inline bool object_young(const ObjectRef& ref) {
+  return (object_state(ref) & kYoungBit) != 0;
+}
+
+// Birth is page-local. A bit is meaningful only while the page's stamp matches
+// the cycle being asked about, so the first allocation of a cycle clears the
+// bitmap and no page walk is needed at a cycle boundary.
+inline bool object_born_in_cycle(const ObjectRef& ref, uint64_t epoch) {
+  const GcPage& page = *ref.page;
+  if (!page.born_bits || page.born_epoch < epoch) return false;
+  const size_t index = span_slot(ref);
+  if (index / 64 >= page.born_words) return false;
+  return (page.born_bits[index / 64] >> (index % 64)) & 1;
+}
+
+inline void mark_object_born(const ObjectRef& ref, uint64_t epoch) {
+  GcPage& page = *ref.page;
+  if (!page.born_bits) return;
+  if (page.born_epoch < epoch) {
+    std::memset(page.born_bits.get(), 0, page.born_words * sizeof(uint64_t));
+    page.born_epoch = epoch;
+    page.born_this_cycle = 0;
+  }
+  const size_t index = span_slot(ref);
+  if (index / 64 >= page.born_words)
+    nrq_runtime_fatal("GC object birth bit is outside its page");
+  uint64_t& word = page.born_bits[index / 64];
+  const uint64_t bit = uint64_t{1} << (index % 64);
+  if ((word & bit) == 0) {
+    word |= bit;
+    if (page.born_this_cycle == SIZE_MAX)
+      nrq_runtime_fatal("GC page born-object count overflow");
+    ++page.born_this_cycle;
+  }
+}
+
+inline uint32_t object_element_count(const ObjectRef& ref) {
+  if (ref.page->kind == PageKind::Headerless ||
+      ref.page->kind == PageKind::Compact)
+    return 1;
+  return reinterpret_cast<const ExtendedHeader*>(ref.header)->element_count;
+}
+
+// Off-heap mark and remembered bit index. Both bitmaps use the same slot grid as
+// the object-start bitmap, so this is pure pointer arithmetic.
+inline size_t mark_bit_index(const ObjectRef& ref) { return span_slot(ref); }
+
+GcPage* page_for_object(const void* object);
+
+inline bool object_marked(const ObjectRef& ref) {
+  const GcPage& page = *ref.page;
   if (!page.mark_bits) return false;
-  const size_t index = mark_bit_index(header, page);
+  const size_t index = mark_bit_index(ref);
   if (index / 64 >= page.mark_words) return false;
   return (page.mark_bits[index / 64] >> (index % 64)) & 1;
 }
 
 // Sets or clears a mark and keeps the page's survivor counts exact. The counts
-// are what let sweep classify a whole page without reading its headers.
-inline void set_header_marked(ObjectHeader& header, GcPage& page,
-                              bool value) {
+// are what let sweep classify a whole page without reading its objects.
+inline void set_object_marked(const ObjectRef& ref, bool value) {
+  GcPage& page = *ref.page;
   if (!page.mark_bits)
     nrq_runtime_fatal("GC object has no page mark bitmap");
-  const size_t index = mark_bit_index(header, page);
+  const size_t index = mark_bit_index(ref);
   if (index / 64 >= page.mark_words)
     nrq_runtime_fatal("GC object mark bit is outside its page");
   uint64_t& word = page.mark_bits[index / 64];
@@ -461,29 +595,18 @@ inline void set_header_marked(ObjectHeader& header, GcPage& page,
   if (value) {
     word |= bit;
     ++page.marked_objects;
-    if (header.young()) ++page.marked_young_objects;
+    if (object_young(ref)) ++page.marked_young_objects;
   } else {
     word &= ~bit;
     if (page.marked_objects == 0)
       nrq_runtime_fatal("GC page marked-object count underflow");
     --page.marked_objects;
-    if (header.young()) {
+    if (object_young(ref)) {
       if (page.marked_young_objects == 0)
         nrq_runtime_fatal("GC page marked-young count underflow");
       --page.marked_young_objects;
     }
   }
-}
-
-inline bool header_marked(const ObjectHeader& header) {
-  const GcPage* page = page_for_header(&header);
-  return page && header_marked(header, *page);
-}
-
-inline void set_header_marked(ObjectHeader& header, bool value) {
-  GcPage* page = page_for_header(&header);
-  if (!page) nrq_runtime_fatal("GC object has no owning page");
-  set_header_marked(header, *page, value);
 }
 
 // A page whose objects are all live (or all dead) needs no per-object walk. The
@@ -496,18 +619,19 @@ inline void clear_page_marks(GcPage& page) {
   page.marked_young_objects = 0;
 }
 
-inline bool header_remembered(const ObjectHeader& header, const GcPage& page) {
+inline bool object_remembered(const ObjectRef& ref) {
+  const GcPage& page = *ref.page;
   if (!page.remembered_bits) return false;
-  const size_t index = mark_bit_index(header, page);
+  const size_t index = mark_bit_index(ref);
   if (index / 64 >= page.remembered_words) return false;
   return (page.remembered_bits[index / 64] >> (index % 64)) & 1;
 }
 
-inline void set_header_remembered(ObjectHeader& header, GcPage& page,
-                                  bool value) {
+inline void set_object_remembered(const ObjectRef& ref, bool value) {
+  GcPage& page = *ref.page;
   if (!page.remembered_bits)
     nrq_runtime_fatal("GC object has no page remembered bitmap");
-  const size_t index = mark_bit_index(header, page);
+  const size_t index = mark_bit_index(ref);
   if (index / 64 >= page.remembered_words)
     nrq_runtime_fatal("GC object remembered bit is outside its page");
   uint64_t& word = page.remembered_bits[index / 64];
@@ -525,17 +649,6 @@ inline void set_header_remembered(ObjectHeader& header, GcPage& page,
   }
 }
 
-inline bool header_remembered(const ObjectHeader& header) {
-  const GcPage* page = page_for_header(&header);
-  return page && header_remembered(header, *page);
-}
-
-inline void set_header_remembered(ObjectHeader& header, bool value) {
-  GcPage* page = page_for_header(&header);
-  if (!page) nrq_runtime_fatal("GC object has no owning page");
-  set_header_remembered(header, *page, value);
-}
-
 inline void clear_page_remembered(GcPage& page) {
   if (page.remembered_bits && page.remembered_words != 0) {
     std::memset(page.remembered_bits.get(), 0,
@@ -547,72 +660,49 @@ inline void clear_page_remembered(GcPage& page) {
 // Pull the next object's header and payload into cache while the current one is
 // traced. The worklist already has the pointer; this only changes when the
 // cache line arrives.
-inline void prefetch_object(const ObjectHeader* header) {
-  if (!header) return;
+inline void prefetch_object(const ObjectRef& ref) {
+  if (!ref.valid()) return;
 #if defined(_MSC_VER) && defined(_M_X64)
-  _mm_prefetch(reinterpret_cast<const char*>(header), _MM_HINT_T0);
-  _mm_prefetch(reinterpret_cast<const char*>(header->payload()), _MM_HINT_T0);
+  _mm_prefetch(reinterpret_cast<const char*>(ref.header), _MM_HINT_T0);
+  _mm_prefetch(reinterpret_cast<const char*>(object_payload(ref)), _MM_HINT_T0);
 #elif defined(__GNUC__) || defined(__clang__)
-  __builtin_prefetch(header);
-  __builtin_prefetch(header->payload());
+  __builtin_prefetch(ref.header);
+  __builtin_prefetch(object_payload(ref));
 #endif
 }
 
-// Managed allocation cost includes one header per object. The reference map,
-// payload size, element size and trace callback live in the shared layout
-// descriptor, and the page is resolved from the page directory (or the exact
-// large-object index), so what remains is what genuinely differs per instance:
-// the unindexed-page link, the layout pointer, the element count, the flags and
-// the birth epoch. A regression here raises the cost of every allocation, which
-// is why the size is asserted rather than assumed.
-static_assert(sizeof(ObjectHeader) == 32,
-              "ObjectHeader metadata must stay within 64 bytes");
-static_assert(alignof(ObjectHeader) == alignof(std::max_align_t),
-              "ObjectHeader must keep payloads max_align_t aligned");
-// The layout, with the phase that writes each field. The payload begins at offset
-// 32, so a record's address is `header + 1` and its size is
-// `element_count * layout->payload_size`:
-//
-//   offset  field            bytes  written by
-//        0  next               8  unindexed-page publication only
-//        8  birth_epoch        8  allocation, from the cycle counter
-//       16  element_count      4  allocation, 1 for a record
-//       20  state              4  marking, the store barrier, the sweep
-//       24  layout             8  allocation, the shared descriptor
-//
-// The offsets are asserted below for the same reason: a field silently moving is
-// how a "temporary" layout change becomes permanent. Reordering requires editing
-// this block, which is the point at which the cost has to be argued again.
-static_assert(offsetof(ObjectHeader, next) == 0, "ObjectHeader layout changed");
-static_assert(offsetof(ObjectHeader, birth_epoch) == 8,
-              "ObjectHeader layout changed");
-static_assert(offsetof(ObjectHeader, element_count) == 16,
-              "ObjectHeader layout changed");
-static_assert(offsetof(ObjectHeader, state) == 20, "ObjectHeader layout changed");
-static_assert(offsetof(ObjectHeader, layout) == 24, "ObjectHeader layout changed");
-static_assert(offsetof(ObjectHeader, state) % alignof(uint32_t) == 0,
-              "the state word would be unaligned");
-// The payload starts at `header + 1`, and object starts are spaced by
-// `alignof(std::max_align_t)`, so the header's size is what keeps every payload
-// aligned. A header size that is not a multiple of that alignment would misalign
-// every payload on a target where it is 16, which is why the rule is asserted at
-// the size rather than trusted at the call sites.
-static_assert(sizeof(ObjectHeader) % alignof(std::max_align_t) == 0,
-              "a header of this size misaligns payloads on this target");
+// The largest standard representation is 16 bytes. The three sizes are asserted
+// here as well as at the structs so a change to a page kind's header cannot
+// silently turn an extended object into something larger.
+static_assert(page_header_bytes(PageKind::Headerless) == 0,
+              "the headerless representation must be zero bytes");
+static_assert(page_header_bytes(PageKind::Compact) == 8,
+              "the compact representation must be 8 bytes");
+static_assert(page_header_bytes(PageKind::Extended) == 16,
+              "the extended representation must be 16 bytes");
+static_assert(page_header_bytes(PageKind::Extended) <= 16,
+              "no standard representation may exceed 16 bytes");
+
+// Storage a managed object occupies, header included, rounded up to the span
+// alignment the bump allocator uses. The header size is a parameter instead of a
+// constant: that is the whole of the representation change at this level.
+inline size_t object_span_bytes(size_t header_bytes, size_t payload_bytes) {
+  constexpr size_t alignment = alignof(std::max_align_t);
+  const size_t raw = header_bytes + payload_bytes;
+  return (raw + alignment - 1) & ~(alignment - 1);
+}
+
 // The payload size an object reports: its element count times the element size
 // its shared descriptor names. One multiply, no per-instance size field, and it
 // cannot disagree with the descriptor.
-inline size_t object_payload_bytes(const ObjectHeader& header) {
-  return static_cast<size_t>(header.element_count) * header.layout->payload_size;
+inline size_t object_payload_bytes(const ObjectRef& ref) {
+  return static_cast<size_t>(object_element_count(ref)) *
+         object_layout(ref)->payload_size;
 }
 
-// Storage a managed object occupies, header included, rounded up to the payload
-// alignment the bump allocator uses.
-size_t object_span_bytes(size_t payload_bytes) {
-  constexpr size_t alignment = alignof(std::max_align_t);
-  const size_t raw = sizeof(ObjectHeader) + payload_bytes;
-  return (raw + alignment - 1) & ~(alignment - 1);
-}
+// Span of one concrete object. A headerless page knows the answer from its slot
+// size alone, which is what lets publication walk a uniform range without
+// reading a header.
 
 // Layout descriptors are interned by every property that changes how the
 // payload is interpreted. Matching sizes alone is not enough: two records of the
@@ -650,6 +740,77 @@ std::unordered_map<LayoutKey, const nrq_object_layout*, LayoutKeyHash> layout_po
 // Bytes the published descriptors and their offset tables occupy. They are never
 // freed, so this is the whole structural cost of sharing.
 size_t layout_bytes_total = 0;
+
+// Layout identity for compact and extended headers. A 32-bit id fits both, and
+// tracing resolves it with one indexed load; the descriptor itself stays in the
+// interning pool. Ids are assigned under layout_mutex and the table entry is
+// published with a release store, so tracing never takes that lock.
+constexpr uint32_t kMaxLayoutIds = 1u << 14;
+std::array<std::atomic<const nrq_object_layout*>, kMaxLayoutIds> layout_by_id{};
+std::atomic<uint32_t> layout_id_count{0};
+std::unordered_map<const nrq_object_layout*, uint32_t> layout_id_pool;
+
+const nrq_object_layout* layout_from_id(uint32_t id) {
+  if (id == 0 || id > layout_id_count.load(std::memory_order_acquire))
+    return nullptr;
+  return layout_by_id[id - 1].load(std::memory_order_relaxed);
+}
+
+const nrq_object_layout* object_layout(const ObjectRef& ref) {
+  if (ref.page->kind == PageKind::Headerless) {
+    if (!ref.page->uniform_layout)
+      nrq_runtime_fatal("headerless page has no layout");
+    return ref.page->uniform_layout;
+  }
+  const uint32_t id =
+      ref.page->kind == PageKind::Compact
+          ? reinterpret_cast<const CompactHeader*>(ref.header)->layout_id
+          : reinterpret_cast<const ExtendedHeader*>(ref.header)->layout_id;
+  const nrq_object_layout* layout = layout_from_id(id);
+  if (!layout) nrq_runtime_fatal("GC object names an unknown layout id");
+  return layout;
+}
+
+// A thread remembers the last few (descriptor, id) pairs. Descriptors are few
+// and long-lived; the id is wanted on every allocation, so the common case has
+// to be a handful of compares rather than a locked table probe.
+struct LayoutIdMemo {
+  static constexpr size_t kCapacity = 8;
+  const nrq_object_layout* layouts[kCapacity] = {};
+  uint32_t ids[kCapacity] = {};
+  size_t next = 0;
+};
+thread_local LayoutIdMemo layout_id_memo;
+
+uint32_t layout_id_for(const nrq_object_layout* layout) {
+  if (!layout) return 0;
+  for (size_t index = 0; index < LayoutIdMemo::kCapacity; ++index) {
+    if (layout_id_memo.layouts[index] == layout)
+      return layout_id_memo.ids[index];
+  }
+  std::lock_guard<std::mutex> lock(layout_mutex);
+  uint32_t id = 0;
+  const auto existing = layout_id_pool.find(layout);
+  if (existing != layout_id_pool.end()) {
+    id = existing->second;
+  } else {
+    const uint32_t next =
+        layout_id_count.load(std::memory_order_relaxed) + 1;
+    if (next > kMaxLayoutIds) return 0;
+    layout_by_id[next - 1].store(layout, std::memory_order_release);
+    layout_id_count.store(next, std::memory_order_release);
+    try {
+      layout_id_pool.emplace(layout, next);
+    } catch (...) {
+      return 0;
+    }
+    id = next;
+  }
+  layout_id_memo.layouts[layout_id_memo.next] = layout;
+  layout_id_memo.ids[layout_id_memo.next] = id;
+  layout_id_memo.next = (layout_id_memo.next + 1) % LayoutIdMemo::kCapacity;
+  return id;
+}
 
 // The ordinary `void*` root is the one shape used by every slot that holds a
 // single managed pointer. Its descriptor is immutable and lives for the process,
@@ -744,7 +905,7 @@ const nrq_object_layout* layout_for_allocation(size_t bytes,
 // defined with the page pool below, declared here because sweeping reaches them.
 void release_span_locked(GcPage& page, size_t offset, size_t span);
 void set_page_max_free_span_locked(GcPage& page, size_t span, size_t count);
-GcPage* take_free_span_locked(size_t span, size_t& offset);
+GcPage* take_free_span_locked(size_t span, size_t& offset, PageKind kind);
 
 // Marking keeps a FIFO ring of pending headers. Contiguous storage avoids
 // chasing an intrusive list through the heap and visits a graph level by level,
@@ -757,23 +918,23 @@ class MarkWorklist {
 
   bool empty() const { return count_ == 0 && overflow_.empty(); }
 
-  void push(ObjectHeader* header) {
-    if (!header) return;
+  void push(const ObjectRef& ref) {
+    if (!ref.valid()) return;
     if (count_ < kInlineCapacity) {
-      inline_[(head_ + count_) % kInlineCapacity] = header;
+      inline_[(head_ + count_) % kInlineCapacity] = ref;
       ++count_;
       return;
     }
     try {
-      overflow_.push_back(header);
+      overflow_.push_back(ref);
     } catch (...) {
       nrq_runtime_fatal("GC mark worklist allocation failed");
     }
   }
 
-  ObjectHeader* pop() {
+  ObjectRef pop() {
     if (count_ != 0) {
-      ObjectHeader* header = inline_[head_];
+      const ObjectRef ref = inline_[head_];
       head_ = (head_ + 1) % kInlineCapacity;
       --count_;
       if (count_ != 0) {
@@ -781,13 +942,13 @@ class MarkWorklist {
       } else if (!overflow_.empty()) {
         prefetch_object(overflow_.back());
       }
-      return header;
+      return ref;
     }
-    if (overflow_.empty()) return nullptr;
-    ObjectHeader* header = overflow_.back();
+    if (overflow_.empty()) return ObjectRef{};
+    const ObjectRef ref = overflow_.back();
     overflow_.pop_back();
     if (!overflow_.empty()) prefetch_object(overflow_.back());
-    return header;
+    return ref;
   }
 
   // Capacity is retained across cycles: the vector only allocates when a mark
@@ -799,10 +960,10 @@ class MarkWorklist {
   }
 
  private:
-  std::array<ObjectHeader*, kInlineCapacity> inline_{};
+  std::array<ObjectRef, kInlineCapacity> inline_{};
   size_t head_ = 0;
   size_t count_ = 0;
-  std::vector<ObjectHeader*> overflow_;
+  std::vector<ObjectRef> overflow_;
 };
 
 // The collector needs exact-address lookup while marking, but only allocation
@@ -814,17 +975,17 @@ class ObjectIndex {
   // page's start bitmap, so this only grows with large-object pages.
   size_t size() const { return size_; }
 
-  ObjectHeader* find(void* object) const {
-    if (!object || entries_.empty()) return nullptr;
+  ObjectRef find(void* object) const {
+    if (!object || entries_.empty()) return ObjectRef{};
     const size_t mask = entries_.size() - 1;
     size_t index = hash(object) & mask;
     for (size_t probes = 0; probes < entries_.size(); ++probes) {
       const Entry& entry = entries_[index];
-      if (entry.object == nullptr) return nullptr;
-      if (entry.object == object) return entry.header;
+      if (entry.object == nullptr) return ObjectRef{};
+      if (entry.object == object) return ObjectRef{entry.header, entry.page};
       index = (index + 1) & mask;
     }
-    return nullptr;
+    return ObjectRef{};
   }
 
   // Large and fallback pages are not in the page directory, so their exact
@@ -842,7 +1003,7 @@ class ObjectIndex {
     return nullptr;
   }
 
-  bool insert(void* object, ObjectHeader* header, GcPage* page) {
+  bool insert(void* object, unsigned char* header, GcPage* page) {
     if (!object || !header) return false;
     const bool needs_rehash = entries_.empty() ||
         size_ + tombstones_ + 1 >= entries_.size() - entries_.size() / 3;
@@ -907,7 +1068,7 @@ class ObjectIndex {
  private:
   struct Entry {
     void* object = nullptr;
-    ObjectHeader* header = nullptr;
+    unsigned char* header = nullptr;
     GcPage* page = nullptr;
   };
   static void* tombstone_key() { return reinterpret_cast<void*>(uintptr_t{1}); }
@@ -946,10 +1107,10 @@ class ObjectIndex {
   size_t tombstones_ = 0;
 };
 
-void destroy_object_storage(ObjectHeader* header) {
-  if (!header) return;
-  header->~ObjectHeader();
-}
+// Managed payloads are trivial or hold managed references, so a reclaimed span
+// has nothing to run before it is reused. Keeping the operation named here makes
+// the absence of a finalizer a deliberate contract rather than an omission.
+inline void forget_object_storage(const ObjectRef&) {}
 
 // The heap lock, instrumented with the one invariant the handshake depends on: no
 // thread may hold it while waiting for a fast-barrier region to drain, because a
@@ -1008,6 +1169,15 @@ struct MutatorState {
   unsigned char* tlab_cursor = nullptr;
   unsigned char* tlab_end = nullptr;
   uint64_t tlab_generation = 0;
+  // A headerless reservation is separate from the ordinary one because the page
+  // is dedicated to one layout and one slot size. Switching layout therefore
+  // starts a new reservation instead of reinterpreting the cursor.
+  GcPage* h0_page = nullptr;
+  unsigned char* h0_cursor = nullptr;
+  unsigned char* h0_end = nullptr;
+  const nrq_object_layout* h0_layout = nullptr;
+  size_t h0_slot = 0;
+  uint64_t h0_generation = 0;
   // Unpublished allocations are described by contiguous page ranges instead of
   // one intrusive link per object. A range is [begin, end) of header storage in
   // one page; the publish walk advances by each object's span.
@@ -1093,46 +1263,49 @@ std::atomic<bool> collection_requested{false};
 thread_local bool thread_is_collector = false;
 thread_local MutatorState thread_mutator;
 // Objects whose page cannot be walked by a start bitmap, in publication order.
-// Ordinary objects are found through their page instead, so allocation no longer
-// links them into a heap-wide list and the sweep has no list to keep consistent
-// while mutators allocate.
-ObjectHeader* unindexed_objects = nullptr;
+// They are held as resolved references in one contiguous vector: large objects
+// are rare, the vector is reused across cycles, and it replaces the intrusive
+// link that used to cost every object a pointer slot.
+std::vector<ObjectRef> unindexed_objects;
 ObjectIndex object_index;
 PageDirectory page_directory;
 
-// Resolve an object's page without a per-header pointer. Ordinary pages are one
+// Resolve an object's page without a per-object pointer. Ordinary pages are one
 // direct-mapped directory probe (hash fallback only on a collision); large and
 // fallback pages carry their page in the exact index entry that already resolves
 // their object. Neither path allocates or takes a lock.
-GcPage* page_for_header(const ObjectHeader* header) {
-  if (!header) return nullptr;
-  GcPage* page = page_directory.find(const_cast<ObjectHeader*>(header));
+GcPage* page_for_object(const void* object) {
+  if (!object) return nullptr;
+  GcPage* page = page_directory.find(const_cast<void*>(object));
   if (page) return page;
-  return object_index.find_page(const_cast<void*>(header->payload()));
+  return object_index.find_page(const_cast<void*>(object));
 }
 
-// Resolve a published object through page-local start metadata first. A hit
-// validates the exact payload start, so interior and stale pointers still miss.
-// Any page that is not indexed (large-object pages or an allocation failure)
-// falls back to the exact ObjectIndex. Callers hold gc_mutex.
-ObjectHeader* find_object_locked(void* object) {
-  if (!object) return nullptr;
+// Resolve a published object through page-local start metadata first. The bitmap
+// records span starts, so the header is `payload - header_bytes(page kind)` and
+// the payload comparison is what makes an interior or stale pointer miss. Any
+// page without a walkable bitmap falls back to the exact ObjectIndex. Callers
+// hold gc_mutex.
+ObjectRef find_object_locked(void* object) {
+  if (!object) return ObjectRef{};
   GcPage* page = page_directory.find(object);
   if (page && page->object_starts) {
     const auto* address = static_cast<const unsigned char*>(object);
     if (address >= page->storage) {
-      const size_t offset = static_cast<size_t>(address - page->storage);
-      if (offset >= sizeof(ObjectHeader) && offset < page->capacity &&
-          test_object_start(*page, offset)) {
-        auto* header =
-            reinterpret_cast<ObjectHeader*>(page->storage + offset) - 1;
-        if (header->payload() == object) return header;
+      const size_t payload_offset = static_cast<size_t>(address - page->storage);
+      const size_t header_bytes = page_header_bytes(*page);
+      if (payload_offset >= header_bytes && payload_offset < page->capacity) {
+        const size_t span_offset = payload_offset - header_bytes;
+        if (test_object_start(*page, span_offset)) {
+          ObjectRef ref{page->storage + span_offset, page};
+          if (object_payload(ref) == object) return ref;
+        }
       }
     }
     // The address lies inside a page whose start bitmap is authoritative, so a
     // cleared slot is a decisive miss: interior pointers, stale addresses and
     // garbage all end here without paying for a hash probe of the global index.
-    return nullptr;
+    return ObjectRef{};
   }
   return object_index.find(static_cast<void*>(object));
 }
@@ -1177,16 +1350,13 @@ void for_each_live_object_locked(Visit&& visit) {
       while (bits != 0) {
         const unsigned index = static_cast<unsigned>(std::countr_zero(bits));
         bits &= bits - 1;
-        const size_t payload_offset =
+        const size_t span_offset =
             (word * 64 + index) * kObjectStartAlignment;
-        auto* header =
-            reinterpret_cast<ObjectHeader*>(page->storage + payload_offset) - 1;
-        visit(header);
+        visit(ObjectRef{page->storage + span_offset, page});
       }
     }
   }
-  for (ObjectHeader* header = unindexed_objects; header; header = header->next)
-    visit(header);
+  for (const ObjectRef& ref : unindexed_objects) visit(ref);
 }
 // Pages that currently record at least one freed run. First-fit reuse used to
 // scan every page in allocation order, so a refill cost grew with the heap even
@@ -1589,13 +1759,13 @@ MarkContext active_mark;
 // During the sweep phase the snapshot list is detached from the allocation
 // list. New allocations are therefore never inserted into a list the sweeper
 // is traversing, and GC barriers can publish new marks between sweep slices.
-ObjectHeader* sweep_list = nullptr;
+std::vector<ObjectRef> sweep_list;
 // Old objects are not traced during a minor collection. This list records young
 // objects referenced by old objects; the root-store/root-copy barriers append
 // here, and a minor collection treats the list as additional roots. Entries are
 // unique because an object's `remembered` flag gates insertion, so the list
 // needs no hashing on the barrier path and scans one contiguous array.
-std::vector<ObjectHeader*> remembered_young;
+std::vector<ObjectRef> remembered_young;
 // A thread may buffer a reference to an object that is still in another
 // mutator's unpublished TLAB. These raw addresses are retried after all TLABs
 // are published at the next cycle boundary; they are never dereferenced.
@@ -1661,45 +1831,42 @@ void publish_tlab_locked(MutatorState& mutator) {
        ++range_index) {
     const MutatorState::PendingRange range = mutator.pending_ranges[range_index];
     if (!range.page || !range.begin) continue;
+    GcPage& page = *range.page;
+    const size_t header_bytes = page_header_bytes(page.kind);
     for (unsigned char* cursor = range.begin; cursor < range.end;) {
-      auto* header = reinterpret_cast<ObjectHeader*>(cursor);
-      const size_t payload_bytes = object_payload_bytes(*header);
-      const size_t span = object_span_bytes(payload_bytes);
+      const ObjectRef object{cursor, &page};
+      const size_t payload_bytes = object_payload_bytes(object);
+      // A headerless range advances by its one slot size; the others read the
+      // span from the object they are looking at.
+      const size_t span = page.kind == PageKind::Headerless
+                              ? page.slot_bytes
+                              : object_span_bytes(header_bytes, payload_bytes);
       if (span == 0 || cursor + span > range.end)
         nrq_runtime_fatal("GC pending range has an invalid span");
-      const bool indexed = page_uses_index(range.page);
+      const bool indexed = page_uses_index(&page);
       if (indexed) {
-        if (!object_index.insert(header->payload(), header, range.page))
+        if (!object_index.insert(object_payload(object), cursor, &page))
           nrq_runtime_fatal("GC failed to publish a thread-local allocation");
-        ++range.page->indexed_objects;
+        ++page.indexed_objects;
+        try {
+          unindexed_objects.push_back(object);
+        } catch (...) {
+          nrq_runtime_fatal("GC unindexed object list allocation failed");
+        }
       } else {
-        const size_t offset = static_cast<size_t>(
-            static_cast<unsigned char*>(header->payload()) -
-            range.page->storage);
-        mark_object_start(*range.page, offset);
+        mark_object_start(page, static_cast<size_t>(cursor - page.storage));
       }
-      // Only an object on a page without a start bitmap needs the unindexed
-      // list; ordinary bitmap pages discover it from the range that was just
-      // published.
-      if (indexed) {
-        header->next = unindexed_objects;
-        unindexed_objects = header;
-      }
-      if (range.page->live_objects == SIZE_MAX)
+      if (page.live_objects == SIZE_MAX)
         nrq_runtime_fatal("GC page live-object count overflow");
-      ++range.page->live_objects;
-      if (range.page->live_payload_bytes > SIZE_MAX - payload_bytes)
+      ++page.live_objects;
+      if (page.live_payload_bytes > SIZE_MAX - payload_bytes)
         nrq_runtime_fatal("GC page live-byte count overflow");
-      range.page->live_payload_bytes += payload_bytes;
+      page.live_payload_bytes += payload_bytes;
       if (collection_phase.load(std::memory_order_acquire) !=
-              CollectionPhase::Idle &&
-          header->birth_epoch >= active_cycle_epoch) {
-        if (range.page->born_this_cycle == SIZE_MAX)
-          nrq_runtime_fatal("GC page born-object count overflow");
-        ++range.page->born_this_cycle;
-      }
-      if (header->young()) {
-        ++range.page->young_objects;
+          CollectionPhase::Idle)
+        mark_object_born(object, next_cycle_epoch.load(std::memory_order_relaxed));
+      if (object_young(object)) {
+        ++page.young_objects;
       } else {
         // Objects become visible here, so this is where the generational
         // policy's old-object count is updated - once per published batch
@@ -1844,21 +2011,22 @@ void wait_for_fast_barriers() {
   }
 }
 
-void trace_children(ObjectHeader* header, nrq_gc_visit_fn visit,
+void trace_children(const ObjectRef& object, nrq_gc_visit_fn visit,
                     void* context) {
   // The descriptor is read once and holds the whole tracing contract, so the
   // common path is one dependent load rather than one per object field.
-  const nrq_object_layout* layout = header->layout;
+  const nrq_object_layout* layout = object_layout(object);
   if (!layout) nrq_runtime_fatal("GC object has no layout descriptor");
-  const size_t payload_bytes = object_payload_bytes(*header);
+  const size_t payload_bytes = object_payload_bytes(object);
   if (layout->trace)
-    layout->trace(header->payload(), payload_bytes, visit, context);
+    layout->trace(object_payload(object), payload_bytes, visit, context);
   // A structure-of-arrays payload has no per-element reference map. Each managed
   // column is contiguous with its own stride, so it is walked column by column;
   // reading it as array elements would visit row-interleaved scalar slots.
   if (layout->soa_column_pairs != 0 && layout->soa_columns) {
     const size_t rows = layout->payload_size ? payload_bytes / layout->payload_size : 0;
-    const auto* bytes = static_cast<const unsigned char*>(header->payload());
+    const auto* bytes =
+        static_cast<const unsigned char*>(object_payload(object));
     for (uint32_t pair = 0; pair + 1 < layout->soa_column_pairs; pair += 2) {
       const size_t base = layout->soa_columns[pair];
       const size_t stride = layout->soa_columns[pair + 1];
@@ -1880,7 +2048,8 @@ void trace_children(ObjectHeader* header, nrq_gc_visit_fn visit,
                             ? layout->payload_size
                             : payload_bytes;
   if (stride == 0) return;
-  const auto* bytes = static_cast<const unsigned char*>(header->payload());
+  const auto* bytes =
+      static_cast<const unsigned char*>(object_payload(object));
   for (size_t base = 0; base + stride <= payload_bytes; base += stride) {
     for (uint32_t offset_index = 0; offset_index < layout->reference_count;
          ++offset_index) {
@@ -1893,32 +2062,29 @@ void trace_children(ObjectHeader* header, nrq_gc_visit_fn visit,
   }
 }
 
-void enqueue_header_locked(ObjectHeader* header, MarkContext& context) {
-  if (!header) return;
-  GcPage* const page = page_for_header(header);
-  if (!page) nrq_runtime_fatal("GC marked object has no owning page");
-  // One read of the state word answers both flag questions. The word is read
-  // before the epoch test because the compile-time filters are the common case
-  // for an already-marked object, and the store below only happens once the
-  // object is known to be entering the worklist.
-  const uint32_t state = header->state_word();
-  if (header_marked(*header, *page)) return;
-  // Objects born during this cycle are retained by the sweep's birth-epoch
-  // check. Marking them would add a survivor count that this cycle does not
-  // need and cannot attribute to the snapshot. The epoch comes from the
-  // context, so the hot path never loads the shared cycle state.
-  if (header->birth_epoch >= context.epoch) return;
-  if (context.young_only && (state & ObjectHeader::kYoungBit) == 0) return;
-  set_header_marked(*header, *page, true);
-  context.worklist.push(header);
+void enqueue_object_locked(const ObjectRef& object, MarkContext& context) {
+  if (!object.valid()) return;
+  // One read of the state word answers both flag questions. It is read before
+  // the page-local birth test because an already-marked object is the common
+  // case, and the mark store only happens once the object is entering the
+  // worklist.
+  const uint32_t state = object_state(object);
+  if (object_marked(object)) return;
+  // Objects born during this cycle are retained by the sweep's birth test.
+  // Marking them would add a survivor count this cycle cannot attribute to the
+  // snapshot. The epoch comes from the context, so the hot path never loads the
+  // shared cycle state.
+  if (object_born_in_cycle(object, context.epoch)) return;
+  if (context.young_only && (state & kYoungBit) == 0) return;
+  set_object_marked(object, true);
+  context.worklist.push(object);
 }
 
 void resolve_reference_locked(void* object, MarkContext& context) {
   if (!object) return;
-  ObjectHeader* found = find_object_locked(object);
-  // Roots may refer to static/native objects. Only collector-owned objects
-  // enter the intrusive mark stack, so marking never allocates auxiliary heap.
-  enqueue_header_locked(found, context);
+  // Roots may refer to static/native objects. Only collector-owned objects enter
+  // the mark worklist, so marking never allocates auxiliary heap.
+  enqueue_object_locked(find_object_locked(object), context);
 }
 
 void flush_reference_batch_locked(MarkContext& context) {
@@ -2014,8 +2180,8 @@ void enqueue_roots_locked(MarkContext& context) {
     if (pinned.second != 0) enqueue_reference(pinned.first, &context);
   }
   if (context.young_only) {
-    for (ObjectHeader* header : remembered_young)
-      enqueue_header_locked(header, context);
+    for (const ObjectRef& object : remembered_young)
+      enqueue_object_locked(object, context);
   }
   flush_reference_batch_locked(context);
 }
@@ -2023,18 +2189,16 @@ void enqueue_roots_locked(MarkContext& context) {
 // Append a young object to the remembered set unless its flag says it is
 // already there. The flag is what makes the flat list a set, so a repeated
 // old-to-young store costs one bool test instead of a hash probe.
-void add_remembered_locked(ObjectHeader* header) {
-  if (!header) return;
+void add_remembered_locked(const ObjectRef& object) {
+  if (!object.valid()) return;
   // The page bitmap is the deduplication test and no longer rewrites the
   // object's state word on every old-to-young store.
-  GcPage* const page = page_for_header(header);
-  if (!page) nrq_runtime_fatal("GC remembered object has no owning page");
-  if (header_remembered(*header, *page)) return;
-  set_header_remembered(*header, *page, true);
+  if (object_remembered(object)) return;
+  set_object_remembered(object, true);
   try {
-    remembered_young.push_back(header);
+    remembered_young.push_back(object);
   } catch (...) {
-    set_header_remembered(*header, *page, false);
+    set_object_remembered(object, false);
     nrq_runtime_fatal("GC remembered-set insertion failed");
   }
 }
@@ -2046,26 +2210,29 @@ void add_remembered_locked(ObjectHeader* header) {
 void compact_remembered_locked() {
   remembered_young.erase(
       std::remove_if(remembered_young.begin(), remembered_young.end(),
-                     [](ObjectHeader* header) {
+                     [](const ObjectRef& object) {
                        // The flag alone is not proof of life: a reclaimed object's
                        // storage is not rewritten, and a whole-page reclaim can
-                       // leave the old word readable. Require the header to still
-                       // be the exact published start its address resolves to.
-                       return !header || !header_remembered(*header) ||
-                              find_object_locked(header->payload()) != header;
+                       // leave the old bit readable. Require the reference to
+                       // still be the exact published start its payload resolves
+                       // to.
+                       if (!object.valid() || !object_remembered(object))
+                         return true;
+                       return find_object_locked(object_payload(object)).header !=
+                              object.header;
                      }),
       remembered_young.end());
   if (remembered_young.capacity() > 1024 &&
       remembered_young.size() * 4 < remembered_young.capacity())
-    std::vector<ObjectHeader*>(remembered_young.begin(), remembered_young.end())
+    std::vector<ObjectRef>(remembered_young.begin(), remembered_young.end())
         .swap(remembered_young);
 }
 
 void remember_reference(void* object, void* opaque_context) {
   (void)opaque_context;
   if (!object) return;
-  ObjectHeader* found = find_object_locked(object);
-  if (!found || !found->young()) return;
+  const ObjectRef found = find_object_locked(object);
+  if (!found.valid() || !object_young(found)) return;
   add_remembered_locked(found);
 }
 
@@ -2074,23 +2241,23 @@ void remember_young_locked(void* object) {
       !generational_barrier_active.load(std::memory_order_acquire) ||
       !object)
     return;
-  ObjectHeader* found = find_object_locked(object);
-  if (found && found->young()) add_remembered_locked(found);
+  const ObjectRef found = find_object_locked(object);
+  if (found.valid() && object_young(found)) add_remembered_locked(found);
 }
 
-void remember_children_locked(ObjectHeader* header) {
-  trace_children(header, remember_reference, nullptr);
+void remember_children_locked(const ObjectRef& object) {
+  trace_children(object, remember_reference, nullptr);
 }
 
 void defer_remembered_locked(void* object) {
   if (!object || !generational_barrier_active.load(std::memory_order_acquire))
     return;
-  ObjectHeader* found = find_object_locked(object);
-  if (found && found->young()) {
+  const ObjectRef found = find_object_locked(object);
+  if (found.valid() && object_young(found)) {
     add_remembered_locked(found);
     return;
   }
-  if (!found) {
+  if (!found.valid()) {
     try {
       unresolved_remembered.insert(object);
     } catch (...) {
@@ -2103,10 +2270,10 @@ void drain_remembered_locked(MutatorState& mutator, bool defer_unresolved) {
   for (size_t index = 0; index < mutator.remembered_count; ++index) {
     void* object = mutator.remembered[index];
     if (!object) continue;
-    ObjectHeader* found = find_object_locked(object);
-    if (found && found->young()) {
+    const ObjectRef found = find_object_locked(object);
+    if (found.valid() && object_young(found)) {
       add_remembered_locked(found);
-    } else if (!found && defer_unresolved) {
+    } else if (!found.valid() && defer_unresolved) {
       try {
         unresolved_remembered.insert(object);
       } catch (...) {
@@ -2153,8 +2320,8 @@ ThreadGcStateCleanup::~ThreadGcStateCleanup() {
 
 void resolve_unresolved_remembered_locked() {
   for (void* object : unresolved_remembered) {
-    ObjectHeader* found = find_object_locked(object);
-    if (!found || !found->young()) continue;
+    const ObjectRef found = find_object_locked(object);
+    if (!found.valid() || !object_young(found)) continue;
     add_remembered_locked(found);
   }
   unresolved_remembered.clear();
@@ -2201,9 +2368,11 @@ void buffer_remembered(void* object) {
 // nothing: it walks the same two words the marker can read here, through an
 // indirect call per object. Anything else - a callback, a typed array, a wider
 // layout - still goes through trace_children.
-void enqueue_narrow_children_locked(ObjectHeader* header, MarkContext& context) {
-  const auto* bytes = static_cast<const unsigned char*>(header->payload());
-  const nrq_object_layout* layout = header->layout;
+void enqueue_narrow_children_locked(const ObjectRef& object,
+                                    MarkContext& context) {
+  const auto* bytes =
+      static_cast<const unsigned char*>(object_payload(object));
+  const nrq_object_layout* layout = object_layout(object);
   // Hot narrow records keep their two offsets inside the descriptor. That turns
   // the common case into one load from the descriptor line the marker already
   // read for `reference_count`, instead of a dependent load of the offset table.
@@ -2213,8 +2382,8 @@ void enqueue_narrow_children_locked(ObjectHeader* header, MarkContext& context) 
     const size_t offset = inline_map
                               ? layout->inline_reference_offsets[index]
                               : layout->reference_offsets[index];
-    if (offset > object_payload_bytes(*header) ||
-        sizeof(void*) > object_payload_bytes(*header) - offset)
+    const size_t payload_bytes = object_payload_bytes(object);
+    if (offset > payload_bytes || sizeof(void*) > payload_bytes - offset)
       continue;
     void* child = nullptr;
     std::memcpy(&child, bytes + offset, sizeof(child));
@@ -2225,16 +2394,17 @@ void enqueue_narrow_children_locked(ObjectHeader* header, MarkContext& context) 
 bool mark_slice_locked(size_t budget_bytes) {
   size_t touched = 0;
   while (!active_mark.worklist.empty() && touched < budget_bytes) {
-    ObjectHeader* header = active_mark.worklist.pop();
-    prefetch_object(header);
-    touched += object_payload_bytes(*header) + sizeof(ObjectHeader);
-    if (active_mark.young_only && !header->young()) continue;
-    const size_t reference_count = header->layout->reference_count;
-    if (!header->layout->trace && reference_count != 0 && reference_count <= 2 &&
-        (header->layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0) {
-      enqueue_narrow_children_locked(header, active_mark);
+    const ObjectRef object = active_mark.worklist.pop();
+    prefetch_object(object);
+    touched += object_payload_bytes(object) + object_header_bytes(object);
+    if (active_mark.young_only && !object_young(object)) continue;
+    const nrq_object_layout* layout = object_layout(object);
+    const size_t reference_count = layout->reference_count;
+    if (!layout->trace && reference_count != 0 && reference_count <= 2 &&
+        (layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0) {
+      enqueue_narrow_children_locked(object, active_mark);
     } else {
-      trace_children(header, enqueue_reference, &active_mark);
+      trace_children(object, enqueue_reference, &active_mark);
     }
     flush_reference_batch_locked(active_mark);
   }
@@ -2280,20 +2450,24 @@ bool sweep_chunk_locked(size_t budget_bytes) {
   bool promotion_raised_barrier = false;
   // Reclaims one object, or leaves it for the next cycle. Returns true when the
   // object was freed, so the caller cannot go on to treat it as a survivor.
-  auto sweep_object = [&](ObjectHeader* header, GcPage* page) -> bool {
+  auto sweep_object = [&](const ObjectRef& object) -> bool {
+    GcPage* const page = object.page;
     // One read of the state word answers every question this function asks:
-    // young, marked, and the value the survivor path rewrites. It used to be read
-    // three times per object, once per question.
-    const uint32_t state = header->state_word();
-    const bool young = (state & ObjectHeader::kYoungBit) != 0;
-    const bool marked = header_marked(*header, *page);
+    // young, marked, and the value the survivor path rewrites.
+    const uint32_t state = object_state(object);
+    const bool young = (state & kYoungBit) != 0;
+    const bool marked = object_marked(object);
     const bool collectable = !active_collection_is_minor || young;
     if (!marked && collectable) {
-      const size_t payload_bytes = object_payload_bytes(*header);
+      const size_t payload_bytes = object_payload_bytes(object);
       const size_t object_offset = static_cast<size_t>(
-          static_cast<unsigned char*>(header->payload()) - page->storage);
+          object.header - page->storage);
+      const size_t span = page->kind == PageKind::Headerless
+                              ? page->slot_bytes
+                              : object_span_bytes(page_header_bytes(*page),
+                                                  payload_bytes);
       if (page_uses_index(page)) {
-        object_index.erase(header->payload());
+        object_index.erase(object_payload(object));
         if (page->indexed_objects == 0)
           nrq_runtime_fatal("GC page indexed-object count underflow");
         --page->indexed_objects;
@@ -2302,9 +2476,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
       }
       // The object's storage becomes reusable space in its own page instead of
       // being lost to the bump cursor.
-      release_span_locked(*page,
-                          object_offset - sizeof(ObjectHeader),
-                          object_span_bytes(payload_bytes));
+      release_span_locked(*page, object_offset, span);
       if (!young) ++reclaimed_old;
       statistics.collected_bytes = saturated_add(
           statistics.collected_bytes, static_cast<uint64_t>(payload_bytes));
@@ -2319,57 +2491,53 @@ bool sweep_chunk_locked(size_t budget_bytes) {
       page->live_payload_bytes -= payload_bytes;
       --page->live_objects;
       if (young) --page->young_objects;
-      set_header_remembered(*header, *page, false);
+      set_object_remembered(object, false);
       if (page->live_objects == 0) {
         page->retired = true;
         ++retired_page_count;
       }
-      destroy_object_storage(header);
+      forget_object_storage(object);
       return true;
     }
 
     if (marked) {
       // The off-heap mark is cleared before any early return, so a promoted
       // object never leaves a stale survivor count behind.
-      set_header_marked(*header, *page, false);
+      set_object_marked(object, false);
       // Everything the survivor needs to become one word: an aging or promoting
       // object rewrites its age. The fields left untouched keep their bits,
       // which a mask guarantees and a sequence of separate flag stores cannot.
       uint32_t survived = state;
-      const bool was_young =
-          (survived & ObjectHeader::kYoungBit) != 0;
+      const bool was_young = (survived & kYoungBit) != 0;
       if (active_collection_is_minor) {
         if (was_young) {
-          uint32_t age = (survived & ObjectHeader::kAgeMask) >>
-                         ObjectHeader::kAgeShift;
+          uint32_t age = (survived & kAgeMask) >> kAgeShift;
           if (age < UINT8_MAX) ++age;
           if (age >= kPromotionAge) {
-            survived &= ~(ObjectHeader::kYoungBit | ObjectHeader::kAgeMask);
-            set_header_remembered(*header, *page, false);
-            header->set_state(survived);
+            survived &= ~(kYoungBit | kAgeMask);
+            set_object_remembered(object, false);
+            set_object_state(object, survived);
             --page->young_objects;
             ++promoted_young;
             promotion_raised_barrier = true;
-            remember_children_locked(header);
-            debug_emit(NRQ_GC_EVENT_PROMOTE, 0, 0,
-                       static_cast<void*>(header + 1));
+            remember_children_locked(object);
+            debug_emit(NRQ_GC_EVENT_PROMOTE, 0, 0, object_payload(object));
             return false;
           }
-          survived = (survived & ~ObjectHeader::kAgeMask) |
-                     (age << ObjectHeader::kAgeShift);
+          survived = (survived & ~kAgeMask) | (age << kAgeShift);
         }
-        header->set_state(survived);
+        set_object_state(object, survived);
       } else {
         if (was_young) {
           --page->young_objects;
           ++promoted_young;
           promotion_raised_barrier = true;
         }
-        survived &= ~(ObjectHeader::kYoungBit | ObjectHeader::kAgeMask);
-        set_header_remembered(*header, *page, false);
-        header->set_state(survived);
+        survived &= ~(kYoungBit | kAgeMask);
+        set_object_remembered(object, false);
+        set_object_state(object, survived);
         if (was_young)
-          debug_emit(NRQ_GC_EVENT_PROMOTE, 0, 0, static_cast<void*>(header + 1));
+          debug_emit(NRQ_GC_EVENT_PROMOTE, 0, 0, object_payload(object));
       }
     }
     return false;
@@ -2495,38 +2663,36 @@ bool sweep_chunk_locked(size_t budget_bytes) {
     sweep_cursor.mask = mask & (mask - uint64_t{1});
     if (sweep_cursor.mask == 0) ++sweep_cursor.word;
     const size_t slot = word_index * 64 + index;
-    const size_t payload_offset = slot * kObjectStartAlignment;
-    auto* header =
-        reinterpret_cast<ObjectHeader*>(page->storage + payload_offset) - 1;
+    const size_t span_offset = slot * kObjectStartAlignment;
+    const ObjectRef object{page->storage + span_offset, page};
     ++steps;
-    touched += object_span_bytes(object_payload_bytes(*header));
+    touched += object_payload_bytes(object) + object_header_bytes(object);
     // An object allocated after the cycle started is outside the snapshot's
-    // reachability analysis. It stays where it is for this cycle - there is no
-    // list to keep it out of - and the next cycle considers it.
-    if (header->birth_epoch >= active_cycle_epoch) {
-      set_header_marked(*header, *page, false);
+    // reachability analysis. It stays where it is for this cycle and the next
+    // cycle considers it.
+    if (object_born_in_cycle(object, active_cycle_epoch)) {
+      set_object_marked(object, false);
       continue;
     }
-    sweep_object(header, page);
+    sweep_object(object);
   }
 
   // Phase 2: objects whose page has no walkable start bitmap.
-  while (sweep_list && touched < budget_bytes) {
-    ObjectHeader* header = sweep_list;
-    sweep_list = header->next;
+  while (!sweep_list.empty() && touched < budget_bytes) {
+    const ObjectRef object = sweep_list.back();
+    sweep_list.pop_back();
     ++steps;
-    touched += object_span_bytes(object_payload_bytes(*header));
-    GcPage* const page = page_for_header(header);
-    if (!page) nrq_runtime_fatal("GC swept object has no owning page");
-    if (header->birth_epoch >= active_cycle_epoch) {
-      set_header_marked(*header, *page, false);
-      header->next = unindexed_objects;
-      unindexed_objects = header;
-      continue;
+    touched += object_payload_bytes(object) + object_header_bytes(object);
+    if (!object.valid())
+      nrq_runtime_fatal("GC swept object has no owning page");
+    const bool born = object_born_in_cycle(object, active_cycle_epoch);
+    if (born) set_object_marked(object, false);
+    if (!born && sweep_object(object)) continue;
+    try {
+      unindexed_objects.push_back(object);
+    } catch (...) {
+      nrq_runtime_fatal("GC unindexed object list allocation failed");
     }
-    if (sweep_object(header, page)) continue;
-    header->next = unindexed_objects;
-    unindexed_objects = header;
   }
 
   if (reclaimed_old != 0) {
@@ -2558,7 +2724,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
                 .count()),
         nullptr);
   }
-  return sweep_list == nullptr && sweep_cursor.page >= sweep_cursor.page_limit;
+  return sweep_list.empty() && sweep_cursor.page >= sweep_cursor.page_limit;
 }
 
 // Largest run currently recorded in a page, and how many runs have that size.
@@ -2717,11 +2883,14 @@ size_t whole_object_grant(size_t grant, size_t span) {
 // First-fit reuse of reclaimed space. The scan visits pages in allocation order
 // and only pages that currently hold a free run, so a heap with nothing to reuse
 // costs one branch per page. Callers hold gc_mutex.
-GcPage* take_free_span_locked(size_t span, size_t& offset) {
+GcPage* take_free_span_locked(size_t span, size_t& offset, PageKind kind,
+                              const nrq_object_layout* uniform_layout) {
   if (span == 0 || total_free_spans == 0) return nullptr;
   for (GcPage* page : span_pages) {
-    if (!page || page->free_span_count == 0 || page->max_free_span < span)
+    if (!page || page->kind != kind || page->free_span_count == 0 ||
+        page->max_free_span < span)
       continue;
+    if (uniform_layout && page->uniform_layout != uniform_layout) continue;
     for (size_t index = 0; index < page->free_span_count; ++index) {
       GcPage::FreeSpan& candidate = page->free_spans[index];
       if (candidate.span < span) continue;
@@ -2767,13 +2936,16 @@ GcPage* take_free_span_locked(size_t span, size_t& offset) {
 // one object. `granted` reports the length actually taken.
 // Callers hold gc_mutex.
 GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t multiple,
-                             size_t& offset, size_t& granted) {
+                             size_t& offset, size_t& granted, PageKind kind,
+                             const nrq_object_layout* uniform_layout) {
   if (desired == 0 || minimum == 0 || minimum > desired ||
       total_free_spans == 0)
     return nullptr;
   for (GcPage* page : span_pages) {
-    if (!page || page->free_span_count == 0 || page->max_free_span < minimum)
+    if (!page || page->kind != kind || page->free_span_count == 0 ||
+        page->max_free_span < minimum)
       continue;
+    if (uniform_layout && page->uniform_layout != uniform_layout) continue;
     for (size_t index = 0; index < page->free_span_count; ++index) {
       GcPage::FreeSpan& candidate = page->free_spans[index];
       if (candidate.span < minimum) continue;
@@ -2820,14 +2992,17 @@ GcPage* take_free_run_locked(size_t desired, size_t minimum, size_t multiple,
 // page's holes, which keeps the space a thread reserves in one place.
 size_t take_free_runs_locked(size_t minimum, size_t byte_budget, size_t max_runs,
                              size_t multiple, GcPage*& page,
-                             GcPage::FreeSpan* out) {
+                             GcPage::FreeSpan* out, PageKind kind,
+                             const nrq_object_layout* uniform_layout) {
   page = nullptr;
   if (minimum == 0 || max_runs == 0 || total_free_spans == 0) return 0;
   GcPage* target = nullptr;
   for (GcPage* candidate : span_pages) {
-    if (!candidate || candidate->free_span_count == 0 ||
+    if (!candidate || candidate->kind != kind ||
+        candidate->free_span_count == 0 ||
         candidate->max_free_span < minimum)
       continue;
+    if (uniform_layout && candidate->uniform_layout != uniform_layout) continue;
     target = candidate;
     break;
   }
@@ -2908,6 +3083,19 @@ void release_tlab_tail_locked(MutatorState& mutator) {
   mutator.tlab_page = nullptr;
   mutator.tlab_cursor = nullptr;
   mutator.tlab_end = nullptr;
+  if (mutator.h0_page && mutator.h0_cursor && mutator.h0_end > mutator.h0_cursor) {
+    const size_t offset =
+        static_cast<size_t>(mutator.h0_cursor - mutator.h0_page->storage);
+    const size_t span = static_cast<size_t>(mutator.h0_end - mutator.h0_cursor);
+    mutator.tlab_tail_reclaimed_bytes =
+        saturated_add(mutator.tlab_tail_reclaimed_bytes, span);
+    release_span_locked(*mutator.h0_page, offset, span);
+  }
+  mutator.h0_page = nullptr;
+  mutator.h0_cursor = nullptr;
+  mutator.h0_end = nullptr;
+  mutator.h0_layout = nullptr;
+  mutator.h0_slot = 0;
 }
 // Installs a new thread-local cursor, accounting whatever the thread is giving
 // up. Every path that starts a reservation goes through here, so a tail is
@@ -2938,12 +3126,13 @@ void flush_spare_runs_locked(MutatorState& mutator) {
 // this thread and every entry was already removed from its page under the lock,
 // so no other thread can be handed the same cells. A run too small for this
 // request stays on the list for a smaller object.
-bool take_spare_run(MutatorState& mutator, size_t minimum_span) {
+bool take_spare_run(MutatorState& mutator, size_t minimum_span, PageKind kind) {
   size_t index = mutator.spare_run_count;
   while (index != 0) {
     --index;
     const MutatorState::SpareRun spare = mutator.spare_runs[index];
-    if (spare.span < minimum_span) continue;
+    if (spare.span < minimum_span || !spare.page || spare.page->kind != kind)
+      continue;
     mutator.spare_runs[index] = mutator.spare_runs[--mutator.spare_run_count];
     install_tlab(mutator, spare.page, spare.offset, spare.span);
     return true;
@@ -2957,13 +3146,14 @@ bool take_spare_run(MutatorState& mutator, size_t minimum_span) {
 // one lock acquisition now answers the next `kSpareRunCapacity` refills. The batch
 // is bounded by bytes as well as by count, so a heap that still has medium runs
 // cannot have a large slice reserved by a thread that may not need it.
-bool reserve_spare_runs_locked(MutatorState& mutator, size_t minimum_span) {
+bool reserve_spare_runs_locked(MutatorState& mutator, size_t minimum_span,
+                               PageKind kind) {
   constexpr size_t byte_budget = kGcTlabBytes * 2;
   GcPage::FreeSpan runs[MutatorState::kSpareRunCapacity];
   GcPage* page = nullptr;
   const size_t taken = take_free_runs_locked(
       minimum_span, byte_budget, MutatorState::kSpareRunCapacity, minimum_span,
-      page, runs);
+      page, runs, kind, nullptr);
   if (taken == 0) return false;
   for (size_t index = 0; index < taken; ++index) {
     MutatorState::SpareRun& spare = mutator.spare_runs[mutator.spare_run_count];
@@ -3184,16 +3374,29 @@ void reset_page_gc_metadata_locked(GcPage& page) {
   page.indexed_objects = 0;
   page.live_payload_bytes = 0;
   page.born_this_cycle = 0;
+  page.born_epoch = 0;
   page.young_objects = 0;
+  // A recycled page may have been a directory fallback. Its objects are gone, so
+  // the exact-index mode must not survive into the new page class: leaving it set
+  // would make every future sweep skip the page as unwalkable.
+  page.use_object_index = false;
+  page.retired = false;
   clear_page_marks(page);
   clear_page_remembered(page);
   if (page.object_starts && page.object_start_words != 0) {
     std::memset(page.object_starts.get(), 0,
                 page.object_start_words * sizeof(uint64_t));
   }
+  if (page.born_bits && page.born_words != 0) {
+    std::memset(page.born_bits.get(), 0, page.born_words * sizeof(uint64_t));
+  }
+  if (page.h0_states) {
+    std::memset(page.h0_states.get(), 0,
+                page.capacity / kObjectStartAlignment);
+  }
 }
 
-std::unique_ptr<GcPage> acquire_page(size_t capacity) {
+std::unique_ptr<GcPage> acquire_page(size_t capacity, PageKind kind) {
   for (auto entry = recycled_pages.begin(); entry != recycled_pages.end();
        ++entry) {
     if ((*entry)->capacity < capacity) continue;
@@ -3208,13 +3411,18 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
     }
     set_page_max_free_span_locked(*page, 0, 0);
     reset_page_gc_metadata_locked(*page);
-    page->kind = page->capacity > kGcPageBytes
-                     ? PageKind::Large
-                     : (page->object_starts ? PageKind::Mixed
-                                            : PageKind::Fallback);
+    const PageKind requested = page->capacity > kGcPageBytes
+                                   ? PageKind::Large
+                                   : kind;
+    page->kind = page->object_starts ? requested : PageKind::Fallback;
     page->slot_bytes = 0;
     page->slot_capacity = 0;
     page->uniform_layout = nullptr;
+    if (page->kind == PageKind::Headerless && !page->h0_states) {
+      page->h0_states.reset(new (std::nothrow)
+                                uint8_t[page->capacity / kObjectStartAlignment]());
+      if (!page->h0_states) return nullptr;
+    }
     recycled_page_reuse_count = saturated_add(recycled_page_reuse_count, 1);
     return page;
   }
@@ -3238,16 +3446,28 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity) {
     const size_t mark_words = (slots + 63) / 64;
     page->mark_bits.reset(new (std::nothrow) uint64_t[mark_words]());
     page->remembered_bits.reset(new (std::nothrow) uint64_t[mark_words]());
-    if (!page->mark_bits || !page->remembered_bits) {
+    page->born_bits.reset(new (std::nothrow) uint64_t[mark_words]());
+    if (!page->mark_bits || !page->remembered_bits || !page->born_bits) {
       release_page_storage(storage, capacity);
       return nullptr;
     }
     page->mark_words = mark_words;
     page->remembered_words = mark_words;
-    page->kind = capacity > kGcPageBytes ? PageKind::Large : PageKind::Mixed;
+    page->born_words = mark_words;
+    page->kind = capacity > kGcPageBytes ? PageKind::Large : kind;
     if (capacity <= kGcPageBytes) {
       page->object_starts.reset(new (std::nothrow) uint64_t[mark_words]());
       if (page->object_starts) page->object_start_words = mark_words;
+    }
+    if (page->kind == PageKind::Headerless) {
+      // One state byte per span slot. It is the only per-object metadata a
+      // headerless page needs beyond the three bitmaps.
+      page->h0_states.reset(new (std::nothrow)
+                                uint8_t[capacity / kObjectStartAlignment]());
+      if (!page->h0_states) {
+        release_page_storage(storage, capacity);
+        return nullptr;
+      }
     }
     return page;
   } catch (...) {
@@ -3312,7 +3532,7 @@ void adapt_collection_policy_locked() {
   ++collection_policy.adaptations;
 }
 
-ObjectHeader* find_pending_header(MutatorState& mutator, void* object);
+ObjectRef find_pending_header(MutatorState& mutator, void* object);
 
 // An entry is active only while it has both an object and a nonzero delta. A
 // handoff that is cancelled before the next drain leaves nothing to fold, so the
@@ -3373,8 +3593,8 @@ void drain_transfer_pins_locked(MutatorState& mutator) {
       // publishes every TLAB before this drain runs. Anything else is a pin of a
       // pointer the heap does not own, which the buffered path can only detect
       // here, so it is recorded as a rejection instead of being counted.
-      if (!find_object_locked(entry.object) &&
-          !find_pending_header(mutator, entry.object)) {
+      if (!find_object_locked(entry.object).valid() &&
+          !find_pending_header(mutator, entry.object).valid()) {
         pin_violations =
             saturated_add(pin_violations, static_cast<uint64_t>(entry.delta));
         continue;
@@ -3457,7 +3677,7 @@ void prepare_cycle_locked(bool young_only) {
     retired_page_count = 0;
   }
 
-  sweep_list = nullptr;
+  sweep_list.clear();
   sweep_cursor = SweepCursor{};
   cycle_start_live_bytes = live_heap_bytes;
   active_cycle_epoch = next_cycle_epoch.fetch_add(1) + 1;
@@ -3634,8 +3854,8 @@ void run_collection(bool young_only) {
           // the lock for sweep slices. Allocations after this point either land
           // in a fresh page (outside the captured set) or carry a birth epoch
           // past the cycle, so the sweeper never has to reason about them.
-          sweep_list = unindexed_objects;
-          unindexed_objects = nullptr;
+          sweep_list.clear();
+          sweep_list.swap(unindexed_objects);
           sweep_cursor = SweepCursor{};
           sweep_cursor.page_limit = gc_pages.size();
           collection_phase.store(CollectionPhase::Sweeping,
@@ -3677,12 +3897,164 @@ void maybe_collect_automatically() {
   run_collection(young_only);
 }
 
+// Representation selection. It is a static decision from the layout's shape and
+// size: the compiler can make the same one in Phase 5, and nothing on the access
+// path has to re-decide it.
+enum class GcRepresentation : uint8_t { Auto, Headerless, Compact, Extended };
+
+// A headerless object's size comes from its page, so its payload has to fit one
+// slot comfortably. Larger fixed records go to H8, where the header is smaller
+// than the alignment waste a dedicated uniform page would leave.
+constexpr size_t kHeaderlessMaxPayload = 256;
+
+GcRepresentation select_representation(size_t payload_bytes,
+                                       const nrq_object_layout* layout,
+                                       GcRepresentation hint, bool& valid) {
+  const bool array = (layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) != 0;
+  const bool fits_page =
+      object_span_bytes(0, payload_bytes) <= kGcPageBytes;
+  if (array) {
+    valid = hint != GcRepresentation::Headerless &&
+            hint != GcRepresentation::Compact;
+    return GcRepresentation::Extended;
+  }
+  switch (hint) {
+    case GcRepresentation::Headerless:
+      valid = payload_bytes <= kHeaderlessMaxPayload && fits_page;
+      return valid ? GcRepresentation::Headerless : GcRepresentation::Extended;
+    case GcRepresentation::Compact:
+      valid = fits_page;
+      return valid ? GcRepresentation::Compact : GcRepresentation::Extended;
+    case GcRepresentation::Extended:
+      valid = true;
+      return GcRepresentation::Extended;
+    case GcRepresentation::Auto:
+      valid = true;
+      if (payload_bytes <= kHeaderlessMaxPayload && fits_page)
+        return GcRepresentation::Headerless;
+      return fits_page ? GcRepresentation::Compact
+                       : GcRepresentation::Extended;
+  }
+  valid = false;
+  return GcRepresentation::Extended;
+}
+
+// Writes the header this representation uses and zeroes the payload. The layout
+// id is resolved once here, never on a read path.
+void initialize_object(const ObjectRef& object, const nrq_object_layout* layout,
+                       uint32_t elements, size_t payload_bytes, bool young) {
+  switch (object.page->kind) {
+    case PageKind::Headerless:
+      object.page->h0_states[span_slot(object)] = young ? 1u : 0u;
+      break;
+    case PageKind::Compact: {
+      auto* header = reinterpret_cast<CompactHeader*>(object.header);
+      header->state = young ? kYoungBit : 0u;
+      header->layout_id = layout_id_for(layout);
+      if (header->layout_id == 0)
+        nrq_runtime_fatal("GC layout id space exhausted");
+      break;
+    }
+    default: {
+      auto* header = reinterpret_cast<ExtendedHeader*>(object.header);
+      header->element_count = elements;
+      header->state = young ? kYoungBit : 0u;
+      header->layout_id = layout_id_for(layout);
+      header->flags = 0;
+      if (header->layout_id == 0)
+        nrq_runtime_fatal("GC layout id space exhausted");
+      break;
+    }
+  }
+  std::memset(object_payload(object), 0, payload_bytes);
+}
+
+// Updates every counter a newly visible object contributes to. Publication and
+// the serialized allocator share it so the two paths cannot account differently.
+void account_new_object_locked(const ObjectRef& object, size_t payload_bytes,
+                               bool young) {
+  GcPage& page = *object.page;
+  const bool indexed = page_uses_index(&page);
+  if (indexed) {
+    if (!object_index.insert(object_payload(object), object.header, &page))
+      nrq_runtime_fatal("GC failed to publish a thread-local allocation");
+    ++page.indexed_objects;
+    try {
+      unindexed_objects.push_back(object);
+    } catch (...) {
+      nrq_runtime_fatal("GC unindexed object list allocation failed");
+    }
+  } else {
+    mark_object_start(page,
+                      static_cast<size_t>(object.header - page.storage));
+  }
+  if (page.live_objects == SIZE_MAX)
+    nrq_runtime_fatal("GC page live-object count overflow");
+  ++page.live_objects;
+  if (page.live_payload_bytes > SIZE_MAX - payload_bytes)
+    nrq_runtime_fatal("GC page live-byte count overflow");
+  page.live_payload_bytes += payload_bytes;
+  if (collection_phase.load(std::memory_order_acquire) !=
+      CollectionPhase::Idle)
+    mark_object_born(object, next_cycle_epoch.load(std::memory_order_relaxed));
+  if (young) {
+    ++page.young_objects;
+  } else {
+    old_object_count.fetch_add(1, std::memory_order_relaxed);
+  }
+  statistics.allocated_bytes = saturated_add(
+      statistics.allocated_bytes, static_cast<uint64_t>(payload_bytes));
+  statistics.live_objects = saturated_add(statistics.live_objects, 1);
+  live_heap_bytes = saturated_add(live_heap_bytes, payload_bytes);
+}
+
+// A headerless page is dedicated to one layout and one slot size. Reusing the
+// most recently carved page of that shape keeps a run of identical records
+// inside pages that are already resident.
+GcPage* find_headerless_page_locked(const nrq_object_layout* layout,
+                                    size_t slot) {
+  for (auto candidate = tail_pages.rbegin(); candidate != tail_pages.rend();
+       ++candidate) {
+    GcPage* page = *candidate;
+    if (!page || page->kind != PageKind::Headerless) continue;
+    if (page->uniform_layout != layout || page->slot_bytes != slot) continue;
+    if (page->used <= page->capacity && page->capacity - page->used >= slot)
+      return page;
+  }
+  return nullptr;
+}
+
+GcPage* create_headerless_page_locked(const nrq_object_layout* layout,
+                                      size_t slot) {
+  auto new_page = acquire_page(kGcPageBytes, PageKind::Headerless);
+  if (!new_page) return nullptr;
+  GcPage* page = new_page.get();
+  page->slot_bytes = slot;
+  page->slot_capacity = kGcPageBytes / kObjectStartAlignment;
+  page->uniform_layout = layout;
+  try {
+    gc_pages.push_back(std::move(new_page));
+  } catch (...) {
+    release_page_storage(page->storage, page->capacity);
+    return nullptr;
+  }
+  if (!page_directory.insert(page)) {
+    // A headerless object is found from its page; without a directory entry the
+    // representation cannot be resolved, so the page is not used for one.
+    page->use_object_index = true;
+    page->kind = PageKind::Fallback;
+    return nullptr;
+  }
+  index_tail_page_locked(*page);
+  return page;
+}
+
 void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
                       nrq_gc_trace_fn trace, const size_t* reference_offsets,
                       size_t reference_count,
-                      const nrq_object_layout* resolved) {
-  if (bytes == 0 || bytes > SIZE_MAX - sizeof(ObjectHeader) || element_size == 0)
-    return nullptr;
+                      const nrq_object_layout* resolved,
+                      GcRepresentation hint) {
+  if (bytes == 0 || element_size == 0 || elements == 0) return nullptr;
   // A caller that already owns an immutable descriptor hands it over directly:
   // it is the identity the object stores, so this path neither interns nor
   // compares tables.
@@ -3691,10 +4063,46 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
                : layout_for_allocation(bytes, element_size, trace,
                                        reference_offsets, reference_count);
   if (!layout) return nullptr;
-  constexpr size_t alignment = alignof(std::max_align_t);
-  const size_t raw_span = sizeof(ObjectHeader) + bytes;
-  if (raw_span > SIZE_MAX - (alignment - 1)) return nullptr;
-  const size_t span = (raw_span + alignment - 1) & ~(alignment - 1);
+  bool valid = true;
+  const GcRepresentation representation = select_representation(
+      layout->payload_size, layout, hint, valid);
+  if (!valid) return nullptr;
+  const bool young =
+      generational_collection_enabled.load(std::memory_order_relaxed);
+  if (representation == GcRepresentation::Headerless) {
+    const size_t slot = object_span_bytes(0, layout->payload_size);
+    // Reuse a reclaimed slot before taking fresh page space, exactly as the
+    // compact and extended paths do.
+    size_t offset = 0;
+    GcPage* page =
+        take_free_span_locked(slot, offset, PageKind::Headerless, layout);
+    if (page && page->slot_bytes != slot) page = nullptr;
+    if (!page) {
+      page = find_headerless_page_locked(layout, slot);
+      if (!page) page = create_headerless_page_locked(layout, slot);
+      if (!page) return nullptr;
+      unretire_page_locked(*page);
+      offset = page->used;
+      page->used += slot;
+      note_page_tail_locked(*page);
+    }
+    const ObjectRef object{page->storage + offset, page};
+    initialize_object(object, layout, 1, layout->payload_size, young);
+    account_new_object_locked(object, layout->payload_size, young);
+    add_since_collection_locked(layout->payload_size);
+    debug_emit(NRQ_GC_EVENT_ALLOCATION, 0, layout->payload_size,
+               object_payload(object));
+    return object_payload(object);
+  }
+
+  const size_t header_bytes =
+      representation == GcRepresentation::Compact ? 8 : 16;
+  const PageKind kind =
+      representation == GcRepresentation::Compact ? PageKind::Compact
+                                                  : PageKind::Extended;
+  const size_t span = object_span_bytes(header_bytes, bytes);
+  if (span < header_bytes || span > SIZE_MAX - kObjectStartAlignment)
+    return nullptr;
   GcPage* page = nullptr;
   size_t header_offset = 0;
   bool reused_span = false;
@@ -3704,26 +4112,29 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
   }
   // Reclaimed space in an existing page comes first: reusing it keeps the
   // working set inside pages that are already resident.
-  page = take_free_span_locked(span, header_offset);
+  page = take_free_span_locked(span, header_offset, kind, nullptr);
   if (page) {
     reused_span = true;
-  } else if (thread_allocation_page &&
-      thread_allocation_page->used <= thread_allocation_page->capacity &&
-      span <= thread_allocation_page->capacity - thread_allocation_page->used) {
+  } else if (thread_allocation_page && thread_allocation_page->kind == kind &&
+             thread_allocation_page->used <= thread_allocation_page->capacity &&
+             span <= thread_allocation_page->capacity -
+                         thread_allocation_page->used) {
     page = thread_allocation_page;
   } else {
     thread_allocation_page = nullptr;
-    for (GcPage* candidate : tail_pages) {
-      if (!candidate) continue;
-      if (span <= candidate->capacity - candidate->used) {
-        page = candidate;
+    for (auto candidate = tail_pages.rbegin(); candidate != tail_pages.rend();
+         ++candidate) {
+      GcPage* possible = *candidate;
+      if (!possible || possible->kind != kind) continue;
+      if (span <= possible->capacity - possible->used) {
+        page = possible;
         break;
       }
     }
   }
   if (!page) {
     const size_t capacity = std::max(kGcPageBytes, span);
-    auto new_page = acquire_page(capacity);
+    auto new_page = acquire_page(capacity, kind);
     if (!new_page) return nullptr;
     page = new_page.get();
     try {
@@ -3748,80 +4159,17 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
     page->used += span;
     note_page_tail_locked(*page);
   }
-  void* header_storage = page->storage + header_offset;
-  auto* header = new (header_storage) ObjectHeader(
-      static_cast<uint32_t>(elements), layout,
-      generational_collection_enabled.load(std::memory_order_relaxed),
-      next_cycle_epoch.load(std::memory_order_relaxed));
-  auto rollback_reservation = [&]() {
-    destroy_object_storage(header);
-    if (reused_span) {
-      release_span_locked(*page, header_offset, span);
-    } else {
-      page->used -= span;
-      note_page_tail_locked(*page);
-    }
-    // A page that reserved space and then could not publish its first object is
-    // empty, not free for later use: mark it retired so the next cycle boundary
-    // reclaims it instead of leaving it in the page set forever.
-    if (page->live_objects == 0 && !page->retired) {
-      page->retired = true;
-      ++retired_page_count;
-    }
-  };
-  void* object = static_cast<unsigned char*>(header_storage) + sizeof(ObjectHeader);
-  std::memset(object, 0, bytes);
-  try {
-    // The reference map is the descriptor's, so an object with any number of
-    // reference words costs no per-instance storage and no allocation.
-    // Counted, not published: this allocation is already live, and the barrier
-    // policy is the only thing that raises the store barrier (see allocate_tlab).
-    if (!header->young())
-      old_object_count.fetch_add(1, std::memory_order_relaxed);
-    header->next = nullptr;
-    if (page_uses_index(page)) {
-      if (!object_index.insert(object, header, page)) {
-        rollback_reservation();
-        return nullptr;
-      }
-    } else {
-      const size_t offset = static_cast<size_t>(
-          static_cast<unsigned char*>(object) - page->storage);
-      mark_object_start(*page, offset);
-    }
-  } catch (...) {
-    rollback_reservation();
-    return nullptr;
-  }
-  // Only a page that cannot be walked by a bitmap needs the object listed; every
-  // other object is reachable from its page.
-  if (page_uses_index(page)) {
-    header->next = unindexed_objects;
-    unindexed_objects = header;
-    ++page->indexed_objects;
-  }
-  ++page->live_objects;
-  if (page->live_payload_bytes > SIZE_MAX - bytes)
-    nrq_runtime_fatal("GC page live-byte count overflow");
-  page->live_payload_bytes += bytes;
-  if (collection_phase.load(std::memory_order_acquire) !=
-          CollectionPhase::Idle &&
-      header->birth_epoch >= active_cycle_epoch) {
-    if (page->born_this_cycle == SIZE_MAX)
-      nrq_runtime_fatal("GC page born-object count overflow");
-    ++page->born_this_cycle;
-  }
-  if (header->young()) ++page->young_objects;
-  statistics.allocated_bytes = saturated_add(
-      statistics.allocated_bytes, static_cast<uint64_t>(bytes));
-  statistics.live_objects = saturated_add(statistics.live_objects, 1);
-  live_heap_bytes = saturated_add(live_heap_bytes, bytes);
+  const ObjectRef object{page->storage + header_offset, page};
+  initialize_object(object, layout, static_cast<uint32_t>(elements), bytes,
+                    young);
+  account_new_object_locked(object, bytes, young);
   add_since_collection_locked(bytes);
-  debug_emit(NRQ_GC_EVENT_ALLOCATION, 0, bytes, object);
-  return object;
+  debug_emit(NRQ_GC_EVENT_ALLOCATION, 0, bytes, object_payload(object));
+  return object_payload(object);
 }
 
-bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
+bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span,
+                         PageKind kind) {
   tlab_refill_count = saturated_add(tlab_refill_count, 1);
   if (mutator.tlab_generation != gc_page_generation) discard_stale_tlab(mutator);
   // A merged run of reclaimed space can host a whole thread-local reservation.
@@ -3839,7 +4187,8 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     size_t run_offset = 0;
     size_t run_span = 0;
     GcPage* reused = take_free_run_locked(kGcTlabBytes, wanted_minimum,
-                                          minimum_span, run_offset, run_span);
+                                          minimum_span, run_offset, run_span,
+                                          kind, nullptr);
     if (!reused) return false;
     install_tlab(mutator, reused, run_offset, run_span);
     return true;
@@ -3860,7 +4209,7 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     thread_allocation_page = nullptr;
     thread_allocation_generation = gc_page_generation;
   }
-  if (thread_allocation_page &&
+  if (thread_allocation_page && thread_allocation_page->kind == kind &&
       thread_allocation_page->used <= thread_allocation_page->capacity) {
     available = thread_allocation_page->capacity - thread_allocation_page->used;
     if (available >= minimum_span) page = thread_allocation_page;
@@ -3871,7 +4220,7 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
     for (auto candidate = tail_pages.rbegin(); candidate != tail_pages.rend();
          ++candidate) {
       GcPage* possible = *candidate;
-      if (!possible) continue;
+      if (!possible || possible->kind != kind) continue;
       const size_t remaining = indexed_tail_bytes(*possible);
       if (remaining >= minimum_span) {
         page = possible;
@@ -3884,7 +4233,7 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
       // refill of the same size skips the walk instead of repeating it.
       max_indexed_tail_bytes = 0;
       for (const GcPage* possible : tail_pages)
-        if (possible) {
+        if (possible && possible->kind == kind) {
           const size_t remaining = indexed_tail_bytes(*possible);
           if (remaining > max_indexed_tail_bytes)
             max_indexed_tail_bytes = remaining;
@@ -3896,13 +4245,13 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span) {
   // tails, which need no index maintenance. One take would hand back a few
   // hundred bytes and make the next two or three allocations pay this lock again,
   // so the batch is reserved here and handed out by `take_spare_run` for free.
-  if (!page && reserve_spare_runs_locked(mutator, minimum_span) &&
-      take_spare_run(mutator, minimum_span)) {
+  if (!page && reserve_spare_runs_locked(mutator, minimum_span, kind) &&
+      take_spare_run(mutator, minimum_span, kind)) {
     return true;
   }
   if (!page) {
     const size_t capacity = std::max(kGcPageBytes, kGcTlabBytes);
-    auto new_page = acquire_page(capacity);
+    auto new_page = acquire_page(capacity, kind);
     if (!new_page) return false;
     page = new_page.get();
     try {
@@ -3991,48 +4340,201 @@ void note_pending_range(MutatorState& mutator, GcPage* page,
 // so the only precondition left is that this thread is a mutator with a usable
 // TLAB. Keeping the checks at the boundary means the validated path and the slow
 // path share one validation instead of each repeating it.
+// Reserves a headerless slab for one layout. The page is dedicated to that
+// layout and slot size, so the reservation is a plain bump of the page tail and
+// publication can walk it without reading a header.
+void install_h0_tlab(MutatorState& mutator, GcPage* page, size_t offset,
+                     size_t span, const nrq_object_layout* layout,
+                     size_t slot) {
+  mutator.h0_page = page;
+  mutator.h0_cursor = page->storage + offset;
+  mutator.h0_end = mutator.h0_cursor + span;
+  mutator.h0_layout = layout;
+  mutator.h0_slot = slot;
+  mutator.h0_generation = gc_page_generation;
+}
+
+// Pops a reserved headerless run. The list is thread-owned and the runs were
+// removed from their pages under the lock already, so this needs no lock.
+bool take_h0_spare_run(MutatorState& mutator, const nrq_object_layout* layout,
+                       size_t slot) {
+  size_t index = mutator.spare_run_count;
+  while (index != 0) {
+    --index;
+    const MutatorState::SpareRun spare = mutator.spare_runs[index];
+    if (!spare.page || spare.page->kind != PageKind::Headerless) continue;
+    if (spare.page->uniform_layout != layout || spare.page->slot_bytes != slot)
+      continue;
+    if (spare.span < slot) continue;
+    mutator.spare_runs[index] = mutator.spare_runs[--mutator.spare_run_count];
+    install_h0_tlab(mutator, spare.page, spare.offset, spare.span, layout, slot);
+    return true;
+  }
+  return false;
+}
+
+bool reserve_h0_tlab_locked(MutatorState& mutator,
+                            const nrq_object_layout* layout, size_t slot) {
+  // A headerless reservation is a refill like any other; the counter is the
+  // measure of how often the allocator lock was taken.
+  tlab_refill_count = saturated_add(tlab_refill_count, 1);
+  // A fragmented page offers few-cell runs. Taking them one refill at a time
+  // would put the allocator lock back on the allocation path, so a batch of them
+  // is reserved and handed out from the thread list, exactly as the other
+  // representations do.
+  constexpr size_t byte_budget = kGcTlabBytes * 2;
+  GcPage::FreeSpan runs[MutatorState::kSpareRunCapacity];
+  GcPage* run_page = nullptr;
+  const size_t taken = take_free_runs_locked(
+      slot, byte_budget, MutatorState::kSpareRunCapacity, slot, run_page, runs,
+      PageKind::Headerless, layout);
+  if (taken != 0) {
+    for (size_t index = 0; index < taken; ++index) {
+      if (mutator.spare_run_count == MutatorState::kSpareRunCapacity) break;
+      MutatorState::SpareRun& spare =
+          mutator.spare_runs[mutator.spare_run_count++];
+      spare.page = run_page;
+      spare.offset = runs[index].offset;
+      spare.span = runs[index].span;
+    }
+    if (mutator.h0_page && mutator.h0_cursor &&
+        mutator.h0_end > mutator.h0_cursor) {
+      const size_t offset = static_cast<size_t>(
+          mutator.h0_cursor - mutator.h0_page->storage);
+      const size_t span =
+          static_cast<size_t>(mutator.h0_end - mutator.h0_cursor);
+      mutator.tlab_tail_reclaimed_bytes =
+          saturated_add(mutator.tlab_tail_reclaimed_bytes, span);
+      release_span_locked(*mutator.h0_page, offset, span);
+    }
+    return take_h0_spare_run(mutator, layout, slot);
+  }
+  GcPage* page = find_headerless_page_locked(layout, slot);
+  if (!page) page = create_headerless_page_locked(layout, slot);
+  if (!page) return false;
+  unretire_page_locked(*page);
+  const size_t available = page->capacity - page->used;
+  const size_t reserve = whole_object_grant(std::min(kGcTlabBytes, available), slot);
+  if (reserve < slot) return false;
+  if (mutator.h0_page && mutator.h0_cursor && mutator.h0_end > mutator.h0_cursor) {
+    const size_t offset = static_cast<size_t>(
+        mutator.h0_cursor - mutator.h0_page->storage);
+    const size_t span = static_cast<size_t>(mutator.h0_end - mutator.h0_cursor);
+    mutator.tlab_tail_reclaimed_bytes =
+        saturated_add(mutator.tlab_tail_reclaimed_bytes, span);
+    release_span_locked(*mutator.h0_page, offset, span);
+  }
+  mutator.h0_page = page;
+  mutator.h0_cursor = page->storage + page->used;
+  mutator.h0_end = mutator.h0_cursor + reserve;
+  mutator.h0_layout = layout;
+  mutator.h0_slot = slot;
+  mutator.h0_generation = gc_page_generation;
+  page->used += reserve;
+  note_page_tail_locked(*page);
+  return true;
+}
+
 void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
                     nrq_gc_trace_fn trace, const size_t* reference_offsets,
                     size_t reference_count, bool& handled,
-                    const nrq_object_layout* resolved) {
+                    const nrq_object_layout* resolved,
+                    GcRepresentation hint) {
   handled = false;
   if (thread_mutator.depth == 0) return nullptr;
-  constexpr size_t alignment = alignof(std::max_align_t);
-  const size_t raw_span = sizeof(ObjectHeader) + bytes;
-  if (raw_span > SIZE_MAX - (alignment - 1)) return nullptr;
-  const size_t span = (raw_span + alignment - 1) & ~(alignment - 1);
-  if (span > kGcTlabBytes) return nullptr;
-  handled = true;
   const nrq_object_layout* layout =
       resolved ? resolved
                : layout_for_allocation(bytes, element_size, trace,
                                        reference_offsets, reference_count);
   if (!layout) return nullptr;
+  bool valid = true;
+  const GcRepresentation representation = select_representation(
+      layout->payload_size, layout, hint, valid);
+  if (!valid) {
+    handled = true;
+    return nullptr;
+  }
+  const bool young =
+      generational_collection_enabled.load(std::memory_order_relaxed);
+
+  GcRepresentation actual = representation;
+  if (actual == GcRepresentation::Headerless) {
+    const size_t slot = object_span_bytes(0, layout->payload_size);
+    if (thread_mutator.h0_generation != gc_page_generation)
+      thread_mutator.h0_page = nullptr;
+    const bool same_shape = thread_mutator.h0_cursor &&
+                            thread_mutator.h0_layout == layout &&
+                            thread_mutator.h0_slot == slot;
+    const bool has_room =
+        same_shape && static_cast<size_t>(thread_mutator.h0_end -
+                                          thread_mutator.h0_cursor) >= slot;
+    const bool slab_active =
+        thread_mutator.h0_cursor && thread_mutator.h0_cursor < thread_mutator.h0_end;
+    if (!has_room && slab_active) {
+      // Another shape owns this thread's headerless slab. A uniform page holds
+      // one layout, so serving this object here would evict a slab that is still
+      // half full - the reservation thrash a mixed-size workload would pay on
+      // every alternating allocation. Use the compact representation instead;
+      // the shape that owns the slab keeps its headerless objects.
+      actual = GcRepresentation::Compact;
+    }
+  }
+
+  if (actual == GcRepresentation::Headerless) {
+    handled = true;
+    const size_t slot = object_span_bytes(0, layout->payload_size);
+    if (!thread_mutator.h0_cursor ||
+        thread_mutator.h0_layout != layout ||
+        thread_mutator.h0_slot != slot ||
+        static_cast<size_t>(thread_mutator.h0_end -
+                            thread_mutator.h0_cursor) < slot) {
+      // A batch reserved earlier answers this without the allocator lock.
+      if (!take_h0_spare_run(thread_mutator, layout, slot)) {
+        HeapLockGuard lock(gc_mutex);
+        if (!reserve_h0_tlab_locked(thread_mutator, layout, slot)) return nullptr;
+      }
+    }
+    const ObjectRef object{thread_mutator.h0_cursor, thread_mutator.h0_page};
+    thread_mutator.h0_cursor += slot;
+    initialize_object(object, layout, 1, layout->payload_size, young);
+    note_pending_range(thread_mutator, object.page, object.header, slot);
+    account_tlab_allocation(thread_mutator, layout->payload_size);
+    if (collection_phase.load(std::memory_order_acquire) !=
+        CollectionPhase::Idle) {
+      HeapLockGuard lock(gc_mutex);
+      publish_tlab_locked(thread_mutator);
+    }
+    debug_emit(NRQ_GC_EVENT_ALLOCATION, 0, layout->payload_size,
+               object_payload(object));
+    return object_payload(object);
+  }
+
+  const size_t header_bytes = actual == GcRepresentation::Compact ? 8 : 16;
+  const PageKind kind = actual == GcRepresentation::Compact ? PageKind::Compact
+                                                            : PageKind::Extended;
+  const size_t span = object_span_bytes(header_bytes, bytes);
+  if (span > kGcTlabBytes) return nullptr;
+  handled = true;
 
   if (thread_mutator.tlab_generation != gc_page_generation)
     discard_stale_tlab(thread_mutator);
   if (!thread_mutator.tlab_cursor || !thread_mutator.tlab_end ||
+      thread_mutator.tlab_page->kind != kind ||
       thread_mutator.tlab_cursor > thread_mutator.tlab_end ||
       span > static_cast<size_t>(thread_mutator.tlab_end -
                                  thread_mutator.tlab_cursor)) {
     // A run reserved earlier answers this without the allocator lock: that is
     // what a fragmented heap needs, because its runs are only a few cells each.
-    if (!take_spare_run(thread_mutator, span)) {
+    if (!take_spare_run(thread_mutator, span, kind)) {
       HeapLockGuard lock(gc_mutex);
-      if (!reserve_tlab_locked(thread_mutator, span)) return nullptr;
+      if (!reserve_tlab_locked(thread_mutator, span, kind)) return nullptr;
     }
   }
 
-  unsigned char* header_storage = thread_mutator.tlab_cursor;
+  const ObjectRef object{thread_mutator.tlab_cursor, thread_mutator.tlab_page};
   thread_mutator.tlab_cursor += span;
-  new (header_storage) ObjectHeader(
-      static_cast<uint32_t>(elements), layout,
-      generational_collection_enabled.load(std::memory_order_relaxed),
-      next_cycle_epoch.load(std::memory_order_relaxed));
-  void* object = header_storage + sizeof(ObjectHeader);
-  std::memset(object, 0, bytes);
-  // The reference map is the descriptor's, so an object with any number of
-  // reference words costs no per-instance storage and no allocation.
+  initialize_object(object, layout, static_cast<uint32_t>(elements), bytes,
+                    young);
   // A non-young object only has to be counted: the count feeds the generational
   // policy, and the store barrier is raised by the policy itself (`begin_cycle`
   // covers a cycle, `nrq_gc_set_generational` covers the switch). Raising it here
@@ -4040,8 +4542,7 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
   // make every later store record a remembered entry that no minor can use, and
   // the counter update would be a locked instruction on the allocation path. The
   // count is folded in where the batch is published.
-  note_pending_range(thread_mutator, thread_mutator.tlab_page, header_storage,
-                     span);
+  note_pending_range(thread_mutator, object.page, object.header, span);
   account_tlab_allocation(thread_mutator, bytes);
 
   // During a cycle an unpublished young object is invisible to the marker and
@@ -4051,8 +4552,8 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
     HeapLockGuard lock(gc_mutex);
     publish_tlab_locked(thread_mutator);
   }
-  debug_emit(NRQ_GC_EVENT_ALLOCATION, 0, bytes, object);
-  return object;
+  debug_emit(NRQ_GC_EVENT_ALLOCATION, 0, bytes, object_payload(object));
+  return object_payload(object);
 }
 
 void store_root_value_locked(void** slot, void* value) {
@@ -4240,19 +4741,24 @@ __forceinline bool shadow_has_pointer_root(ShadowStack& stack, void* slot) {
   return found != nullptr && found->pointer_root;
 }
 
-ObjectHeader* find_pending_header(MutatorState& mutator, void* object) {
+ObjectRef find_pending_header(MutatorState& mutator, void* object) {
   for (size_t index = 0; index < mutator.pending_range_count; ++index) {
     const MutatorState::PendingRange range = mutator.pending_ranges[index];
     if (!range.page || !range.begin) continue;
+    const size_t header_bytes = page_header_bytes(range.page->kind);
     for (unsigned char* cursor = range.begin; cursor < range.end;) {
-      auto* header = reinterpret_cast<ObjectHeader*>(cursor);
-      if (header->payload() == object) return header;
-      const size_t span = object_span_bytes(object_payload_bytes(*header));
+      const ObjectRef candidate{cursor, range.page};
+      if (object_payload(candidate) == object) return candidate;
+      const size_t span =
+          range.page->kind == PageKind::Headerless
+              ? range.page->slot_bytes
+              : object_span_bytes(header_bytes,
+                                  object_payload_bytes(candidate));
       if (span == 0 || cursor + span > range.end) break;
       cursor += span;
     }
   }
-  return nullptr;
+  return ObjectRef{};
 }
 
 }  // namespace
@@ -4260,13 +4766,104 @@ ObjectHeader* find_pending_header(MutatorState& mutator, void* object) {
 extern "C" {
 
 void* nrq_gc_allocate(size_t bytes, nrq_gc_trace_fn trace) {
-  if (bytes == 0 || bytes > SIZE_MAX - sizeof(ObjectHeader)) return nullptr;
+  if (bytes == 0 || bytes > SIZE_MAX - 16) return nullptr;
   maybe_collect_automatically();
   bool handled = false;
-  void* object = allocate_tlab(bytes, bytes, 1, trace, nullptr, 0, handled, nullptr);
+  void* object = allocate_tlab(bytes, bytes, 1, trace, nullptr, 0, handled,
+                               nullptr, GcRepresentation::Auto);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
-  return allocate_locked(bytes, bytes, 1, trace, nullptr, 0, nullptr);
+  return allocate_locked(bytes, bytes, 1, trace, nullptr, 0, nullptr,
+                         GcRepresentation::Auto);
+}
+
+void* nrq_gc_allocate_repr(size_t bytes, nrq_gc_trace_fn trace,
+                           int32_t representation) {
+  GcRepresentation hint = GcRepresentation::Auto;
+  switch (representation) {
+    case NRQ_GC_REPR_AUTO: hint = GcRepresentation::Auto; break;
+    case NRQ_GC_REPR_HEADERLESS: hint = GcRepresentation::Headerless; break;
+    case NRQ_GC_REPR_COMPACT: hint = GcRepresentation::Compact; break;
+    case NRQ_GC_REPR_EXTENDED: hint = GcRepresentation::Extended; break;
+    default: return nullptr;
+  }
+  if (bytes == 0 || bytes > SIZE_MAX - 16) return nullptr;
+  maybe_collect_automatically();
+  bool handled = false;
+  void* object = allocate_tlab(bytes, bytes, 1, trace, nullptr, 0, handled,
+                               nullptr, hint);
+  if (handled) return object;
+  HeapLockGuard lock(gc_mutex);
+  return allocate_locked(bytes, bytes, 1, trace, nullptr, 0, nullptr, hint);
+}
+
+int32_t nrq_gc_object_representation(void* object) {
+  HeapLockGuard lock(gc_mutex);
+  const ObjectRef ref = find_object_locked(object);
+  if (!ref.valid()) return NRQ_GC_REPR_AUTO;
+  switch (ref.page->kind) {
+    case PageKind::Headerless: return NRQ_GC_REPR_HEADERLESS;
+    case PageKind::Compact: return NRQ_GC_REPR_COMPACT;
+    default: return NRQ_GC_REPR_EXTENDED;
+  }
+}
+
+size_t nrq_gc_object_header_size(void* object) {
+  HeapLockGuard lock(gc_mutex);
+  const ObjectRef ref = find_object_locked(object);
+  return ref.valid() ? object_header_bytes(ref) : 0;
+}
+
+nrq_gc_representation_facts nrq_gc_get_representation_facts(void) {
+  nrq_gc_representation_facts facts{};
+  facts.headerless_header_bytes = page_header_bytes(PageKind::Headerless);
+  facts.compact_header_bytes = page_header_bytes(PageKind::Compact);
+  facts.extended_header_bytes = page_header_bytes(PageKind::Extended);
+  facts.max_header_bytes = facts.extended_header_bytes;
+  facts.headerless_payload_alignment = kObjectStartAlignment;
+  // A compact payload begins after the 8-byte header, so it keeps min(8, grid).
+  facts.compact_payload_alignment =
+      std::min<size_t>(8, kObjectStartAlignment);
+  facts.extended_payload_alignment = kObjectStartAlignment;
+  return facts;
+}
+
+nrq_gc_representation_stats nrq_gc_get_representation_stats(void) {
+  HeapLockGuard lock(gc_mutex);
+  nrq_gc_representation_stats stats{};
+  for (const auto& entry : gc_pages) {
+    const GcPage* page = entry.get();
+    if (!page) continue;
+    switch (page->kind) {
+      case PageKind::Headerless:
+        ++stats.headerless_pages;
+        stats.headerless_objects += page->live_objects;
+        break;
+      case PageKind::Compact:
+        ++stats.compact_pages;
+        stats.compact_objects += page->live_objects;
+        break;
+      case PageKind::Extended:
+        ++stats.extended_pages;
+        stats.extended_objects += page->live_objects;
+        break;
+      case PageKind::Large:
+        ++stats.large_pages;
+        stats.extended_objects += page->live_objects;
+        break;
+      case PageKind::Fallback:
+        ++stats.fallback_pages;
+        stats.extended_objects += page->live_objects;
+        break;
+    }
+  }
+  // What the same live set would have spent on extended headers instead.
+  const uint64_t extended = page_header_bytes(PageKind::Extended);
+  stats.header_bytes_saved_vs_extended =
+      stats.headerless_objects * extended +
+      stats.compact_objects *
+          (extended - page_header_bytes(PageKind::Compact));
+  return stats;
 }
 
 void* nrq_gc_allocate_array(size_t count, size_t element_size,
@@ -4279,11 +4876,12 @@ void* nrq_gc_allocate_array(size_t count, size_t element_size,
   if (multiply_size_overflowed(count, element_size, bytes)) return nullptr;
   maybe_collect_automatically();
   bool handled = false;
-  void* object = allocate_tlab(bytes, element_size, count, trace, nullptr, 0, handled,
-                     nullptr);
+  void* object = allocate_tlab(bytes, element_size, count, trace, nullptr, 0,
+                               handled, nullptr, GcRepresentation::Auto);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
-  return allocate_locked(bytes, element_size, count, trace, nullptr, 0, nullptr);
+  return allocate_locked(bytes, element_size, count, trace, nullptr, 0, nullptr,
+                         GcRepresentation::Auto);
 }
 
 void* nrq_gc_allocate_array_typed(size_t count, size_t element_size,
@@ -4299,11 +4897,12 @@ void* nrq_gc_allocate_array_typed(size_t count, size_t element_size,
   bool handled = false;
   void* object = allocate_tlab(bytes, element_size, count, nullptr,
                                reference_offsets, reference_count, handled,
-                               nullptr);
+                               nullptr, GcRepresentation::Auto);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
   return allocate_locked(bytes, element_size, count, nullptr,
-                         reference_offsets, reference_count, nullptr);
+                         reference_offsets, reference_count, nullptr,
+                         GcRepresentation::Auto);
 }
 
 void* allocate_array_rooted_impl(void** root_slot, size_t count,
@@ -4318,15 +4917,15 @@ void* nrq_gc_allocate_layout(const nrq_object_layout* layout) {
   if constexpr (nirq::runtime_debug_enabled)
     if (!layout_is_consistent(*layout)) return nullptr;
   const size_t bytes = layout->payload_size;
-  if (bytes == 0 || bytes > SIZE_MAX - sizeof(ObjectHeader)) return nullptr;
+  if (bytes == 0 || bytes > SIZE_MAX - 16) return nullptr;
   maybe_collect_automatically();
   bool handled = false;
-  void* object =
-      allocate_tlab(bytes, bytes, 1, layout->trace, nullptr, 0, handled,
-                    layout);
+  void* object = allocate_tlab(bytes, bytes, 1, layout->trace, nullptr, 0,
+                               handled, layout, GcRepresentation::Auto);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
-  return allocate_locked(bytes, bytes, 1, layout->trace, nullptr, 0, layout);
+  return allocate_locked(bytes, bytes, 1, layout->trace, nullptr, 0, layout,
+                         GcRepresentation::Auto);
 }
 
 void* nrq_gc_allocate_array_layout(const nrq_object_layout* layout,
@@ -4341,12 +4940,13 @@ void* nrq_gc_allocate_array_layout(const nrq_object_layout* layout,
     return nullptr;
   maybe_collect_automatically();
   bool handled = false;
-  void* object = allocate_tlab(bytes, layout->payload_size, count, layout->trace,
-                              nullptr, 0, handled, layout);
+  void* object = allocate_tlab(bytes, layout->payload_size, count,
+                               layout->trace, nullptr, 0, handled, layout,
+                               GcRepresentation::Auto);
   if (handled) return object;
   HeapLockGuard lock(gc_mutex);
   return allocate_locked(bytes, layout->payload_size, count, layout->trace,
-                         nullptr, 0, layout);
+                         nullptr, 0, layout, GcRepresentation::Auto);
 }
 
 void* nrq_gc_allocate_array_layout_rooted(void** root_slot,
@@ -4386,7 +4986,7 @@ void* allocate_array_rooted_impl(void** root_slot, size_t count,
       bool handled = false;
       void* object = allocate_tlab(bytes, element_size, count, nullptr,
                                    reference_offsets, reference_count, handled,
-                                   resolved);
+                                   resolved, GcRepresentation::Auto);
       if (handled) {
         *root_slot = object;
         end_fast_barrier();
@@ -4402,7 +5002,8 @@ void* allocate_array_rooted_impl(void** root_slot, size_t count,
     nrq_runtime_fatal(
         "rooted GC allocation requires a registered pointer root slot");
   void* object = allocate_locked(bytes, element_size, count, nullptr,
-                                 reference_offsets, reference_count, resolved);
+                                 reference_offsets, reference_count, resolved,
+                                 GcRepresentation::Auto);
   store_root_value_locked(root_slot, object);
   return object;
 }
@@ -5127,7 +5728,7 @@ uint64_t nrq_gc_last_reclaimed_bytes(void) {
   return collection_policy.last_reclaimed_bytes;
 }
 
-size_t nrq_gc_object_header_bytes(void) { return sizeof(ObjectHeader); }
+size_t nrq_gc_object_header_bytes(void) { return 16; }
 
 const nrq_object_layout* nrq_gc_layout_intern(
     size_t payload_bytes, size_t element_bytes, nrq_gc_trace_fn trace,
@@ -5204,11 +5805,14 @@ size_t nrq_gc_layout_bytes(void) {
 
 nrq_gc_allocation_facts nrq_gc_get_allocation_facts(void) {
   nrq_gc_allocation_facts facts{};
-  facts.object_header_bytes = sizeof(ObjectHeader);
-  // Measured from the layout rather than restated, so the split cannot drift
-  // away from the struct it describes; the layout pointer is declared last.
-  facts.object_instance_bytes = offsetof(ObjectHeader, layout);
-  facts.object_shared_bytes = sizeof(ObjectHeader) - offsetof(ObjectHeader, layout);
+  // The maximum standard header is the extended one; compact and headerless
+  // objects spend less. The split is measured from the extended struct: eight
+  // bytes that describe one instance (element count and state) and eight that
+  // name shared metadata (the layout id and the reserved flag word).
+  facts.object_header_bytes = sizeof(ExtendedHeader);
+  facts.object_instance_bytes = offsetof(ExtendedHeader, layout_id);
+  facts.object_shared_bytes =
+      sizeof(ExtendedHeader) - offsetof(ExtendedHeader, layout_id);
   facts.payload_alignment = kObjectStartAlignment;
   facts.page_bytes = kGcPageBytes;
   facts.tlab_bytes = kGcTlabBytes;
@@ -5235,9 +5839,14 @@ nrq_gc_page_metadata_facts nrq_gc_get_page_metadata_facts(void) {
 int32_t nrq_gc_get_allocation_profile(size_t payload_bytes,
                                   nrq_gc_allocation_profile* out) {
   if (!out) return 0;
-  if (payload_bytes > SIZE_MAX - sizeof(ObjectHeader) - kObjectStartAlignment)
+  if (payload_bytes == 0 ||
+      payload_bytes > SIZE_MAX - 16 - kObjectStartAlignment)
     return 0;
-  const size_t raw_span = sizeof(ObjectHeader) + payload_bytes;
+  // The auto policy's answer for a fixed record: headerless while the payload
+  // fits a uniform slot, compact above it. A profile that did not follow the
+  // policy would describe storage the allocator never hands out.
+  const size_t header_bytes = payload_bytes <= kHeaderlessMaxPayload ? 0 : 8;
+  const size_t raw_span = header_bytes + payload_bytes;
   const size_t span =
       (raw_span + kObjectStartAlignment - 1) & ~(kObjectStartAlignment - 1);
   // A page is at least as large as the span it must hold, exactly as
@@ -5284,29 +5893,30 @@ size_t nrq_gc_object_index_entries(void) {
 
 int32_t nrq_gc_pointer_is_managed(void* object) {
   HeapLockGuard lock(gc_mutex);
-  return find_object_locked(object) ? 1 : 0;
+  return find_object_locked(object).valid() ? 1 : 0;
 }
 
 const nrq_object_layout* nrq_gc_object_layout(void* object) {
   HeapLockGuard lock(gc_mutex);
-  const ObjectHeader* header = find_object_locked(object);
-  if (!header) return nullptr;
+  const ObjectRef ref = find_object_locked(object);
+  if (!ref.valid()) return nullptr;
+  const nrq_object_layout* layout = object_layout(ref);
   if constexpr (nirq::runtime_debug_enabled) {
     // Every live object must name a descriptor this runtime can read. The
     // development configuration checks the reference here rather than trusting it,
     // so an inspection reports the damage instead of handing back a pointer that
     // the next trace would fault on. Allocation already refuses an inconsistent
     // descriptor, so a failure here means the header itself was corrupted.
-    if (!header->layout || !layout_is_consistent(*header->layout))
+    if (!layout || !layout_is_consistent(*layout))
       nrq_runtime_fatal("GC object holds an invalid layout reference");
   }
-  return header->layout;
+  return layout;
 }
 
 uint32_t nrq_gc_object_state_bits(void* object) {
   HeapLockGuard lock(gc_mutex);
-  const ObjectHeader* header = find_object_locked(object);
-  return header ? header->state_word() : 0;
+  const ObjectRef ref = find_object_locked(object);
+  return ref.valid() ? object_state(ref) : 0;
 }
 
 int32_t nrq_gc_store_barrier_active(void) {
@@ -5400,7 +6010,7 @@ void* nrq_gc_pin(void* object) {
   if (!object) return nullptr;
   HeapLockGuard lock(gc_mutex);
   if (thread_mutator.depth != 0) publish_tlab_locked(thread_mutator);
-  if (!find_object_locked(object)) return nullptr;
+  if (!find_object_locked(object).valid()) return nullptr;
   if (collection_phase.load(std::memory_order_relaxed) !=
       CollectionPhase::Idle)
     mark_value_locked(object);
@@ -5534,8 +6144,8 @@ void* nrq_gc_pin_transfer(void* object) {
   // object is already protected: cycle preparation publishes every registered
   // mutator's TLAB before enumerating pinned roots, so a pending pin becomes
   // visible for exactly the collection that needs it.
-  if (!find_object_locked(object) &&
-      !find_pending_header(thread_mutator, object))
+  if (!find_object_locked(object).valid() &&
+      !find_pending_header(thread_mutator, object).valid())
     return nullptr;
   if (collection_phase.load(std::memory_order_relaxed) !=
       CollectionPhase::Idle)
@@ -5572,13 +6182,13 @@ int64_t nrq_gc_get_ref_count(void* object) {
   wait_for_fast_barriers();
   HeapLockGuard lock(gc_mutex);
   if (thread_mutator.depth != 0) publish_tlab_locked(thread_mutator);
-  if (!object || !find_object_locked(object)) return 0;
+  if (!object || !find_object_locked(object).valid()) return 0;
   try {
     ReferenceCountTarget target{object, 0};
     // The diagnostic walks exactly what the marker walks, through the same
     // descriptor, so a reference count can never disagree with marking.
-    for_each_live_object_locked([&](ObjectHeader* header) {
-      trace_children(header, count_reference_to_target, &target);
+    for_each_live_object_locked([&](const ObjectRef& object) {
+      trace_children(object, count_reference_to_target, &target);
     });
     // Counts exactly what marking reads: the same descriptor, the same walk.
     auto count_root = [&](const void* storage, const RootInfo& info) {
