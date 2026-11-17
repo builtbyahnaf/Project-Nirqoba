@@ -93,11 +93,11 @@ TEST(GcTest, SharedCountersDoNotShareACacheLine) {
 
 TEST(GcTest, ObjectHeaderStaysWithinItsMetadataBudget) {
   // Small managed objects pay this overhead on every allocation. The header
-  // shares `next`/`tlab_next` and derives the payload address; the payload size,
-  // element size, trace callback and reference map live in the shared layout
-  // descriptor instead of every instance, so it must stay at 48 bytes and the
-  // payload must remain max_align_t aligned.
-  ASSERT_EQ(nrq_gc_object_header_bytes(), size_t{48});
+  // has no intrusive mark or TLAB link and derives its page from the directory;
+  // the payload size, element size, trace callback and reference map live in the
+  // shared layout descriptor instead of every instance, so it must stay at 32
+  // bytes and the payload must remain max_align_t aligned.
+  ASSERT_EQ(nrq_gc_object_header_bytes(), size_t{32});
   ASSERT_EQ(nrq_gc_object_header_bytes() % alignof(std::max_align_t), size_t{0});
 
   void* object = nrq_gc_allocate(8, nullptr);
@@ -363,12 +363,12 @@ TEST(GcTest, AWideArrayRootUsesOneSharedElementLayout) {
 }
 
 TEST(GcTest, TheHeaderSplitsIntoInstanceAndSharedBytes) {
-  // The header is 48 bytes: 40 that describe one instance and 8 that name the
+  // The header is 32 bytes: 24 that describe one instance and 8 that name the
   // layout every instance of that shape shares. The facts measure the split from
   // the struct, so this test fails if a field quietly moves to the other half.
   const nrq_gc_allocation_facts facts = nrq_gc_get_allocation_facts();
-  ASSERT_EQ(facts.object_header_bytes, static_cast<size_t>(48));
-  ASSERT_EQ(facts.object_instance_bytes, static_cast<size_t>(40));
+  ASSERT_EQ(facts.object_header_bytes, static_cast<size_t>(32));
+  ASSERT_EQ(facts.object_instance_bytes, static_cast<size_t>(24));
   ASSERT_EQ(facts.object_shared_bytes, static_cast<size_t>(8));
   ASSERT_EQ(facts.object_instance_bytes + facts.object_shared_bytes,
             facts.object_header_bytes);
@@ -446,7 +446,7 @@ TEST(GcTest, StructuralMetadataIsSharedNotRepeated) {
   // measurable rather than assumed.
   nrq_gc_enable();
   const nrq_gc_allocation_facts before = nrq_gc_get_allocation_facts();
-  ASSERT_EQ(before.object_header_bytes, size_t{48});
+  ASSERT_EQ(before.object_header_bytes, size_t{32});
   for (int index = 0; index < 1000; ++index)
     ASSERT_NE(nrq_gc_allocate(sizeof(Node), trace_node), nullptr);
   const nrq_gc_allocation_facts after = nrq_gc_get_allocation_facts();
@@ -489,16 +489,16 @@ TEST(GcTest, AStaticDescriptorIsUsedAsGiven) {
 
 TEST(GcTest, AllocationProfileCountsTheCompactHeader) {
   // The profile is what the header work is judged against, so it must describe
-  // the layout that actually exists: 48 bytes of metadata, a 112-byte span for a
-  // 64-byte payload, and 585 of those in a 64 KiB page.
+  // the layout that actually exists: 32 bytes of metadata, a 96-byte span for a
+  // 64-byte payload, and 682 of those in a 64 KiB page.
   nrq_gc_allocation_profile profile{};
   ASSERT_TRUE(nrq_gc_get_allocation_profile(64, &profile) != 0);
   ASSERT_EQ(profile.payload_bytes, size_t{64});
-  ASSERT_EQ(profile.span_bytes, size_t{112});
+  ASSERT_EQ(profile.span_bytes, size_t{96});
   ASSERT_EQ(profile.page_bytes, size_t{65536});
-  ASSERT_EQ(profile.slots_per_page, size_t{585});
+  ASSERT_EQ(profile.slots_per_page, size_t{682});
   ASSERT_EQ(profile.page_slack_bytes,
-            size_t{65536 - 585 * 112});
+            size_t{65536 - 682 * 96});
 }
 
 TEST(GcTest, PreservesReachableCyclesAndSweepsAfterRootRemoval) {
