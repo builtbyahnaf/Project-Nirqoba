@@ -213,7 +213,7 @@ and nothing else. Sites:
   struct's declaration order; the lowering maps that index to the physical column.
 - **Lowering**: `payload + column.index_in_bytes * count + row * column.element_bytes`
   in i64, then an `i8` GEP. `count` is loaded from `payload - 16`: that is
-  `ObjectHeader::element_count` at header offset 32 with the payload at 48, both
+  `ObjectHeader::element_count` at header offset 16 with the payload at 32, both
   asserted in `runtime/src/gc.cpp`, and it is the same word the collector sizes the
   payload with, so it cannot disagree with the block that was allocated. No offset is
   hardcoded on faith.
@@ -263,7 +263,7 @@ until the column form exists.
 What the correct form needs:
 
 - `count`, which is not carried by the container value. It is `header->element_count`,
-  at offset 32 of the object header, and the payload starts 48 bytes in, so
+  at offset 16 of the object header, and the payload starts 32 bytes in, so
   `count = load i32 at payload - 16`. One extra load per column access, from the same
   cache line as the rest of the header.
 - A single addressing step, because the column base and the row stride have different

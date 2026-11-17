@@ -12,6 +12,34 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.593-beta
+
+### Summary of Changes (since `0.592-beta`):
+
+- **AOR Phase 3 completed.** The intrusive mark link, the per-object TLAB
+  publication link, and the stored page pointer were removed. `ObjectHeader` is
+  now H32 (24 instance bytes plus the 8-byte shared layout pointer).
+- **Marking uses an external worklist.** The 256-entry inline ring is retained;
+  overflow goes to a cycle-reused `std::vector` instead of `mark_next`. Capacity
+  is kept between cycles, so marking does not allocate per object.
+- **TLAB publication uses ranges.** Each mutator records up to 32 contiguous
+  `{page, begin, end}` ranges. Publication walks a range by header span, so an
+  allocation no longer writes a batch link. A full range table flushes early
+  under the collector lock; it never grows.
+- **Page ownership is resolved, not stored.** Ordinary objects use a 1024-slot
+  direct page-directory probe with a hash fallback; large and fallback objects
+  carry their page in their exact `ObjectIndex` entry. Hot sweep/publication
+  loops pass the page they already know.
+- **SoA count arithmetic unchanged.** `element_count` remains at `payload - 16`;
+  compiler and SoA code that loads the count at that offset needed no change.
+- Tests: `335` unit tests and `624` full-run cases pass. Phase 7 isolation, the
+  Phase 9 production/debug matrix, and `*gc*` configuration equivalence pass.
+- No performance claim is made. Phase 3 removes per-object writes and 16 header
+  bytes, but adds a page lookup on object-first paths; the net effect has not
+  been benchmarked.
+
+---
+
 ## Version 0.592-beta
 
 ### Summary of Changes (since `0.591-beta`):
