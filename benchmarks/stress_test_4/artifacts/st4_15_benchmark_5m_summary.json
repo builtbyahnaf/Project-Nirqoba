@@ -1,0 +1,20 @@
+{
+  "file_name": "st4_15_benchmark_5m.csv",
+  "total_rows": 5000000,
+  "total_columns": 8,
+  "file_size_bytes": 450387624,
+  "file_size_mib": 429.52,
+  "generation_time_seconds": 9.97,
+  "validation_aggregates": {
+    "sum_id": 12500002500000,
+    "sum_timestamp": 8500215576455200,
+    "sum_device_code": 2747402264,
+    "sum_int_all": 8512718326357464,
+    "sum_reading_val": -17612.736,
+    "sum_variance": 249789.3917,
+    "sum_float_all": 232176.6557,
+    "count_empty_category": 2000000,
+    "count_empty_notes": 1000000,
+    "count_rows_with_escaped_quotes": 2000000
+  }
+}

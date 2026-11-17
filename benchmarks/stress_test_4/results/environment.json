@@ -1,0 +1,63 @@
+{
+  "benchmark_suite": "stress_test_4",
+  "name": "Nirqoba Stress Test 4 — Cross-Language Performance Matrix",
+  "generated_at": "2026-11-17T05:00:00+06:00",
+  "environment": {
+    "host_name": "DESKTOP-VO51V7J",
+    "os": "Windows 11 Pro 10.0.26300 (AMD64)",
+    "processor": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel (Intel Core i5-1235U)",
+    "cpu_architecture": "x86_64",
+    "cpu_cores_physical": 10,
+    "cpu_cores_logical": 12,
+    "total_memory_gib": 15.73,
+    "storage_type": "NVMe SSD",
+    "power_profile": "High Performance / Plugged In"
+  },
+  "compilers_and_runtimes": {
+    "nirqoba": {
+      "name": "Nirqoba Release Compiler",
+      "version": "nirqoba compiler version 0.587-beta (Phase 9) / 0.1.0 fallback",
+      "flags": "--release -O3",
+      "runtime": "Production runtime, LLVM/MLIR backend"
+    },
+    "c": {
+      "compiler": "GCC 16.2.0 (MSYS2 UCRT64)",
+      "flags": "-O3 -DNDEBUG",
+      "allocator": "ucrt malloc/free"
+    },
+    "cpp": {
+      "compiler": "G++ 16.2.0 (MSYS2 UCRT64)",
+      "standard": "C++20 / C++23",
+      "flags": "-O3 -DNDEBUG -std=c++20",
+      "allocator": "std::allocator, RAII, stdlib smart pointers"
+    },
+    "rust": {
+      "compiler": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+      "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+      "profile": "release (--release)",
+      "flags": "opt-level = 3, codegen-units = 16"
+    },
+    "java": {
+      "runtime": "Java SE 25 / OpenJDK 25 (Fallback JDK 8 path present)",
+      "flags": "-XX:+UseParallelGC -Xms8G -Xmx8G",
+      "jit": "HotSpot 64-Bit Server VM"
+    },
+    "javascript": {
+      "runtime": "Node.js v24.22.1",
+      "engine": "V8 12.x+",
+      "flags": "--max-old-space-size=8192"
+    },
+    "python": {
+      "runtime": "CPython 3.12.7 (64-bit)",
+      "flags": "-O",
+      "implementation": "Standard CPython"
+    }
+  },
+  "protocols": {
+    "minimum_runs_per_workload": 15,
+    "primary_statistic": "median",
+    "warmup_runs_jit": 5,
+    "randomized_execution_order": true,
+    "timeout_seconds": 600
+  }
+}

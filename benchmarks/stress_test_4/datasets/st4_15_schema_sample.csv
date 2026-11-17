@@ -1,0 +1,6 @@
+id,uuid,measurement_value,description,status_code,category,optional_tag,notes
+1,550e8400-e29b-41d4-a716-446655440000,42.125800,Standard measurement payload,200,primary,tag_alpha,Initial test entry
+2,7c9e6679-7425-40de-944b-e07fc1f90ae7,987654.321000,"Value with, comma in string",201,secondary,,Includes empty optional_tag field
+3,6ba7b810-9dad-11d1-80b4-00c04fd430c8,-123.456000,"Escaped quote: ""critical"" reading",404,tertiary,tag_beta,Tests quote escape grammar
+4,6ba7b811-9dad-11d1-80b4-00c04fd430c8,0.000010,Boundary precision measurement,204,secondary,,
+5,6ba7b812-9dad-11d1-80b4-00c04fd430c8,1000000.000000,"Special characters: !@#$%^&*()",500,primary,tag_gamma,End of template sample
