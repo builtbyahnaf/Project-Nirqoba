@@ -4427,10 +4427,12 @@ class FunctionTranslator {
           return builder_.create<mlir::LLVM::ConstantOp>(
               loc, i64, builder_.getI64IntegerAttr(v)).getResult();
         };
-        // `element_count` sits at offset 32 of the object header and the payload
-        // starts at 48, so the count is the word at payload - 16. It is the same
-        // word the collector sizes the payload with, so it cannot disagree with the
-        // block that was actually allocated.
+        // `element_count` is the first word of the extended (H16) header and the
+        // payload starts 16 bytes after it, so the count is the word at
+        // payload - 16. An array always takes the extended representation, so this
+        // read can never land in a headerless or compact object. It is the same
+        // word the collector sizes the payload with, so it cannot disagree with
+        // the block that was actually allocated.
         mlir::Value count_slot = builder_.create<mlir::LLVM::GEPOp>(
             loc, llvm_ptr_type(ctx_), builder_.getI8Type(), payload,
             mlir::ValueRange{constant(-16)}).getResult();
