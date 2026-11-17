@@ -22,7 +22,7 @@ AoS stays the default. `soa<T>` is only ever written by the programmer.
 
 ## Representation
 
-One GC object, header 48 bytes, payload = `n` contiguous columns in the struct's
+One GC object, header 32 bytes, payload = `n` contiguous columns in the struct's
 existing physical field order, each column `n * elem_size` bytes:
 
 ```
