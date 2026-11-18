@@ -5133,6 +5133,11 @@ void* nrq_gc_allocate_planned(void** root_slot, size_t bytes,
                               size_t reference_count, void** site_cache,
                               uint32_t plan_flags) {
   if (!root_slot || bytes == 0 || bytes > SIZE_MAX - 16) return nullptr;
+  // A plan that names deterministic storage describes a site the collector does
+  // not own. Honouring it here would let the allocator choose the program's
+  // lifetime strategy, so the entry point declines instead and the compiler's
+  // fallback decides what happens to that site.
+  if ((plan_flags & NRQ_ALLOC_PLAN_DETERMINISTIC) != 0) return nullptr;
   // A record plan names H0, H8 or H16. `NONE` means deterministic storage, which
   // is not this entry point's job, and an array plan is for an array.
   const uint32_t representation = NRQ_ALLOC_PLAN_REPR_OF(plan_flags);
@@ -5178,6 +5183,9 @@ void* nrq_gc_allocate_array_planned(void** root_slot, size_t count,
   // this is the interleaved-reference-table form of the same contract.
   if (!root_slot || count == 0 || element_size == 0) return nullptr;
   if (count > UINT32_MAX) return nullptr;
+  // See nrq_gc_allocate_planned: a deterministic plan is not this entry point's
+  // to honour.
+  if ((plan_flags & NRQ_ALLOC_PLAN_DETERMINISTIC) != 0) return nullptr;
   // The compiler's plan is used only when it says "array, extended". Anything
   // else is treated as no plan at all, and the allocator decides as it would for
   // a caller that said nothing.
@@ -5364,6 +5372,9 @@ void* nrq_gc_allocate_soa_planned(void** root_slot, size_t count,
                                   const size_t* column_pairs, size_t pair_count,
                                   void** site_cache, uint32_t plan_flags) {
   if (!root_slot || count == 0 || count > UINT32_MAX) return nullptr;
+  // See nrq_gc_allocate_planned: a deterministic plan is not this entry point's
+  // to honour.
+  if ((plan_flags & NRQ_ALLOC_PLAN_DETERMINISTIC) != 0) return nullptr;
   const uint32_t* pairs = nullptr;
   size_t pair_values = 0;
   if (!collect_soa_pairs(element_bytes, column_pairs, pair_count, pairs,
