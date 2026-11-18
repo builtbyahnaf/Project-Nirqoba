@@ -113,11 +113,20 @@ void* build_tree(int depth, int64_t value) {
   return slots[1];
 }
 
+// Which parts of the emitted activation are present. Bit 0 is the root frame and
+// its two registrations, bit 1 the four barrier stores. Ablation runs every
+// combination inside one process so the host cannot drift between them.
+uint32_t g_cycle_mask = 3;
+
 // make_one_cycle, exactly as emitted: a frame with two slots, two planned
 // allocations, two field stores, no managed return.
 void make_one_cycle(int64_t index) {
   void* slots[2] = {nullptr, nullptr};
-  const uint64_t frame = nrq_gc_root_frame_begin();
+  const bool frame_on = (g_cycle_mask & 1u) != 0;
+  const bool stores_on = (g_cycle_mask & 2u) != 0;
+  const uint64_t frame = frame_on ? nrq_gc_root_frame_begin() : 0;
+  // The allocation publishes into slots[0], so that registration is part of the
+  // allocation protocol rather than of the frame: it is present in every variant.
   nrq_gc_root_register(&slots[0]);
   nrq_gc_root_register(&slots[1]);
   void* first = g_use_record
@@ -126,7 +135,7 @@ void make_one_cycle(int64_t index) {
                     : nrq_gc_allocate_array_planned(
                           &slots[0], 1, 16, kCycleOffsets, 1, &g_cycle_site,
                           kArrayExtended);
-  nrq_gc_root_store(&slots[1], first);
+  if (stores_on) nrq_gc_root_store(&slots[1], first);
   void* second = g_use_record
                      ? nrq_gc_allocate_planned(&slots[1], 16, kCycleOffsets, 1,
                                                &g_cycle_site, kRecordHeaderless)
@@ -135,9 +144,11 @@ void make_one_cycle(int64_t index) {
                            kArrayExtended);
   static_cast<CycleNode*>(first)->value = index;
   static_cast<CycleNode*>(second)->value = index + 1;
-  nrq_gc_root_store(&static_cast<CycleNode*>(first)->next, second);
-  nrq_gc_root_store(&static_cast<CycleNode*>(second)->next, first);
-  nrq_gc_root_frame_end(frame);
+  if (stores_on) {
+    nrq_gc_root_store(&static_cast<CycleNode*>(first)->next, second);
+    nrq_gc_root_store(&static_cast<CycleNode*>(second)->next, first);
+  }
+  if (frame_on) nrq_gc_root_frame_end(frame);
 }
 
 volatile int64_t checksum;
@@ -243,6 +254,32 @@ void measure_collect(int depth) {
   }
 }
 
+// Interleaved ablation of the two-node cycle: every variant is measured once per
+// pass, so each pass shares the host's state across all of them.
+void measure_cycle_ablations(int64_t pairs) {
+  constexpr uint32_t kMasks[] = {3u, 2u, 1u, 0u};
+  constexpr const char* kNames[] = {"frame+stores", "stores only",
+                                    "frame only", "neither"};
+  double samples[4][3] = {};
+  for (int pass = 0; pass < 3; ++pass) {
+    for (size_t variant = 0; variant < 4; ++variant) {
+      g_cycle_mask = kMasks[variant];
+      nrq_gc_collect();
+      const double start = now_ms();
+      for (int64_t i = 0; i < pairs; ++i) make_one_cycle(i * 2);
+      samples[variant][pass] = now_ms() - start;
+      checksum += 1;
+    }
+  }
+  for (size_t variant = 0; variant < 4; ++variant) {
+    std::vector<double> values(samples[variant], samples[variant] + 3);
+    std::sort(values.begin(), values.end());
+    printf("  %-14s %.1f ms  %.2f ns/node\n", kNames[variant], values[1],
+           values[1] * 1.0e6 / static_cast<double>(pairs * 2));
+  }
+  g_cycle_mask = 3;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -259,6 +296,9 @@ int main(int argc, char** argv) {
   } else if (std::strcmp(mode, "collect") == 0) {
     printf("collect: phase split over a depth 20 tree\n");
     measure_collect(20);
+  } else if (std::strcmp(mode, "ablate") == 0) {
+    printf("ablate: 500000 two-node cycles, interleaved\n");
+    measure_cycle_ablations(500000);
   } else if (std::strcmp(mode, "alloc") == 0) {
     printf("alloc: 2097151 planned array allocations\n");
     measure_alloc_only(2097151);
