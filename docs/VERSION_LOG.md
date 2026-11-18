@@ -12,6 +12,54 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.605-beta
+
+### Summary of Changes (since `0.601-beta`):
+
+- **AOR Phase 6 completed.** The Phase 5 pool release path was measured and
+  rewritten, and compiler layout knowledge now reaches the allocator through an
+  explicit hint, plan and per-site descriptor cache. No safety check introduced in
+  Phase 4 or 5 was removed to pay for either change.
+- **Pool release (alpha):** a slot's chunk is found through a sorted chunk index
+  instead of a linear scan, free lists are per chunk, and reset visits only live
+  slots. Individual release fell from ~62 to ~16 ns/op with generations, exact-slot
+  validation, double-release refusal and poisoning still enabled; reset of a
+  mostly free pool fell from 58.8 µs to 33.0 µs. See
+  `reports/aor/phase-6-alpha.md`.
+- **New release entry point:** `nrq_cdmm_pool_scope_release_checked` validates a
+  generation from an open scope without a registry lookup, and
+  `nrq_cdmm_pool_seed_generation` (debug builds only) exposes generation
+  wraparound to tests.
+- **Allocation hints:** `NrqAllocHint` states what a compiler knows about a site;
+  `nrq_alloc_plan` turns it into an `NrqAllocPlan` (representation, header bytes,
+  payload, slot size) and `nrq_alloc_plan_flags` packs that into one 32-bit word.
+  The policy is the Phase 4 policy: arrays and objects past a page are extended,
+  fixed records up to 256 bytes are headerless, everything between is compact.
+- **Planned allocation:** `nrq_gc_allocate_array_planned` and
+  `nrq_gc_allocate_soa_planned` accept the compiler's plan plus a per-site cache
+  word. The runtime validates both on every call and falls back to its own
+  decision when either does not hold, so a wrong plan costs a lookup and never a
+  wrong representation.
+- **Compiler lowering:** `array.allocate<T>` and reference-carrying
+  `memory.owned_soa<T>` sites emit one private zeroed `nrq_alloc_site_N` word and
+  call the planned entry points with plan `1 | (3 << 8)`. The typed entry points
+  keep their signatures.
+- **Deterministic layouts:** `nrq_cdmm_pool_create_layout` and
+  `nrq_cdmm_arena_allocate_layout` configure a pool or arena from a compiler
+  descriptor, and refuse any layout a non-tracing region cannot honour (managed
+  references, SoA columns, a custom trace callback, arrays).
+- **Measured result:** the site cache makes no measurable difference for a single
+  shape, and 1.46× (78.15 → 53.37 ns/op) when eight shapes round-robin through a
+  four-entry layout memo. Both results, with spread, are in
+  `reports/aor/phase-6-performance.md`.
+- **Verification:** 426 unit tests, 624 integration cases, and 67 configuration
+  equivalence agreements pass. Reports: `reports/aor/phase-6.md`,
+  `reports/aor/phase-6-alpha.md`, `reports/aor/phase-6-performance.md`.
+- **Docs:** new `docs/memory-model/alloc-hints.md`; `docs/memory-model/cdmm.md`
+  now points at the layout entry points instead of calling them future work.
+
+---
+
 ## Version 0.601-beta
 
 ### Summary of Changes (since `0.597-beta`):
