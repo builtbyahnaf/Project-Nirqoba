@@ -3116,6 +3116,32 @@ void nrq_cdmm_arena_end(NrqCdmmArenaScope* scope) {
   scope->arena = nullptr;
 }
 
+// A deterministic region does not trace, so only a layout whose payload owns no
+// managed references can describe its slots. Anything else is refused: the
+// alternative is a pool that either keeps a reference alive it cannot see or
+// lets one die while a live slot still points at it.
+static bool cdmm_layout_is_plain(const nrq_object_layout* layout) {
+  return layout != nullptr && layout->payload_size != 0 &&
+         layout->trace == nullptr && layout->reference_count == 0 &&
+         layout->soa_column_pairs == 0 &&
+         (layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0;
+}
+
+void* nrq_cdmm_arena_allocate_layout(void* handle,
+                                     const nrq_object_layout* layout) {
+  if (!cdmm_layout_is_plain(layout)) return nullptr;
+  return nrq_cdmm_arena_allocate(handle, layout->payload_size,
+                                 alignof(std::max_align_t));
+}
+
+void* nrq_cdmm_pool_create_layout(const nrq_object_layout* layout,
+                                  size_t slots_per_chunk, uint32_t flags,
+                                  NrqCdmmDestructor destructor, void* context) {
+  if (!cdmm_layout_is_plain(layout)) return nullptr;
+  return nrq_cdmm_pool_create(layout->payload_size, alignof(std::max_align_t),
+                              slots_per_chunk, flags, destructor, context);
+}
+
 void* nrq_cdmm_pool_create(size_t slot_bytes, size_t slot_alignment,
                            size_t slots_per_chunk, uint32_t flags,
                            NrqCdmmDestructor destructor, void* context) {

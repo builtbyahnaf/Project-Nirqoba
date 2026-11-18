@@ -60,6 +60,13 @@ int32_t nrq_cdmm_arena_destroy(void* arena);
 // unknown or a scope is still open.
 int32_t nrq_cdmm_arena_reset(void* arena);
 void* nrq_cdmm_arena_allocate(void* arena, size_t bytes, size_t alignment);
+// Allocates one object described by a compiler layout descriptor. A deterministic
+// region does not trace, so a layout that owns managed references, describes an
+// array, or needs a custom trace callback is refused with a null result rather
+// than accepted and traced by nobody.
+struct nrq_object_layout;
+void* nrq_cdmm_arena_allocate_layout(void* arena,
+                                     const struct nrq_object_layout* layout);
 void* nrq_cdmm_arena_allocate_destructible(void* arena, size_t bytes,
                                            size_t alignment,
                                            NrqCdmmDestructor destructor,
@@ -110,6 +117,13 @@ void nrq_cdmm_arena_end(NrqCdmmArenaScope* scope);
 void* nrq_cdmm_pool_create(size_t slot_bytes, size_t slot_alignment,
                            size_t slots_per_chunk, uint32_t flags,
                            NrqCdmmDestructor destructor, void* context);
+// Creates a pool whose slot size comes from a compiler layout descriptor, so the
+// size the compiler computed and the size the pool reserves cannot drift apart.
+// The same restriction as `nrq_cdmm_arena_allocate_layout` applies: only a plain
+// record layout is accepted, because a pool cannot trace managed references.
+void* nrq_cdmm_pool_create_layout(const struct nrq_object_layout* layout,
+                                  size_t slots_per_chunk, uint32_t flags,
+                                  NrqCdmmDestructor destructor, void* context);
 int32_t nrq_cdmm_pool_reset(void* pool);
 int32_t nrq_cdmm_pool_destroy(void* pool);
 void* nrq_cdmm_pool_allocate(void* pool);
