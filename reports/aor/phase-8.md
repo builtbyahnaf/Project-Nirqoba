@@ -128,11 +128,50 @@ hybrid-architecture constraint is in place: representation-specific and
 mixed-workload shapes exist in the Phase 7 harness, and arenas, pools and
 collector storage are measured side by side in the coexistence and stress tests.
 
-## Upgrade 8-Psi â€” production validation and stabilisation
+## Upgrade 8-Psi — production validation and stabilisation
 
-Not started. No production-runtime build was measured, so no production/debug
-comparison is reported. The full unit suite, the integration suite and the
-`*gc*` configuration equivalence were run for the development configuration only.
+Both configurations were built and run, which is what makes the equivalence claim
+below more than an assertion:
+
+| suite | development (`RelWithDebInfo`) | production (`Release`, asserts off) |
+|---|---|---|
+| unit tests | 451 / 451 | 451 / 451 |
+| integration | 624 / 624 | 624 / 624 |
+| `*gc*` configuration equivalence | 67 agreed, 0 failed | 67 agreed, 0 failed |
+
+Both configurations compile and run the same 451 tests, so the production build is
+not silently dropping checks, and the concurrency stress suite runs in both.
+
+Benchmark, 300 000 objects, 5 runs, medians, identical parameters and host:
+
+| shape | dev alloc ns | prod alloc ns | dev mark ns/obj | prod mark ns/obj |
+|---|---|---|---|---|
+| h0-chain-16B | 32.0 | 34.7 | 36.84 | 42.34 |
+| h0-rooted-manual | 49.4 | 47.6 | 34.83 | 31.60 |
+| h0-planned-16B | 35.9 | 34.5 | 37.40 | 41.31 |
+| h8-record-512B | 59.0 | 57.1 | 36.42 | 38.54 |
+| h16-array-4x16B | 49.1 | 47.6 | 40.83 | 44.60 |
+| h16-large-200K | 50958.6 | 49448.0 | 310.16 | 303.91 |
+| h16-soa-ptr-column | 58.0 | 57.0 | 39.52 | 37.82 |
+
+Barrier: 38.56 ns/store development, 39.58 production.
+
+Reading: allocation is slightly cheaper in production, which is what compiling the
+development instrumentation out should do. Marking is mixed - the chain, planned
+and array shapes read slower in production, the rooted, SoA and large-object
+shapes read faster - and every difference sits inside the +/-30 % band this host
+shows between two runs of one binary. No production advantage is claimed for
+marking; what the numbers do support is that the two configurations behave the
+same, which is the point of the comparison.
+
+Review note: while the commits were split, the concurrency suite lost its line in
+`tests/CMakeLists.txt` for one commit, so the binary at that revision ran 449
+tests. The build lists it again and both configurations were rebuilt and re-run
+from the current tree.
+
+Limitation: `stress_test_2` validation was re-run only for the development
+configuration, and no cross-configuration timing study of the multithreaded mix
+was made.
 
 ## Version
 
