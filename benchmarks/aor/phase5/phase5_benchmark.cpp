@@ -24,6 +24,7 @@
 
 #include "nirqoba/runtime/allocator.h"
 #include "nirqoba/runtime/cdmm.h"
+#include "nirqoba/runtime/gc.h"
 
 namespace {
 
@@ -242,6 +243,89 @@ Sample run_arena_churn(size_t rounds) {
   sample.allocated_bytes = static_cast<double>(kUniformBytes);
   sample.committed_bytes = static_cast<size_t>(nrq_cdmm_arena_committed(arena));
   nrq_cdmm_arena_destroy(arena);
+  return sample;
+}
+
+// --- compiler-planned array allocation --------------------------------------
+
+// The typed entry point resolves the layout through the layout memo on every
+// call. The planned entry point resolves it once for its site and validates the
+// cached descriptor afterwards, so the comparison isolates what the site cache
+// buys. "cold" clears the cache before every allocation: that is the price for a
+// site that never warms up, and the floor the planned path must stay above.
+Sample run_gc_array_allocation(size_t count, bool planned, bool warm) {
+  Sample sample;
+  constexpr uint32_t kArrayExtendedPlan = 1u | (3u << 8);
+  constexpr size_t kElementBytes = 16;
+  constexpr size_t kElements = 4;
+  void* root = nullptr;
+  nrq_gc_disable();
+  nrq_gc_collect();
+  nrq_gc_root_register(&root);
+  void* site_cache = nullptr;
+  const auto start = Clock::now();
+  for (size_t index = 0; index < count; ++index) {
+    void* object = nullptr;
+    if (!planned) {
+      object = nrq_gc_allocate_array_typed_rooted(
+          &root, kElements, kElementBytes, nullptr, 0);
+    } else {
+      if (!warm) site_cache = nullptr;
+      object = nrq_gc_allocate_array_planned(&root, kElements, kElementBytes,
+                                             nullptr, 0, &site_cache,
+                                             kArrayExtendedPlan);
+    }
+    if (!object) {
+      std::fprintf(stderr, "managed array allocation failed at %zu\n", index);
+      std::exit(2);
+    }
+  }
+  const auto end = Clock::now();
+  sample.allocate_ns = ns_per_op(end - start, count);
+  sample.allocated_bytes = static_cast<double>(kElements * kElementBytes);
+  nrq_gc_root_unregister(&root);
+  nrq_gc_collect();
+  nrq_gc_collect();
+  nrq_gc_enable();
+  return sample;
+}
+
+// Eight shapes, allocated round-robin from one loop. The typed entry point has to
+// find each shape's descriptor in the four-entry layout memo, and eight shapes do
+// not fit, so every allocation is a memo miss. The planned entry point validates
+// its own site's cached descriptor instead. This is the workload the per-site
+// cache exists for: many shapes, each hot at its own site.
+Sample run_gc_array_multishape(size_t count, bool planned) {
+  Sample sample;
+  constexpr uint32_t kArrayExtendedPlan = 1u | (3u << 8);
+  constexpr size_t kShapes = 8;
+  constexpr size_t kSizes[kShapes] = {16, 24, 32, 40, 48, 56, 64, 72};
+  void* caches[kShapes] = {};
+  void* root = nullptr;
+  nrq_gc_disable();
+  nrq_gc_collect();
+  nrq_gc_root_register(&root);
+  const auto start = Clock::now();
+  for (size_t index = 0; index < count; ++index) {
+    const size_t shape = index % kShapes;
+    void* object = planned
+                       ? nrq_gc_allocate_array_planned(
+                             &root, 2, kSizes[shape], nullptr, 0,
+                             &caches[shape], kArrayExtendedPlan)
+                       : nrq_gc_allocate_array_typed_rooted(
+                             &root, 2, kSizes[shape], nullptr, 0);
+    if (!object) {
+      std::fprintf(stderr, "multishape allocation failed at %zu\n", index);
+      std::exit(2);
+    }
+  }
+  const auto end = Clock::now();
+  sample.allocate_ns = ns_per_op(end - start, count);
+  sample.allocated_bytes = static_cast<double>(2 * 44);
+  nrq_gc_root_unregister(&root);
+  nrq_gc_collect();
+  nrq_gc_collect();
+  nrq_gc_enable();
   return sample;
 }
 
@@ -468,6 +552,11 @@ int main(int argc, char** argv) {
               "committed");
 
   const Workload workloads[] = {
+      {"gc-array-typed", [](size_t objects) { return run_gc_array_allocation(objects, false, true); }},
+      {"gc-array-planned", [](size_t objects) { return run_gc_array_allocation(objects, true, true); }},
+      {"gc-array-planned-cold", [](size_t objects) { return run_gc_array_allocation(objects, true, false); }},
+      {"gc-array-multishape-typed", [](size_t objects) { return run_gc_array_multishape(objects, false); }},
+      {"gc-array-multishape-planned", [](size_t objects) { return run_gc_array_multishape(objects, true); }},
       {"owned-64B", &run_owned},
       {"owned-churn-500", [](size_t objects) { return run_owned_churn(std::max<size_t>(1, objects / kChurnObjects)); }},
       {"arena-64B", &run_arena},
