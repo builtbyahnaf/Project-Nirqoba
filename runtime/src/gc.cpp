@@ -154,10 +154,13 @@ struct GcPage {
   std::unique_ptr<uint64_t[]> object_starts;
   size_t object_start_words = 0;
   // Per-object state for headerless pages. With no object word to hold young and
-  // promotion age, one byte per 16-byte slot carries them: bit 0 young, bits 1-7
-  // age. It costs 1 byte per maximum-density object, which still leaves the
-  // headerless representation far below the 8 bytes an H8 object spends.
+  // promotion age, one byte per object carries them: bit 0 young, bits 1-7 age.
+  // A headerless page has one slot size, so the table is indexed by the object's
+  // ordinal (`offset / slot_bytes`), not by its 8-byte grid position: indexing by
+  // grid position would spend eight bytes of page metadata on a 64-byte record,
+  // which is exactly the H8 header the representation exists to avoid.
   std::unique_ptr<uint8_t[]> h0_states;
+  size_t h0_state_capacity = 0;
   // Pages emptied by a concurrent sweep are retained until the next
   // stop-the-world cycle boundary, when no mutator can still be inside an
   // allocator or holding a TLAB cursor into the page.
@@ -482,11 +485,26 @@ inline const nrq_object_layout* object_layout(const ObjectRef& ref);
 // One word of mutable state, wherever this representation keeps it. A headerless
 // object has no word of its own, so the page's per-slot byte carries the same
 // young bit and a 7-bit age.
+// The headerless state table is indexed by object ordinal. The page's slot size
+// divides every span start, so the ordinal is exact and needs no bitmap.
+inline size_t h0_state_index(const ObjectRef& ref) {
+  const GcPage& page = *ref.page;
+  if (page.slot_bytes == 0)
+    nrq_runtime_fatal("headerless page has no slot size");
+  const size_t offset = static_cast<size_t>(ref.header - page.storage);
+  if (offset % page.slot_bytes != 0)
+    nrq_runtime_fatal("headerless object is not slot-aligned");
+  const size_t index = offset / page.slot_bytes;
+  if (!page.h0_states || index >= page.h0_state_capacity)
+    nrq_runtime_fatal("headerless state index is outside its page");
+  return index;
+}
+
 inline uint32_t object_state(const ObjectRef& ref) {
   switch (ref.page->kind) {
     case PageKind::Headerless: {
       const uint8_t packed = ref.page->h0_states
-                                 ? ref.page->h0_states[span_slot(ref)]
+                                 ? ref.page->h0_states[h0_state_index(ref)]
                                  : uint8_t{0};
       uint32_t state = (packed & uint8_t{1}) ? kYoungBit : 0u;
       state |= (static_cast<uint32_t>(packed >> 1) << kAgeShift) & kAgeMask;
@@ -505,7 +523,7 @@ inline void set_object_state(const ObjectRef& ref, uint32_t state) {
       if (!ref.page->h0_states)
         nrq_runtime_fatal("headerless page has no state table");
       const uint32_t age = (state & kAgeMask) >> kAgeShift;
-      ref.page->h0_states[span_slot(ref)] = static_cast<uint8_t>(
+      ref.page->h0_states[h0_state_index(ref)] = static_cast<uint8_t>(
           ((state & kYoungBit) ? 1u : 0u) | ((age & 0x7Fu) << 1));
       return;
     }
@@ -3394,8 +3412,7 @@ void reset_page_gc_metadata_locked(GcPage& page) {
     std::memset(page.born_bits.get(), 0, page.born_words * sizeof(uint64_t));
   }
   if (page.h0_states) {
-    std::memset(page.h0_states.get(), 0,
-                page.capacity / kObjectStartAlignment);
+    std::memset(page.h0_states.get(), 0, page.h0_state_capacity);
   }
 }
 
@@ -3421,11 +3438,6 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity, PageKind kind) {
     page->slot_bytes = 0;
     page->slot_capacity = 0;
     page->uniform_layout = nullptr;
-    if (page->kind == PageKind::Headerless && !page->h0_states) {
-      page->h0_states.reset(new (std::nothrow)
-                                uint8_t[page->capacity / kObjectStartAlignment]());
-      if (!page->h0_states) return nullptr;
-    }
     recycled_page_reuse_count = saturated_add(recycled_page_reuse_count, 1);
     return page;
   }
@@ -3462,16 +3474,7 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity, PageKind kind) {
       page->object_starts.reset(new (std::nothrow) uint64_t[mark_words]());
       if (page->object_starts) page->object_start_words = mark_words;
     }
-    if (page->kind == PageKind::Headerless) {
-      // One state byte per span slot. It is the only per-object metadata a
-      // headerless page needs beyond the three bitmaps.
-      page->h0_states.reset(new (std::nothrow)
-                                uint8_t[capacity / kObjectStartAlignment]());
-      if (!page->h0_states) {
-        release_page_storage(storage, capacity);
-        return nullptr;
-      }
-    }
+
     return page;
   } catch (...) {
     release_page_storage(storage, capacity);
@@ -3948,7 +3951,7 @@ void initialize_object(const ObjectRef& object, const nrq_object_layout* layout,
                        uint32_t elements, size_t payload_bytes, bool young) {
   switch (object.page->kind) {
     case PageKind::Headerless:
-      object.page->h0_states[span_slot(object)] = young ? 1u : 0u;
+      object.page->h0_states[h0_state_index(object)] = young ? 1u : 0u;
       break;
     case PageKind::Compact: {
       auto* header = reinterpret_cast<CompactHeader*>(object.header);
@@ -4035,6 +4038,14 @@ GcPage* create_headerless_page_locked(const nrq_object_layout* layout,
   page->slot_bytes = slot;
   page->slot_capacity = kGcPageBytes / kObjectStartAlignment;
   page->uniform_layout = layout;
+  // One state byte per object slot. A page reused for a different slot size
+  // grows the table rather than reallocating a smaller one.
+  const size_t state_bytes = page->capacity / slot;
+  if (!page->h0_states || page->h0_state_capacity < state_bytes) {
+    page->h0_states.reset(new (std::nothrow) uint8_t[state_bytes]());
+    if (!page->h0_states) return nullptr;
+    page->h0_state_capacity = state_bytes;
+  }
   try {
     gc_pages.push_back(std::move(new_page));
   } catch (...) {
@@ -4830,6 +4841,7 @@ nrq_gc_representation_facts nrq_gc_get_representation_facts(void) {
   facts.compact_payload_alignment =
       std::min<size_t>(8, kObjectStartAlignment);
   facts.extended_payload_alignment = kObjectStartAlignment;
+  facts.headerless_state_bytes_per_object = 1;
   return facts;
 }
 

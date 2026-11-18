@@ -63,6 +63,9 @@ TEST(GcRepresentationTest, FactsDescribeTheThreeHeaders) {
   ASSERT_EQ(facts().headerless_payload_alignment, alignof(std::max_align_t));
   ASSERT_EQ(facts().extended_payload_alignment, alignof(std::max_align_t));
   ASSERT_EQ(facts().compact_payload_alignment, size_t{8});
+  // The headerless state byte is per object, not per 8-byte slot, so a 64-byte
+  // record does not pay an H8-sized table for the privilege of a zero header.
+  ASSERT_EQ(facts().headerless_state_bytes_per_object, size_t{1});
 }
 
 TEST(GcRepresentationTest, HeaderlessObjectCarriesNoHeader) {

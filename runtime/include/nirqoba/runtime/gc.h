@@ -139,6 +139,10 @@ struct nrq_gc_representation_facts {
   size_t headerless_payload_alignment;
   size_t compact_payload_alignment;
   size_t extended_payload_alignment;
+  // Page metadata a headerless page adds beyond the shared bitmaps: one state
+  // byte per object (young + promotion age). Indexed by object ordinal, not by
+  // the 8-byte grid, so it does not grow with the payload size.
+  size_t headerless_state_bytes_per_object;
 };
 struct nrq_gc_representation_facts nrq_gc_get_representation_facts(void);
 
