@@ -68,6 +68,39 @@ void unregister_word_region(std::vector<void*>& region) {
   nrq_gc_root_unregister(reinterpret_cast<void**>(region.data()));
 }
 
+// One collection, split into the phases the runtime reports. A whole-cycle
+// figure cannot separate marking from the survivor sweep: the same graph is
+// marked and then walked again while reclaiming nothing, so both costs land in
+// one number. These are the runtime's own timestamps, not a second measurement
+// wrapped around the entry point.
+struct PhaseSplit {
+  uint64_t pause_ns = 0;
+  uint64_t prepare_ns = 0;
+  uint64_t mark_ns = 0;
+  uint64_t sweep_ns = 0;
+  uint64_t finish_ns = 0;
+  uint64_t mark_objects = 0;
+  uint64_t mark_references = 0;
+  uint64_t sweep_objects = 0;
+  uint64_t cycles = 0;
+};
+
+PhaseSplit take_phase_split() {
+  const nrq_gc_cycle_timing timing = nrq_gc_get_cycle_timing();
+  PhaseSplit split;
+  split.pause_ns = timing.pause_ns;
+  split.prepare_ns = timing.prepare_ns;
+  split.mark_ns = timing.mark_ns;
+  split.sweep_ns = timing.sweep_ns;
+  split.finish_ns = timing.finish_ns;
+  split.mark_objects = timing.mark_objects;
+  split.mark_references = timing.mark_references;
+  split.sweep_objects = timing.sweep_objects;
+  split.cycles = timing.cycles;
+  nrq_gc_reset_cycle_timing();
+  return split;
+}
+
 struct Sample {
   double allocate_ns = 0;
   double mark_us = 0;
@@ -80,6 +113,11 @@ struct Sample {
   size_t header_bytes = 0;
   int32_t representation = 0;
   size_t objects = 0;
+  // Phase split of the cycle whose graph stayed live: the reclamation cost of a
+  // reachable object, with nothing to free.
+  PhaseSplit live_cycle;
+  // Phase split of the cycle that reclaimed the graph.
+  PhaseSplit dead_cycle;
 };
 
 enum class Shape {
@@ -206,11 +244,13 @@ Sample run_shape(Shape shape, size_t requested) {
 
   // Mark phase: every object is reachable from the chain head or the root
   // region, so this cycle marks the whole graph and reclaims nothing.
+  take_phase_split();
   const auto mark_start = Clock::now();
   nrq_gc_collect();
   const auto mark_end = Clock::now();
   sample.mark_us = us_total(mark_end - mark_start);
   sample.mark_ns_per_object = ns_per_op(mark_end - mark_start, count);
+  sample.live_cycle = take_phase_split();
   sample.live_after_mark = nrq_gc_get_live_objects();
   require(nrq_gc_get_collection_count() > cycles_before,
           "the mark phase did not run a cycle");
@@ -220,11 +260,13 @@ Sample run_shape(Shape shape, size_t requested) {
   // Sweep phase: the graph becomes garbage when its roots go away.
   if (!chain) unregister_word_region(objects);
   nrq_gc_root_unregister(&root);
+  take_phase_split();
   const auto sweep_start = Clock::now();
   nrq_gc_collect();
   const auto sweep_end = Clock::now();
   sample.sweep_us = us_total(sweep_end - sweep_start);
   sample.sweep_ns_per_object = ns_per_op(sweep_end - sweep_start, count);
+  sample.dead_cycle = take_phase_split();
   sample.live_after_sweep = nrq_gc_get_live_objects();
   sample.cycles = nrq_gc_get_collection_count() - cycles_before;
   require(sample.live_after_sweep < count,
@@ -341,6 +383,34 @@ void print_row(const char* name, size_t objects, const Sample& sample) {
               static_cast<unsigned long long>(sample.live_after_sweep));
 }
 
+// The phase split of one cycle. `mark ns/obj` is derived from the objects the
+// marking loop actually popped, and `sweep ns/obj` from the objects the
+// reclaimer examined, so neither depends on how big the heap was.
+void print_phase_header() {
+  std::printf("\n%-22s %-8s %10s %10s %10s %10s %10s %10s %10s\n", "shape",
+              "cycle", "pause us", "prepare us", "mark us", "sweep us",
+              "finish us", "mark ns/o", "sweep ns/o");
+}
+
+void print_phase_row(const char* name, const char* cycle,
+                     const PhaseSplit& split) {
+  const double mark_ns_per_object =
+      split.mark_objects == 0
+          ? 0.0
+          : static_cast<double>(split.mark_ns) /
+                static_cast<double>(split.mark_objects);
+  const double sweep_ns_per_object =
+      split.sweep_objects == 0
+          ? 0.0
+          : static_cast<double>(split.sweep_ns) /
+                static_cast<double>(split.sweep_objects);
+  std::printf("%-22s %-8s %10.1f %10.1f %10.1f %10.1f %10.1f %10.2f %10.2f\n",
+              name, cycle, split.pause_ns / 1000.0, split.prepare_ns / 1000.0,
+              split.mark_ns / 1000.0, split.sweep_ns / 1000.0,
+              split.finish_ns / 1000.0, mark_ns_per_object,
+              sweep_ns_per_object);
+}
+
 void print_heap_facts() {
   const nrq_gc_representation_facts facts = nrq_gc_get_representation_facts();
   const nrq_gc_allocation_facts allocation = nrq_gc_get_allocation_facts();
@@ -399,7 +469,11 @@ int main(int argc, char** argv) {
                           Shape::Planned16,
                           Shape::Record512,   Shape::Array4x16,
                           Shape::LargeObject, Shape::SoaPointers};
-  for (Shape shape : shapes) {
+  const size_t shape_count = sizeof(shapes) / sizeof(shapes[0]);
+  std::vector<PhaseSplit> live_cycles(shape_count);
+  std::vector<PhaseSplit> dead_cycles(shape_count);
+  for (size_t shape_index = 0; shape_index < shape_count; ++shape_index) {
+    const Shape shape = shapes[shape_index];
     std::vector<Sample> samples;
     samples.reserve(runs);
     for (size_t run = 0; run < runs; ++run)
@@ -434,9 +508,18 @@ int main(int argc, char** argv) {
     combined.objects = last.objects;
     std::string label = std::string(shape_name(shape)) + "-median";
     print_row(label.c_str(), combined.objects, combined);
+    live_cycles[shape_index] = last.live_cycle;
+    dead_cycles[shape_index] = last.dead_cycle;
   }
 
   std::printf("\n%-22s %9s %11s\n", "workload", "objects", "ns/store");
+  print_phase_header();
+  for (size_t shape_index = 0; shape_index < shape_count; ++shape_index) {
+    print_phase_row(shape_name(shapes[shape_index]), "live",
+                    live_cycles[shape_index]);
+    print_phase_row(shape_name(shapes[shape_index]), "dead",
+                    dead_cycles[shape_index]);
+  }
   std::vector<double> barrier_samples;
   for (size_t run = 0; run < runs; ++run) {
     const Sample sample = run_barrier(std::max<size_t>(count / 4, 1000));
