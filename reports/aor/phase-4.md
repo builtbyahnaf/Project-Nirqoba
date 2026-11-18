@@ -77,6 +77,17 @@ test or an assertion that would catch it again.
 8. **The headerless state table was indexed per 8-byte slot.** A 64-byte record
    paid 8 bytes of page metadata — exactly the H8 header the representation was
    removing. It is now one byte per object.
+9. **A page larger than a directory page could be bitmap-indexed.** The directory
+   insert succeeded by chunk key, so the object took the start-bitmap path with a
+   null bitmap: no start bit, no index entry, and the sweep never saw it. Large
+   pages now always use the exact index, and recycled storage is matched by exact
+   capacity so a large page is never handed to an ordinary request.
+10. **A mixed-shape thread abandoned its slab on every switch.** One mutator
+    holds one bump slab, so alternating representations discarded a mostly-full
+    slab each time and took a fresh page per object: 66,667 compact pages for
+    66,667 objects and 546 MB of page metadata. A request of another
+    representation now allocates through a per-class page cache instead, and the
+    same workload uses 1,059 pages and allocates 14× faster.
 
 ## Invariants preserved
 
@@ -98,7 +109,7 @@ test or an assertion that would catch it again.
 
 | Check | Result |
 |---|---|
-| Unit tests | 349 / 349 passed |
+| Unit tests | 360 / 360 passed |
 | Integration cases | 624 / 624 passed |
 | Phase 7 isolation | passed |
 | Phase 9 optimization matrix (O0/O2 × production/debug) | passed |
@@ -109,6 +120,9 @@ test or an assertion that would catch it again.
 
 - The benchmark runs the development runtime, not the production one. The
   production path is covered by equivalence checks, not by those timings.
+- A thread keeps one bump slab. A second representation's objects go through the
+  page cache under the allocator lock while that slab is active, which is slower
+  than a thread-local path but avoids the page-per-object failure above.
 - Headerless objects are capped at a 256-byte payload. Raising the cap would make
   a dedicated page per shape more expensive than the header it removes.
 - A second small shape on a thread is served as H8 while a slab is active. This
