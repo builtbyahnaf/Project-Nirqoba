@@ -7,6 +7,7 @@
 #endif
 
 #include "nirqoba/runtime/allocator.h"
+#include "nirqoba/runtime/cdmm.h"
 #include "nirqoba/runtime/gc.h"
 #include "nirqoba/runtime/fatal.h"
 #include "nirqoba/runtime/system.h"
@@ -28,6 +29,7 @@
 #include <mutex>
 #include <new>
 #include <set>
+#include <shared_mutex>
 #include <iterator>
 #include <unordered_map>
 #include <utility>
@@ -42,6 +44,42 @@ constexpr size_t kMinimumBlockBytes = 16;
 // Alignment used when `memory.reallocate` is asked to grow a null pointer, i.e.
 // when the call is really a fresh allocation with no prior alignment to reuse.
 constexpr size_t kDefaultAlignmentBytes = 16;
+// Smallest chunk either explicit strategy commits.
+constexpr size_t kCdmmMinimumChunkBytes = 4096;
+// Pool chunk size when the caller does not choose a slot count. It matches the
+// collector's page size so both metadata systems are arranged the same way.
+constexpr size_t kCdmmPoolChunkBytes = 64 * 1024;
+
+// --- CDMM explicit-strategy metadata -----------------------------------------
+//
+// Neither explicit strategy puts a header on an object. An arena derives the
+// layout of a block from the bump pointer of the chunk that contains it; a pool
+// derives the slot size and liveness from the chunk as well. What remains is one
+// destructor record per destructible arena object, one liveness bit per pool
+// slot, and the optional generation word. The range table below is what lets an
+// outside caller ask which strategy owns an address without reading the object.
+
+struct DestructorRecord {
+  DestructorRecord* previous = nullptr;
+  NrqCdmmDestructor destructor = nullptr;
+  void* context = nullptr;
+  void* object = nullptr;
+};
+
+struct CdmmRange {
+  uintptr_t begin = 0;
+  uintptr_t end = 0;
+  const void* owner = nullptr;
+  NrqCdmmStrategy strategy = NRQ_CDMM_STRATEGY_NONE;
+};
+
+std::mutex cdmm_range_mutex;
+std::vector<CdmmRange> cdmm_ranges;
+
+void cdmm_register_range(const void* owner, uintptr_t begin, size_t bytes,
+                         NrqCdmmStrategy strategy);
+void cdmm_unregister_range(const void* owner, uintptr_t begin);
+bool cdmm_lookup_range(uintptr_t address, CdmmRange& result);
 
 size_t align_up(size_t value, size_t alignment) {
   return (value + alignment - 1) & ~(alignment - 1);
@@ -137,6 +175,25 @@ class Allocator {
    */
   virtual bool requires_operation_serialization() const { return true; }
   virtual NrqAllocatorKind kind() const { return NRQ_ALLOCATOR_GENERAL; }
+  // Strategy reported by `nrq_cdmm_strategy_of`. Only the explicit strategies
+  // in this file answer with a name; every other allocator reports none, which
+  // is also what keeps stack and collector storage out of the range table.
+  virtual NrqCdmmStrategy cdmm_strategy() const { return NRQ_CDMM_STRATEGY_NONE; }
+  // Fills the page-level facts for `object`, which is inside a chunk this
+  // allocator owns. The base answer is the common one: no per-object header.
+  virtual void cdmm_describe(const void* object, NrqCdmmFacts& facts) const {
+    (void)object;
+    facts.header_bytes = 0;
+  }
+  // Runs `function` under the allocator's operation lock. Entry points that do
+  // more than one step (a destructor record plus its object) use it so the pair
+  // is serialized as one operation.
+  template <typename Function>
+  auto serialize_operation(Function&& function) -> decltype(function()) {
+    if (!requires_operation_serialization()) return function();
+    std::lock_guard<std::mutex> lock(operation_mutex_);
+    return function();
+  }
   size_t capacity() const { return capacity_; }
 
   bool try_pin_operation() {
@@ -435,6 +492,274 @@ class FixedPoolAllocator final : public Allocator {
   std::map<std::pair<size_t, size_t>, PoolBucket> buckets_;
 };
 
+// Fixed-slot pool for explicit CDMM allocation.
+//
+// One slot size per pool, one liveness bit per slot, and a free list threaded
+// through the free slots themselves. A slot carries no header and keeps no side
+// record unless the pool was created with generations, so an allocator that
+// hands out a million 32-byte objects pays one bit per object rather than an
+// object record. Chunk size is the pool's page: layout, stride and liveness all
+// come from the chunk, which is the same reasoning behind the headerless GC
+// representation.
+class CdmmPool final : public Allocator {
+ public:
+  CdmmPool(size_t slot_bytes, size_t alignment, size_t slots_per_chunk,
+           bool generations, NrqCdmmDestructor destructor, void* context)
+      : Allocator(slot_bytes),
+        slot_bytes_(slot_bytes),
+        alignment_(alignment),
+        generations_(generations),
+        destructor_(destructor),
+        context_(context) {
+    const size_t minimum = std::max(slot_bytes_, sizeof(size_t));
+    stride_ = align_up(minimum, alignment_);
+    slots_per_chunk_ = slots_per_chunk != 0
+                           ? slots_per_chunk
+                           : std::max<size_t>(8, kCdmmPoolChunkBytes / stride_);
+  }
+  ~CdmmPool() override { release_chunks(); }
+
+  NrqCdmmStrategy cdmm_strategy() const override { return NRQ_CDMM_STRATEGY_POOL; }
+
+  // Commits the first chunk at creation so the pool either exists fully formed
+  // or not at all, and so `committed` is meaningful before the first allocation.
+  bool reserve_chunk() { return add_chunk(); }
+
+  void* allocate(size_t bytes, size_t alignment) override {
+    if (bytes == 0 || bytes > slot_bytes_ || alignment == 0 ||
+        alignment > alignment_ || (alignment & (alignment - 1)) != 0)
+      return nullptr;
+    return allocate_slot();
+  }
+  void deallocate(void* pointer) override { release_slot(pointer, false, 0); }
+
+  bool release_serialized_slot(void* slot, bool checked, uint64_t generation) {
+    return serialize_operation(
+        [&] { return release_slot(slot, checked, generation); });
+  }
+
+  // Scope path: the scope owns the pool for its lifetime, so the release needs no
+  // operation lock. The liveness checks are the same ones the serialized path
+  // uses, so a double release is still refused.
+  bool release_unserialized(void* slot) { return release_slot(slot, false, 0); }
+
+  bool reset() override {
+    for (Chunk& chunk : chunks_) {
+      for (size_t local = 0; local < chunk.slot_count; ++local) {
+        const uint64_t bit = uint64_t{1} << (local % 64);
+        if ((chunk.live_bits[local / 64] & bit) == 0) continue;
+        if (destructor_)
+          destructor_(reinterpret_cast<void*>(chunk.base + local * stride_),
+                      context_);
+        chunk.live_bits[local / 64] &= ~bit;
+      }
+      chunk.live = 0;
+    }
+    live_total_ = 0;
+    rebuild_free_list();
+    return true;
+  }
+  NrqAllocatorKind kind() const override { return NRQ_ALLOCATOR_POOL; }
+
+  void free_statistics(size_t& free_bytes,
+                       size_t& largest_free_block) const override {
+    free_bytes = 0;
+    for (const Chunk& chunk : chunks_)
+      free_bytes += (chunk.slot_count - chunk.live) * stride_;
+    // A free slot can serve exactly one slot-sized request.
+    largest_free_block = free_bytes == 0 ? 0 : stride_;
+  }
+
+  void cdmm_describe(const void* object, NrqCdmmFacts& facts) const override {
+    facts.header_bytes = 0;
+    facts.object_bytes = slot_bytes_;
+    facts.generation = 0;
+    facts.metadata_bytes = 0;
+    size_t local = 0;
+    const size_t index = slot_index_for(reinterpret_cast<uintptr_t>(object), local);
+    if (index == kNoSlot) return;
+    const Chunk& chunk = chunks_[index / slots_per_chunk_];
+    if (generations_) facts.generation = chunk.generations[local];
+    facts.metadata_bytes = chunk.slot_count == 0 ? 0
+                                                 : chunk.metadata_bytes / chunk.slot_count;
+  }
+
+  uint64_t slot_generation(const void* slot) const {
+    size_t local = 0;
+    const size_t index = slot_index_for(reinterpret_cast<uintptr_t>(slot), local);
+    if (index == kNoSlot || !generations_) return 0;
+    return chunks_[index / slots_per_chunk_].generations[local];
+  }
+
+  uint64_t live_count() const { return live_total_; }
+  uint64_t committed_bytes() const { return committed_; }
+  uint64_t slot_bytes() const { return slot_bytes_; }
+  bool contains(const void* pointer) const {
+    size_t local = 0;
+    return slot_index_for(reinterpret_cast<uintptr_t>(pointer), local) != kNoSlot;
+  }
+
+ private:
+  static constexpr size_t kNoSlot = std::numeric_limits<size_t>::max();
+
+  struct Chunk {
+    void* raw = nullptr;
+    uintptr_t base = 0;
+    size_t first_index = 0;
+    size_t slot_count = 0;
+    size_t live = 0;
+    size_t metadata_bytes = 0;
+    std::vector<uint64_t> live_bits;
+    std::vector<uint32_t> generations;
+  };
+
+  // Maps an address to its global slot index, or kNoSlot when the address is not
+  // the start of a slot in this pool. An interior address is rejected rather
+  // than rounded: releasing one would corrupt the neighbouring slot.
+  size_t slot_index_for(uintptr_t address, size_t& local) const {
+    for (const Chunk& chunk : chunks_) {
+      if (address < chunk.base) continue;
+      const uintptr_t offset = address - chunk.base;
+      if (offset >= chunk.slot_count * stride_) continue;
+      if (offset % stride_ != 0) return kNoSlot;
+      local = static_cast<size_t>(offset / stride_);
+      return chunk.first_index + local;
+    }
+    return kNoSlot;
+  }
+
+  void* address_of(size_t index) const {
+    const size_t chunk_index = index / slots_per_chunk_;
+    const size_t local = index % slots_per_chunk_;
+    return reinterpret_cast<void*>(
+        chunks_[chunk_index].base + local * stride_);
+  }
+
+  void* allocate_slot() {
+    if (free_head_ == kNoSlot && !add_chunk()) return nullptr;
+    const size_t index = free_head_;
+    void* slot = address_of(index);
+    free_head_ = *static_cast<size_t*>(slot);
+    Chunk& chunk = chunks_[index / slots_per_chunk_];
+    const size_t local = index % slots_per_chunk_;
+    chunk.live_bits[local / 64] |= uint64_t{1} << (local % 64);
+    ++chunk.live;
+    ++live_total_;
+    if (generations_) {
+      // Zero means "no allocation", so a wrap skips it. With 2^32 values the
+      // wrap is unreachable for any realistic reuse count.
+      uint32_t generation = chunk.generations[local] + 1;
+      if (generation == 0) generation = 1;
+      chunk.generations[local] = generation;
+    }
+    return slot;
+  }
+
+  bool release_slot(void* pointer, bool checked, uint64_t expected) {
+    if (!pointer) return false;
+    size_t local = 0;
+    const size_t index = slot_index_for(reinterpret_cast<uintptr_t>(pointer), local);
+    if (index == kNoSlot) return false;
+    Chunk& chunk = chunks_[index / slots_per_chunk_];
+    const uint64_t bit = uint64_t{1} << (local % 64);
+    // A bit that is already clear means a double release or an address that was
+    // never handed out; both are refused without touching the slot.
+    if ((chunk.live_bits[local / 64] & bit) == 0) return false;
+    if (checked && generations_ &&
+        chunk.generations[local] != static_cast<uint32_t>(expected))
+      return false;
+    chunk.live_bits[local / 64] &= ~bit;
+    --chunk.live;
+    --live_total_;
+    if (destructor_) destructor_(pointer, context_);
+    // Poison the payload so a stale read is visible in tests and a debugger, then
+    // link the slot into the free list. The link overwrites the first word.
+    std::memset(pointer, 0xDD, stride_);
+    *static_cast<size_t*>(pointer) = free_head_;
+    free_head_ = index;
+    return true;
+  }
+
+  bool add_chunk() {
+    const size_t slots = slots_per_chunk_;
+    if (slots == 0 || slots > (std::numeric_limits<size_t>::max() - 64) / stride_)
+      return false;
+    const size_t bytes = stride_ * slots;
+    const size_t alignment = std::max<size_t>(alignment_, 64);
+    if (bytes > std::numeric_limits<size_t>::max() - alignment - 1) return false;
+    const size_t total = bytes + alignment - 1;
+    void* raw = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, total);
+    if (!raw) return false;
+    uintptr_t base = 0;
+    if (!checked_align_address(reinterpret_cast<uintptr_t>(raw), alignment, base)) {
+      HeapFree(GetProcessHeap(), 0, raw);
+      return false;
+    }
+    Chunk chunk;
+    chunk.raw = raw;
+    chunk.base = base;
+    chunk.first_index =
+        chunks_.empty() ? 0 : chunks_.back().first_index + slots_per_chunk_;
+    chunk.slot_count = slots;
+    try {
+      chunk.live_bits.assign((slots + 63) / 64, 0);
+      if (generations_) chunk.generations.assign(slots, 0);
+      chunk.metadata_bytes = sizeof(Chunk) +
+                             chunk.live_bits.capacity() * sizeof(uint64_t) +
+                             chunk.generations.capacity() * sizeof(uint32_t) +
+                             (alignment - 1);
+      chunks_.push_back(std::move(chunk));
+    } catch (...) {
+      HeapFree(GetProcessHeap(), 0, raw);
+      return false;
+    }
+    Chunk& added = chunks_.back();
+    for (size_t local = slots; local-- > 0;) {
+      void* slot = reinterpret_cast<void*>(added.base + local * stride_);
+      *static_cast<size_t*>(slot) = free_head_;
+      free_head_ = added.first_index + local;
+    }
+    committed_ += total;
+    cdmm_register_range(this, base, bytes, NRQ_CDMM_STRATEGY_POOL);
+    return true;
+  }
+
+  void rebuild_free_list() {
+    free_head_ = kNoSlot;
+    for (size_t chunk_index = chunks_.size(); chunk_index-- > 0;) {
+      Chunk& chunk = chunks_[chunk_index];
+      for (size_t local = chunk.slot_count; local-- > 0;) {
+        void* slot = reinterpret_cast<void*>(chunk.base + local * stride_);
+        *static_cast<size_t*>(slot) = free_head_;
+        free_head_ = chunk.first_index + local;
+      }
+    }
+  }
+
+  void release_chunks() {
+    for (const Chunk& chunk : chunks_) {
+      cdmm_unregister_range(this, chunk.base);
+      HeapFree(GetProcessHeap(), 0, chunk.raw);
+    }
+    chunks_.clear();
+    free_head_ = kNoSlot;
+    live_total_ = 0;
+    committed_ = 0;
+  }
+
+  size_t slot_bytes_ = 0;
+  size_t alignment_ = 8;
+  size_t stride_ = 0;
+  size_t slots_per_chunk_ = 0;
+  bool generations_ = false;
+  NrqCdmmDestructor destructor_ = nullptr;
+  void* context_ = nullptr;
+  size_t free_head_ = kNoSlot;
+  size_t live_total_ = 0;
+  size_t committed_ = 0;
+  std::vector<Chunk> chunks_;
+};
+
 struct ArenaChunk {
   void* raw = nullptr;
   uintptr_t base = 0;
@@ -447,7 +772,68 @@ class ArenaAllocator : public Allocator {
   explicit ArenaAllocator(size_t capacity) : Allocator(std::max(capacity, size_t{4096})) {}
   ~ArenaAllocator() override { release_chunks(); }
 
+  void set_max_bytes(size_t max_bytes) { max_bytes_ = max_bytes; }
+  // Commits the first chunk at creation, so a created arena either has its
+  // initial capacity or does not exist, and `committed` is meaningful before the
+  // first allocation.
+  bool reserve_chunk() { return add_chunk(capacity_); }
+  NrqCdmmStrategy cdmm_strategy() const override { return NRQ_CDMM_STRATEGY_ARENA; }
+  uint64_t generation() const { return generation_; }
+  uint64_t used_bytes() const {
+    size_t total = 0;
+    for (const ArenaChunk& chunk : chunks_) total += chunk.used;
+    return total;
+  }
+  uint64_t committed_bytes() const { return committed_; }
+  bool contains(const void* pointer) const {
+    const uintptr_t address = reinterpret_cast<uintptr_t>(pointer);
+    for (const ArenaChunk& chunk : chunks_) {
+      if (address >= chunk.base && address < chunk.base + chunk.size) return true;
+    }
+    return false;
+  }
+  void cdmm_describe(const void* object, NrqCdmmFacts& facts) const override {
+    (void)object;
+    facts.header_bytes = 0;
+    facts.generation = generation_;
+    facts.metadata_bytes = 0;
+  }
+
+  // Allocates `bytes` and registers `destructor` so bulk release destroys the
+  // object. The record is allocated inside the arena and is only paid for by
+  // objects that actually need deterministic cleanup; the payload itself still
+  // has no header.
+  void* allocate_destructible(size_t bytes, size_t alignment,
+                              NrqCdmmDestructor destructor, void* context) {
+    if (!destructor) return allocate(bytes, alignment);
+    const Checkpoint checkpoint = mark();
+    void* record = allocate(sizeof(DestructorRecord), alignof(std::max_align_t));
+    if (!record) return nullptr;
+    void* object = allocate(bytes, alignment);
+    if (!object) {
+      rewind(checkpoint);
+      return nullptr;
+    }
+    DestructorRecord* entry = static_cast<DestructorRecord*>(record);
+    entry->previous = destructors_;
+    entry->destructor = destructor;
+    entry->context = context;
+    entry->object = object;
+    destructors_ = entry;
+    return object;
+  }
+
+  void* allocate_destructible_serialized(size_t bytes, size_t alignment,
+                                         NrqCdmmDestructor destructor,
+                                         void* context) {
+    return serialize_operation([&] {
+      if (destroying_) return static_cast<void*>(nullptr);
+      return allocate_destructible(bytes, alignment, destructor, context);
+    });
+  }
+
   void* allocate(size_t bytes, size_t alignment) override {
+    if (destroying_) return nullptr;
     if (bytes == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0)
       return nullptr;
     if (chunks_.empty() || !fits(chunks_.back(), bytes, alignment)) {
@@ -471,20 +857,31 @@ class ArenaAllocator : public Allocator {
   void deallocate(void*) override {}
 
   bool reset() override {
+    // Destructors first: they read the objects the chunks still hold. Running
+    // them before the chunk walk also keeps a destructor from observing a
+    // half-rewound arena.
+    run_destructors();
     // Retain only the initial, capacity-bounded chunk. Growth chunks are freed
     // so a reset cannot pin an arbitrarily large peak working set; retaining
-    // the first chunk lets repeated reset/reuse avoid a fresh VirtualAlloc.
+    // the first chunk lets repeated reset/reuse avoid a fresh HeapAlloc.
     const bool retain_first =
         !chunks_.empty() && chunks_.front().size <= capacity_;
     const size_t first_to_free = retain_first ? 1 : 0;
-    for (size_t index = first_to_free; index < chunks_.size(); ++index)
+    for (size_t index = first_to_free; index < chunks_.size(); ++index) {
+      cdmm_unregister_range(this, chunks_[index].base);
+      committed_ -= chunks_[index].size;
       HeapFree(GetProcessHeap(), 0, chunks_[index].raw);
+    }
     if (retain_first) {
       chunks_.resize(1);
       chunks_.front().used = 0;
     } else {
       chunks_.clear();
     }
+    // A stale pointer plus the generation it was allocated under can be rejected
+    // by the caller; a reset that cannot advance the generation would make the
+    // pair meaningless.
+    ++generation_;
     return true;
   }
   NrqAllocatorKind kind() const override { return NRQ_ALLOCATOR_ARENA; }
@@ -524,9 +921,14 @@ class ArenaAllocator : public Allocator {
 
  protected:
   void release_chunks() {
-    for (const ArenaChunk& chunk : chunks_)
+    for (const ArenaChunk& chunk : chunks_) {
+      cdmm_unregister_range(this, chunk.base);
       HeapFree(GetProcessHeap(), 0, chunk.raw);
+    }
     chunks_.clear();
+    committed_ = 0;
+    // The records lived in the chunks just released.
+    destructors_ = nullptr;
   }
 
   bool fits(const ArenaChunk& chunk, size_t bytes, size_t alignment) const {
@@ -543,6 +945,11 @@ class ArenaAllocator : public Allocator {
 
   bool add_chunk(size_t bytes) {
     if (bytes > std::numeric_limits<size_t>::max() - 63) return false;
+    // A cap is a promise: an allocation that would cross it fails instead of
+    // silently committing more storage.
+    if (max_bytes_ != 0 &&
+        (bytes > max_bytes_ || committed_ > max_bytes_ - bytes))
+      return false;
     void* raw = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes + 63);
     if (!raw) return false;
     uintptr_t base = 0;
@@ -556,9 +963,59 @@ class ArenaAllocator : public Allocator {
       HeapFree(GetProcessHeap(), 0, raw);
       return false;
     }
+    committed_ += bytes;
+    cdmm_register_range(this, base, bytes, cdmm_strategy());
     return true;
   }
 
+ protected:
+  struct Checkpoint {
+    size_t chunk_count;
+    size_t used;
+    DestructorRecord* tail;
+  };
+
+  Checkpoint mark() const {
+    return Checkpoint{chunks_.size(),
+                      chunks_.empty() ? size_t{0} : chunks_.back().used,
+                      destructors_};
+  }
+
+  // Undoes allocations made since `checkpoint`, including any chunk they forced
+  // into existence. Used when the payload of a destructible allocation cannot be
+  // served after its record already was.
+  void rewind(const Checkpoint& checkpoint) {
+    while (chunks_.size() > checkpoint.chunk_count) {
+      const ArenaChunk& chunk = chunks_.back();
+      cdmm_unregister_range(this, chunk.base);
+      committed_ -= chunk.size;
+      HeapFree(GetProcessHeap(), 0, chunk.raw);
+      chunks_.pop_back();
+    }
+    if (!chunks_.empty()) chunks_.back().used = checkpoint.used;
+    destructors_ = checkpoint.tail;
+  }
+
+  // Runs last-allocated-first, so an object that owns another arena object is
+  // destroyed after the object it owns. Allocation is closed for the duration: a
+  // destructor that allocated would push a record behind the one being walked.
+  void run_destructors() {
+    DestructorRecord* list = destructors_;
+    destructors_ = nullptr;
+    destroying_ = true;
+    while (list) {
+      DestructorRecord* previous = list->previous;
+      list->destructor(list->object, list->context);
+      list = previous;
+    }
+    destroying_ = false;
+  }
+
+  size_t max_bytes_ = 0;
+  size_t committed_ = 0;
+  uint64_t generation_ = 1;
+  bool destroying_ = false;
+  DestructorRecord* destructors_ = nullptr;
   std::vector<ArenaChunk> chunks_;
 };
 
@@ -566,6 +1023,9 @@ class StackAllocator final : public ArenaAllocator {
  public:
   explicit StackAllocator(size_t capacity) : ArenaAllocator(capacity) {}
   NrqAllocatorKind kind() const override { return NRQ_ALLOCATOR_STACK; }
+  // A stack frame is not an arena: it cannot be reset in bulk, so it must not
+  // answer as one to the explicit-strategy inspection API.
+  NrqCdmmStrategy cdmm_strategy() const override { return NRQ_CDMM_STRATEGY_NONE; }
   void* allocate(size_t bytes, size_t alignment) override {
     if (bytes == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0)
       return nullptr;
@@ -1361,6 +1821,66 @@ std::unique_ptr<Allocator> make_allocator(NrqAllocatorKind kind, size_t capacity
     case NRQ_ALLOCATOR_CUSTOM: return nullptr;
   }
   return nullptr;
+}
+
+// --- CDMM range table --------------------------------------------------------
+
+void cdmm_register_range(const void* owner, uintptr_t begin, size_t bytes,
+                         NrqCdmmStrategy strategy) {
+  if (strategy == NRQ_CDMM_STRATEGY_NONE || bytes == 0) return;
+  CdmmRange range;
+  range.begin = begin;
+  range.end = begin + bytes;
+  range.owner = owner;
+  range.strategy = strategy;
+  std::lock_guard<std::mutex> lock(cdmm_range_mutex);
+  auto position = std::lower_bound(
+      cdmm_ranges.begin(), cdmm_ranges.end(), range.begin,
+      [](const CdmmRange& entry, uintptr_t value) { return entry.begin < value; });
+  cdmm_ranges.insert(position, range);
+}
+
+void cdmm_unregister_range(const void* owner, uintptr_t begin) {
+  std::lock_guard<std::mutex> lock(cdmm_range_mutex);
+  auto position = std::lower_bound(
+      cdmm_ranges.begin(), cdmm_ranges.end(), begin,
+      [](const CdmmRange& entry, uintptr_t value) { return entry.begin < value; });
+  while (position != cdmm_ranges.end() && position->begin == begin) {
+    if (position->owner == owner) {
+      cdmm_ranges.erase(position);
+      return;
+    }
+    ++position;
+  }
+}
+
+bool cdmm_lookup_range(uintptr_t address, CdmmRange& result) {
+  std::lock_guard<std::mutex> lock(cdmm_range_mutex);
+  auto position = std::upper_bound(
+      cdmm_ranges.begin(), cdmm_ranges.end(), address,
+      [](uintptr_t value, const CdmmRange& entry) { return value < entry.begin; });
+  if (position == cdmm_ranges.begin()) return false;
+  --position;
+  if (address >= position->end) return false;
+  result = *position;
+  return true;
+}
+
+// --- CDMM handle table -------------------------------------------------------
+//
+// Explicit strategies live here rather than in `allocator_handles` so the legacy
+// allocator entry points cannot reset or destroy them behind the CDMM paths' back
+// and the CDMM fast path never takes the global explicit-allocation lock. A
+// shared lock covers lookup plus pinning; create and destroy take it uniquely.
+
+std::shared_mutex cdmm_handle_mutex;
+std::unordered_map<void*, std::unique_ptr<Allocator>> cdmm_handles;
+
+Allocator* pin_cdmm_handle_locked(void* handle) {
+  if (!handle) return nullptr;
+  auto found = cdmm_handles.find(handle);
+  if (found == cdmm_handles.end()) return nullptr;
+  return found->second->try_pin_operation() ? found->second.get() : nullptr;
 }
 
 }  // namespace
@@ -2318,6 +2838,443 @@ uint64_t nrq_memory_available_bytes(void) {
   status.dwLength = sizeof(status);
   if (!GlobalMemoryStatusEx(&status)) return 0;
   return static_cast<uint64_t>(status.ullAvailPhys);
+}
+
+// --- CDMM explicit strategies -----------------------------------------------
+
+static void* cdmm_arena_entry(void* handle, size_t bytes, size_t alignment,
+                              NrqCdmmDestructor destructor, void* context) {
+  Allocator* allocator = nullptr;
+  {
+    // The shared lock covers lookup plus pinning, so a concurrent destroy cannot
+    // reclaim the allocator between the two. The allocation itself runs outside
+    // the lock, serialized only by the allocator's own operation lock.
+    std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+    allocator = pin_cdmm_handle_locked(handle);
+  }
+  if (!allocator) return nullptr;
+  void* pointer = nullptr;
+  if (allocator->kind() == NRQ_ALLOCATOR_ARENA) {
+    auto* arena = static_cast<ArenaAllocator*>(allocator);
+    try {
+      pointer = destructor ? arena->allocate_destructible_serialized(
+                                 bytes, alignment, destructor, context)
+                           : arena->allocate_serialized(bytes, alignment);
+    } catch (...) {
+      pointer = nullptr;
+    }
+  }
+  allocator->unpin_operation();
+  return pointer;
+}
+
+void* nrq_cdmm_arena_create(size_t initial_bytes, size_t max_bytes) {
+  if (max_bytes != 0 && max_bytes < kCdmmMinimumChunkBytes)
+    max_bytes = kCdmmMinimumChunkBytes;
+  if (initial_bytes == 0) initial_bytes = kDefaultRegionBytes;
+  if (initial_bytes < kCdmmMinimumChunkBytes)
+    initial_bytes = kCdmmMinimumChunkBytes;
+  if (max_bytes != 0 && initial_bytes > max_bytes) initial_bytes = max_bytes;
+  try {
+    auto arena = std::make_unique<ArenaAllocator>(initial_bytes);
+    arena->set_max_bytes(max_bytes);
+    if (!arena->reserve_chunk()) return nullptr;
+    void* handle = arena.get();
+    std::unique_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+    cdmm_handles.emplace(handle, std::move(arena));
+    return handle;
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+int32_t nrq_cdmm_arena_reset(void* handle) {
+  if (!handle) return 0;
+  std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+  auto found = cdmm_handles.find(handle);
+  if (found == cdmm_handles.end()) return 0;
+  Allocator* allocator = found->second.get();
+  if (allocator->kind() != NRQ_ALLOCATOR_ARENA) return 0;
+  // A scope pins the arena for its whole lifetime, so reset during a scope is
+  // refused exactly like reset during a single allocation.
+  if (allocator->in_flight_operations() != 0) return 0;
+  return allocator->reset_serialized() ? 1 : 0;
+}
+
+int32_t nrq_cdmm_arena_destroy(void* handle) {
+  if (!handle) return 0;
+  std::unique_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+  auto found = cdmm_handles.find(handle);
+  if (found == cdmm_handles.end()) return 0;
+  Allocator* allocator = found->second.get();
+  if (allocator->kind() != NRQ_ALLOCATOR_ARENA) return 0;
+  if (allocator->in_flight_operations() != 0) return 0;
+  // Destructors run now, while every chunk is still mapped.
+  allocator->reset_serialized();
+  cdmm_handles.erase(found);
+  return 1;
+}
+
+void* nrq_cdmm_arena_allocate(void* handle, size_t bytes, size_t alignment) {
+  return cdmm_arena_entry(handle, bytes, alignment, nullptr, nullptr);
+}
+
+void* nrq_cdmm_arena_allocate_destructible(void* handle, size_t bytes,
+                                           size_t alignment,
+                                           NrqCdmmDestructor destructor,
+                                           void* context) {
+  return cdmm_arena_entry(handle, bytes, alignment, destructor, context);
+}
+
+size_t nrq_cdmm_arena_allocate_bulk(void* handle, size_t bytes,
+                                    size_t alignment, size_t count,
+                                    void** output) {
+  if (!handle || !output) return 0;
+  NrqCdmmArenaScope scope{};
+  if (!nrq_cdmm_arena_begin(handle, &scope)) return 0;
+  size_t written = 0;
+  for (; written < count; ++written) {
+    void* pointer = nrq_cdmm_arena_scope_allocate(&scope, bytes, alignment);
+    if (!pointer) break;
+    output[written] = pointer;
+  }
+  nrq_cdmm_arena_end(&scope);
+  return written;
+}
+
+static uint64_t cdmm_arena_stat(const void* handle, bool committed) {
+  if (!handle) return 0;
+  std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+  auto found = cdmm_handles.find(const_cast<void*>(handle));
+  if (found == cdmm_handles.end()) return 0;
+  Allocator* allocator = found->second.get();
+  if (allocator->kind() != NRQ_ALLOCATOR_ARENA) return 0;
+  auto* arena = static_cast<ArenaAllocator*>(allocator);
+  // Serialized against a concurrent reset, which rewrites the chunk list.
+  return allocator->serialize_operation([&] {
+    return committed ? arena->committed_bytes() : arena->used_bytes();
+  });
+}
+
+uint64_t nrq_cdmm_arena_used(const void* handle) {
+  return cdmm_arena_stat(handle, false);
+}
+
+uint64_t nrq_cdmm_arena_committed(const void* handle) {
+  return cdmm_arena_stat(handle, true);
+}
+
+uint64_t nrq_cdmm_arena_generation(const void* handle) {
+  if (!handle) return 0;
+  std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+  auto found = cdmm_handles.find(const_cast<void*>(handle));
+  if (found == cdmm_handles.end()) return 0;
+  Allocator* allocator = found->second.get();
+  if (allocator->kind() != NRQ_ALLOCATOR_ARENA) return 0;
+  return static_cast<ArenaAllocator*>(allocator)->generation();
+}
+
+int32_t nrq_cdmm_arena_contains(const void* handle, const void* pointer) {
+  if (!handle || !pointer) return 0;
+  std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+  auto found = cdmm_handles.find(const_cast<void*>(handle));
+  if (found == cdmm_handles.end()) return 0;
+  Allocator* allocator = found->second.get();
+  if (allocator->kind() != NRQ_ALLOCATOR_ARENA) return 0;
+  return static_cast<ArenaAllocator*>(allocator)->contains(pointer) ? 1 : 0;
+}
+
+int32_t nrq_cdmm_arena_begin(void* handle, NrqCdmmArenaScope* scope) {
+  if (!handle || !scope) return 0;
+  std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+  Allocator* allocator = pin_cdmm_handle_locked(handle);
+  if (!allocator) return 0;
+  if (allocator->kind() != NRQ_ALLOCATOR_ARENA) {
+    allocator->unpin_operation();
+    return 0;
+  }
+  scope->arena = handle;
+  scope->state = allocator;
+  scope->generation = static_cast<ArenaAllocator*>(allocator)->generation();
+  return 1;
+}
+
+void* nrq_cdmm_arena_scope_allocate(NrqCdmmArenaScope* scope, size_t bytes,
+                                    size_t alignment) {
+  if (!scope || !scope->state) return nullptr;
+  return static_cast<ArenaAllocator*>(scope->state)->allocate(bytes, alignment);
+}
+
+void* nrq_cdmm_arena_scope_allocate_destructible(NrqCdmmArenaScope* scope,
+                                                 size_t bytes, size_t alignment,
+                                                 NrqCdmmDestructor destructor,
+                                                 void* context) {
+  if (!scope || !scope->state) return nullptr;
+  return static_cast<ArenaAllocator*>(scope->state)->allocate_destructible(
+      bytes, alignment, destructor, context);
+}
+
+size_t nrq_cdmm_arena_scope_allocate_bulk(NrqCdmmArenaScope* scope, size_t bytes,
+                                          size_t alignment, size_t count,
+                                          void** output) {
+  if (!scope || !scope->state || !output) return 0;
+  size_t written = 0;
+  for (; written < count; ++written) {
+    void* pointer = nrq_cdmm_arena_scope_allocate(scope, bytes, alignment);
+    if (!pointer) break;
+    output[written] = pointer;
+  }
+  return written;
+}
+
+void nrq_cdmm_arena_end(NrqCdmmArenaScope* scope) {
+  if (!scope || !scope->state) return;
+  static_cast<Allocator*>(scope->state)->unpin_operation();
+  scope->state = nullptr;
+  scope->arena = nullptr;
+}
+
+void* nrq_cdmm_pool_create(size_t slot_bytes, size_t slot_alignment,
+                           size_t slots_per_chunk, uint32_t flags,
+                           NrqCdmmDestructor destructor, void* context) {
+  if (slot_bytes == 0 || slot_alignment == 0 ||
+      (slot_alignment & (slot_alignment - 1)) != 0)
+    return nullptr;
+  try {
+    auto pool = std::make_unique<CdmmPool>(
+        slot_bytes, slot_alignment, slots_per_chunk,
+        (flags & NRQ_CDMM_POOL_GENERATIONS) != 0, destructor, context);
+    if (!pool->reserve_chunk()) return nullptr;
+    void* handle = pool.get();
+    std::unique_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+    cdmm_handles.emplace(handle, std::move(pool));
+    return handle;
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+// Looks up a pool and pins it, or returns null. The caller must hold the shared
+// handle lock.
+static CdmmPool* pin_cdmm_pool_locked(void* handle) {
+  auto found = cdmm_handles.find(handle);
+  if (found == cdmm_handles.end()) return nullptr;
+  if (found->second->kind() != NRQ_ALLOCATOR_POOL) return nullptr;
+  if (!found->second->try_pin_operation()) return nullptr;
+  return static_cast<CdmmPool*>(found->second.get());
+}
+
+void* nrq_cdmm_pool_allocate(void* handle) {
+  if (!handle) return nullptr;
+  CdmmPool* pool = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+    pool = pin_cdmm_pool_locked(handle);
+  }
+  if (!pool) return nullptr;
+  void* slot = nullptr;
+  try {
+    slot = pool->allocate_serialized(1, 1);
+  } catch (...) {
+    slot = nullptr;
+  }
+  pool->unpin_operation();
+  return slot;
+}
+
+size_t nrq_cdmm_pool_allocate_bulk(void* handle, size_t count, void** output) {
+  if (!handle || !output) return 0;
+  NrqCdmmPoolScope scope{};
+  if (!nrq_cdmm_pool_begin(handle, &scope)) return 0;
+  const size_t written = nrq_cdmm_pool_scope_allocate_bulk(&scope, count, output);
+  nrq_cdmm_pool_end(&scope);
+  return written;
+}
+
+static int32_t cdmm_pool_release_entry(void* handle, void* slot, bool checked,
+                                       uint64_t generation) {
+  if (!handle || !slot) return 0;
+  CdmmPool* pool = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+    pool = pin_cdmm_pool_locked(handle);
+  }
+  if (!pool) return 0;
+  bool released = false;
+  try {
+    released = pool->release_serialized_slot(slot, checked, generation);
+  } catch (...) {
+    released = false;
+  }
+  pool->unpin_operation();
+  return released ? 1 : 0;
+}
+
+int32_t nrq_cdmm_pool_release(void* handle, void* slot) {
+  return cdmm_pool_release_entry(handle, slot, false, 0);
+}
+
+int32_t nrq_cdmm_pool_release_checked(void* handle, void* slot,
+                                      uint64_t generation) {
+  return cdmm_pool_release_entry(handle, slot, true, generation);
+}
+
+size_t nrq_cdmm_pool_release_bulk(void* handle, void* const* slots,
+                                  size_t count) {
+  if (!handle || !slots) return 0;
+  NrqCdmmPoolScope scope{};
+  if (!nrq_cdmm_pool_begin(handle, &scope)) return 0;
+  const size_t released =
+      nrq_cdmm_pool_scope_release_bulk(&scope, slots, count);
+  nrq_cdmm_pool_end(&scope);
+  return released;
+}
+
+uint64_t nrq_cdmm_pool_generation(const void* handle, const void* slot) {
+  if (!handle || !slot) return 0;
+  std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+  auto found = cdmm_handles.find(const_cast<void*>(handle));
+  if (found == cdmm_handles.end()) return 0;
+  if (found->second->kind() != NRQ_ALLOCATOR_POOL) return 0;
+  return static_cast<const CdmmPool*>(found->second.get())->slot_generation(slot);
+}
+
+static uint64_t cdmm_pool_stat(const void* handle, int which) {
+  if (!handle) return 0;
+  std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+  auto found = cdmm_handles.find(const_cast<void*>(handle));
+  if (found == cdmm_handles.end()) return 0;
+  if (found->second->kind() != NRQ_ALLOCATOR_POOL) return 0;
+  const auto* pool = static_cast<const CdmmPool*>(found->second.get());
+  switch (which) {
+    case 0: return pool->live_count();
+    case 1: return pool->committed_bytes();
+    default: return pool->slot_bytes();
+  }
+}
+
+uint64_t nrq_cdmm_pool_live(const void* handle) { return cdmm_pool_stat(handle, 0); }
+uint64_t nrq_cdmm_pool_committed(const void* handle) {
+  return cdmm_pool_stat(handle, 1);
+}
+uint64_t nrq_cdmm_pool_slot_bytes(const void* handle) {
+  return cdmm_pool_stat(handle, 2);
+}
+
+int32_t nrq_cdmm_pool_contains(const void* handle, const void* pointer) {
+  if (!handle || !pointer) return 0;
+  std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+  auto found = cdmm_handles.find(const_cast<void*>(handle));
+  if (found == cdmm_handles.end()) return 0;
+  if (found->second->kind() != NRQ_ALLOCATOR_POOL) return 0;
+  return static_cast<const CdmmPool*>(found->second.get())->contains(pointer) ? 1
+                                                                             : 0;
+}
+
+int32_t nrq_cdmm_pool_reset(void* handle) {
+  if (!handle) return 0;
+  std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+  auto found = cdmm_handles.find(handle);
+  if (found == cdmm_handles.end()) return 0;
+  Allocator* allocator = found->second.get();
+  if (allocator->kind() != NRQ_ALLOCATOR_POOL) return 0;
+  if (allocator->in_flight_operations() != 0) return 0;
+  return allocator->reset_serialized() ? 1 : 0;
+}
+
+int32_t nrq_cdmm_pool_destroy(void* handle) {
+  if (!handle) return 0;
+  std::unique_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+  auto found = cdmm_handles.find(handle);
+  if (found == cdmm_handles.end()) return 0;
+  Allocator* allocator = found->second.get();
+  if (allocator->kind() != NRQ_ALLOCATOR_POOL) return 0;
+  if (allocator->in_flight_operations() != 0) return 0;
+  allocator->reset_serialized();
+  cdmm_handles.erase(found);
+  return 1;
+}
+
+int32_t nrq_cdmm_pool_begin(void* handle, NrqCdmmPoolScope* scope) {
+  if (!handle || !scope) return 0;
+  std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+  CdmmPool* pool = pin_cdmm_pool_locked(handle);
+  if (!pool) return 0;
+  scope->pool = handle;
+  scope->state = pool;
+  return 1;
+}
+
+void* nrq_cdmm_pool_scope_allocate(NrqCdmmPoolScope* scope) {
+  if (!scope || !scope->state) return nullptr;
+  return static_cast<CdmmPool*>(scope->state)->allocate(1, 1);
+}
+
+size_t nrq_cdmm_pool_scope_allocate_bulk(NrqCdmmPoolScope* scope, size_t count,
+                                         void** output) {
+  if (!scope || !scope->state || !output) return 0;
+  auto* pool = static_cast<CdmmPool*>(scope->state);
+  size_t written = 0;
+  for (; written < count; ++written) {
+    void* slot = pool->allocate(1, 1);
+    if (!slot) break;
+    output[written] = slot;
+  }
+  return written;
+}
+
+int32_t nrq_cdmm_pool_scope_release(NrqCdmmPoolScope* scope, void* slot) {
+  if (!scope || !scope->state || !slot) return 0;
+  auto* pool = static_cast<CdmmPool*>(scope->state);
+  return pool->release_unserialized(slot) ? 1 : 0;
+}
+
+size_t nrq_cdmm_pool_scope_release_bulk(NrqCdmmPoolScope* scope,
+                                        void* const* slots, size_t count) {
+  if (!scope || !scope->state || !slots) return 0;
+  auto* pool = static_cast<CdmmPool*>(scope->state);
+  size_t released = 0;
+  for (size_t index = 0; index < count; ++index) {
+    if (pool->release_unserialized(slots[index])) ++released;
+  }
+  return released;
+}
+
+void nrq_cdmm_pool_end(NrqCdmmPoolScope* scope) {
+  if (!scope || !scope->state) return;
+  static_cast<Allocator*>(scope->state)->unpin_operation();
+  scope->state = nullptr;
+  scope->pool = nullptr;
+}
+
+NrqCdmmStrategy nrq_cdmm_strategy_of(const void* pointer) {
+  if (!pointer) return NRQ_CDMM_STRATEGY_NONE;
+  CdmmRange range;
+  if (!cdmm_lookup_range(reinterpret_cast<uintptr_t>(pointer), range))
+    return NRQ_CDMM_STRATEGY_NONE;
+  return range.strategy;
+}
+
+int32_t nrq_cdmm_object_facts(const void* pointer, NrqCdmmFacts* output) {
+  if (!pointer || !output) return 0;
+  std::lock_guard<std::mutex> lock(cdmm_range_mutex);
+  const uintptr_t address = reinterpret_cast<uintptr_t>(pointer);
+  auto position = std::upper_bound(
+      cdmm_ranges.begin(), cdmm_ranges.end(), address,
+      [](uintptr_t value, const CdmmRange& entry) { return value < entry.begin; });
+  if (position == cdmm_ranges.begin()) return 0;
+  --position;
+  if (address >= position->end) return 0;
+  const auto* owner = static_cast<const Allocator*>(position->owner);
+  output->strategy = position->strategy;
+  output->header_bytes = 0;
+  output->object_bytes = 0;
+  output->generation = 0;
+  output->metadata_bytes = 0;
+  // The range lock is held across the description so a chunk cannot be released
+  // between the lookup and the call into the allocator that owns it.
+  owner->cdmm_describe(pointer, *output);
+  return 1;
 }
 
 }  // extern "C"
