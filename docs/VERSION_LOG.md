@@ -88,12 +88,45 @@ above 33 ms.
 - Stress corpus 02 and 03: validation passed in both the development and the
   production configuration.
 
+#### Construction protocol, attributed
+
+The build phases were attributed by counting cycles inside each runtime entry
+point for one full build (temporary instrumentation, removed after the run). The
+counts and per-call costs in cycles:
+
+| entry point | test 02 calls | cycles/call | test 03 calls | cycles/call |
+|---|---:|---:|---:|---:|
+| `nrq_gc_root_frame_open` | 2 097 151 | 87 | 3 500 000 | 107 |
+| `nrq_gc_root_frame_end` | 2 097 152 | 60 | 3 500 000 | 69 |
+| `nrq_gc_allocate_array_planned` | 2 097 151 | 95 | 7 000 000 | 79 |
+| `nrq_gc_root_store` | 4 194 302 | 17 | 10 500 000 | 16 |
+| `nrq_gc_unpin` | 2 097 151 | 17 | 0 | — |
+| `nrq_gc_pin_transfer` | 2 097 151 | 17 | 0 | — |
+
+Each figure includes ~25 cycles of measurement, so the ordering rather than the
+absolute value is what the table is for. Two conclusions follow. The frame pair is
+the largest non-allocation cost — 147 cycles per activation against 17 for a write
+barrier and 17 for a pin transfer — and it is not a bug: one activation registers
+two roots into the thread's slot index and removes them again. And the arithmetic
+floor says the published targets cannot be met by removing protocol: at 79–95
+cycles per allocation, allocating the 2 097 151 nodes costs ~46 ms before the frame,
+the barriers, the pins or the recursion, against a 14 ms target. Reaching it needs
+a different allocation code path — an inline bump with an out-of-line slow path,
+and a header small enough for one-element arrays — not further trimming of the
+calls the compiler emits today.
+
+Three construction candidates were implemented and measured, and all three were
+reverted: bulk per-page promotion in a major sweep (neutral, because a fully live
+page is already classified from its counts at 0.1 ns/object), child prefetching at
+worklist enqueue (32.2 against 30.5 ns/object), and `nrq_gc_root_store_release` in
+place of the unpin/store pair (inside the host's noise floor, so not adopted).
+
 #### Remaining gaps
 
-`BUILD_MS` in test 02 (231 ms against a 14 ms target) is the per-activation GC
-protocol plus 26 ns of allocation per object; closing it needs the root frame,
-barrier, pin and transfer calls removed from the emitted sequence for a recursive
-builder, not a faster allocator. Test 03's 67 ms for a million nodes is the same
+`BUILD_MS` in test 02 (218–231 ms against a 14 ms target) is the per-activation GC
+protocol plus 79–95 cycles of allocation per object; closing it needs the root
+frame, barrier, pin and transfer calls removed from the emitted sequence for a
+recursive builder, not a faster allocator. Test 03's 67 ms for a million nodes is the same
 protocol with a void return. Marking a 100 MB live heap at ~30 ns/object is limited
 by memory latency; the next lever is object density (40 bytes of node per 24 bytes
 of payload), not more instructions removed.
