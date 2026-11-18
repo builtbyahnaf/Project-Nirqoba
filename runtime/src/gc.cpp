@@ -2584,8 +2584,15 @@ bool mark_slice_locked(size_t budget_bytes) {
     if (active_mark.young_only && !object_young(object)) continue;
     const nrq_object_layout* layout = object_layout(object);
     const size_t reference_count = layout->reference_count;
-    if (!layout->trace && reference_count != 0 && reference_count <= 2 &&
-        (layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0) {
+    // A one-element array has the geometry of a record: its payload is the single
+    // element and the descriptor's offsets are relative to that element, so the
+    // offset walk answers it exactly. Only a larger array needs the layout
+    // callback, because only that path knows the element stride.
+    const bool narrow_shape = !layout->trace && reference_count != 0 &&
+                              reference_count <= 2 &&
+                              ((layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0 ||
+                               object_element_count(object) == 1);
+    if (narrow_shape) {
       enqueue_narrow_children_locked(object, layout, payload_bytes,
                                     active_mark);
     } else {
