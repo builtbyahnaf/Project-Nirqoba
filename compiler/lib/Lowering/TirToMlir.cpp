@@ -2178,6 +2178,83 @@ class FunctionTranslator {
         loc, llvm_ptr_type(ctx_), name).getResult();
   }
 
+  // A compiler-emitted word for one allocation site. The runtime writes the
+  // resolved layout descriptor into it on the first allocation, so later
+  // allocations at this site read one pointer instead of searching the layout
+  // memo. The global starts zeroed and is writable, which is why the runtime
+  // re-validates whatever it finds there.
+  mlir::Value allocation_site_cache(mlir::Location loc) {
+    static int counter = 0;
+    const std::string name =
+        "nrq_alloc_site_" + std::to_string(counter++);
+    auto storage_type = mlir::LLVM::LLVMArrayType::get(builder_.getI8Type(), 8);
+    {
+      mlir::OpBuilder::InsertionGuard guard(builder_);
+      builder_.setInsertionPointToStart(module_.getBody());
+      builder_.create<mlir::LLVM::GlobalOp>(
+          loc, storage_type, /*isConstant=*/false, mlir::LLVM::Linkage::Private,
+          name, builder_.getStringAttr(std::string(8, '\0')),
+          /*alignment=*/8);
+    }
+    return builder_.create<mlir::LLVM::AddressOfOp>(loc, llvm_ptr_type(ctx_), name)
+        .getResult();
+  }
+
+  // One rooted managed array allocation: the compiler's static plan, and this
+  // site's descriptor cache so the runtime resolves the layout once per site.
+  mlir::Value emit_planned_rooted_array(mlir::Location loc,
+                                        mlir::Value root_slot,
+                                        mlir::Value count,
+                                        mlir::Value element_size,
+                                        mlir::Value offsets_pointer,
+                                        mlir::Value reference_count) {
+    // Array + extended, the only representation an array can use. Mirrors
+    // NRQ_ALLOC_PLAN_ARRAY | NRQ_ALLOC_PLAN_REPR_BITS(NRQ_ALLOC_REPR_EXTENDED)
+    // from runtime/include/nirqoba/runtime/alloc_hint.h; the runtime re-checks
+    // the plan and falls back to its own decision if the two ever disagree.
+    constexpr uint32_t kArrayAllocationPlan = 1u | (3u << 8);
+    auto fn = ensure_runtime_fn(module_, builder_,
+                                "nrq_gc_allocate_array_planned",
+                                llvm_ptr_type(ctx_),
+                                {llvm_ptr_type(ctx_), builder_.getI64Type(),
+                                 builder_.getI64Type(), llvm_ptr_type(ctx_),
+                                 builder_.getI64Type(), llvm_ptr_type(ctx_),
+                                 builder_.getI32Type()});
+    mlir::Value site_cache = allocation_site_cache(loc);
+    mlir::Value plan = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI32Type(),
+        builder_.getI32IntegerAttr(static_cast<int32_t>(kArrayAllocationPlan)))
+                           .getResult();
+    return builder_.create<mlir::LLVM::CallOp>(
+        loc, fn, mlir::ValueRange{root_slot, count, element_size, offsets_pointer,
+                                  reference_count, site_cache, plan}).getResult();
+  }
+
+  // The structure-of-arrays form of emit_planned_rooted_array: same static plan,
+  // same per-site descriptor cache, strided column table instead of an offset
+  // table.
+  mlir::Value emit_planned_rooted_soa(mlir::Location loc,
+                                      mlir::Value root_slot, mlir::Value count,
+                                      mlir::Value element_size,
+                                      mlir::Value pairs_pointer,
+                                      mlir::Value pair_count) {
+    constexpr uint32_t kArrayAllocationPlan = 1u | (3u << 8);
+    auto fn = ensure_runtime_fn(module_, builder_, "nrq_gc_allocate_soa_planned",
+                                llvm_ptr_type(ctx_),
+                                {llvm_ptr_type(ctx_), builder_.getI64Type(),
+                                 builder_.getI64Type(), llvm_ptr_type(ctx_),
+                                 builder_.getI64Type(), llvm_ptr_type(ctx_),
+                                 builder_.getI32Type()});
+    mlir::Value site_cache = allocation_site_cache(loc);
+    mlir::Value plan = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI32Type(),
+        builder_.getI32IntegerAttr(static_cast<int32_t>(kArrayAllocationPlan)))
+                           .getResult();
+    return builder_.create<mlir::LLVM::CallOp>(
+        loc, fn, mlir::ValueRange{root_slot, count, element_size, pairs_pointer,
+                                  pair_count, site_cache, plan}).getResult();
+  }
+
   void emit_gc_root_registration(mlir::Value slot, const Type& value_type,
                                  mlir::Location loc) {
     std::vector<uint64_t> offsets;
@@ -3069,12 +3146,6 @@ class FunctionTranslator {
             return false;
           }
           register_gc_root(root_slot, op.result.type, loc);
-          auto fn = ensure_runtime_fn(module_, builder_,
-                                      "nrq_gc_allocate_array_typed_rooted",
-                                      llvm_ptr_type(ctx_),
-                                      {llvm_ptr_type(ctx_), builder_.getI64Type(),
-                                       builder_.getI64Type(),
-                                       llvm_ptr_type(ctx_), builder_.getI64Type()});
           mlir::Value size = builder_.create<mlir::LLVM::ConstantOp>(
               loc, builder_.getI64Type(),
               builder_.getI64IntegerAttr(static_cast<int64_t>(layout.element_bytes)))
@@ -3097,9 +3168,8 @@ class FunctionTranslator {
                 loc, builder_.getI64Type(), builder_.getI64IntegerAttr(0)).getResult();
             mlir::Value offsets_pointer = builder_.create<mlir::LLVM::ZeroOp>(
                 loc, llvm_ptr_type(ctx_)).getResult();
-            result = builder_.create<mlir::LLVM::CallOp>(
-                loc, fn, mlir::ValueRange{root_slot, count, size, offsets_pointer,
-                                          ref_count}).getResult();
+            result = emit_planned_rooted_array(loc, root_slot, count, size,
+                                               offsets_pointer, ref_count);
           } else {
             mlir::Value pairs_slot = reference_layout_descriptor(column_pairs, loc);
             if (!pairs_slot) {
@@ -3107,18 +3177,12 @@ class FunctionTranslator {
                           "internal: no descriptor for the reference columns");
               return false;
             }
-            auto soa_fn = ensure_runtime_fn(
-                module_, builder_, "nrq_gc_allocate_soa_rooted",
-                llvm_ptr_type(ctx_),
-                {llvm_ptr_type(ctx_), builder_.getI64Type(), builder_.getI64Type(),
-                 llvm_ptr_type(ctx_), builder_.getI64Type()});
             mlir::Value pair_count = builder_.create<mlir::LLVM::ConstantOp>(
                 loc, builder_.getI64Type(),
                 builder_.getI64IntegerAttr(
                     static_cast<int64_t>(column_pairs.size()))).getResult();
-            result = builder_.create<mlir::LLVM::CallOp>(
-                loc, soa_fn, mlir::ValueRange{root_slot, count, size, pairs_slot,
-                                              pair_count}).getResult();
+            result = emit_planned_rooted_soa(loc, root_slot, count, size,
+                                             pairs_slot, pair_count);
           }
           set(op.result, result);
           return true;
@@ -3430,21 +3494,14 @@ class FunctionTranslator {
             return false;
           }
           register_gc_root(root_slot, op.result.type, loc);
-          auto fn = ensure_runtime_fn(module_, builder_,
-                                     "nrq_gc_allocate_array_typed_rooted",
-                                     llvm_ptr_type(ctx_),
-                                     {llvm_ptr_type(ctx_), builder_.getI64Type(),
-                                      builder_.getI64Type(),
-                                      llvm_ptr_type(ctx_), builder_.getI64Type()});
           mlir::Value size = builder_.create<mlir::LLVM::ConstantOp>(
               loc, builder_.getI64Type(),
               builder_.getI64IntegerAttr(element_size)).getResult();
           mlir::Value ref_count = builder_.create<mlir::LLVM::ConstantOp>(
               loc, builder_.getI64Type(),
               builder_.getI64IntegerAttr(static_cast<int64_t>(reference_offsets.size()))).getResult();
-          mlir::Value result = builder_.create<mlir::LLVM::CallOp>(
-              loc, fn, mlir::ValueRange{root_slot, count, size, offsets_pointer,
-                                        ref_count}).getResult();
+          mlir::Value result = emit_planned_rooted_array(
+              loc, root_slot, count, size, offsets_pointer, ref_count);
           set(op.result, result);
           if (is_development(configuration_) && op.location.is_valid()) {
             const uint64_t site = gc_site_id(op.location);

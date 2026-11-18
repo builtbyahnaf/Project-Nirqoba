@@ -272,8 +272,12 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
     return policy;
   }
   // This one publication writes the root slot it is handed, so its argument
-  // memory is genuinely read and written.
-  if (symbol == "nrq_gc_allocate_array_typed_rooted") {
+  // memory is genuinely read and written. The planned entry point also writes the
+  // compiler-emitted site cache, which is outside the caller's arguments, so the
+  // same policy covers both.
+  if (symbol == "nrq_gc_allocate_array_typed_rooted" ||
+      symbol == "nrq_gc_allocate_array_planned" ||
+      symbol == "nrq_gc_allocate_soa_planned") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     policy.return_noalias = true;

@@ -654,7 +654,7 @@ int function main() {
       if (!callee) return;
       if (callee->str() == "nrq_gc_root_frame_begin") ++frame_begins;
       if (callee->str() == "nrq_gc_root_register_typed") ++registrations;
-      if (callee->str() == "nrq_gc_allocate_array_typed_rooted") ++allocations;
+      if (callee->str() == "nrq_gc_allocate_array_planned") ++allocations;
       if (callee->str() == "nrq_gc_root_unregister") ++unregistrations;
     });
   });
