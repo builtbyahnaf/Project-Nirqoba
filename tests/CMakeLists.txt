@@ -28,6 +28,7 @@ add_executable(nirqoba_unit_tests
   unit/cdmm_coexistence_test.cpp
   unit/cdmm_stress_test.cpp
   unit/cdmm_pool_release_test.cpp
+  unit/alloc_hint_test.cpp
   unit/file_test.cpp
   unit/mapping_test.cpp
   unit/sync_test.cpp

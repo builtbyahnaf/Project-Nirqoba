@@ -62,6 +62,7 @@ set(NIRQOBA_RUNTIME_SOURCES
   src/system_windows.cpp
   src/args_windows.cpp
   src/allocator_windows.cpp
+  src/alloc_hint.cpp
   src/mapping_windows.cpp
 )
 
