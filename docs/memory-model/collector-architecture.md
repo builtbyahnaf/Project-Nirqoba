@@ -6,6 +6,41 @@ which records the interoperability contract, and
 [allocation-coverage.md](allocation-coverage.md), which records which allocation
 path every source construct takes.
 
+## The strategy boundary
+
+Nirqoba's hybrid memory model is not the collector's to change, and this document
+describes only the collector side of it. The rules the collector obeys:
+
+- **Deterministic ownership is the default.** Nothing is tracing-managed unless a
+  program allocates it through a collector entry point.
+- **Arena and pool objects keep their own lifetime.** A region is created,
+  reset and destroyed by its owner; the collector never traces, reclaims or
+  destroys a region or anything in it, and a region never releases a collector
+  object.
+- **A plan may choose a strategy, never change one.** A deterministic plan
+  carries `NRQ_ALLOC_PLAN_DETERMINISTIC` and no representation; a region
+  constructor refuses a plan that carries a representation, a header, an array
+  or managed references, because a region does not trace. The collector's planned
+  entry points refuse a deterministic plan outright and return null rather than
+  quietly allocating collector storage for a site that asked not to be
+  collector-managed.
+- **AOR is a representation, not an ownership class.** H0/H8/H16 describes where
+  an object's layout and state live *inside collector storage*. A 16-byte arena
+  object has no representation and no header; a 16-byte collector record is
+  headerless. Equal size, different ownership.
+- **Cross-strategy references are visible, not merged.** An explicit region can
+  hold a collector pointer and register that storage as an array root, which
+  keeps the object alive while the registration exists. Releasing the root hands
+  the object back to the collector alone; destroying the region does not touch
+  it.
+
+Two directions of the boundary are asserted by
+`tests/unit/cdmm_coexistence_test.cpp` (collector pages are not in the region
+range table, and regions survive collection) and by
+`tests/unit/strategy_boundary_test.cpp` (a deterministic plan is refused by every
+collector entry point and honoured by a region, representation does not decide
+ownership, and an explicit region can root a collector object without owning it).
+
 ## Page classes are the representation
 
 A page is dedicated to one representation, so an object never stores its own

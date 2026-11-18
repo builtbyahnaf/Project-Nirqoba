@@ -61,7 +61,7 @@ Coverage for the change:
   returns the same descriptor, a different table returns a different one, and a
   reference stored in the pointer column is traced and kept alive;
 - the existing SoA entry-point and representation tests still pass;
-- 442 unit tests, 624 integration cases, and 67 `*gc*` configuration-equivalence
+- 446 unit tests, 624 integration cases, and 67 `*gc*` configuration-equivalence
   agreements pass with the change in place.
 
 ## 2. Baseline: one million objects, five runs

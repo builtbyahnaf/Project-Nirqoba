@@ -36,14 +36,45 @@ Two concrete gaps were found and one of them was fixed:
   `soa_layout_matches` takes the same view. A hot SoA site no longer allocates or
   takes `layout_mutex`. Measured in
   [phase-7-performance.md](phase-7-performance.md).
+- `runtime/src/gc.cpp`: the three planned collector entry points now refuse a
+  plan carrying `NRQ_ALLOC_PLAN_DETERMINISTIC` and return null. That plan names
+  deterministic storage, so honouring it would have let the allocator pick the
+  program's lifetime strategy; the compiler's fallback decides instead. No
+  existing caller passes that flag to a collector entry point, so nothing changed
+  behaviour for them.
 - Nothing else in the collector changed. In particular the rejected H0 index
   change is not present.
+
+## 2a. Strategy boundaries (non-negotiable constraint)
+
+The hybrid model is treated as an invariant the collector must not move, and it
+was audited rather than assumed:
+
+| Rule | Where it is enforced |
+|---|---|
+| Deterministic ownership is the default | Nothing is tracing-managed unless allocated through a collector entry point; `nrq_gc_pointer_is_managed` is the check |
+| Regions keep their own lifetime | `nrq_cdmm_strategy_of` / `nrq_cdmm_arena_contains`; the collector's page set and the region range table are disjoint |
+| A plan may choose a strategy, never change one | `cdmm_plan_is_plain` and `cdmm_layout_is_plain` refuse a representation, a header, an array or references; the collector's planned entry points refuse a deterministic plan |
+| AOR is representation, not ownership | A 16-byte arena object reports no representation and no header; a 16-byte collector record is headerless |
+| Cross-strategy references are visible, not merged | `nrq_gc_root_register_array` over region storage keeps a collector object alive; releasing the root returns it to the collector alone |
+
+Both directions are now asserted by `tests/unit/cdmm_coexistence_test.cpp`
+(collector pages are not region storage, regions survive collection) and
+`tests/unit/strategy_boundary_test.cpp` (a deterministic plan is refused by every
+collector entry point and honoured by a region; representation does not decide
+ownership; a region can root a collector object without owning it). The contract
+is written down in
+[collector-architecture.md](../../docs/memory-model/collector-architecture.md).
+
+No part of this tranche merges strategy semantics, and the one measured
+optimization (the SoA geometry memo) is inside collector-managed allocation only:
+that path cannot be reached with region or deterministic storage.
 
 ## 3. Validation actually run
 
 | Check | Result |
 |---|---|
-| Unit tests (`nirqoba_unit_tests.exe`) | **442 / 442 passed** |
+| Unit tests (`nirqoba_unit_tests.exe`) | **446 / 446 passed** |
 | Integration (`tests/run_tests.py`, RelWithDebInfo) | **624 / 624 passed** |
 | Configuration equivalence (`*gc*`) | **67 agreed, 0 skipped, 0 failed** |
 | Build (`nirqoba_unit_tests`, `nirqoba`, both AOR benchmarks) | clean, no warnings from the touched files |
@@ -60,6 +91,15 @@ New tests, all in `tests/unit/gc_phase7_test.cpp`:
 | `NestedArraysStayReachableThroughTheOuterElement` | array of arrays reachable only through the outer element |
 | `SoaGeometryKeepsItsIdentityAndTracesItsColumn` | geometry memo identity plus tracing a pointer in a column |
 | `APlannedRecordAllocatesTheRepresentationItAskedFor` | planned record selects H0, caches the descriptor, replaces a rejected plan |
+
+Strategy-boundary tests, in `tests/unit/strategy_boundary_test.cpp`:
+
+| Test | What it pins |
+|---|---|
+| `EveryCollectorEntryPointRefusesADeterministicPlan` | a plan naming deterministic storage is refused by all three planned collector entry points, allocating and caching nothing |
+| `ADeterministicPlanIsHonouredByARegionInstead` | the same plan creates a pool; a plan carrying references is refused by an arena |
+| `RepresentationDoesNotDecideOwnership` | equal size and header, different ownership, and destroying the region leaves the collector object alone |
+| `ExplicitStorageCanRootACollectorObjectWithoutOwningIt` | a region roots a collector object; releasing the root returns it to the collector alone |
 
 The tests measure the live-object count relative to the count they start with and
 release roots through an owner, so they do not depend on suite order and cannot

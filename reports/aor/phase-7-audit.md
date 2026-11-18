@@ -204,7 +204,19 @@ worth stating because it is a real hazard for any caller that registers a slot o
 a reused stack frame without releasing it: the unwound frame's slot address can
 name a live root later.
 
-### 6.4 Documented: the remembered set retains a referent conservatively
+### 6.4 Fixed: a deterministic plan could reach a collector entry point
+
+`nrq_gc_allocate_planned` documented that `NRQ_ALLOC_REPR_NONE` "means
+deterministic storage, which is not this entry point's job", then treated the
+plan as `Auto` and allocated collector storage anyway. An array or SoA plan for a
+region fell through to the same path. That is the plan changing the program's
+lifetime semantics rather than choosing a strategy, so all three planned entry
+points now refuse a plan carrying `NRQ_ALLOC_PLAN_DETERMINISTIC` and return
+null. The flag is not the same test as `representation == NONE`, which is also
+what a caller that passes no plan supplies, so callers that pass no plan are
+unaffected. No compiler path passes the flag to these entry points.
+
+### 6.5 Documented: the remembered set retains a referent conservatively
 
 Clearing an old object's field does not remove the young object from the
 remembered set, so the young object stays reachable for the minor generation even
