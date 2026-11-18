@@ -993,6 +993,15 @@ def main() -> int:
         help="Use existing binaries instead of rebuilding.",
     )
     parser.add_argument(
+        "--compiler",
+        default=None,
+        help=(
+            "Nirqoba compiler binary to build the corpus with. Defaults to the "
+            "development build; pass the release build to time the production "
+            "configuration with the same workloads."
+        ),
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=RESULT_JSON,
@@ -1007,6 +1016,13 @@ def main() -> int:
 
     if args.repeats < 1:
         parser.error("--repeats must be at least 1")
+
+    if args.compiler is not None:
+        # The corpus compiles each program with the compiler it is given, so a
+        # configuration is chosen by pointing it at that configuration's binary
+        # rather than by rebuilding the harness.
+        global NRQ_EXE
+        NRQ_EXE = Path(args.compiler).resolve()
 
     selected_tests = args.test or sorted(TESTS)
     selected_impls = args.impl or IMPLS
