@@ -66,9 +66,14 @@ int function main() {
 
         let before_collect = gc.get_statistics();
 
+        // See test 01: the millisecond figure is kept for cross-track
+        // comparison and the cycle counter proves the reclamation happened when
+        // the phase is too short to register a millisecond.
         let collect_start = time.now();
+        let collect_cycles_start = time.cycles();
         gc.collect();
         let collect_end = time.now();
+        let collect_cycles_end = time.cycles();
 
         let after_collect = gc.get_statistics();
         let cleared_nodes = before_collect.live_objects - after_collect.live_objects;
@@ -79,6 +84,8 @@ int function main() {
         print(build_end - build_start);
         print("COLLECT_MS");
         print(collect_end - collect_start);
+        print("COLLECT_CYCLES");
+        print(collect_cycles_end - collect_cycles_start);
         print("CHECKSUM");
         print(checksum);
         print("LIVE_AFTER");

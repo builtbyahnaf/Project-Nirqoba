@@ -95,12 +95,20 @@ int function main() {
 
         var checksum = measure_round(object_count, 1);
 
+        // `time.now()` reports whole milliseconds, and a collection of a dead
+        // chain is now tens of microseconds, so the phase is measured twice:
+        // the millisecond figure stays for cross-track comparison, and the
+        // cycle counter reports the same work at a resolution that can show it.
         let collect_start = time.now();
+        let collect_cycles_start = time.cycles();
         gc.collect();
         let collect_end = time.now();
+        let collect_cycles_end = time.cycles();
 
         print("COLLECT_MS");
         print(collect_end - collect_start);
+        print("COLLECT_CYCLES");
+        print(collect_cycles_end - collect_cycles_start);
         print("CHECKSUM");
         print(checksum);
         print("LIVE_AFTER");
