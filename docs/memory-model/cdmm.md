@@ -12,9 +12,10 @@ explicitly:
 
 Nothing selects a strategy automatically yet. Phase 6 added the other half of that
 connection: `nrq_cdmm_pool_create_layout` and `nrq_cdmm_arena_allocate_layout`
-take a compiler layout descriptor, so the size a compiler computed and the slot a
-pool reserves cannot disagree, and a layout a deterministic region cannot trace is
-refused outright. A compiler pass that chooses between arena, pool and collector
+take a compiler layout descriptor, and `nrq_cdmm_pool_create_planned` and
+`nrq_cdmm_arena_allocate_planned` take a compiler allocation plan, so the size and
+alignment a compiler computed and the slot a pool reserves cannot disagree, and a
+layout or plan a deterministic region cannot trace is refused outright. A compiler pass that chooses between arena, pool and collector
 from the same metadata is still future work; see
 [`alloc-hints.md`](alloc-hints.md) for the hint and plan it would consume.
 

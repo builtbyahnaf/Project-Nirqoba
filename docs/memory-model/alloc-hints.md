@@ -44,6 +44,22 @@ headerless (H0), anything in between is compact (H8). A rejected hint — zero
 payload, a non-power-of-two alignment — produces `NONE` plus the rejected flag
 rather than an exception or a partial plan.
 
+## The planned record entry point
+
+```c
+void* nrq_gc_allocate_planned(void** root_slot, size_t bytes,
+                              const size_t* reference_offsets,
+                              size_t reference_count, void** site_cache,
+                              uint32_t plan_flags);
+```
+
+The representation comes from the plan's bits: `HEADERLESS` asks for H0,
+`COMPACT` for H8, `EXTENDED` for H16. `NONE` means deterministic storage and is not
+this entry point's job, so it falls back to Auto; so does a rejected plan. The
+runtime still checks that the requested representation is possible for the payload
+and upgrades it when it is not, which is why a plan can never place a large object
+on a headerless page.
+
 ## The planned allocation entry point
 
 ```c
@@ -57,6 +73,23 @@ void* nrq_gc_allocate_array_planned(void** root_slot, size_t count,
 The compiler emits one zero-initialized 8-byte global per allocation site and
 passes its address as `site_cache`. The runtime stores the resolved descriptor
 there, so a site searches the layout memo once and afterwards reads one pointer.
+
+## The layout memo
+
+Behind the planned entries sits the descriptor interning path, and behind that a
+thread-local memo. It used to be a four-entry ring: five shapes and it started
+evicting, and eight shapes alternated through the table so every allocation
+re-interned. It is now a sixteen-set, two-way table indexed by the shape itself
+(element size, reference count, array/record kind, tracer, and the first and last
+reference offsets). A hit is one hash, two comparisons and no lock; a shape keeps
+its entry even when eight or twenty-four others are in use, and the second way
+absorbs a hash collision between two hot shapes instead of letting them evict each
+other forever.
+
+The memo costs 260 bytes of thread-local storage. It is a fallback, not the fast
+path: a planned site with a warm cache never touches it.
+
+## What the cache is and is not trusted for
 
 Nothing about that cache is trusted. On every call the runtime checks the plan
 (rejected bit clear, array bit set, representation extended) and the cached
@@ -103,10 +136,17 @@ For this site the compiler emits plan `1 | (3 << 8)` (array, extended), a
 ## Migrating
 
 Nothing has to change. `nrq_gc_allocate_array_typed_rooted` and
-`nrq_gc_allocate_soa_rooted` keep their signatures and their behaviour, and
-`nrq_gc_allocate_array_planned` reaches the same allocation path with one extra
-validated input. A site that does not want a plan passes `0` as `plan_flags` and
-`NULL` as `site_cache`.
+`nrq_gc_allocate_soa_rooted` keep their signatures and their behaviour, and the
+planned entries reach the same allocation path with one extra validated input. A
+site that does not want a plan passes `0` as `plan_flags` and `NULL` as
+`site_cache`. A caller that has a descriptor instead of a plan keeps using
+`nrq_gc_allocate_layout`, `nrq_cdmm_pool_create_layout` and
+`nrq_cdmm_arena_allocate_layout`; a caller that has a plan for deterministic
+storage uses `nrq_cdmm_pool_create_planned` or
+`nrq_cdmm_arena_allocate_planned`.
+
+See [`allocation-coverage.md`](allocation-coverage.md) for which path each source
+construct takes.
 
 ## Reproducing the measurements
 
@@ -114,6 +154,7 @@ validated input. A site that does not want a plan passes `0` as `plan_flags` and
 nirqoba_phase5_benchmark 200000 7
 ```
 
-The rows `gc-array-typed`, `gc-array-planned`, and `gc-array-planned-cold` compare
-the typed entry point, a warm site cache, and a cache cleared before every
-allocation. Numbers and variance are in `reports/aor/phase-6-performance.md`.
+The rows `gc-array-typed`, `gc-array-planned`, `gc-array-alt2-*`,
+`gc-array-multishape-*` and `gc-array-diverse24/40-*` compare the typed entry point
+against a warm site cache across one, two, eight, twenty-four and forty shapes.
+Numbers and variance are in `reports/aor/phase-6-performance.md`.
