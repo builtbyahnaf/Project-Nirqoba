@@ -130,6 +130,13 @@ uint64_t nrq_cdmm_pool_committed(const void* pool);
 uint64_t nrq_cdmm_pool_slot_bytes(const void* pool);
 int32_t nrq_cdmm_pool_contains(const void* pool, const void* pointer);
 
+#if defined(NRQ_RUNTIME_DEBUG_ENABLED) && NRQ_RUNTIME_DEBUG_ENABLED
+// Testing seam: seeds a slot's generation so the wraparound rule can be checked
+// without 2^32 allocations. Debug runtime only; the production runtime has no
+// such symbol and no path that writes a generation from outside an allocation.
+int32_t nrq_cdmm_pool_seed_generation(void* pool, void* slot, uint32_t generation);
+#endif
+
 // A pool scope is the pool's bulk path: one registry lookup and one pin for a
 // whole batch of allocations and releases. It carries the same exclusive-use
 // rule as an arena scope.
@@ -143,6 +150,10 @@ void* nrq_cdmm_pool_scope_allocate(NrqCdmmPoolScope* scope);
 size_t nrq_cdmm_pool_scope_allocate_bulk(NrqCdmmPoolScope* scope, size_t count,
                                          void** output);
 int32_t nrq_cdmm_pool_scope_release(NrqCdmmPoolScope* scope, void* slot);
+// Generation-checked release through a scope, so validating a stale reference
+// does not also pay for the registry lookup a single-object call needs.
+int32_t nrq_cdmm_pool_scope_release_checked(NrqCdmmPoolScope* scope, void* slot,
+                                            uint64_t generation);
 size_t nrq_cdmm_pool_scope_release_bulk(NrqCdmmPoolScope* scope,
                                         void* const* slots, size_t count);
 void nrq_cdmm_pool_end(NrqCdmmPoolScope* scope);

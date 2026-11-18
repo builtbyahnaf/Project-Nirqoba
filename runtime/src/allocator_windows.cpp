@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <atomic>
 #include <cstdint>
 #include <condition_variable>
@@ -538,36 +539,61 @@ class CdmmPool final : public Allocator {
         [&] { return release_slot(slot, checked, generation); });
   }
 
-  // Scope path: the scope owns the pool for its lifetime, so the release needs no
-  // operation lock. The liveness checks are the same ones the serialized path
-  // uses, so a double release is still refused.
-  bool release_unserialized(void* slot) { return release_slot(slot, false, 0); }
+  // Scope path: the scope owns the pool for its lifetime, so a release needs no
+  // operation lock. The liveness and generation checks are identical, so a
+  // double release or a stale generation is still refused.
+  bool release_unserialized(void* slot, bool checked, uint64_t generation) {
+    return release_slot(slot, checked, generation);
+  }
 
   bool reset() override {
-    for (Chunk& chunk : chunks_) {
-      for (size_t local = 0; local < chunk.slot_count; ++local) {
-        const uint64_t bit = uint64_t{1} << (local % 64);
-        if ((chunk.live_bits[local / 64] & bit) == 0) continue;
-        if (destructor_)
-          destructor_(reinterpret_cast<void*>(chunk.base + local * stride_),
-                      context_);
-        chunk.live_bits[local / 64] &= ~bit;
+    free_slot_count_ = 0;
+    for (size_t chunk_index = 0; chunk_index < chunks_.size(); ++chunk_index) {
+      Chunk& chunk = chunks_[chunk_index];
+      if (chunk.live == 0) {
+        // Its free list is already complete; rebuilding it would be work
+        // proportional to a pool the caller is not using.
+        free_slot_count_ += chunk.free_count;
+        continue;
+      }
+      // Only the live slots have to move. Every other slot is already on this
+      // chunk's free list, so reset costs the live set plus a bitmap scan, not a
+      // walk over the whole chunk.
+      size_t released = 0;
+      for (size_t word = 0; word < chunk.live_bits.size(); ++word) {
+        uint64_t bits = chunk.live_bits[word];
+        chunk.live_bits[word] = 0;
+        while (bits != 0) {
+          const size_t bit_index = static_cast<size_t>(std::countr_zero(bits));
+          bits &= bits - 1;
+          const size_t local = word * 64 + bit_index;
+          if (local >= chunk.slot_count) break;
+          void* slot = reinterpret_cast<void*>(chunk.base + local * stride_);
+          if (destructor_) destructor_(slot, context_);
+          std::memset(slot, 0xDD, stride_);
+          *static_cast<size_t*>(slot) = chunk.free_head;
+          chunk.free_head = local;
+          ++released;
+        }
       }
       chunk.live = 0;
+      chunk.free_count += released;
+      free_slot_count_ += chunk.free_count;
+      if (!chunk.in_free_set) {
+        chunk.in_free_set = true;
+        chunks_with_free_.push_back(chunk_index);
+      }
     }
     live_total_ = 0;
-    rebuild_free_list();
     return true;
   }
   NrqAllocatorKind kind() const override { return NRQ_ALLOCATOR_POOL; }
 
   void free_statistics(size_t& free_bytes,
                        size_t& largest_free_block) const override {
-    free_bytes = 0;
-    for (const Chunk& chunk : chunks_)
-      free_bytes += (chunk.slot_count - chunk.live) * stride_;
+    free_bytes = free_slot_count_ * stride_;
     // A free slot can serve exactly one slot-sized request.
-    largest_free_block = free_bytes == 0 ? 0 : stride_;
+    largest_free_block = free_slot_count_ == 0 ? 0 : stride_;
   }
 
   void cdmm_describe(const void* object, NrqCdmmFacts& facts) const override {
@@ -575,28 +601,39 @@ class CdmmPool final : public Allocator {
     facts.object_bytes = slot_bytes_;
     facts.generation = 0;
     facts.metadata_bytes = 0;
+    size_t chunk_index = 0;
     size_t local = 0;
-    const size_t index = slot_index_for(reinterpret_cast<uintptr_t>(object), local);
-    if (index == kNoSlot) return;
-    const Chunk& chunk = chunks_[index / slots_per_chunk_];
+    if (!locate(object, chunk_index, local)) return;
+    const Chunk& chunk = chunks_[chunk_index];
     if (generations_) facts.generation = chunk.generations[local];
     facts.metadata_bytes = chunk.slot_count == 0 ? 0
                                                  : chunk.metadata_bytes / chunk.slot_count;
   }
 
   uint64_t slot_generation(const void* slot) const {
+    size_t chunk_index = 0;
     size_t local = 0;
-    const size_t index = slot_index_for(reinterpret_cast<uintptr_t>(slot), local);
-    if (index == kNoSlot || !generations_) return 0;
-    return chunks_[index / slots_per_chunk_].generations[local];
+    if (!generations_ || !locate(slot, chunk_index, local)) return 0;
+    return chunks_[chunk_index].generations[local];
   }
+
+#if defined(NRQ_RUNTIME_DEBUG_ENABLED) && NRQ_RUNTIME_DEBUG_ENABLED
+  bool seed_generation(const void* slot, uint32_t generation) {
+    size_t chunk_index = 0;
+    size_t local = 0;
+    if (!generations_ || !locate(slot, chunk_index, local)) return false;
+    chunks_[chunk_index].generations[local] = generation;
+    return true;
+  }
+#endif
 
   uint64_t live_count() const { return live_total_; }
   uint64_t committed_bytes() const { return committed_; }
   uint64_t slot_bytes() const { return slot_bytes_; }
   bool contains(const void* pointer) const {
+    size_t chunk_index = 0;
     size_t local = 0;
-    return slot_index_for(reinterpret_cast<uintptr_t>(pointer), local) != kNoSlot;
+    return locate(pointer, chunk_index, local);
   }
 
  private:
@@ -605,62 +642,102 @@ class CdmmPool final : public Allocator {
   struct Chunk {
     void* raw = nullptr;
     uintptr_t base = 0;
-    size_t first_index = 0;
     size_t slot_count = 0;
     size_t live = 0;
+    // Local free list: a free slot holds the local index of the next free slot in
+    // this chunk, and the chunk holds the head. Keeping the list per chunk is what
+    // makes a reset cost the chunks it touches instead of the whole pool.
+    size_t free_head = kNoSlot;
+    size_t free_count = 0;
+    bool in_free_set = false;
     size_t metadata_bytes = 0;
     std::vector<uint64_t> live_bits;
     std::vector<uint32_t> generations;
   };
 
-  // Maps an address to its global slot index, or kNoSlot when the address is not
-  // the start of a slot in this pool. An interior address is rejected rather
-  // than rounded: releasing one would corrupt the neighbouring slot.
-  size_t slot_index_for(uintptr_t address, size_t& local) const {
-    for (const Chunk& chunk : chunks_) {
-      if (address < chunk.base) continue;
-      const uintptr_t offset = address - chunk.base;
-      if (offset >= chunk.slot_count * stride_) continue;
-      if (offset % stride_ != 0) return kNoSlot;
-      local = static_cast<size_t>(offset / stride_);
-      return chunk.first_index + local;
-    }
-    return kNoSlot;
+  // Maps an address to its chunk and local slot, or returns false when the
+  // address is not the start of a slot in this pool. An interior address is
+  // rejected rather than rounded: releasing one would corrupt its neighbour.
+  bool locate(const void* pointer, size_t& chunk_index, size_t& local) const {
+    const uintptr_t address = reinterpret_cast<uintptr_t>(pointer);
+    // Binary search over chunk bases. The pool grows by allocating chunks, so a
+    // linear scan costs one comparison per chunk and dominated the release path
+    // once a pool held a few hundred of them.
+    auto position = std::upper_bound(
+        chunk_order_.begin(), chunk_order_.end(), address,
+        [this](uintptr_t value, size_t index) {
+          return value < chunks_[index].base;
+        });
+    if (position == chunk_order_.begin()) return false;
+    const size_t candidate = *(position - 1);
+    const Chunk& chunk = chunks_[candidate];
+    const uintptr_t offset = address - chunk.base;
+    if (offset >= chunk.slot_count * stride_) return false;
+    if (offset % stride_ != 0) return false;
+    chunk_index = candidate;
+    local = static_cast<size_t>(offset / stride_);
+    return true;
   }
 
-  void* address_of(size_t index) const {
-    const size_t chunk_index = index / slots_per_chunk_;
-    const size_t local = index % slots_per_chunk_;
-    return reinterpret_cast<void*>(
-        chunks_[chunk_index].base + local * stride_);
+  void* slot_address(const Chunk& chunk, size_t local) const {
+    return reinterpret_cast<void*>(chunk.base + local * stride_);
+  }
+
+  void link_new_chunk(size_t chunk_index) {
+    Chunk& chunk = chunks_[chunk_index];
+    chunk.free_head = kNoSlot;
+    for (size_t local = chunk.slot_count; local-- > 0;) {
+      void* slot = slot_address(chunk, local);
+      *static_cast<size_t*>(slot) = chunk.free_head;
+      chunk.free_head = local;
+    }
+    chunk.free_count = chunk.slot_count;
+    chunk.in_free_set = true;
+    chunks_with_free_.push_back(chunk_index);
+    free_slot_count_ += chunk.slot_count;
   }
 
   void* allocate_slot() {
-    if (free_head_ == kNoSlot && !add_chunk()) return nullptr;
-    const size_t index = free_head_;
-    void* slot = address_of(index);
-    free_head_ = *static_cast<size_t*>(slot);
-    Chunk& chunk = chunks_[index / slots_per_chunk_];
-    const size_t local = index % slots_per_chunk_;
-    chunk.live_bits[local / 64] |= uint64_t{1} << (local % 64);
-    ++chunk.live;
-    ++live_total_;
-    if (generations_) {
-      // Zero means "no allocation", so a wrap skips it. With 2^32 values the
-      // wrap is unreachable for any realistic reuse count.
-      uint32_t generation = chunk.generations[local] + 1;
-      if (generation == 0) generation = 1;
-      chunk.generations[local] = generation;
+    while (!chunks_with_free_.empty()) {
+      const size_t chunk_index = chunks_with_free_.back();
+      Chunk& chunk = chunks_[chunk_index];
+      if (chunk.free_count == 0) {
+        chunks_with_free_.pop_back();
+        chunk.in_free_set = false;
+        continue;
+      }
+      const size_t local = chunk.free_head;
+      void* slot = slot_address(chunk, local);
+      chunk.free_head = *static_cast<size_t*>(slot);
+      --chunk.free_count;
+      --free_slot_count_;
+      const uint64_t bit = uint64_t{1} << (local % 64);
+      chunk.live_bits[local / 64] |= bit;
+      ++chunk.live;
+      ++live_total_;
+      if (generations_) {
+        // Zero means "no allocation", so a wrap skips it. With 2^32 values the
+        // wrap is unreachable for any realistic reuse count.
+        uint32_t generation = chunk.generations[local] + 1;
+        if (generation == 0) generation = 1;
+        chunk.generations[local] = generation;
+      }
+      if (chunk.free_count == 0) {
+        chunks_with_free_.pop_back();
+        chunk.in_free_set = false;
+      }
+      return slot;
     }
-    return slot;
+    if (!add_chunk()) return nullptr;
+    return allocate_slot();
   }
 
   bool release_slot(void* pointer, bool checked, uint64_t expected) {
     if (!pointer) return false;
+    size_t chunk_index = 0;
     size_t local = 0;
-    const size_t index = slot_index_for(reinterpret_cast<uintptr_t>(pointer), local);
-    if (index == kNoSlot) return false;
-    Chunk& chunk = chunks_[index / slots_per_chunk_];
+    if (!locate(pointer, chunk_index, local)) return false;
+    Chunk& chunk = chunks_[chunk_index];
     const uint64_t bit = uint64_t{1} << (local % 64);
     // A bit that is already clear means a double release or an address that was
     // never handed out; both are refused without touching the slot.
@@ -673,10 +750,17 @@ class CdmmPool final : public Allocator {
     --live_total_;
     if (destructor_) destructor_(pointer, context_);
     // Poison the payload so a stale read is visible in tests and a debugger, then
-    // link the slot into the free list. The link overwrites the first word.
+    // link the slot into this chunk's free list. The link overwrites the first
+    // word, which is why the poison is written first.
     std::memset(pointer, 0xDD, stride_);
-    *static_cast<size_t*>(pointer) = free_head_;
-    free_head_ = index;
+    *static_cast<size_t*>(pointer) = chunk.free_head;
+    chunk.free_head = local;
+    ++chunk.free_count;
+    ++free_slot_count_;
+    if (!chunk.in_free_set) {
+      chunk.in_free_set = true;
+      chunks_with_free_.push_back(chunk_index);
+    }
     return true;
   }
 
@@ -698,8 +782,6 @@ class CdmmPool final : public Allocator {
     Chunk chunk;
     chunk.raw = raw;
     chunk.base = base;
-    chunk.first_index =
-        chunks_.empty() ? 0 : chunks_.back().first_index + slots_per_chunk_;
     chunk.slot_count = slots;
     try {
       chunk.live_bits.assign((slots + 63) / 64, 0);
@@ -709,31 +791,24 @@ class CdmmPool final : public Allocator {
                              chunk.generations.capacity() * sizeof(uint32_t) +
                              (alignment - 1);
       chunks_.push_back(std::move(chunk));
+      // Sorted chunk index, so a release finds its chunk without a scan. Chunk
+      // indices stay valid: the vector only ever grows.
+      const size_t index = chunks_.size() - 1;
+      auto position = std::upper_bound(
+          chunk_order_.begin(), chunk_order_.end(), base,
+          [this](uintptr_t value, size_t candidate) {
+            return value < chunks_[candidate].base;
+          });
+      chunk_order_.insert(position, index);
     } catch (...) {
       HeapFree(GetProcessHeap(), 0, raw);
       return false;
     }
-    Chunk& added = chunks_.back();
-    for (size_t local = slots; local-- > 0;) {
-      void* slot = reinterpret_cast<void*>(added.base + local * stride_);
-      *static_cast<size_t*>(slot) = free_head_;
-      free_head_ = added.first_index + local;
-    }
+    const size_t index = chunks_.size() - 1;
+    link_new_chunk(index);
     committed_ += total;
     cdmm_register_range(this, base, bytes, NRQ_CDMM_STRATEGY_POOL);
     return true;
-  }
-
-  void rebuild_free_list() {
-    free_head_ = kNoSlot;
-    for (size_t chunk_index = chunks_.size(); chunk_index-- > 0;) {
-      Chunk& chunk = chunks_[chunk_index];
-      for (size_t local = chunk.slot_count; local-- > 0;) {
-        void* slot = reinterpret_cast<void*>(chunk.base + local * stride_);
-        *static_cast<size_t*>(slot) = free_head_;
-        free_head_ = chunk.first_index + local;
-      }
-    }
   }
 
   void release_chunks() {
@@ -742,7 +817,9 @@ class CdmmPool final : public Allocator {
       HeapFree(GetProcessHeap(), 0, chunk.raw);
     }
     chunks_.clear();
-    free_head_ = kNoSlot;
+    chunk_order_.clear();
+    chunks_with_free_.clear();
+    free_slot_count_ = 0;
     live_total_ = 0;
     committed_ = 0;
   }
@@ -754,10 +831,15 @@ class CdmmPool final : public Allocator {
   bool generations_ = false;
   NrqCdmmDestructor destructor_ = nullptr;
   void* context_ = nullptr;
-  size_t free_head_ = kNoSlot;
   size_t live_total_ = 0;
+  size_t free_slot_count_ = 0;
   size_t committed_ = 0;
   std::vector<Chunk> chunks_;
+  // Chunk indices sorted by base address, and the set of chunks that still have
+  // at least one free slot. Both hold indices, not pointers, so growing `chunks_`
+  // never invalidates them.
+  std::vector<size_t> chunk_order_;
+  std::vector<size_t> chunks_with_free_;
 };
 
 struct ArenaChunk {
@@ -3130,6 +3212,21 @@ size_t nrq_cdmm_pool_release_bulk(void* handle, void* const* slots,
   return released;
 }
 
+#if defined(NRQ_RUNTIME_DEBUG_ENABLED) && NRQ_RUNTIME_DEBUG_ENABLED
+int32_t nrq_cdmm_pool_seed_generation(void* handle, void* slot,
+                                      uint32_t generation) {
+  if (!handle || !slot) return 0;
+  std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+  auto found = cdmm_handles.find(handle);
+  if (found == cdmm_handles.end()) return 0;
+  if (found->second->kind() != NRQ_ALLOCATOR_POOL) return 0;
+  return static_cast<CdmmPool*>(found->second.get())
+                 ->seed_generation(slot, generation)
+             ? 1
+             : 0;
+}
+#endif
+
 uint64_t nrq_cdmm_pool_generation(const void* handle, const void* slot) {
   if (!handle || !slot) return 0;
   std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
@@ -3226,7 +3323,14 @@ size_t nrq_cdmm_pool_scope_allocate_bulk(NrqCdmmPoolScope* scope, size_t count,
 int32_t nrq_cdmm_pool_scope_release(NrqCdmmPoolScope* scope, void* slot) {
   if (!scope || !scope->state || !slot) return 0;
   auto* pool = static_cast<CdmmPool*>(scope->state);
-  return pool->release_unserialized(slot) ? 1 : 0;
+  return pool->release_unserialized(slot, false, 0) ? 1 : 0;
+}
+
+int32_t nrq_cdmm_pool_scope_release_checked(NrqCdmmPoolScope* scope, void* slot,
+                                            uint64_t generation) {
+  if (!scope || !scope->state || !slot) return 0;
+  auto* pool = static_cast<CdmmPool*>(scope->state);
+  return pool->release_unserialized(slot, true, generation) ? 1 : 0;
 }
 
 size_t nrq_cdmm_pool_scope_release_bulk(NrqCdmmPoolScope* scope,
@@ -3235,7 +3339,7 @@ size_t nrq_cdmm_pool_scope_release_bulk(NrqCdmmPoolScope* scope,
   auto* pool = static_cast<CdmmPool*>(scope->state);
   size_t released = 0;
   for (size_t index = 0; index < count; ++index) {
-    if (pool->release_unserialized(slots[index])) ++released;
+    if (pool->release_unserialized(slots[index], false, 0)) ++released;
   }
   return released;
 }
