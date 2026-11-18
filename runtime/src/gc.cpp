@@ -857,11 +857,47 @@ const nrq_object_layout kPointerRootLayout{
 // would read expired storage on the next allocation, and comparing two calls by
 // it would accept a table that has since been rebuilt with different contents.
 struct LayoutMemo {
-  // Four entries cover the interleaved shapes a typed workload uses without
-  // letting a rarely seen layout evict the hot one after a single pass.
-  static constexpr size_t kCapacity = 4;
+  // The memo used to be a four-entry ring. That is enough for a handful of
+  // interleaved shapes and nothing more: a program alternating eight shapes
+  // evicted every entry before it came round again, so every allocation took the
+  // interning path. It is now a direct-mapped table indexed by the shape itself,
+  // which keeps the hit path at one hash and one comparison no matter how many
+  // shapes a program uses, and gives unrelated shapes their own entries instead
+  // of making them compete for a shared ring.
+  // Sixteen sets, two ways each. A direct-mapped table is one comparison but a
+  // single hash collision between two hot shapes would make both miss forever;
+  // the second way absorbs exactly that case for 256 bytes of thread-local
+  // storage.
+  static constexpr size_t kSets = 16;
+  static constexpr size_t kWays = 2;
+  static constexpr size_t kCapacity = kSets * kWays;
   const nrq_object_layout* layouts[kCapacity] = {};
-  size_t next = 0;
+  // One replacement bit per set, flipped on every insert into that set.
+  uint32_t victim = 0;
+
+  static uint64_t mix(uint64_t value) {
+    // splitmix64 finalizer: a few multiplies and shifts, no branches, and it
+    // spreads the small, highly correlated sizes real layouts have.
+    value += 0x9E3779B97F4A7C15ull;
+    value = (value ^ (value >> 30)) * 0xBF58476D1CE4E5B9ull;
+    value = (value ^ (value >> 27)) * 0x94D049BB133111EBull;
+    return value ^ (value >> 31);
+  }
+
+  // The shape is the key: element size, reference count, array/record kind, any
+  // custom tracer, and the two offsets that distinguish tables of equal length.
+  static size_t set_for(size_t element_size, size_t count, bool repeated,
+                        nrq_gc_trace_fn trace, const size_t* offsets) {
+    uint64_t key = mix(static_cast<uint64_t>(element_size) |
+                       (static_cast<uint64_t>(count) << 32));
+    key ^= mix(static_cast<uint64_t>(repeated ? 1u : 2u));
+    key ^= mix(reinterpret_cast<uintptr_t>(trace));
+    if (count != 0 && offsets) {
+      key ^= mix(static_cast<uint64_t>(offsets[0]) + 0x51ED270B);
+      key ^= mix(static_cast<uint64_t>(offsets[count - 1]) * 3u);
+    }
+    return static_cast<size_t>(key) & (kSets - 1);
+  }
 };
 thread_local LayoutMemo layout_memo;
 thread_local uint64_t layout_memo_hits = 0;
@@ -905,8 +941,11 @@ const nrq_object_layout* layout_for_allocation(size_t bytes,
   // a one-element container has bytes == element_size exactly like a fixed
   // record, and describing it as one would hide its element count.
   const size_t element_bytes = repeated ? element_size : 0;
-  for (size_t index = 0; index < LayoutMemo::kCapacity; ++index) {
-    const nrq_object_layout* cached = layout_memo.layouts[index];
+  const size_t set = LayoutMemo::set_for(element_size, count, repeated, trace,
+                                        offsets);
+  const size_t base = set * LayoutMemo::kWays;
+  for (size_t way = 0; way < LayoutMemo::kWays; ++way) {
+    const nrq_object_layout* cached = layout_memo.layouts[base + way];
     if (cached && layout_memo_matches(cached, bytes, element_size, trace,
                                       offsets, count, repeated)) {
       ++layout_memo_hits;
@@ -917,8 +956,10 @@ const nrq_object_layout* layout_for_allocation(size_t bytes,
   const nrq_object_layout* layout = nrq_gc_layout_intern(
       payload_bytes, element_bytes, trace, offsets, count);
   if (layout) {
-    layout_memo.layouts[layout_memo.next] = layout;
-    layout_memo.next = (layout_memo.next + 1) % LayoutMemo::kCapacity;
+    const uint32_t bit = 1u << set;
+    const size_t way = (layout_memo.victim & bit) != 0 ? 1 : 0;
+    layout_memo.victim ^= bit;
+    layout_memo.layouts[base + way] = layout;
   }
   return layout;
 }
@@ -5082,6 +5123,39 @@ void* allocate_array_rooted_impl(void** root_slot, size_t count,
                                  hint, true);
   store_root_value_locked(root_slot, object);
   return object;
+}
+
+void* nrq_gc_allocate_planned(void** root_slot, size_t bytes,
+                              const size_t* reference_offsets,
+                              size_t reference_count, void** site_cache,
+                              uint32_t plan_flags) {
+  if (!root_slot || bytes == 0 || bytes > SIZE_MAX - 16) return nullptr;
+  // A record plan names H0, H8 or H16. `NONE` means deterministic storage, which
+  // is not this entry point's job, and an array plan is for an array.
+  const uint32_t representation = NRQ_ALLOC_PLAN_REPR_OF(plan_flags);
+  GcRepresentation hint = GcRepresentation::Auto;
+  if ((plan_flags & (NRQ_ALLOC_PLAN_REJECTED | NRQ_ALLOC_PLAN_ARRAY)) == 0) {
+    switch (representation) {
+      case NRQ_ALLOC_REPR_HEADERLESS: hint = GcRepresentation::Headerless; break;
+      case NRQ_ALLOC_REPR_COMPACT: hint = GcRepresentation::Compact; break;
+      case NRQ_ALLOC_REPR_EXTENDED: hint = GcRepresentation::Extended; break;
+      default: hint = GcRepresentation::Auto; break;
+    }
+  }
+  const nrq_object_layout* layout = nullptr;
+  if (site_cache) layout = static_cast<const nrq_object_layout*>(*site_cache);
+  if (layout &&
+      !layout_memo_matches(layout, bytes, bytes, nullptr, reference_offsets,
+                           reference_count, false))
+    layout = nullptr;
+  if (!layout) {
+    layout = layout_for_allocation(bytes, bytes, nullptr, reference_offsets,
+                                   reference_count, false);
+    if (!layout) return nullptr;
+    if (site_cache) *site_cache = const_cast<nrq_object_layout*>(layout);
+  }
+  return allocate_array_rooted_impl(root_slot, 1, bytes, reference_offsets,
+                                    reference_count, layout, hint);
 }
 
 void* nrq_gc_allocate_array_typed_rooted(

@@ -159,10 +159,11 @@ TEST(GcTest, OneLayoutServesEveryCompatibleInstance) {
   ASSERT_EQ(nrq_gc_layout_count(), shared);
 }
 
-TEST(GcTest, LayoutMemoHitsMultipleLayoutsAndEvictsRoundRobin) {
-  // Typed workloads interleave several shapes. Four entries must all be
-  // searched, each hit must avoid interning, and the fifth distinct shape must
-  // evict the oldest slot in round-robin order rather than the newest.
+TEST(GcTest, LayoutMemoKeepsManyShapesWithoutEviction) {
+  // Typed workloads interleave several shapes, and the memo used to hold four.
+  // The table is now indexed by the shape, so a program may use many shapes at
+  // once: each one interns once and hits afterwards, and none of them evicts
+  // another.
   nrq_gc_disable();
   struct Four { void* a; void* b; void* c; void* d; };
   const size_t t1[] = {offsetof(Four, a)};
@@ -171,63 +172,47 @@ TEST(GcTest, LayoutMemoHitsMultipleLayoutsAndEvictsRoundRobin) {
   const size_t t4[] = {offsetof(Four, a), offsetof(Four, b), offsetof(Four, c),
                        offsetof(Four, d)};
   const size_t t5[] = {offsetof(Four, b)};
+  struct Shape { const size_t* offsets; size_t count; };
+  const Shape shapes[5] = {{t1, 1}, {t2, 2}, {t3, 3}, {t4, 4}, {t5, 1}};
 
-  const uint64_t hits_before = nrq_gc_layout_memo_hits();
   const uint64_t misses_before = nrq_gc_layout_memo_misses();
-  void* objects[5] = {
-      nrq_gc_allocate_array_typed(1, sizeof(Four), t1, 1),
-      nrq_gc_allocate_array_typed(1, sizeof(Four), t2, 2),
-      nrq_gc_allocate_array_typed(1, sizeof(Four), t3, 3),
-      nrq_gc_allocate_array_typed(1, sizeof(Four), t4, 4),
-      nrq_gc_allocate_array_typed(1, sizeof(Four), t5, 1),
-  };
-  for (void* object : objects) ASSERT_NE(object, nullptr);
+  void* objects[5] = {};
+  for (size_t index = 0; index < 5; ++index) {
+    objects[index] = nrq_gc_allocate_array_typed(
+        1, sizeof(Four), shapes[index].offsets, shapes[index].count);
+    ASSERT_NE(objects[index], nullptr);
+  }
   ASSERT_EQ(nrq_gc_layout_memo_misses() - misses_before, uint64_t{5});
-
   const nrq_object_layout* layouts[5];
-  for (size_t index = 0; index < 5; ++index)
+  for (size_t index = 0; index < 5; ++index) {
     layouts[index] = nrq_gc_object_layout(objects[index]);
-  for (size_t i = 0; i < 5; ++i) {
-    ASSERT_NE(layouts[i], nullptr);
-    for (size_t j = i + 1; j < 5; ++j) ASSERT_TRUE(layouts[i] != layouts[j]);
+    ASSERT_NE(layouts[index], nullptr);
   }
 
-  // After five inserts the cache holds B, C, D and E; A was evicted first.
+  // Two more passes over all five shapes: every allocation must hit, and every
+  // shape must resolve to the same descriptor it did the first time.
   const uint64_t hits_before_cached = nrq_gc_layout_memo_hits();
-  void* cached[4] = {
-      nrq_gc_allocate_array_typed(1, sizeof(Four), t2, 2),
-      nrq_gc_allocate_array_typed(1, sizeof(Four), t3, 3),
-      nrq_gc_allocate_array_typed(1, sizeof(Four), t4, 4),
-      nrq_gc_allocate_array_typed(1, sizeof(Four), t5, 1),
-  };
-  for (void* object : cached) ASSERT_NE(object, nullptr);
-  ASSERT_EQ(nrq_gc_layout_memo_hits() - hits_before_cached, uint64_t{4});
+  const uint64_t misses_before_cached = nrq_gc_layout_memo_misses();
+  for (size_t round = 0; round < 2; ++round) {
+    for (size_t index = 0; index < 5; ++index) {
+      void* object = nrq_gc_allocate_array_typed(
+          1, sizeof(Four), shapes[index].offsets, shapes[index].count);
+      ASSERT_NE(object, nullptr);
+      ASSERT_TRUE(nrq_gc_object_layout(object) == layouts[index]);
+    }
+  }
+  ASSERT_EQ(nrq_gc_layout_memo_misses() - misses_before_cached, uint64_t{0});
+  ASSERT_EQ(nrq_gc_layout_memo_hits() - hits_before_cached, uint64_t{10});
 
-  // Reusing the evicted shape must miss once, intern the same descriptor again
-  // and then hit. Its insertion replaces B, the next slot in round-robin order.
-  const uint64_t hits_before_a = nrq_gc_layout_memo_hits();
-  const uint64_t misses_before_a = nrq_gc_layout_memo_misses();
-  void* evicted = nrq_gc_allocate_array_typed(1, sizeof(Four), t1, 1);
-  ASSERT_NE(evicted, nullptr);
-  ASSERT_EQ(nrq_gc_layout_memo_misses() - misses_before_a, uint64_t{1});
-  ASSERT_TRUE(nrq_gc_object_layout(evicted) == layouts[0]);
-  void* rehit = nrq_gc_allocate_array_typed(1, sizeof(Four), t1, 1);
-  ASSERT_NE(rehit, nullptr);
-  ASSERT_EQ(nrq_gc_layout_memo_hits() - hits_before_a, uint64_t{1});
-  ASSERT_TRUE(nrq_gc_object_layout(rehit) == layouts[0]);
-
-  // B is now the evicted entry. Repopulating it must produce B's own descriptor,
-  // not the offsets of the slot it replaced.
-  const uint64_t misses_before_b = nrq_gc_layout_memo_misses();
-  void* b_again = nrq_gc_allocate_array_typed(1, sizeof(Four), t2, 2);
-  ASSERT_NE(b_again, nullptr);
-  ASSERT_EQ(nrq_gc_layout_memo_misses() - misses_before_b, uint64_t{1});
-  const nrq_object_layout* b_layout = nrq_gc_object_layout(b_again);
-  ASSERT_TRUE(b_layout == layouts[1]);
-  ASSERT_EQ(b_layout->reference_count, uint32_t{2});
-  ASSERT_EQ(b_layout->reference_offsets[0], uint32_t{0});
-  ASSERT_EQ(b_layout->reference_offsets[1], uint32_t{8});
-
+  // A shape whose table only differs in one offset is a different shape, not a
+  // hit on its neighbour.
+  const size_t t6[] = {offsetof(Four, c)};
+  const uint64_t misses_before_sixth = nrq_gc_layout_memo_misses();
+  void* sixth = nrq_gc_allocate_array_typed(1, sizeof(Four), t6, 1);
+  ASSERT_NE(sixth, nullptr);
+  ASSERT_EQ(nrq_gc_layout_memo_misses() - misses_before_sixth, uint64_t{1});
+  ASSERT_TRUE(nrq_gc_object_layout(sixth) != layouts[0]);
+  ASSERT_EQ(nrq_gc_object_layout(sixth)->reference_offsets[0], uint32_t{16});
 }
 
 TEST(GcTest, PointerRootsBypassTheMemoAcrossMoreShapesThanItHolds) {

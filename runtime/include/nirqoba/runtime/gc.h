@@ -187,6 +187,13 @@ void* nrq_gc_allocate_array_typed(size_t count, size_t element_size,
 void* nrq_gc_allocate_array_typed_rooted(
     void** root_slot, size_t count, size_t element_size,
     const size_t* reference_offsets, size_t reference_count);
+// Compiler-directed record allocation: one fixed payload, plan-flags giving H0,
+// H8 or H16, and a per-site cache word. The cache is validated against the shape
+// on every call, exactly like the array form.
+void* nrq_gc_allocate_planned(void** root_slot, size_t bytes,
+                              const size_t* reference_offsets,
+                              size_t reference_count, void** site_cache,
+                              uint32_t plan_flags);
 // Compiler-directed array allocation. `plan_flags` is the static eligibility the
 // compiler computed (see alloc_hint.h). `site_cache` is a compiler-emitted,
 // zero-initialized word: the runtime stores the resolved descriptor there on the
