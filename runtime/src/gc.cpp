@@ -194,8 +194,21 @@ struct GcPage {
   // and forces a fresh page, which is the fragmentation drift this bound exists
   // to avoid.
   static constexpr size_t kMaxFreeSpans = 384;
+  // The list grows past the inline array only on a page that actually shatters.
+  // A page that has lost every other object records one run per dead object, and
+  // the old fixed bound dropped everything above 384 of them: at 16-byte slots
+  // that is 2 048 holes in one page, so four fifths of the reclaimed space was
+  // unreachable and the next allocation wave opened fresh pages it did not need.
+  // Growing on demand pays the extra metadata only where it buys back space.
+  static constexpr size_t kMaxGrownFreeSpans = 4096;
   static constexpr size_t kNoSpanIndex = SIZE_MAX;
-  std::array<FreeSpan, kMaxFreeSpans> free_spans{};
+  std::array<FreeSpan, kMaxFreeSpans> inline_free_spans{};
+  // Points at the inline array until the list outgrows it. Every reader and
+  // writer of the run list uses this pointer, so there is one representation of
+  // "where the runs live" rather than two paths to keep in step.
+  FreeSpan* free_spans = inline_free_spans.data();
+  size_t free_span_capacity = kMaxFreeSpans;
+  std::unique_ptr<FreeSpan[]> grown_free_spans;
   size_t free_span_count = 0;
   size_t free_span_bytes = 0;
   // Largest run currently recorded in this page. It lets a refill ask whether a
@@ -3034,12 +3047,31 @@ void release_span_locked(GcPage& page, size_t offset, size_t span) {
     adjust_page_max_free_span_locked(page, before, next.span);
     return;
   }
-  if (page.free_span_count >= GcPage::kMaxFreeSpans) {
-    // The list is bounded, so something has to be dropped. Dropping the newest
-    // run lets a page lose the space it just freed; dropping the smallest
-    // recorded run keeps the runs a later request can actually use, which is what
-    // the bound exists to preserve. A page whose recorded runs are all at least as
-    // large as the new one keeps them and drops the new one.
+  if (page.free_span_count >= page.free_span_capacity) {
+    // A page that shatters may need more entries than the inline array holds, so
+    // the list grows before any run is discarded. The growth doubles, which keeps
+    // the number of reallocations logarithmic in the number of dead objects a
+    // page has accumulated.
+    if (page.free_span_capacity < GcPage::kMaxGrownFreeSpans) {
+      const size_t wanted =
+          std::min(page.free_span_capacity * 2, GcPage::kMaxGrownFreeSpans);
+      std::unique_ptr<GcPage::FreeSpan[]> grown(
+          new (std::nothrow) GcPage::FreeSpan[wanted]);
+      if (grown) {
+        std::memcpy(grown.get(), page.free_spans,
+                    page.free_span_count * sizeof(GcPage::FreeSpan));
+        page.grown_free_spans = std::move(grown);
+        page.free_spans = page.grown_free_spans.get();
+        page.free_span_capacity = wanted;
+      }
+    }
+  }
+  if (page.free_span_count >= page.free_span_capacity) {
+    // Only a page that has reached the grown limit drops anything now. Dropping
+    // the newest run lets a page lose the space it just freed; dropping the
+    // smallest recorded run keeps the runs a later request can actually use,
+    // which is what a bound exists to preserve. A page whose recorded runs are
+    // all at least as large as the new one keeps them and drops the new one.
     size_t smallest = 0;
     for (size_t scan = 1; scan < page.free_span_count; ++scan)
       if (page.free_spans[scan].span < page.free_spans[smallest].span)
@@ -3637,6 +3669,12 @@ void reset_page_gc_metadata_locked(GcPage& page) {
   // used to hold rather than about the ones it will.
   page.zero_cursor = page.capacity;
   page.dropped_free_bytes = 0;
+  // A recycled shell keeps its grown run list, but starts again at the inline
+  // array: the entries it holds are stale, and a page that shatters again will
+  // grow back to whatever size that actually needs.
+  page.grown_free_spans.reset();
+  page.free_spans = page.inline_free_spans.data();
+  page.free_span_capacity = GcPage::kMaxFreeSpans;
   // A recycled page may have been a directory fallback. Its objects are gone, so
   // the exact-index mode must not survive into the new page class: leaving it set
   // would make every future sweep skip the page as unwalkable.
