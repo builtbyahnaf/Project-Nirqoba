@@ -1296,6 +1296,12 @@ struct MutatorState {
   static constexpr size_t kSpareRunCapacity = 24;
   SpareRun spare_runs[kSpareRunCapacity];
   size_t spare_run_count = 0;
+  // The list is shared by the ordinary reservation and the headerless one, and
+  // each of those keeps its own cursor stamp. Without its own stamp a compact
+  // refill could treat runs reserved by a headerless refill as stale and abandon
+  // them: their space is then neither published nor free, so no page that held
+  // them could ever be recycled.
+  uint64_t spare_generation = 0;
   // Unused reservation space this thread has given up, and the largest single
   // tail. Owner-only: only the owner can move its cursor, so no lock is needed,
   // and a thread that leaves folds its totals into the global counters.
@@ -1558,7 +1564,12 @@ size_t pages_with_slab_run = 0;
 // Cache the current bump page per allocating thread. Collection increments the
 // generation so a thread that resumes after another thread reclaimed its page
 // discards the stale pointer before dereferencing it.
-uint64_t gc_page_generation = 1;
+// Atomic because a mutator reads this on its allocation fast path
+// without the collector lock, while the cycle boundary publishes a new
+// value under that lock. The acquire loads below and the release store
+// at the boundary are the handshake that tells a resuming mutator it
+// may not keep using a page stamp it read before the cycle.
+std::atomic<uint64_t> gc_page_generation{1};
 // One cached bump page per page class. A workload that alternates two
 // representations used to discard the single cache slot on every switch and
 // rescan the tail index, which turned into a fresh page per allocation once the
@@ -1569,15 +1580,15 @@ thread_local GcPage* thread_allocation_pages[kPageClassCount] = {};
 thread_local uint64_t thread_allocation_generation = 0;
 
 inline GcPage* cached_allocation_page(PageKind kind) {
-  if (thread_allocation_generation != gc_page_generation) return nullptr;
+  if (thread_allocation_generation != gc_page_generation.load(std::memory_order_acquire)) return nullptr;
   return thread_allocation_pages[static_cast<size_t>(kind)];
 }
 
 inline void cache_allocation_page(GcPage* page) {
   if (!page) return;
-  if (thread_allocation_generation != gc_page_generation) {
+  if (thread_allocation_generation != gc_page_generation.load(std::memory_order_acquire)) {
     for (GcPage*& slot : thread_allocation_pages) slot = nullptr;
-    thread_allocation_generation = gc_page_generation;
+    thread_allocation_generation = gc_page_generation.load(std::memory_order_acquire);
   }
   thread_allocation_pages[static_cast<size_t>(page->kind)] = page;
 }
@@ -3195,7 +3206,7 @@ void install_tlab(MutatorState& mutator, GcPage* page, size_t offset, size_t spa
   mutator.tlab_page = page;
   mutator.tlab_cursor = page->storage + offset;
   mutator.tlab_end = mutator.tlab_cursor + span;
-  mutator.tlab_generation = gc_page_generation;
+  mutator.tlab_generation = gc_page_generation.load(std::memory_order_acquire);
   cache_allocation_page(page);
 }
 // Returns every run this thread reserved and did not hand out. The caller holds
@@ -3209,6 +3220,7 @@ void flush_spare_runs_locked(MutatorState& mutator) {
     if (!spare.page) continue;
     release_span_locked(*spare.page, spare.offset, spare.span);
   }
+  mutator.spare_generation = gc_page_generation.load(std::memory_order_acquire);
 }
 
 // Pops a reserved run into the thread-local cursor. No lock: the list is owned by
@@ -3251,6 +3263,9 @@ bool reserve_spare_runs_locked(MutatorState& mutator, size_t minimum_span,
     spare.span = runs[index].span;
     ++mutator.spare_run_count;
   }
+  // The runs just reserved belong to the page set as it is now; a later cycle
+  // that flushes this list stamps its own generation over this one.
+  mutator.spare_generation = gc_page_generation.load(std::memory_order_acquire);
   return true;
 }
 
@@ -3263,8 +3278,15 @@ void discard_stale_tlab(MutatorState& mutator) {
   mutator.tlab_page = nullptr;
   mutator.tlab_cursor = nullptr;
   mutator.tlab_end = nullptr;
-  mutator.tlab_generation = gc_page_generation;
-  if (mutator.spare_run_count != 0) {
+  mutator.tlab_generation = gc_page_generation.load(std::memory_order_acquire);
+  // Only the runs a cycle boundary failed to return are abandoned here, and only
+  // those whose reservation predates the current page set. A run reserved after
+  // the boundary is still valid even though the cursor that named this mutator
+  // belonged to the previous cycle, which is the normal state after a headerless
+  // refill reserved a batch that a compact refill then found.
+  if (mutator.spare_run_count != 0 &&
+      mutator.spare_generation !=
+          gc_page_generation.load(std::memory_order_acquire)) {
     if constexpr (nirq::runtime_debug_enabled)
       nrq_runtime_fatal("GC reserved runs outlived a cycle boundary");
     mutator.spare_run_count = 0;
@@ -3738,7 +3760,9 @@ void prepare_cycle_locked(bool young_only) {
   // its storage released. Validation uses the page directory and start bits,
   // which are still authoritative at this point.
   compact_remembered_locked();
-  ++gc_page_generation;
+  gc_page_generation.store(
+      gc_page_generation.load(std::memory_order_relaxed) + 1,
+      std::memory_order_release);
   if (retired_page_count != 0) {
     for (auto page = gc_pages.begin(); page != gc_pages.end();) {
       if ((*page)->live_objects == 0) {
@@ -4268,7 +4292,7 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
 bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span,
                          PageKind kind) {
   tlab_refill_count = saturated_add(tlab_refill_count, 1);
-  if (mutator.tlab_generation != gc_page_generation) discard_stale_tlab(mutator);
+  if (mutator.tlab_generation != gc_page_generation.load(std::memory_order_acquire)) discard_stale_tlab(mutator);
   // A merged run of reclaimed space can host a whole thread-local reservation.
   // Taking it here is what turns a fragmented page back into a usable bump
   // region instead of leaving it permanently half empty - and taking all of it,
@@ -4450,7 +4474,7 @@ void install_h0_tlab(MutatorState& mutator, GcPage* page, size_t offset,
   mutator.h0_end = mutator.h0_cursor + span;
   mutator.h0_layout = layout;
   mutator.h0_slot = slot;
-  mutator.h0_generation = gc_page_generation;
+  mutator.h0_generation = gc_page_generation.load(std::memory_order_acquire);
 }
 
 // Pops a reserved headerless run. The list is thread-owned and the runs were
@@ -4496,6 +4520,8 @@ bool reserve_h0_tlab_locked(MutatorState& mutator,
       spare.offset = runs[index].offset;
       spare.span = runs[index].span;
     }
+    mutator.spare_generation =
+        gc_page_generation.load(std::memory_order_acquire);
     if (mutator.h0_page && mutator.h0_cursor &&
         mutator.h0_end > mutator.h0_cursor) {
       const size_t offset = static_cast<size_t>(
@@ -4528,7 +4554,7 @@ bool reserve_h0_tlab_locked(MutatorState& mutator,
   mutator.h0_end = mutator.h0_cursor + reserve;
   mutator.h0_layout = layout;
   mutator.h0_slot = slot;
-  mutator.h0_generation = gc_page_generation;
+  mutator.h0_generation = gc_page_generation.load(std::memory_order_acquire);
   page->used += reserve;
   note_page_tail_locked(*page);
   return true;
@@ -4560,7 +4586,7 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
   GcRepresentation actual = representation;
   if (actual == GcRepresentation::Headerless) {
     const size_t slot = object_span_bytes(0, layout->payload_size);
-    if (thread_mutator.h0_generation != gc_page_generation)
+    if (thread_mutator.h0_generation != gc_page_generation.load(std::memory_order_acquire))
       thread_mutator.h0_page = nullptr;
     const bool same_shape = thread_mutator.h0_cursor &&
                             thread_mutator.h0_layout == layout &&
@@ -4624,7 +4650,7 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
     return nullptr;
   handled = true;
 
-  if (thread_mutator.tlab_generation != gc_page_generation)
+  if (thread_mutator.tlab_generation != gc_page_generation.load(std::memory_order_acquire))
     discard_stale_tlab(thread_mutator);
   if (!thread_mutator.tlab_cursor || !thread_mutator.tlab_end ||
       thread_mutator.tlab_page->kind != kind ||
