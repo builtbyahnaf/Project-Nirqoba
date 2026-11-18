@@ -3419,7 +3419,12 @@ void reset_page_gc_metadata_locked(GcPage& page) {
 std::unique_ptr<GcPage> acquire_page(size_t capacity, PageKind kind) {
   for (auto entry = recycled_pages.begin(); entry != recycled_pages.end();
        ++entry) {
-    if ((*entry)->capacity < capacity) continue;
+    // The pooled storage can only serve the page size it was committed for: an
+    // ordinary page is carved on a kGcPageBytes boundary and recoverable by
+    // masking, while a large page is neither. Handing a large page to an
+    // ordinary request made the page directory reject it, and the allocation
+    // failed instead of falling through to fresh storage.
+    if ((*entry)->capacity != capacity) continue;
     std::unique_ptr<GcPage> page = std::move(*entry);
     recycled_pages.erase(entry);
     page->retired = false;
@@ -4158,9 +4163,15 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
       if (new_page) release_page_storage(new_page->storage, new_page->capacity);
       return nullptr;
     }
-    // A page that cannot be indexed by address is still usable; its objects
-    // are tracked through the exact object index instead.
-    if (!page_directory.insert(page)) {
+    // A page larger than the directory's page size is never found by masking an
+    // address, and it has no start bitmap, so its objects are tracked by the
+    // exact index from the first allocation. A directory insert can succeed by
+    // chunk key alone, which left such objects with no start bit and no index
+    // entry: the sweep never saw them and they leaked.
+    if (page->capacity > kGcPageBytes) {
+      page->use_object_index = true;
+      page->kind = PageKind::Large;
+    } else if (!page_directory.insert(page)) {
       page->use_object_index = true;
       page->kind = PageKind::Fallback;
     }
@@ -4275,9 +4286,15 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span,
       if (new_page) release_page_storage(new_page->storage, new_page->capacity);
       return false;
     }
-    // A page that cannot be indexed by address is still usable; its objects
-    // are tracked through the exact object index instead.
-    if (!page_directory.insert(page)) {
+    // A page larger than the directory's page size is never found by masking an
+    // address, and it has no start bitmap, so its objects are tracked by the
+    // exact index from the first allocation. A directory insert can succeed by
+    // chunk key alone, which left such objects with no start bit and no index
+    // entry: the sweep never saw them and they leaked.
+    if (page->capacity > kGcPageBytes) {
+      page->use_object_index = true;
+      page->kind = PageKind::Large;
+    } else if (!page_directory.insert(page)) {
       page->use_object_index = true;
       page->kind = PageKind::Fallback;
     }
