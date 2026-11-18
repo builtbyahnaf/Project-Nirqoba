@@ -242,6 +242,9 @@ TEST(GcRepresentationTest, EveryRepresentationTracesAndIsReclaimed) {
   ASSERT_EQ(nrq_gc_pointer_is_managed(extended), int32_t{0});
 
   root = nullptr;
+  // The slot must be released before the frame that owns it goes away: a root
+  // left registered points at a dead stack address that a later test can reuse.
+  nrq_gc_root_unregister(&root);
   nrq_gc_collect();
   ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
 }
