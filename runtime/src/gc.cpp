@@ -2456,16 +2456,19 @@ void enqueue_narrow_children_locked(const ObjectRef& object,
   const auto* bytes =
       static_cast<const unsigned char*>(object_payload(object));
   const nrq_object_layout* layout = object_layout(object);
+  // The payload size is the same for every field of a fixed record, so it is
+  // read once instead of once per reference; the descriptor and page are already
+  // in cache by the time the worklist handed this object over.
   // Hot narrow records keep their two offsets inside the descriptor. That turns
   // the common case into one load from the descriptor line the marker already
   // read for `reference_count`, instead of a dependent load of the offset table.
   const bool inline_map =
       (layout->flags & NRQ_OBJECT_LAYOUT_INLINE_MAP) != 0;
+  const size_t payload_bytes = object_payload_bytes(object);
   for (uint32_t index = 0; index < layout->reference_count; ++index) {
     const size_t offset = inline_map
                               ? layout->inline_reference_offsets[index]
                               : layout->reference_offsets[index];
-    const size_t payload_bytes = object_payload_bytes(object);
     if (offset > payload_bytes || sizeof(void*) > payload_bytes - offset)
       continue;
     void* child = nullptr;
@@ -5219,21 +5222,78 @@ struct SoaPairsHash {
 };
 std::unordered_map<std::vector<uint32_t>, const nrq_object_layout*, SoaPairsHash>
     soa_layout_pool;
+
+// A geometry that has been interned recently is answered from this thread's own
+// memory. The descriptor lives for the life of the process, so caching its
+// address is safe; a site with a fixed column table then never takes the layout
+// lock, and a per-object SoA allocation no longer builds two vectors to look up
+// a descriptor it has already seen. That lookup, not the allocation, was most of
+// the gap between this entry point and the plain array one.
+struct SoaGeometryMemo {
+  static constexpr size_t kCapacity = 4;
+  static constexpr size_t kMaxPairs = 16;
+  struct Entry {
+    size_t element_bytes = 0;
+    size_t pair_count = SIZE_MAX;
+    uint32_t pairs[kMaxPairs] = {};
+    const nrq_object_layout* layout = nullptr;
+  };
+  Entry entries[kCapacity];
+  size_t next = 0;
+
+  const nrq_object_layout* find(size_t element_bytes, const uint32_t* pairs,
+                                size_t count) const {
+    if (count > kMaxPairs) return nullptr;
+    for (const Entry& entry : entries) {
+      if (entry.layout == nullptr) continue;
+      if (entry.element_bytes != element_bytes || entry.pair_count != count)
+        continue;
+      if (count != 0 &&
+          std::memcmp(entry.pairs, pairs, count * sizeof(uint32_t)) != 0)
+        continue;
+      return entry.layout;
+    }
+    return nullptr;
+  }
+
+  void remember(size_t element_bytes, const uint32_t* pairs, size_t count,
+                const nrq_object_layout* layout) {
+    if (!layout || count > kMaxPairs) return;
+    Entry& entry = entries[next];
+    next = (next + 1) % kCapacity;
+    entry.element_bytes = element_bytes;
+    entry.pair_count = count;
+    if (count != 0) std::memcpy(entry.pairs, pairs, count * sizeof(uint32_t));
+    entry.layout = layout;
+  }
+};
+thread_local SoaGeometryMemo soa_geometry_memo;
+// Column tables are narrowed into this thread's own storage: a vector that keeps
+// its capacity allocates once per thread instead of once per object.
+thread_local std::vector<uint32_t> soa_pair_scratch;
+
 const nrq_object_layout* soa_layout_for(size_t element_bytes,
-                                        const std::vector<uint32_t>& pairs) {
+                                       const uint32_t* pairs,
+                                       size_t pair_count) {
+  if (const nrq_object_layout* cached =
+          soa_geometry_memo.find(element_bytes, pairs, pair_count))
+    return cached;
   // The key must include the element size: two layouts can carry identical
   // reference geometry and still differ in payload per row, and sharing a
   // descriptor between them would trace the wrong number of rows. The descriptor
   // itself stores only the pairs, because payload_size already carries the size.
   std::vector<uint32_t> key;
-  key.reserve(pairs.size() + 1);
+  key.reserve(pair_count + 1);
   key.push_back(static_cast<uint32_t>(element_bytes));
-  key.insert(key.end(), pairs.begin(), pairs.end());
+  key.insert(key.end(), pairs, pairs + pair_count);
   std::lock_guard<std::mutex> lock(layout_mutex);
   const auto found = soa_layout_pool.find(key);
-  if (found != soa_layout_pool.end()) return found->second;
-  auto* stored = new uint32_t[pairs.size()];
-  std::copy(pairs.begin(), pairs.end(), stored);
+  if (found != soa_layout_pool.end()) {
+    soa_geometry_memo.remember(element_bytes, pairs, pair_count, found->second);
+    return found->second;
+  }
+  auto* stored = new uint32_t[pair_count];
+  std::copy(pairs, pairs + pair_count, stored);
   auto* layout = new nrq_object_layout{};
   layout->payload_size = static_cast<uint32_t>(element_bytes);
   layout->reference_count = 0;
@@ -5241,26 +5301,32 @@ const nrq_object_layout* soa_layout_for(size_t element_bytes,
   layout->reference_offsets = nullptr;
   layout->trace = nullptr;
   layout->soa_columns = stored;
-  layout->soa_column_pairs = static_cast<uint32_t>(pairs.size());
+  layout->soa_column_pairs = static_cast<uint32_t>(pair_count);
   soa_layout_pool.emplace(std::move(key), layout);
+  soa_geometry_memo.remember(element_bytes, pairs, pair_count, layout);
   return layout;
 }
 // Validates a structure-of-arrays column table and narrows it to the uint32 pairs
 // a descriptor stores. A column base must leave room for a pointer inside one
 // element, so a malformed table is refused here rather than described to the
-// collector.
+// collector. The narrowed table is returned through the caller's view of this
+// thread's scratch storage, so a valid call does not allocate.
 static bool collect_soa_pairs(size_t element_bytes, const size_t* column_pairs,
-                              size_t pair_count, std::vector<uint32_t>& pairs) {
+                              size_t pair_count, const uint32_t*& pairs,
+                              size_t& count) {
   if (!column_pairs || pair_count == 0 || (pair_count % 2) != 0) return false;
   if (element_bytes == 0 || element_bytes > UINT32_MAX) return false;
-  pairs.resize(pair_count);
+  soa_pair_scratch.resize(pair_count);
   for (size_t index = 0; index < pair_count; ++index) {
     if (column_pairs[index] > UINT32_MAX) return false;
-    pairs[index] = static_cast<uint32_t>(column_pairs[index]);
+    soa_pair_scratch[index] = static_cast<uint32_t>(column_pairs[index]);
     if ((index % 2) == 0 &&
-        static_cast<size_t>(pairs[index]) + sizeof(void*) > element_bytes)
+        static_cast<size_t>(soa_pair_scratch[index]) + sizeof(void*) >
+            element_bytes)
       return false;
   }
+  pairs = soa_pair_scratch.data();
+  count = pair_count;
   return true;
 }
 
@@ -5268,24 +5334,27 @@ static bool collect_soa_pairs(size_t element_bytes, const size_t* column_pairs,
 // overwritten site cache can name a descriptor of the right size with different
 // columns, which would trace a pointer at the wrong offset.
 static bool soa_layout_matches(const nrq_object_layout* layout,
-                               size_t element_bytes,
-                               const std::vector<uint32_t>& pairs) {
+                               size_t element_bytes, const uint32_t* pairs,
+                               size_t count) {
   if (!layout) return false;
   if (layout->payload_size != element_bytes) return false;
   if (layout->trace != nullptr) return false;
   if ((layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0) return false;
-  if (layout->soa_column_pairs != pairs.size()) return false;
+  if (layout->soa_column_pairs != count) return false;
   if (!layout->soa_columns) return false;
-  return std::equal(pairs.begin(), pairs.end(), layout->soa_columns);
+  return count == 0 || std::equal(pairs, pairs + count, layout->soa_columns);
 }
 
 void* nrq_gc_allocate_soa_rooted(void** root_slot, size_t count,
                                  size_t element_bytes,
                                  const size_t* column_pairs, size_t pair_count) {
-  std::vector<uint32_t> pairs;
-  if (!collect_soa_pairs(element_bytes, column_pairs, pair_count, pairs))
+  const uint32_t* pairs = nullptr;
+  size_t pair_values = 0;
+  if (!collect_soa_pairs(element_bytes, column_pairs, pair_count, pairs,
+                         pair_values))
     return nullptr;
-  const nrq_object_layout* layout = soa_layout_for(element_bytes, pairs);
+  const nrq_object_layout* layout =
+      soa_layout_for(element_bytes, pairs, pair_values);
   return allocate_array_rooted_impl(root_slot, count, element_bytes, nullptr, 0,
                                     layout);
 }
@@ -5295,8 +5364,10 @@ void* nrq_gc_allocate_soa_planned(void** root_slot, size_t count,
                                   const size_t* column_pairs, size_t pair_count,
                                   void** site_cache, uint32_t plan_flags) {
   if (!root_slot || count == 0 || count > UINT32_MAX) return nullptr;
-  std::vector<uint32_t> pairs;
-  if (!collect_soa_pairs(element_bytes, column_pairs, pair_count, pairs))
+  const uint32_t* pairs = nullptr;
+  size_t pair_values = 0;
+  if (!collect_soa_pairs(element_bytes, column_pairs, pair_count, pairs,
+                         pair_values))
     return nullptr;
   const bool plan_usable =
       (plan_flags & NRQ_ALLOC_PLAN_REJECTED) == 0 &&
@@ -5306,9 +5377,10 @@ void* nrq_gc_allocate_soa_planned(void** root_slot, size_t count,
       plan_usable ? GcRepresentation::Extended : GcRepresentation::Auto;
   const nrq_object_layout* layout = nullptr;
   if (site_cache) layout = static_cast<const nrq_object_layout*>(*site_cache);
-  if (!soa_layout_matches(layout, element_bytes, pairs)) layout = nullptr;
+  if (!soa_layout_matches(layout, element_bytes, pairs, pair_values))
+    layout = nullptr;
   if (!layout) {
-    layout = soa_layout_for(element_bytes, pairs);
+    layout = soa_layout_for(element_bytes, pairs, pair_values);
     if (!layout) return nullptr;
     if (site_cache) *site_cache = const_cast<nrq_object_layout*>(layout);
   }
