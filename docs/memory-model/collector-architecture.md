@@ -6,6 +6,29 @@ which records the interoperability contract, and
 [allocation-coverage.md](allocation-coverage.md), which records which allocation
 path every source construct takes.
 
+## Reserved runs belong to a page generation
+
+A refill does not take one run at a time. It reserves a batch of short runs and
+hands them out from a thread list without the allocator lock, which is what keeps
+a fragmented heap's few-cell runs from putting the lock back on the allocation
+path. Two consequences follow, and both are load-bearing:
+
+- **The list has its own generation.** The ordinary and the headerless refill
+  share one list, but each keeps its own cursor stamp. A list stamped by the
+  cursor of the other shape looks stale to the next refill of this one, and the
+  discard path may then abandon runs that are perfectly valid. Abandoned runs are
+  neither published nor free, so the page holding them can never be recycled:
+  a silent leak that only shows up as a heap that will not shrink.
+- **A cycle boundary must return every reserved run before it recycles a page.**
+  The flush happens under the collector lock, before the page generation moves.
+  A reserved run is the one piece of page space that is neither an object nor a
+  free run, so a page holding one must not be judged empty.
+
+The page generation itself is atomic: the allocation fast path reads it without
+the collector lock, and the boundary publishes a new value under that lock. An
+acquire load that observes the new generation tells a resumed mutator that its
+cursor may point into a page the boundary has already dealt with.
+
 ## The strategy boundary
 
 Nirqoba's hybrid memory model is not the collector's to change, and this document
