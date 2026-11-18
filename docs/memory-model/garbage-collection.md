@@ -1,5 +1,8 @@
 # GC interoperability (Phase 8)
 
+How the collector discovers, traces, promotes and reclaims the three object
+representations is described in [collector-architecture.md](collector-architecture.md).
+
 Phase 7's explicit collector contract is unchanged. `array.allocate<T>` and
 `managed<T>` still select collector storage; ordinary, shared, arena, pool and
 manual storage do not.
