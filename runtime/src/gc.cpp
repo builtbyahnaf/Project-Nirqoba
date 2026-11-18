@@ -11,6 +11,7 @@
 // parked only briefly at cycle boundaries to publish TLabs and prepare roots.
 
 #include "nirqoba/runtime/gc.h"
+#include "nirqoba/runtime/alloc_hint.h"
 #include "nirqoba/runtime/cache_line.h"
 #include "nirqoba/runtime/fatal.h"
 
@@ -4981,7 +4982,9 @@ void* allocate_array_rooted_impl(void** root_slot, size_t count,
                                  size_t element_size,
                                  const size_t* reference_offsets,
                                  size_t reference_count,
-                                 const nrq_object_layout* resolved);
+                                 const nrq_object_layout* resolved,
+                                 GcRepresentation hint =
+                                     GcRepresentation::Auto);
 
 
 void* nrq_gc_allocate_layout(const nrq_object_layout* layout) {
@@ -5039,7 +5042,8 @@ void* allocate_array_rooted_impl(void** root_slot, size_t count,
                                  size_t element_size,
                                  const size_t* reference_offsets,
                                  size_t reference_count,
-                                 const nrq_object_layout* resolved) {
+                                 const nrq_object_layout* resolved,
+                                 GcRepresentation hint) {
   if (!root_slot || count == 0 || element_size == 0) return nullptr;
   if (count > UINT32_MAX) return nullptr;
   size_t bytes = 0;
@@ -5058,7 +5062,7 @@ void* allocate_array_rooted_impl(void** root_slot, size_t count,
       bool handled = false;
       void* object = allocate_tlab(bytes, element_size, count, nullptr,
                                    reference_offsets, reference_count, handled,
-                                   resolved, GcRepresentation::Auto, true);
+                                   resolved, hint, true);
       if (handled) {
         *root_slot = object;
         end_fast_barrier();
@@ -5075,7 +5079,7 @@ void* allocate_array_rooted_impl(void** root_slot, size_t count,
         "rooted GC allocation requires a registered pointer root slot");
   void* object = allocate_locked(bytes, element_size, count, nullptr,
                                  reference_offsets, reference_count, resolved,
-                                 GcRepresentation::Auto, true);
+                                 hint, true);
   store_root_value_locked(root_slot, object);
   return object;
 }
@@ -5086,6 +5090,46 @@ void* nrq_gc_allocate_array_typed_rooted(
   return allocate_array_rooted_impl(root_slot, count, element_size,
                                     reference_offsets, reference_count,
                                     nullptr);
+}
+
+void* nrq_gc_allocate_array_planned(void** root_slot, size_t count,
+                                   size_t element_size,
+                                   const size_t* reference_offsets,
+                                   size_t reference_count, void** site_cache,
+                                   uint32_t plan_flags) {
+  // See nrq_gc_allocate_soa_planned for the compiled-plan and site-cache rules;
+  // this is the interleaved-reference-table form of the same contract.
+  if (!root_slot || count == 0 || element_size == 0) return nullptr;
+  if (count > UINT32_MAX) return nullptr;
+  // The compiler's plan is used only when it says "array, extended". Anything
+  // else is treated as no plan at all, and the allocator decides as it would for
+  // a caller that said nothing.
+  const bool plan_usable =
+      (plan_flags & NRQ_ALLOC_PLAN_REJECTED) == 0 &&
+      (plan_flags & NRQ_ALLOC_PLAN_ARRAY) != 0 &&
+      NRQ_ALLOC_PLAN_REPR_OF(plan_flags) == NRQ_ALLOC_REPR_EXTENDED;
+  const GcRepresentation hint =
+      plan_usable ? GcRepresentation::Extended : GcRepresentation::Auto;
+  // A cached descriptor is only reused after it is checked against this call's
+  // shape. The cache word is compiler-emitted and writable, so it is treated as
+  // untrusted input, not as a guarantee.
+  const nrq_object_layout* layout = nullptr;
+  if (site_cache)
+    layout = static_cast<const nrq_object_layout*>(*site_cache);
+  if (layout &&
+      !layout_memo_matches(layout, element_size, element_size, nullptr,
+                           reference_offsets, reference_count, true))
+    layout = nullptr;
+  if (!layout) {
+    layout = layout_for_allocation(element_size, element_size, nullptr,
+                                   reference_offsets, reference_count, true);
+    if (!layout) return nullptr;
+    if (site_cache)
+      *site_cache = const_cast<nrq_object_layout*>(layout);
+  }
+  return allocate_array_rooted_impl(root_slot, count, element_size,
+                                    reference_offsets, reference_count, layout,
+                                    hint);
 }
 
 // Structure-of-arrays descriptors are interned by their column geometry. They keep
@@ -5127,25 +5171,75 @@ const nrq_object_layout* soa_layout_for(size_t element_bytes,
   soa_layout_pool.emplace(std::move(key), layout);
   return layout;
 }
-void* nrq_gc_allocate_soa_rooted(void** root_slot, size_t count,
-                                 size_t element_bytes,
-                                 const size_t* column_pairs, size_t pair_count) {
-  if (!column_pairs || pair_count == 0 || (pair_count % 2) != 0) return nullptr;
-  // A descriptor stores its element size in a uint32 field, and a column base must
-  // leave room for a pointer inside one element. A malformed pair table would
-  // otherwise describe reads outside the payload, so it is refused here.
-  if (element_bytes == 0 || element_bytes > UINT32_MAX) return nullptr;
-  std::vector<uint32_t> pairs(pair_count);
+// Validates a structure-of-arrays column table and narrows it to the uint32 pairs
+// a descriptor stores. A column base must leave room for a pointer inside one
+// element, so a malformed table is refused here rather than described to the
+// collector.
+static bool collect_soa_pairs(size_t element_bytes, const size_t* column_pairs,
+                              size_t pair_count, std::vector<uint32_t>& pairs) {
+  if (!column_pairs || pair_count == 0 || (pair_count % 2) != 0) return false;
+  if (element_bytes == 0 || element_bytes > UINT32_MAX) return false;
+  pairs.resize(pair_count);
   for (size_t index = 0; index < pair_count; ++index) {
-    if (column_pairs[index] > UINT32_MAX) return nullptr;
+    if (column_pairs[index] > UINT32_MAX) return false;
     pairs[index] = static_cast<uint32_t>(column_pairs[index]);
     if ((index % 2) == 0 &&
         static_cast<size_t>(pairs[index]) + sizeof(void*) > element_bytes)
-      return nullptr;
+      return false;
   }
+  return true;
+}
+
+// Whether an interned descriptor really describes this column table. A stale or
+// overwritten site cache can name a descriptor of the right size with different
+// columns, which would trace a pointer at the wrong offset.
+static bool soa_layout_matches(const nrq_object_layout* layout,
+                               size_t element_bytes,
+                               const std::vector<uint32_t>& pairs) {
+  if (!layout) return false;
+  if (layout->payload_size != element_bytes) return false;
+  if (layout->trace != nullptr) return false;
+  if ((layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0) return false;
+  if (layout->soa_column_pairs != pairs.size()) return false;
+  if (!layout->soa_columns) return false;
+  return std::equal(pairs.begin(), pairs.end(), layout->soa_columns);
+}
+
+void* nrq_gc_allocate_soa_rooted(void** root_slot, size_t count,
+                                 size_t element_bytes,
+                                 const size_t* column_pairs, size_t pair_count) {
+  std::vector<uint32_t> pairs;
+  if (!collect_soa_pairs(element_bytes, column_pairs, pair_count, pairs))
+    return nullptr;
   const nrq_object_layout* layout = soa_layout_for(element_bytes, pairs);
   return allocate_array_rooted_impl(root_slot, count, element_bytes, nullptr, 0,
                                     layout);
+}
+
+void* nrq_gc_allocate_soa_planned(void** root_slot, size_t count,
+                                  size_t element_bytes,
+                                  const size_t* column_pairs, size_t pair_count,
+                                  void** site_cache, uint32_t plan_flags) {
+  if (!root_slot || count == 0 || count > UINT32_MAX) return nullptr;
+  std::vector<uint32_t> pairs;
+  if (!collect_soa_pairs(element_bytes, column_pairs, pair_count, pairs))
+    return nullptr;
+  const bool plan_usable =
+      (plan_flags & NRQ_ALLOC_PLAN_REJECTED) == 0 &&
+      (plan_flags & NRQ_ALLOC_PLAN_ARRAY) != 0 &&
+      NRQ_ALLOC_PLAN_REPR_OF(plan_flags) == NRQ_ALLOC_REPR_EXTENDED;
+  const GcRepresentation hint =
+      plan_usable ? GcRepresentation::Extended : GcRepresentation::Auto;
+  const nrq_object_layout* layout = nullptr;
+  if (site_cache) layout = static_cast<const nrq_object_layout*>(*site_cache);
+  if (!soa_layout_matches(layout, element_bytes, pairs)) layout = nullptr;
+  if (!layout) {
+    layout = soa_layout_for(element_bytes, pairs);
+    if (!layout) return nullptr;
+    if (site_cache) *site_cache = const_cast<nrq_object_layout*>(layout);
+  }
+  return allocate_array_rooted_impl(root_slot, count, element_bytes, nullptr, 0,
+                                    layout, hint);
 }
 void nrq_gc_root_register(void** slot) {
   static constexpr size_t pointer_offset = 0;

@@ -187,6 +187,24 @@ void* nrq_gc_allocate_array_typed(size_t count, size_t element_size,
 void* nrq_gc_allocate_array_typed_rooted(
     void** root_slot, size_t count, size_t element_size,
     const size_t* reference_offsets, size_t reference_count);
+// Compiler-directed array allocation. `plan_flags` is the static eligibility the
+// compiler computed (see alloc_hint.h). `site_cache` is a compiler-emitted,
+// zero-initialized word: the runtime stores the resolved descriptor there on the
+// first allocation and reuses it afterwards, so a site pays descriptor lookup
+// once instead of once per object. The runtime validates both the plan and the
+// cached descriptor and falls back to its own decision when either does not hold.
+void* nrq_gc_allocate_array_planned(void** root_slot, size_t count,
+                                   size_t element_size,
+                                   const size_t* reference_offsets,
+                                   size_t reference_count, void** site_cache,
+                                   uint32_t plan_flags);
+// The same contract for a structure-of-arrays payload: `column_pairs` is the
+// (offset, stride) table and `site_cache` caches that column layout per site.
+void* nrq_gc_allocate_soa_planned(void** root_slot, size_t count,
+                                  size_t element_size,
+                                  const size_t* column_pairs,
+                                  size_t pair_count, void** site_cache,
+                                  uint32_t plan_flags);
 
 // Root slots are addresses containing managed object pointers. Register the
 // slot before a collection can run and unregister it before its storage ends.
