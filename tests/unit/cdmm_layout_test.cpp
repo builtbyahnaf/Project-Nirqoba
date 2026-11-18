@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "nirqoba/runtime/alloc_hint.h"
 #include "nirqoba/runtime/cdmm.h"
 #include "nirqoba/runtime/gc.h"
 
@@ -85,6 +86,63 @@ TEST(CdmmLayoutTest, AArenaAllocatesFromALayout) {
   ASSERT_EQ(alignment, uint64_t{0});
   std::memset(object, 0x33, kRecordBytes);
   ASSERT_EQ(nrq_cdmm_arena_used(arena), uint64_t{kRecordBytes});
+  ASSERT_EQ(nrq_cdmm_arena_destroy(arena), int32_t{1});
+}
+
+TEST(CdmmLayoutTest, APlannedDeterministicGeometryConfiguresBothRegions) {
+  NrqAllocHint hint{};
+  hint.payload_bytes = 48;
+  hint.element_count = 1;
+  hint.alignment = 16;
+  hint.flags = NRQ_ALLOC_HINT_ARENA | NRQ_ALLOC_HINT_DETERMINISTIC;
+  const NrqAllocPlan plan = nrq_alloc_plan(&hint);
+  ASSERT_EQ(plan.representation, NRQ_ALLOC_REPR_NONE);
+  void* pool = nrq_cdmm_pool_create_planned(&plan, 0, 0, nullptr, nullptr);
+  ASSERT_NE(pool, nullptr);
+  void* first = nrq_cdmm_pool_allocate(pool);
+  void* second = nrq_cdmm_pool_allocate(pool);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  std::memset(first, 0x11, 48);
+  std::memset(second, 0x22, 48);
+  ASSERT_EQ(reinterpret_cast<uintptr_t>(first) % 16, uintptr_t{0});
+  ASSERT_EQ(nrq_cdmm_pool_release(pool, first), int32_t{1});
+  ASSERT_EQ(nrq_cdmm_pool_release(pool, second), int32_t{1});
+  ASSERT_EQ(nrq_cdmm_pool_destroy(pool), int32_t{1});
+
+  void* arena = nrq_cdmm_arena_create(64 * 1024, 0);
+  ASSERT_NE(arena, nullptr);
+  void* object = nrq_cdmm_arena_allocate_planned(arena, &plan);
+  ASSERT_NE(object, nullptr);
+  ASSERT_TRUE(nrq_cdmm_arena_contains(arena, object) != 0);
+  ASSERT_EQ(reinterpret_cast<uintptr_t>(object) % 16, uintptr_t{0});
+  ASSERT_EQ(nrq_cdmm_arena_used(arena), static_cast<uint64_t>(plan.slot_bytes));
+  ASSERT_EQ(nrq_cdmm_arena_destroy(arena), int32_t{1});
+}
+
+TEST(CdmmLayoutTest, APlannedCollectorShapeIsRefusedByBothRegions) {
+  NrqAllocHint hint{};
+  hint.payload_bytes = 64;
+  hint.element_count = 1;
+  hint.alignment = 16;
+  hint.flags = NRQ_ALLOC_HINT_MANAGED;
+  const NrqAllocPlan record = nrq_alloc_plan(&hint);
+  ASSERT_EQ(record.representation, NRQ_ALLOC_REPR_HEADERLESS);
+  ASSERT_EQ(nrq_cdmm_pool_create_planned(&record, 0, 0, nullptr, nullptr),
+            nullptr);
+  void* arena = nrq_cdmm_arena_create(4096, 0);
+  ASSERT_NE(arena, nullptr);
+  ASSERT_EQ(nrq_cdmm_arena_allocate_planned(arena, &record), nullptr);
+
+  NrqAllocHint array_hint = hint;
+  array_hint.flags = NRQ_ALLOC_HINT_MANAGED | NRQ_ALLOC_HINT_ARRAY;
+  array_hint.element_count = 4;
+  const NrqAllocPlan array = nrq_alloc_plan(&array_hint);
+  ASSERT_EQ(array.representation, NRQ_ALLOC_REPR_EXTENDED);
+  ASSERT_EQ(nrq_cdmm_pool_create_planned(&array, 0, 0, nullptr, nullptr),
+            nullptr);
+  ASSERT_EQ(nrq_cdmm_arena_allocate_planned(arena, &array), nullptr);
+  ASSERT_EQ(nrq_cdmm_arena_used(arena), uint64_t{0});
   ASSERT_EQ(nrq_cdmm_arena_destroy(arena), int32_t{1});
 }
 

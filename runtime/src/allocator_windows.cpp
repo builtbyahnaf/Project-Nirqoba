@@ -9,6 +9,7 @@
 #include "nirqoba/runtime/allocator.h"
 #include "nirqoba/runtime/cdmm.h"
 #include "nirqoba/runtime/gc.h"
+#include "nirqoba/runtime/alloc_hint.h"
 #include "nirqoba/runtime/fatal.h"
 #include "nirqoba/runtime/system.h"
 
@@ -3127,6 +3128,34 @@ static bool cdmm_layout_is_plain(const nrq_object_layout* layout) {
          (layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0;
 }
 
+// A plan may only describe deterministic storage: no header, no managed
+// references, not an array, and not rejected. Anything else names either collector
+// storage or an object this region cannot keep alive.
+static uint64_t cdmm_plan_alignment(const NrqAllocPlan* plan) {
+  return plan->alignment != 0 ? plan->alignment : alignof(std::max_align_t);
+}
+
+static bool cdmm_plan_is_plain(const NrqAllocPlan* plan) {
+  if (plan == nullptr) return false;
+  if ((plan->flags & (NRQ_ALLOC_PLAN_REJECTED | NRQ_ALLOC_PLAN_ARRAY |
+                     NRQ_ALLOC_PLAN_HAS_REFERENCES)) != 0)
+    return false;
+  if (plan->representation != NRQ_ALLOC_REPR_NONE) return false;
+  if (plan->header_bytes != 0) return false;
+  if (plan->payload_bytes == 0) return false;
+  if (plan->slot_bytes < plan->payload_bytes) return false;
+  const uint64_t alignment = cdmm_plan_alignment(plan);
+  if (alignment == 0 || (alignment & (alignment - 1)) != 0) return false;
+  return true;
+}
+
+void* nrq_cdmm_arena_allocate_planned(void* handle,
+                                      const NrqAllocPlan* plan) {
+  if (!cdmm_plan_is_plain(plan)) return nullptr;
+  return nrq_cdmm_arena_allocate(handle, static_cast<size_t>(plan->slot_bytes),
+                                 static_cast<size_t>(cdmm_plan_alignment(plan)));
+}
+
 void* nrq_cdmm_arena_allocate_layout(void* handle,
                                      const nrq_object_layout* layout) {
   if (!cdmm_layout_is_plain(layout)) return nullptr;
@@ -3139,6 +3168,15 @@ void* nrq_cdmm_pool_create_layout(const nrq_object_layout* layout,
                                   NrqCdmmDestructor destructor, void* context) {
   if (!cdmm_layout_is_plain(layout)) return nullptr;
   return nrq_cdmm_pool_create(layout->payload_size, alignof(std::max_align_t),
+                              slots_per_chunk, flags, destructor, context);
+}
+
+void* nrq_cdmm_pool_create_planned(const NrqAllocPlan* plan,
+                                   size_t slots_per_chunk, uint32_t flags,
+                                   NrqCdmmDestructor destructor, void* context) {
+  if (!cdmm_plan_is_plain(plan)) return nullptr;
+  return nrq_cdmm_pool_create(static_cast<size_t>(plan->slot_bytes),
+                              static_cast<size_t>(cdmm_plan_alignment(plan)),
                               slots_per_chunk, flags, destructor, context);
 }
 

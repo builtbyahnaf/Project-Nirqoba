@@ -67,6 +67,13 @@ void* nrq_cdmm_arena_allocate(void* arena, size_t bytes, size_t alignment);
 struct nrq_object_layout;
 void* nrq_cdmm_arena_allocate_layout(void* arena,
                                      const struct nrq_object_layout* layout);
+// The same geometry, taken from a compiler allocation plan: the slot size and
+// alignment are the plan's, and the plan must describe deterministic storage (no
+// header, no references, not an array). A plan that survives those checks is
+// still clamped to the region's own alignment rules.
+struct NrqAllocPlan;
+void* nrq_cdmm_arena_allocate_planned(void* arena,
+                                      const struct NrqAllocPlan* plan);
 void* nrq_cdmm_arena_allocate_destructible(void* arena, size_t bytes,
                                            size_t alignment,
                                            NrqCdmmDestructor destructor,
@@ -124,6 +131,11 @@ void* nrq_cdmm_pool_create(size_t slot_bytes, size_t slot_alignment,
 void* nrq_cdmm_pool_create_layout(const struct nrq_object_layout* layout,
                                   size_t slots_per_chunk, uint32_t flags,
                                   NrqCdmmDestructor destructor, void* context);
+// Creates a pool from a compiler plan, which additionally carries the alignment
+// the compiler chose. Refused for the same plans the layout form refuses.
+void* nrq_cdmm_pool_create_planned(const struct NrqAllocPlan* plan,
+                                   size_t slots_per_chunk, uint32_t flags,
+                                   NrqCdmmDestructor destructor, void* context);
 int32_t nrq_cdmm_pool_reset(void* pool);
 int32_t nrq_cdmm_pool_destroy(void* pool);
 void* nrq_cdmm_pool_allocate(void* pool);
