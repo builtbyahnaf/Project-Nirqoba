@@ -49,7 +49,7 @@ recorded below is made under that authority.
   9.58 ms (medians of 9 runs). No H32 binary was rebuilt, so no before/after
   timing is claimed; the header-size comparison is arithmetic and is recorded in
   `reports/aor/phase-4-performance.md`.
-- Tests: `349` unit tests and `624` full-run cases pass. Phase 7 isolation, the
+- Tests: `360` unit tests and `624` full-run cases pass. Phase 7 isolation, the
   Phase 9 production/debug matrix, and `*gc*` configuration equivalence (67
   agreed) pass.
 

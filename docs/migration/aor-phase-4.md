@@ -82,7 +82,7 @@ reserved for that work.
 
 ## Verification
 
-- `349` unit tests pass.
+- `360` unit tests pass.
 - `624` integration cases pass.
 - Phase 7 isolation passes.
 - Phase 9 optimization compatibility passes (O0/O2 × production/debug).
