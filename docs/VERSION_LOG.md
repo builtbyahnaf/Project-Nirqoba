@@ -12,6 +12,49 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.597-beta
+
+### Summary of Changes (since `0.593-beta`):
+
+- **AOR Phase 4 completed.** The H32 object header is gone. Managed objects now
+  use H0 (headerless, 0 bytes), H8 (compact, 8 bytes), or H16 (extended, 16
+  bytes); no standard object carries more than 16 header bytes.
+- **A page names the representation.** `PageKind { Headerless, Compact, Extended,
+  Large, Fallback }` fixes the header size and payload offset, so no object needs
+  a size tag. The object-start bitmap now indexes span starts, and payload is
+  `span_start + header_bytes`.
+- **H16 layout:** `{element_count, state, layout_id, flags}`. `element_count` is
+  first so the compiler's `payload - 16` SoA count read is unchanged. Arrays and
+  SoA containers are always extended, including one-element containers.
+- **H8 layout:** `{state, layout_id}`. **H0:** no header; the layout is the page's
+  `uniform_layout`, state is one byte per object, and the element count is one.
+- **`birth_epoch` removed from every object.** A page born bitmap plus a lazy
+  `born_epoch` stamp replaces the 8-byte field; stale bits are never read.
+- **Layout identity is a 32-bit id table** (14-bit space, thread-local 8-entry
+  memo) instead of an 8-byte pointer in each object.
+- **Public API:** `nrq_gc_allocate_repr`, `nrq_gc_object_representation`,
+  `nrq_gc_object_header_size`, `nrq_gc_get_representation_facts`, and
+  `nrq_gc_get_representation_stats`. An impossible explicit request is rejected,
+  never silently coerced.
+- **Reuse is representation-local.** A free run is only usable by the page's own
+  representation; headerless refills reserve a batch of runs so fragmented pages
+  do not take the allocator lock per run.
+- **Eight bugs fixed**, including recycled pages keeping `use_object_index`, a
+  one-element container being described as a record, headerless slab thrashing
+  between two small shapes, and a headerless state table that cost as much as the
+  H8 header it removed. Regression tests cover each.
+- Benchmarks: `benchmarks/aor/phase4` measures allocation and collection for all
+  three representations. On an i5-1235U with the development runtime, 200,000
+  live 64-byte H0 objects allocate in 5.96 ms and a full live collection takes
+  9.58 ms (medians of 9 runs). No H32 binary was rebuilt, so no before/after
+  timing is claimed; the header-size comparison is arithmetic and is recorded in
+  `reports/aor/phase-4-performance.md`.
+- Tests: `349` unit tests and `624` full-run cases pass. Phase 7 isolation, the
+  Phase 9 production/debug matrix, and `*gc*` configuration equivalence (67
+  agreed) pass.
+
+---
+
 ## Version 0.593-beta
 
 ### Summary of Changes (since `0.592-beta`):
