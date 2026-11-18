@@ -3776,6 +3776,16 @@ void validate_page_metadata_locked() {
       nrq_runtime_fatal("GC empty page retained live metadata");
     if (page->marked_objects != 0 || page->marked_young_objects != 0)
       nrq_runtime_fatal("GC cycle ended with a page mark outstanding");
+    // The Phase 4 contract, checked where the cycle already audits metadata:
+    // no page class may describe a header larger than H16, and a headerless page
+    // must hold everything needed to decode an object that has no header.
+    if (page_header_bytes(page->kind) > 16)
+      nrq_runtime_fatal("GC page describes a header larger than 16 bytes");
+    if (page->kind == PageKind::Headerless) {
+      if (page->slot_bytes == 0 || !page->uniform_layout || !page->h0_states ||
+          page->h0_state_capacity < page->capacity / page->slot_bytes)
+        nrq_runtime_fatal("GC headerless page cannot decode its objects");
+    }
   }
 }
 
