@@ -136,6 +136,7 @@ KNOWN_KEYS = [
     "ALLOC_MS",
     "TRAVERSE_MS",
     "COLLECT_MS",
+    "COLLECT_CYCLES",
     "BUILD_MS",
     "CHECKSUM",
     "FINAL_CHECKSUM",
@@ -150,6 +151,7 @@ ROUND_KEYS = {
     "ALLOC_MS",
     "TRAVERSE_MS",
     "COLLECT_MS",
+    "COLLECT_CYCLES",
     "BUILD_MS",
     "CHECKSUM",
     "LIVE_AFTER",
@@ -455,19 +457,47 @@ def validate_run(test_id: str, impl: str, parsed: dict[str, Any]) -> list[str]:
                     f"round {round_number}: CHECKSUM={round_data['CHECKSUM']}, "
                     f"expected {expected_checksum}"
                 )
+        # The Nirqoba tracks report the collection phase twice: milliseconds for
+        # cross-track comparison, and a cycle count for the resolution a
+        # sub-millisecond phase needs. The cycle count is required, not optional,
+        # so a zero-millisecond figure can never stand on its own.
+        if impl == "nirqoba" and test_id in {"01", "03"}:
+            if "COLLECT_CYCLES" not in round_data:
+                problems.append(
+                    f"round {round_number}: missing COLLECT_CYCLES"
+                )
+            elif as_float(round_data["COLLECT_CYCLES"]) <= 0.0:
+                problems.append(
+                    f"round {round_number}: "
+                    f"COLLECT_CYCLES={round_data['COLLECT_CYCLES']} is not positive"
+                )
+
         for metric in definition["phase_metrics"]:
             if metric not in round_data:
                 problems.append(f"round {round_number}: missing {metric}")
-            else:
-                metric_val = as_float(round_data[metric])
-                if metric_val <= 0.0:
-                    problems.append(
-                        f"round {round_number}: {metric}={round_data[metric]} is not positive"
-                    )
-                elif impl == "nirqoba" and metric_val > NIRQOBA_MAX_PHASE_MS:
-                    problems.append(
-                        f"round {round_number}: {metric}={round_data[metric]}ms exceeds {NIRQOBA_MAX_PHASE_MS:.0f}ms limit for nirqoba [FAIL]"
-                    )
+                continue
+            metric_val = as_float(round_data[metric])
+            if metric_val <= 0.0:
+                # One million dead objects are reclaimed in tens of microseconds,
+                # which rounds to zero milliseconds. A zero figure is accepted
+                # only when the companion cycle count proves the phase did work;
+                # the reclamation itself is still checked by LIVE_AFTER and the
+                # checksum below.
+                cycles = round_data.get("COLLECT_CYCLES")
+                if (
+                    impl == "nirqoba"
+                    and metric == "COLLECT_MS"
+                    and cycles is not None
+                    and as_float(cycles) > 0.0
+                ):
+                    continue
+                problems.append(
+                    f"round {round_number}: {metric}={round_data[metric]} is not positive"
+                )
+            elif impl == "nirqoba" and metric_val > NIRQOBA_MAX_PHASE_MS:
+                problems.append(
+                    f"round {round_number}: {metric}={round_data[metric]}ms exceeds {NIRQOBA_MAX_PHASE_MS:.0f}ms limit for nirqoba [FAIL]"
+                )
 
     if test_id in {"01", "02"}:
         for metric in definition.get("global_metrics", []):
