@@ -4868,26 +4868,38 @@ nrq_gc_representation_stats nrq_gc_get_representation_stats(void) {
   for (const auto& entry : gc_pages) {
     const GcPage* page = entry.get();
     if (!page) continue;
+    // What this page actually spends off-heap. `h0_state_capacity` is zero for
+    // every page that is not headerless, so one expression covers all three.
+    const size_t metadata_bytes =
+        (page->mark_words + page->remembered_words + page->born_words +
+         page->object_start_words) *
+            sizeof(uint64_t) +
+        page->h0_state_capacity;
     switch (page->kind) {
       case PageKind::Headerless:
         ++stats.headerless_pages;
         stats.headerless_objects += page->live_objects;
+        stats.headerless_metadata_bytes += metadata_bytes;
         break;
       case PageKind::Compact:
         ++stats.compact_pages;
         stats.compact_objects += page->live_objects;
+        stats.compact_metadata_bytes += metadata_bytes;
         break;
       case PageKind::Extended:
         ++stats.extended_pages;
         stats.extended_objects += page->live_objects;
+        stats.extended_metadata_bytes += metadata_bytes;
         break;
       case PageKind::Large:
         ++stats.large_pages;
         stats.extended_objects += page->live_objects;
+        stats.extended_metadata_bytes += metadata_bytes;
         break;
       case PageKind::Fallback:
         ++stats.fallback_pages;
         stats.extended_objects += page->live_objects;
+        stats.extended_metadata_bytes += metadata_bytes;
         break;
     }
   }

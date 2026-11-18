@@ -160,6 +160,13 @@ struct nrq_gc_representation_stats {
   size_t large_pages;
   size_t fallback_pages;
   uint64_t header_bytes_saved_vs_extended;
+  // Page metadata actually allocated for each representation: the off-heap
+  // bitmaps plus, for a headerless page, the per-object state table. Large and
+  // fallback pages are counted with the extended representation, because their
+  // objects use the extended header.
+  size_t headerless_metadata_bytes;
+  size_t compact_metadata_bytes;
+  size_t extended_metadata_bytes;
 };
 struct nrq_gc_representation_stats nrq_gc_get_representation_stats(void);
 

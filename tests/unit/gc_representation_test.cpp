@@ -212,6 +212,17 @@ TEST(GcRepresentationTest, StatisticsAccountForHeaderSavings) {
   // object saves 8. Anything smaller would mean the accounting is not measuring
   // the headers that actually exist.
   ASSERT_TRUE(stats.header_bytes_saved_vs_extended >= 16 + 8);
+  // Metadata is charged to the representation that spends it, and a headerless
+  // page spends at least one state byte per live object on top of its bitmaps.
+  ASSERT_TRUE(stats.headerless_metadata_bytes >= stats.headerless_objects);
+  // Three bitmaps are always present (mark, remembered, born); the size follows
+  // the target's span grid, so it is derived here rather than hard-coded.
+  const size_t slots = size_t{65536} / facts().headerless_payload_alignment;
+  const size_t bitmap_bytes = (slots / 64) * sizeof(uint64_t);
+  ASSERT_TRUE(stats.compact_metadata_bytes >=
+              stats.compact_pages * 3 * bitmap_bytes);
+  ASSERT_TRUE(stats.extended_metadata_bytes >=
+              stats.extended_pages * 3 * bitmap_bytes);
 }
 
 TEST(GcRepresentationTest, EveryRepresentationTracesAndIsReclaimed) {
