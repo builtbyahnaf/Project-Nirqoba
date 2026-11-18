@@ -23,6 +23,10 @@ add_executable(nirqoba_unit_tests
   unit/gc_slot_index_test.cpp
   unit/slot_index_test.cpp
   unit/allocator_test.cpp
+  unit/cdmm_arena_test.cpp
+  unit/cdmm_pool_test.cpp
+  unit/cdmm_coexistence_test.cpp
+  unit/cdmm_stress_test.cpp
   unit/file_test.cpp
   unit/mapping_test.cpp
   unit/sync_test.cpp
