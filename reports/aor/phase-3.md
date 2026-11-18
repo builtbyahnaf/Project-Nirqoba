@@ -1,5 +1,9 @@
 # AOR Phase 3 — Remove Intrusive Object Dependencies
 
+> Historical record. Phase 4 replaced the H32 header this report ends with by
+> H0/H8/H16; see `phase-4.md` and `docs/memory-model/aor-headers.md` for the
+> current layouts. The removal work described here is still in force.
+
 Status: implemented in the current tree  
 Baseline: Phase 2 page-local metadata  
 Scope: external mark worklist, range-based TLAB publication, directory-based page resolution, and the H48 → H32 header reduction.

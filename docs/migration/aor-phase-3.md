@@ -1,5 +1,8 @@
 # AOR Phase 3 Migration Notes
 
+> Historical record. Phase 4 replaced H32 with H0/H8/H16 and moved layout
+> identity to a 32-bit id; use `aor-phase-4.md` for the current state.
+
 **Status:** complete  
 **Object header:** H32  
 **Compatibility:** no source-language or ownership change
