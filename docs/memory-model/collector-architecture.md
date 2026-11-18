@@ -116,6 +116,14 @@ descriptor once:
 Payload size is `element_count × payload_size`, so no per-instance size field is
 needed and it cannot disagree with the descriptor.
 
+A narrow record's child is resolved against the page the record itself is in
+before the directory is consulted. A chain is allocated sequentially, so
+consecutive nodes share a page almost always, and the page is already in hand:
+the check is a range compare, a start bit and a payload compare, and anything
+outside the page takes the ordinary discovery path. This is the marking change
+Phase 8 measured, and it is why the directory probe is not on the per-object
+path for a sequential graph.
+
 ## Generational state
 
 Young, promotion age and remembered membership are tracked per object. Mark and
@@ -151,6 +159,18 @@ limit belong to the next cycle.
 A headerless reservation is per layout and per slot size: switching layout starts
 a new reservation instead of reinterpreting the cursor.
 
+**Payload zeroing.** Every managed payload is promised zero-initialised. Storage
+the OS has just committed already holds zeros, so a payload handed out from a
+page's untouched tail needs no fill, and a page the allocator dedicated to one
+large object - where the fill was measured at four fifths of the allocation cost -
+needs none at all. The decision is made where the page is read anyway, at the
+refill or at the single-object allocation, and carried to the object as a flag: an
+earlier version asked the page per object and cost more than the fill it saved.
+Each page carries the offset from which its storage is known to be zero; a
+reclaimed span or a recycled page shell ends that claim, so stale bytes are never
+handed out as zeros. A development build samples a freshly committed page against
+that premise rather than trusting it.
+
 ## Sweep
 
 Sweep visits pages in allocation order and consumes set bits only, so zero bits
@@ -165,11 +185,20 @@ A page a cycle has not yet touched is classified from its counts:
 - otherwise: per-object reclamation, which releases each dead object's span into
   its own page so the space is reusable rather than lost to the bump cursor.
 
-Reclaimed spans are recorded per page (`FreeSpan`, 8 bytes, up to 384 per page),
-indexed so a refill finds a page that can answer a request without walking the
-page set. Runs a thread has reserved but not used never survive a cycle boundary:
-they are returned to their page before the reclaimer decides which pages are
-empty.
+Reclaimed spans are recorded per page (`FreeSpan`, 8 bytes), indexed so a refill
+finds a page that can answer a request without walking the page set. Runs a
+thread has reserved but not used never survive a cycle boundary: they are
+returned to their page before the reclaimer decides which pages are empty.
+
+The list starts inline at 384 entries and grows on demand, doubling up to 4 096,
+only for a page that actually shatters. The fixed bound was a space defect, not a
+conservative choice: at 16-byte slots a page holds 4 096 objects, so a heap that
+loses every other object needs 2 048 runs in one page, and everything above the
+bound was dropped. The matrix measures the consequence directly - the bytes a page
+could not record, and the pages a second allocation wave commits beyond what the
+heap already holds - and both fall to zero and to the minimum once the list can
+grow. A page that reaches the grown limit keeps its largest runs and drops the
+smallest, which is the last resort rather than the policy.
 
 ## What the measurements say
 
