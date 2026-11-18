@@ -15,6 +15,7 @@ add_executable(nirqoba_unit_tests
   unit/diagnostics_test.cpp
   unit/gc_test.cpp
   unit/gc_representation_test.cpp
+  unit/gc_representation_reuse_test.cpp
   unit/gc_debug_test.cpp
   unit/gc_isolation_test.cpp
   unit/gc_slot_index_test.cpp
