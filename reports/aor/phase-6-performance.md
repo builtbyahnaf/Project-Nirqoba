@@ -58,19 +58,66 @@ unit test `GcPlannedAllocationTest.PlannedArrayUsesTheExtendedRepresentation`
 proves the cache does what it claims: with a warm site cache, the layout-memo miss
 counter does not move at all across a second allocation.
 
-The case where the cache matters is a program with more shapes than the layout
-memo holds. Eight element sizes allocated round-robin evict each other from the
-four-entry memo, so every typed allocation is a miss:
+The case where the cache mattered was a program with more shapes than the layout
+memo held. Eight element sizes allocated round-robin evicted each other from the
+four-entry memo, so every typed allocation was a miss:
 
-| Workload | Median | Range over 7 runs | Change |
+| Workload (four-entry memo) | Median | Range over 7 runs |
+|---|---|---|
+| `gc-array-multishape-typed` | 78.15 ns/op | 75.94–82.42 |
+| `gc-array-multishape-planned` | 53.37 ns/op | 47.81–57.59 |
+
+That was 24.8 ns less per allocation and the two ranges did not overlap. It was
+also a measurement of the memo's degradation, not of anything intrinsic: the typed
+path was slow because it was re-interning descriptors it had already seen.
+
+## Beta, after the memo redesign
+
+The memo is now a sixteen-set, two-way table indexed by shape (see
+`docs/memory-model/alloc-hints.md`). The same eight-shape workload, measured again
+on the same machine with 7 runs:
+
+| Workload | Median | Range over 7 runs |
+|---|---|---|
+| `gc-array-multishape-typed` | 52.26 ns/op | 47.33–60.90 |
+| `gc-array-multishape-planned` | 47.52 ns/op | 45.80–57.97 |
+
+The typed path improved from 78.15 to 52.26 ns/op — 1.50× — with no change to the
+work it does, only to where it finds the descriptor. The planned path stayed where
+it was, and the 9 % gap that remains between the two is inside the overlap of
+their ranges, so it is not claimed as an improvement.
+
+With larger shape counts the workload stops being about descriptor lookup and
+becomes about page classes, because every distinct element size is a distinct page
+class:
+
+| Workload | Shapes | Typed median (range) | Planned median (range) |
 |---|---|---|---|
-| `gc-array-multishape-typed` | 78.15 ns/op | 75.94–82.42 | — |
-| `gc-array-multishape-planned` | 53.37 ns/op | 47.81–57.59 | 1.46× faster |
+| `gc-array-alt2-*` | 2 | 43.04 (40.18–49.45) | 41.35 (37.16–49.78) |
+| `gc-array-multishape-*` | 8 | 52.26 (47.33–60.90) | 47.52 (45.80–57.97) |
+| `gc-array-diverse24-*` | 24 | 114.12 (106.51–135.17) | 114.88 (92.74–124.44) |
+| `gc-array-diverse40-*` | 40 | 152.57 (140.93–198.77) | 158.27 (114.00–171.48) |
 
-That is 24.8 ns less per allocation, about 32 % lower, and the two ranges do not
-overlap. This is the honest headline for beta: the site cache is worth about a
-third of an allocation when the shapes do not fit the memo, and worth nothing
-measurable when they do.
+At 24 and 40 shapes the two paths are indistinguishable: the memo still holds all
+40 shapes (32 entries, two ways), so the planned cache has nothing left to save,
+and the cost is dominated by allocating across many page classes. Reported as a
+null result rather than as a cache win.
+
+## Metadata and code size
+
+Measured by compiling a generated program with 40 `array.allocate<int>` sites and
+inspecting its IR and object file:
+
+| Item | Measured |
+|---|---|
+| per-site cache global | 8 bytes |
+| 40 sites | 320 bytes of module data |
+| object file, 40-site program | 6 288 bytes |
+| thread-local layout memo | 260 bytes per thread |
+
+The per-call cost is one extra argument and one immediate. No separate
+typed-versus-planned code-size comparison was run; the 8-byte global per site is
+the only new module data, and it is counted above.
 
 ## Reproduction
 

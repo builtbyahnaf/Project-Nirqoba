@@ -89,6 +89,23 @@ columns, a custom trace callback, or an array.
 | Configuration equivalence, `*gc*` | 67 agree, 0 disagree |
 | Pool benchmark | before/after recorded with spread |
 
+## Second half: coverage, memo, wiring, validation
+
+After the plan and the site cache existed, the remaining work was to find what still
+bypassed them and to fix the lookup they sat on. Full detail in
+`phase-6-coverage.md`; the path table is
+`docs/memory-model/allocation-coverage.md`.
+
+- The four-entry layout memo was replaced by a sixteen-set, two-way table indexed
+  by shape. Typed eight-shape allocation went from 78.15 to 52.26 ns/op.
+- `nrq_gc_allocate_planned` added record allocation with a plan.
+- `nrq_cdmm_pool_create_planned` and `nrq_cdmm_arena_allocate_planned` added
+  plan-driven deterministic regions.
+- Records were confirmed to be owned storage, so no compiler record path needs a
+  plan; that is recorded as an intentional fallback rather than left unexplained.
+- Validation gained property tests across sizes, a memo-behaviour test, cache
+  rejection tests, and a four-thread planned-allocation test.
+
 ## What this phase did not do
 
 - No unified garbage-collection redesign. That is Phase 7; nothing here changes
