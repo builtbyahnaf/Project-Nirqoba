@@ -2452,19 +2452,21 @@ void buffer_remembered(void* object) {
 // indirect call per object. Anything else - a callback, a typed array, a wider
 // layout - still goes through trace_children.
 void enqueue_narrow_children_locked(const ObjectRef& object,
+                                    const nrq_object_layout* layout,
+                                    size_t payload_bytes,
                                     MarkContext& context) {
   const auto* bytes =
       static_cast<const unsigned char*>(object_payload(object));
-  const nrq_object_layout* layout = object_layout(object);
-  // The payload size is the same for every field of a fixed record, so it is
-  // read once instead of once per reference; the descriptor and page are already
-  // in cache by the time the worklist handed this object over.
+  // The descriptor and the payload size are the ones the caller already
+  // resolved for its budget accounting and its narrow-shape test. Resolving them
+  // again here cost a second descriptor lookup and a second element-count/size
+  // multiply for every traced object, so they are passed in instead.
+  //
   // Hot narrow records keep their two offsets inside the descriptor. That turns
   // the common case into one load from the descriptor line the marker already
   // read for `reference_count`, instead of a dependent load of the offset table.
   const bool inline_map =
       (layout->flags & NRQ_OBJECT_LAYOUT_INLINE_MAP) != 0;
-  const size_t payload_bytes = object_payload_bytes(object);
   for (uint32_t index = 0; index < layout->reference_count; ++index) {
     const size_t offset = inline_map
                               ? layout->inline_reference_offsets[index]
@@ -2482,13 +2484,15 @@ bool mark_slice_locked(size_t budget_bytes) {
   while (!active_mark.worklist.empty() && touched < budget_bytes) {
     const ObjectRef object = active_mark.worklist.pop();
     prefetch_object(object);
-    touched += object_payload_bytes(object) + object_header_bytes(object);
+    const size_t payload_bytes = object_payload_bytes(object);
+    touched += payload_bytes + object_header_bytes(object);
     if (active_mark.young_only && !object_young(object)) continue;
     const nrq_object_layout* layout = object_layout(object);
     const size_t reference_count = layout->reference_count;
     if (!layout->trace && reference_count != 0 && reference_count <= 2 &&
         (layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0) {
-      enqueue_narrow_children_locked(object, active_mark);
+      enqueue_narrow_children_locked(object, layout, payload_bytes,
+                                    active_mark);
     } else {
       trace_children(object, enqueue_reference, &active_mark);
     }
