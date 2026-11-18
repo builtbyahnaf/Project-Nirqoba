@@ -291,6 +291,89 @@ Sample run_pool(size_t count, bool generations) {
   return sample;
 }
 
+// Individual release measured on its own: the allocation phase is outside the
+// timed region, so this is the release path and nothing else. `generations`
+// enables the per-slot generation word; `checked` releases through the validating
+// entry point (a scope release does not take the operation lock).
+Sample run_pool_release(size_t count, bool generations, bool checked) {
+  Sample sample;
+  const uint32_t flags = generations ? NRQ_CDMM_POOL_GENERATIONS : 0;
+  void* pool = nrq_cdmm_pool_create(kUniformBytes, 8, 0, flags, nullptr, nullptr);
+  if (!pool) std::exit(2);
+  std::vector<void*> slots(count, nullptr);
+  std::vector<uint64_t> generations_by_slot(count, 0);
+  {
+    NrqCdmmPoolScope scope{};
+    if (!nrq_cdmm_pool_begin(pool, &scope)) std::exit(2);
+    for (size_t index = 0; index < count; ++index) {
+      slots[index] = nrq_cdmm_pool_scope_allocate(&scope);
+      if (!slots[index]) std::exit(2);
+      if (checked)
+        generations_by_slot[index] = nrq_cdmm_pool_generation(pool, slots[index]);
+    }
+    nrq_cdmm_pool_end(&scope);
+  }
+  sample.committed_bytes = static_cast<size_t>(nrq_cdmm_pool_committed(pool));
+  const auto release_start = Clock::now();
+  size_t released = 0;
+  {
+    // Both cases use a scope so the measurement is the release path; the checked
+    // case adds generation validation, not a registry lookup.
+    NrqCdmmPoolScope scope{};
+    if (!nrq_cdmm_pool_begin(pool, &scope)) std::exit(2);
+    for (size_t index = 0; index < count; ++index) {
+      const bool ok = checked
+                          ? nrq_cdmm_pool_scope_release_checked(
+                                &scope, slots[index], generations_by_slot[index])
+                          : nrq_cdmm_pool_scope_release(&scope, slots[index]);
+      if (ok) ++released;
+    }
+    nrq_cdmm_pool_end(&scope);
+  }
+  const auto release_end = Clock::now();
+  if (released != count) {
+    std::fprintf(stderr, "released %zu of %zu individual slots\n", released,
+                 count);
+    std::exit(2);
+  }
+  sample.allocate_ns = 0;
+  sample.release_ns = ns_per_op(release_end - release_start, count);
+  sample.allocated_bytes = static_cast<double>(kUniformBytes);
+  sample.chunks = (sample.committed_bytes + 64 * 1024 - 1) / (64 * 1024);
+  nrq_cdmm_pool_destroy(pool);
+  return sample;
+}
+
+// Bulk release through `nrq_cdmm_pool_reset` after a working set that is a small
+// fraction of the pool: a reset should cost the chunks that were touched, not the
+// whole pool.
+Sample run_pool_reset_partial(size_t count) {
+  Sample sample;
+  void* pool = nrq_cdmm_pool_create(kUniformBytes, 8, 0, 0, nullptr, nullptr);
+  if (!pool) std::exit(2);
+  const size_t touched = std::max<size_t>(1, count / 20);
+  std::vector<void*> slots(touched, nullptr);
+  NrqCdmmPoolScope scope{};
+  if (!nrq_cdmm_pool_begin(pool, &scope)) std::exit(2);
+  for (size_t index = 0; index < touched; ++index) {
+    slots[index] = nrq_cdmm_pool_scope_allocate(&scope);
+    if (!slots[index]) std::exit(2);
+  }
+  nrq_cdmm_pool_end(&scope);
+  sample.committed_bytes = static_cast<size_t>(nrq_cdmm_pool_committed(pool));
+  const auto release_start = Clock::now();
+  if (!nrq_cdmm_pool_reset(pool)) std::exit(2);
+  const auto release_end = Clock::now();
+  if (nrq_cdmm_pool_live(pool) != 0) std::exit(2);
+  sample.allocate_ns = 0;
+  // Per live slot, because that is the work the reset is being judged on.
+  sample.release_ns = ns_per_op(release_end - release_start, touched);
+  sample.allocated_bytes = static_cast<double>(kUniformBytes);
+  sample.chunks = (sample.committed_bytes + 64 * 1024 - 1) / (64 * 1024);
+  nrq_cdmm_pool_destroy(pool);
+  return sample;
+}
+
 // Bulk release: every slot is reclaimed in one call. This is the pool analogue of
 // an arena reset and does not run per-slot destructors unless one is registered.
 Sample run_pool_reset(size_t count) {
@@ -394,6 +477,10 @@ int main(int argc, char** argv) {
       {"pool-64B", [](size_t objects) { return run_pool(objects, false); }},
       {"pool-generations", [](size_t objects) { return run_pool(objects, true); }},
       {"pool-reset-64B", &run_pool_reset},
+      {"pool-release-plain", [](size_t objects) { return run_pool_release(objects, false, false); }},
+      {"pool-release-gen", [](size_t objects) { return run_pool_release(objects, true, false); }},
+      {"pool-release-stale-check", [](size_t objects) { return run_pool_release(objects, true, true); }},
+      {"pool-reset-partial", &run_pool_reset_partial},
       {"pool-churn-500", [](size_t objects) { return run_pool_churn(std::max<size_t>(1, objects / kChurnObjects)); }},
   };
 

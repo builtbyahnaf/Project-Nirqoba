@@ -26,6 +26,10 @@ Each run prints one row; the last row per workload is the median of the runs.
 | `pool-64B` | one scope, 200,000 slot allocations, then a bulk release through the scope |
 | `pool-generations` | same with `NRQ_CDMM_POOL_GENERATIONS` |
 | `pool-reset-64B` | allocate 200,000 slots, then one `pool_reset` |
+| `pool-release-plain` | allocate 200,000 slots, then release each one through a scope |
+| `pool-release-gen` | same with generations enabled |
+| `pool-release-stale-check` | same, releasing through the generation-checked scope path |
+| `pool-reset-partial` | allocate a twentieth of the pool, then one `pool_reset` |
 | `pool-churn-500` | 400 rounds of 500 slots allocated and released in a scrambled order |
 
 The `release ns` column is per object for individual releases and per object for a
