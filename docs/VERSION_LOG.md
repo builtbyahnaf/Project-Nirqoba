@@ -39,10 +39,12 @@ recorded below is made under that authority.
 - **Reuse is representation-local.** A free run is only usable by the page's own
   representation; headerless refills reserve a batch of runs so fragmented pages
   do not take the allocator lock per run.
-- **Eight bugs fixed**, including recycled pages keeping `use_object_index`, a
-  one-element container being described as a record, headerless slab thrashing
-  between two small shapes, and a headerless state table that cost as much as the
-  H8 header it removed. Regression tests cover each.
+- **Ten bugs fixed**, including recycled pages keeping `use_object_index`, a
+  one-element container being described as a record, large pages that took the
+  bitmap path with no start bitmap and were never swept, a headerless state table
+  that cost as much as the H8 header it removed, and a mixed-shape thread that
+  abandoned its slab and allocated a page per object. Regression tests or
+  statistics assertions cover each.
 - Benchmarks: `benchmarks/aor/phase4` measures allocation and collection for all
   three representations. On an i5-1235U with the development runtime, 200,000
   live 64-byte H0 objects allocate in 5.96 ms and a full live collection takes
