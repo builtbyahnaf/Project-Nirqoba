@@ -12,6 +12,53 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.601-beta
+
+### Summary of Changes (since `0.597-beta`):
+
+- **AOR Phase 5 completed.** Arena and pool allocation are first-class CDMM
+  strategies with runtime APIs, deterministic destruction, and no object header.
+  Neither strategy repeats layout, size or liveness in the object: the arena
+  chunk's bump pointer and the pool chunk's bitmap and free list answer for every
+  allocation, the same page-dedicated reasoning as the headerless GC
+  representation.
+- **Arenas:** `nrq_cdmm_arena_create/allocate/reset/destroy`, `max_bytes` cap,
+  power-of-two alignment, growth chunks, a generation advanced by every reset, and
+  containment checks. The first chunk is committed at creation, so a created
+  arena either has its capacity or does not exist.
+- **Deterministic destruction:** `nrq_cdmm_arena_allocate_destructible` records a
+  destructor inside the arena and runs the records newest-first on reset and
+  destroy, so a nested owned resource is released after the object that owns it.
+  A failed payload allocation rewinds the arena, leaving no stray record.
+- **Pools:** `nrq_cdmm_pool_create/allocate/release/reset/destroy` with one
+  liveness bit per slot, a free list threaded through the free slots, exact-slot
+  address validation, optional 32-bit generations for stale-release rejection, one
+  destructor per pool, and poison-on-release.
+- **Bulk paths:** scope structs and bulk allocate/release helpers take one handle
+  lookup and one operation pin for a whole batch, which removes both locks from
+  the per-object path. Reset and destroy are refused while a scope is open.
+- **Introspection:** `nrq_cdmm_strategy_of` and `nrq_cdmm_object_facts` report
+  which strategy owns an address, a header size of zero, the pool slot size, the
+  generation, and the amortized metadata per object.
+- **Coexistence:** the explicit strategies use a separate handle table and a
+  separate address-range table, so the collector and the legacy allocator entry
+  points cannot reset, destroy or claim each other's storage. Tests cover both
+  directions, including a collection while arenas and pools hold live objects.
+- **Two runtime defects found and fixed in this phase:** the first chunk was
+  committed lazily, so `committed` read zero after creation, and scope release
+  reused the serialized entry point and took a mutex per slot. Both are covered.
+- Benchmarks: `benchmarks/aor/phase5` measures arena, pool, destructible arena and
+  ordinary owned allocation on uniform, mixed-size and mixed-lifetime workloads.
+  On an i5-1235U with the development runtime, 200,000 64-byte objects allocate at
+  23.99 ns each in an arena against 174.69 ns owned, and a bulk reset costs
+  5.07 ns per object against 135.77 ns for individual release (medians of 9 runs).
+- Tests: `394` unit tests and `624` full-run cases pass. Phase 7 isolation, the
+  Phase 9 production/debug matrix, and `*gc*` configuration equivalence pass.
+- Version bumped by `0.004` after the two strategy upgrades (arena, pool), as the
+  phase rule requires.
+
+---
+
 ## Version 0.597-beta
 
 ### Summary of Changes (since `0.593-beta`):
