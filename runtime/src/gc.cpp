@@ -1517,8 +1517,28 @@ size_t pages_with_slab_run = 0;
 // generation so a thread that resumes after another thread reclaimed its page
 // discards the stale pointer before dereferencing it.
 uint64_t gc_page_generation = 1;
-thread_local GcPage* thread_allocation_page = nullptr;
+// One cached bump page per page class. A workload that alternates two
+// representations used to discard the single cache slot on every switch and
+// rescan the tail index, which turned into a fresh page per allocation once the
+// scan could not answer. The class is part of the key, so each shape keeps its
+// own page resident.
+constexpr size_t kPageClassCount = 5;
+thread_local GcPage* thread_allocation_pages[kPageClassCount] = {};
 thread_local uint64_t thread_allocation_generation = 0;
+
+inline GcPage* cached_allocation_page(PageKind kind) {
+  if (thread_allocation_generation != gc_page_generation) return nullptr;
+  return thread_allocation_pages[static_cast<size_t>(kind)];
+}
+
+inline void cache_allocation_page(GcPage* page) {
+  if (!page) return;
+  if (thread_allocation_generation != gc_page_generation) {
+    for (GcPage*& slot : thread_allocation_pages) slot = nullptr;
+    thread_allocation_generation = gc_page_generation;
+  }
+  thread_allocation_pages[static_cast<size_t>(page->kind)] = page;
+}
 struct RootInfo {
   size_t references = 0;
   size_t object_size = 0;
@@ -3127,8 +3147,7 @@ void install_tlab(MutatorState& mutator, GcPage* page, size_t offset, size_t spa
   mutator.tlab_cursor = page->storage + offset;
   mutator.tlab_end = mutator.tlab_cursor + span;
   mutator.tlab_generation = gc_page_generation;
-  thread_allocation_page = page;
-  thread_allocation_generation = gc_page_generation;
+  cache_allocation_page(page);
 }
 // Returns every run this thread reserved and did not hand out. The caller holds
 // gc_mutex and this mutator is not running: the cycle boundary flushes before it
@@ -4136,22 +4155,16 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
   GcPage* page = nullptr;
   size_t header_offset = 0;
   bool reused_span = false;
-  if (thread_allocation_generation != gc_page_generation) {
-    thread_allocation_page = nullptr;
-    thread_allocation_generation = gc_page_generation;
-  }
+  GcPage* const cached = cached_allocation_page(kind);
   // Reclaimed space in an existing page comes first: reusing it keeps the
   // working set inside pages that are already resident.
   page = take_free_span_locked(span, header_offset, kind, nullptr);
   if (page) {
     reused_span = true;
-  } else if (thread_allocation_page && thread_allocation_page->kind == kind &&
-             thread_allocation_page->used <= thread_allocation_page->capacity &&
-             span <= thread_allocation_page->capacity -
-                         thread_allocation_page->used) {
-    page = thread_allocation_page;
+  } else if (cached && cached->used <= cached->capacity &&
+             span <= cached->capacity - cached->used) {
+    page = cached;
   } else {
-    thread_allocation_page = nullptr;
     for (auto candidate = tail_pages.rbegin(); candidate != tail_pages.rend();
          ++candidate) {
       GcPage* possible = *candidate;
@@ -4188,8 +4201,7 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
     index_tail_page_locked(*page);
   }
   unretire_page_locked(*page);
-  thread_allocation_page = page;
-  thread_allocation_generation = gc_page_generation;
+  cache_allocation_page(page);
   if (!reused_span) {
     header_offset = page->used;
     page->used += span;
@@ -4241,14 +4253,10 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span,
   }
   GcPage* page = nullptr;
   size_t available = 0;
-  if (thread_allocation_generation != gc_page_generation) {
-    thread_allocation_page = nullptr;
-    thread_allocation_generation = gc_page_generation;
-  }
-  if (thread_allocation_page && thread_allocation_page->kind == kind &&
-      thread_allocation_page->used <= thread_allocation_page->capacity) {
-    available = thread_allocation_page->capacity - thread_allocation_page->used;
-    if (available >= minimum_span) page = thread_allocation_page;
+  GcPage* const cached = cached_allocation_page(kind);
+  if (cached && cached->used <= cached->capacity) {
+    available = cached->capacity - cached->used;
+    if (available >= minimum_span) page = cached;
   }
   if (!page && max_indexed_tail_bytes >= minimum_span) {
     // Newest first, as the reverse scan did: the most recently carved page is the
@@ -4557,6 +4565,14 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
                                                             : PageKind::Extended;
   const size_t span = object_span_bytes(header_bytes, bytes);
   if (span > kGcTlabBytes) return nullptr;
+  // A mutator owns one slab. A request of another representation must not evict
+  // it: a workload that alternates two shapes would abandon a mostly-full slab
+  // on every switch and take a fresh page per object. The object is allocated
+  // through the page cache under the lock instead, and the slab is still there
+  // when its own shape comes back.
+  if (thread_mutator.tlab_cursor && thread_mutator.tlab_page &&
+      thread_mutator.tlab_page->kind != kind)
+    return nullptr;
   handled = true;
 
   if (thread_mutator.tlab_generation != gc_page_generation)
