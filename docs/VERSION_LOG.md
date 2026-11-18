@@ -12,6 +12,45 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.609-beta
+
+### Summary of Changes (since `0.605-beta`):
+
+- **AOR Phase 6 completed.** Three upgrades: the shape-indexed layout memo, a
+  planned entry point for records, and plan-driven arena and pool construction.
+  The first half's releases and measurements are unchanged and still stand.
+- **Layout memo:** the four-entry ring thrashed as soon as a program used five
+  shapes; eight alternating shapes re-interned on every allocation. It is now a
+  sixteen-set, two-way table indexed by shape, with one replacement bit per set,
+  costing 260 bytes per thread. The typed eight-shape workload fell from 78.15 to
+  52.26 ns/op (1.50×), and typed and planned allocation are now indistinguishable
+  at 24 and 40 shapes.
+- **`nrq_gc_allocate_planned`:** planned record allocation. The representation
+  comes from the plan's two-bit field, the allocator still upgrades a hint the
+  payload cannot support, and the site cache is validated against the shape on
+  every call.
+- **`nrq_cdmm_pool_create_planned` / `nrq_cdmm_arena_allocate_planned`:**
+  deterministic regions sized and aligned from a compiler plan, refusing plans
+  with headers, references or arrays because a region that does not trace cannot
+  honour them.
+- **Coverage:** `docs/memory-model/allocation-coverage.md` records which path every
+  source construct takes, which entry points use a plan, and which fallbacks are
+  intentional. Nirqoba records are owned storage, so no plan applies to them, and
+  the typed entry points stay as the documented fallback.
+- **Validation:** 434 unit tests (property checks across 14 record sizes and 4
+  array shapes, eight-shape memo behaviour, same-size/different-table cache
+  rejection, rejected-plan fallback, four threads allocating planned arrays
+  concurrently), 624 integration cases, and 67 configuration equivalence
+  agreements for `*gc*`.
+- **Metadata footprint, measured:** 8 bytes per allocation site (40 sites = 320
+  bytes), 6 288-byte object file for the 40-site program, 260-byte thread-local
+  memo. No typed-versus-planned code-size delta was isolated.
+- **Docs and reports:** `reports/aor/phase-6-coverage.md`,
+  `reports/aor/phase-6-performance.md` updated with post-fix numbers and the null
+  results, `docs/memory-model/alloc-hints.md` and `cdmm.md` updated.
+
+---
+
 ## Version 0.605-beta
 
 ### Summary of Changes (since `0.601-beta`):
