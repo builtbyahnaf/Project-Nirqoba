@@ -413,6 +413,25 @@ uint64_t nrq_gc_tlab_tail_reclaimed_bytes(void);
 size_t nrq_gc_free_run_count(void);
 size_t nrq_gc_page_with_runs_count(void);
 uint64_t nrq_gc_reused_span_bytes(void);
+// A page records a bounded number of reclaimed runs, so space it cannot record is
+// decided on purpose: the allocator keeps the largest runs and drops the smallest.
+// These report how much that policy discarded, which is what tells a fragmentation
+// figure whether the bound or the workload stranded the space.
+uint64_t nrq_gc_dropped_free_run_bytes(void);
+uint64_t nrq_gc_dropped_free_run_count(void);
+// Reservation span handed out, how much of it the allocator had to write as zeros
+// itself, and how much came from storage already known to be zero. The split makes
+// the initialization cost visible instead of folding it into the allocation
+// figure, where it cannot be separated from the rest of the entry point. It is
+// counted per reservation, because that is where the decision is made; a payload
+// filled per object inside a reservation that needs filling is part of that span.
+struct nrq_gc_zeroing_facts {
+  uint64_t payload_bytes;
+  uint64_t filled_bytes;
+  uint64_t prezeroed_bytes;
+};
+struct nrq_gc_zeroing_facts nrq_gc_get_zeroing_facts(void);
+void nrq_gc_reset_zeroing_facts(void);
 // Reports how many objects are tracked by the exact address index. Objects that
 // live in a page with start metadata are discovered without the index, so this
 // stays proportional to the number of large-object pages rather than the heap.
@@ -443,6 +462,32 @@ uint64_t nrq_gc_get_allocated_bytes(void);
 uint64_t nrq_gc_get_collected_bytes(void);
 uint64_t nrq_gc_get_collection_count(void);
 uint64_t nrq_gc_get_live_objects(void);
+// Per-phase cost of the collection cycles that have run since the totals were
+// last reset. `prepare` is the safepoint, root enumeration and page-boundary
+// work, `mark` the marking slices including the reference resolution they
+// drained, `sweep` the reclamation slices, and `finish` the end-of-cycle
+// accounting. A whole-cycle figure hides which of those a change moved, so this
+// reports them separately from one monotonic clock.
+//
+// `mark_objects` and `mark_references` count what the marking loop traversed, so
+// a per-object cost comes from observed work rather than from the heap size.
+// `sweep_objects` is the same count for the reclaimer. The counters are written
+// by the collecting thread only, which the cycle lock makes single.
+struct nrq_gc_cycle_timing {
+  uint64_t cycles;
+  uint64_t pause_ns;
+  uint64_t prepare_ns;
+  uint64_t mark_ns;
+  uint64_t sweep_ns;
+  uint64_t finish_ns;
+  uint64_t mark_objects;
+  uint64_t mark_references;
+  uint64_t sweep_objects;
+};
+struct nrq_gc_cycle_timing nrq_gc_get_cycle_timing(void);
+// Clears the phase totals, the traversal counts and the cycle count they were
+// accumulated over, so one measurement covers exactly the cycles that follow.
+void nrq_gc_reset_cycle_timing(void);
 void* nrq_gc_pin(void* object);
 void nrq_gc_unpin(void* object);
 // Balanced compiler handoff pin for managed-pointer returns. Unlike the

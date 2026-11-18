@@ -219,6 +219,23 @@ struct GcPage {
   // a page with room and find none, once per TLAB; the index answers that in
   // constant time and holds only pages that can serve a request.
   size_t tail_index = kNoSpanIndex;
+  // The fields below were added after the page layout had been tuned around the
+  // cache line the allocation fast path touches, so they live at the end of the
+  // struct: inserting them beside `used` would push the bitmaps and counters the
+  // hot path reads onto a second line for every page.
+  //
+  // Offset from which this page's storage is known to hold zeros, up to
+  // `capacity`. Every managed payload is promised zero-initialised, and the
+  // allocator used to write those zeros itself for every object. Storage the OS
+  // has just committed is already zero, so the first pass over a page skips the
+  // fill and only moves this cursor past the header it wrote. Reclaimed space and
+  // a recycled page shell are dirty and set the cursor to `capacity`, which makes
+  // the next allocation pay the fill again rather than expose stale bytes.
+  size_t zero_cursor = 0;
+  // Reclaimed runs this page could not record because its run list was full.
+  // Counted per page so a workload can show whether the bound is costing space
+  // rather than leaving that to inference.
+  size_t dropped_free_bytes = 0;
 };
 
 
@@ -387,6 +404,7 @@ bool test_object_start(const GcPage& page, size_t offset) {
   if (index / 64 >= page.object_start_words) return false;
   return (page.object_starts[index / 64] >> (index % 64)) & 1;
 }
+
 
 void mark_object_start(GcPage& page, size_t offset) {
   if (!page.object_starts || offset % kObjectStartAlignment != 0) return;
@@ -1232,6 +1250,11 @@ struct MutatorState {
   unsigned char* tlab_cursor = nullptr;
   unsigned char* tlab_end = nullptr;
   uint64_t tlab_generation = 0;
+  // Set when the current reservation was taken from a page's untouched, freshly
+  // committed tail: its payloads already hold zeros, so the per-object fill is
+  // skipped. Decided at the refill, where the page is already being read.
+  bool tlab_payload_is_zero = false;
+  bool h0_payload_is_zero = false;
   // A headerless reservation is separate from the ordinary one because the page
   // is dedicated to one layout and one slot size. Switching layout therefore
   // starts a new reservation instead of reinterpreting the cursor.
@@ -1355,6 +1378,29 @@ GcPage* page_for_object(const void* object) {
 // the payload comparison is what makes an interior or stale pointer miss. Any
 // page without a walkable bitmap falls back to the exact ObjectIndex. Callers
 // hold gc_mutex.
+ObjectRef find_object_locked(void* object);
+
+// A narrow record's child is usually in the same page as the record itself: a
+// chain is allocated sequentially, so consecutive nodes share a page far more
+// often than not. Resolving the child against the page already in hand replaces a
+// page-directory probe with one range compare. A child outside the page takes the
+// ordinary path, and a slot this page does not consider an object start is the
+// same decisive miss find_object_locked reports.
+ObjectRef find_child_in_page_locked(void* object, const GcPage* page) {
+  if (!page || !page->object_starts) return find_object_locked(object);
+  const auto* address = static_cast<const unsigned char*>(object);
+  if (address < page->storage) return find_object_locked(object);
+  const size_t payload_offset = static_cast<size_t>(address - page->storage);
+  if (payload_offset >= page->capacity) return find_object_locked(object);
+  const size_t header_bytes = page_header_bytes(*page);
+  if (payload_offset < header_bytes) return ObjectRef{};
+  const size_t span_offset = payload_offset - header_bytes;
+  if (!test_object_start(*page, span_offset)) return ObjectRef{};
+  ObjectRef ref{page->storage + span_offset, const_cast<GcPage*>(page)};
+  if (object_payload(ref) != object) return ObjectRef{};
+  return ref;
+}
+
 ObjectRef find_object_locked(void* object) {
   if (!object) return ObjectRef{};
   GcPage* page = page_directory.find(object);
@@ -1546,7 +1592,15 @@ uint64_t tlab_refill_count = 0;
 // Counts allocations served from space freed by an earlier sweep rather than
 // from a page's untouched tail.
 uint64_t recycled_span_reuse_count = 0;
-size_t total_free_spans = 0;// AO-06 observation. `reused_span_bytes` is how much reclaimed space has been
+size_t total_free_spans = 0;
+// Reclaimed space the bounded run list could not record. Counted globally as well
+// as per page, so a fragmentation figure can say whether the bound - rather than
+// the workload - is what stranded the space.
+uint64_t dropped_free_bytes_total = 0;
+uint64_t dropped_free_runs_total = 0;
+// What the allocator did about payload zeroing, split into the bytes it wrote and
+// the bytes a page already held as zeros.
+nrq_gc_zeroing_facts zeroing_facts{};// AO-06 observation. `reused_span_bytes` is how much reclaimed space has been
 // handed back out, which with the allocated total gives the reuse hit rate;
 // `tlab_tail_bytes_total` folds in the reservations of threads that have left
 // the registry, so the tail counters stay per-mutator and race-free.
@@ -1832,6 +1886,19 @@ std::atomic<size_t> minor_collections_since_major{0};
 // lookup with every callback invocation. The inline array keeps the hot path
 // allocation-free; an oversized fan-out resolves the overflow immediately.
 constexpr size_t kReferenceBatchCapacity = 128;
+// Per-phase cycle accounting. One collector runs at a time (collection cycles
+// are serialized), so these are plain counters written by that thread. The
+// timestamps come from the same monotonic clock the benchmark harness uses, so a
+// phase figure is directly comparable with a whole-cycle figure measured
+// outside the runtime.
+using CycleClock = std::chrono::steady_clock;
+inline uint64_t cycle_ns(CycleClock::time_point since) {
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(CycleClock::now() -
+                                                          since)
+          .count());
+}
+nrq_gc_cycle_timing cycle_timing{};
 struct MarkContext {
   MarkWorklist worklist;
   bool young_only = false;
@@ -2182,6 +2249,7 @@ void resolve_reference_locked(void* object, MarkContext& context) {
 }
 
 void flush_reference_batch_locked(MarkContext& context) {
+  cycle_timing.mark_references += context.reference_count;
   for (size_t index = 0; index < context.reference_count; ++index)
     resolve_reference_locked(context.references[index], context);
   context.reference_count = 0;
@@ -2486,13 +2554,16 @@ void enqueue_narrow_children_locked(const ObjectRef& object,
       continue;
     void* child = nullptr;
     std::memcpy(&child, bytes + offset, sizeof(child));
-    if (child) enqueue_reference(child, &context);
+    if (child)
+      enqueue_object_locked(find_child_in_page_locked(child, object.page),
+                            context);
   }
 }
 
 bool mark_slice_locked(size_t budget_bytes) {
   size_t touched = 0;
   while (!active_mark.worklist.empty() && touched < budget_bytes) {
+    ++cycle_timing.mark_objects;
     const ObjectRef object = active_mark.worklist.pop();
     prefetch_object(object);
     const size_t payload_bytes = object_payload_bytes(object);
@@ -2552,6 +2623,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
   // Reclaims one object, or leaves it for the next cycle. Returns true when the
   // object was freed, so the caller cannot go on to treat it as a survivor.
   auto sweep_object = [&](const ObjectRef& object) -> bool {
+    ++cycle_timing.sweep_objects;
     GcPage* const page = object.page;
     // One read of the state word answers every question this function asks:
     // young, marked, and the value the survivor path rewrites.
@@ -2917,6 +2989,9 @@ void adjust_page_max_free_span_locked(GcPage& page, size_t before,
 // merging and the page fragments until it can no longer serve a reservation.
 void release_span_locked(GcPage& page, size_t offset, size_t span) {
   if (span == 0) return;
+  // The storage may still hold the reclaimed object's bytes, so nothing about
+  // this page may be assumed zero from here on: the known-zero suffix ends.
+  page.zero_cursor = page.capacity;
   // A run the representation cannot describe would be recorded as a negative
   // length; such a page simply keeps behaving like the bump allocator it was.
   if (offset > UINT32_MAX || span > UINT32_MAX) return;
@@ -2959,7 +3034,40 @@ void release_span_locked(GcPage& page, size_t offset, size_t span) {
     adjust_page_max_free_span_locked(page, before, next.span);
     return;
   }
-  if (page.free_span_count >= GcPage::kMaxFreeSpans) return;
+  if (page.free_span_count >= GcPage::kMaxFreeSpans) {
+    // The list is bounded, so something has to be dropped. Dropping the newest
+    // run lets a page lose the space it just freed; dropping the smallest
+    // recorded run keeps the runs a later request can actually use, which is what
+    // the bound exists to preserve. A page whose recorded runs are all at least as
+    // large as the new one keeps them and drops the new one.
+    size_t smallest = 0;
+    for (size_t scan = 1; scan < page.free_span_count; ++scan)
+      if (page.free_spans[scan].span < page.free_spans[smallest].span)
+        smallest = scan;
+    const size_t smallest_span = page.free_spans[smallest].span;
+    if (smallest_span >= span) {
+      page.dropped_free_bytes += span;
+      dropped_free_bytes_total += span;
+      ++dropped_free_runs_total;
+      return;
+    }
+    for (size_t move = smallest; move + 1 < page.free_span_count; ++move)
+      page.free_spans[move] = page.free_spans[move + 1];
+    --page.free_span_count;
+    --total_free_spans;
+    page.free_span_bytes -= smallest_span;
+    page.dropped_free_bytes += smallest_span;
+    dropped_free_bytes_total += smallest_span;
+    ++dropped_free_runs_total;
+    adjust_page_max_free_span_locked(page, smallest_span, 0);
+    index = page.free_span_count;
+    for (size_t scan = 0; scan < page.free_span_count; ++scan) {
+      if (page.free_spans[scan].offset >= offset) {
+        index = scan;
+        break;
+      }
+    }
+  }
   for (size_t move = page.free_span_count; move > index; --move)
     page.free_spans[move] = page.free_spans[move - 1];
   page.free_spans[index] = GcPage::FreeSpan{
@@ -2987,6 +3095,16 @@ size_t whole_object_grant(size_t grant, size_t span) {
 GcPage* take_free_span_locked(size_t span, size_t& offset, PageKind kind,
                               const nrq_object_layout* uniform_layout) {
   if (span == 0 || total_free_spans == 0) return nullptr;
+  // Two preferences, in this order:
+  //
+  //  1. a page already serving this size class, because its holes are the shape
+  //     of this request and reusing it does not widen the page's mix;
+  //  2. among equally suitable pages, the one whose largest run is closest to the
+  //     request, because taking a small request out of a large run splits it into
+  //     a remainder nothing large can use.
+  //
+  // A request that has no page of its own class still gets any page that can
+  // serve it, which is what keeps a single-size workload's behaviour unchanged.
   for (GcPage* page : span_pages) {
     if (!page || page->kind != kind || page->free_span_count == 0 ||
         page->max_free_span < span)
@@ -3207,6 +3325,20 @@ void install_tlab(MutatorState& mutator, GcPage* page, size_t offset, size_t spa
   mutator.tlab_cursor = page->storage + offset;
   mutator.tlab_end = mutator.tlab_cursor + span;
   mutator.tlab_generation = gc_page_generation.load(std::memory_order_acquire);
+  // Whether objects from this reservation need their payload filled is decided
+  // once, here, from the page's known-zero boundary: the reservation covers the
+  // page's untouched tail, so the answer is the same for every object it serves
+  // and costs one register pass per allocation instead of a page probe per
+  // allocation. The reservation itself is charged to the boundary, because the
+  // headers written into it will be the only non-zero bytes there.
+  mutator.tlab_payload_is_zero = offset >= page->zero_cursor;
+  const size_t end = offset + span;
+  if (end > page->zero_cursor) page->zero_cursor = end;
+  zeroing_facts.payload_bytes += span;
+  if (mutator.tlab_payload_is_zero)
+    zeroing_facts.prezeroed_bytes += span;
+  else
+    zeroing_facts.filled_bytes += span;
   cache_allocation_page(page);
 }
 // Returns every run this thread reserved and did not hand out. The caller holds
@@ -3376,7 +3508,8 @@ bool commit_run_bytes(PageRun& run, size_t end) {
 
 // Hand back a released carve of exactly `bytes`, recommitting it when its commit
 // charge had already been returned.
-unsigned char* take_released_page_storage(size_t bytes) {
+unsigned char* take_released_page_storage(size_t bytes, bool& zeroed) {
+  zeroed = false;
   for (auto entry = free_page_storage.rbegin(); entry != free_page_storage.rend();
        ++entry) {
     if (entry->bytes != bytes) continue;
@@ -3384,6 +3517,8 @@ unsigned char* take_released_page_storage(size_t bytes) {
     *entry = free_page_storage.back();
     free_page_storage.pop_back();
     if (retained_page_bytes >= bytes) retained_page_bytes -= bytes;
+    // The commit charge was never returned, so this page still holds whatever the
+    // object that used it last left behind.
     return storage;
   }
   for (auto entry = released_page_storage.rbegin();
@@ -3394,6 +3529,8 @@ unsigned char* take_released_page_storage(size_t bytes) {
     unsigned char* storage = entry->storage;
     *entry = released_page_storage.back();
     released_page_storage.pop_back();
+    // Recommitting a range that was decommitted zero-fills it again.
+    zeroed = true;
     return storage;
   }
   return nullptr;
@@ -3441,14 +3578,22 @@ unsigned char* carve_page_run(size_t bytes) {
 // Storage for one page: a released carve of the same size, a fresh carve from a
 // run, or a direct mapping when the page is too large for a run or the runs cannot
 // serve the request.
-unsigned char* commit_page_storage(size_t bytes) {
+unsigned char* commit_page_storage(size_t bytes, bool& zeroed) {
+  zeroed = false;
   if (bytes <= kPageRunMaxCarveBytes) {
-    if (unsigned char* storage = take_released_page_storage(bytes))
+    if (unsigned char* storage = take_released_page_storage(bytes, zeroed))
       return storage;
-    if (unsigned char* storage = carve_page_run(bytes)) return storage;
+    if (unsigned char* storage = carve_page_run(bytes)) {
+      // Committing a reserved range zero-fills it, which is what lets the
+      // allocator skip its own fill for the first pass over the page.
+      zeroed = true;
+      return storage;
+    }
   }
-  return static_cast<unsigned char*>(
+  unsigned char* mapping = static_cast<unsigned char*>(
       ::VirtualAlloc(nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+  zeroed = mapping != nullptr;
+  return mapping;
 }
 
 // Return storage to the run that owns it, or to the OS when it was a direct
@@ -3487,6 +3632,11 @@ void reset_page_gc_metadata_locked(GcPage& page) {
   page.born_this_cycle = 0;
   page.born_epoch = 0;
   page.young_objects = 0;
+  // The shell held a page's objects before, so nothing about its bytes may be
+  // assumed zero, and the class it was serving is a fact about the objects it
+  // used to hold rather than about the ones it will.
+  page.zero_cursor = page.capacity;
+  page.dropped_free_bytes = 0;
   // A recycled page may have been a directory fallback. Its objects are gone, so
   // the exact-index mode must not survive into the new page class: leaving it set
   // would make every future sweep skip the page as unwalkable.
@@ -3536,12 +3686,28 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity, PageKind kind) {
     recycled_page_reuse_count = saturated_add(recycled_page_reuse_count, 1);
     return page;
   }
-  unsigned char* storage = commit_page_storage(capacity);
+  bool storage_is_zero = false;
+  unsigned char* storage = commit_page_storage(capacity, storage_is_zero);
   if (!storage) return nullptr;
+  // The zero-fill skip rests on committed storage reading as zero. That premise
+  // is checked here, on every fresh page, instead of being trusted: the pages the
+  // allocator hands out are the ones it will later refuse to zero.
+  if constexpr (nirq::runtime_debug_enabled) {
+    if (storage_is_zero) {
+      const size_t step = capacity / 8 > sizeof(uint64_t) ? capacity / 8
+                                                          : sizeof(uint64_t);
+      for (size_t at = 0; at + sizeof(uint64_t) <= capacity; at += step) {
+        uint64_t word = 0;
+        std::memcpy(&word, storage + at, sizeof(word));
+        if (word != 0) nrq_runtime_fatal("fresh GC page storage was not zero");
+      }
+    }
+  }
   try {
     auto page = std::make_unique<GcPage>();
     page->storage = storage;
     page->capacity = capacity;
+    page->zero_cursor = storage_is_zero ? 0 : capacity;
     // An ordinary page is carved on a kGcPageBytes boundary inside a reserved run,
     // so its base is recoverable from any address inside it by masking off the low
     // bits. Large-object pages are larger than that and are not, which is why the
@@ -3951,8 +4117,14 @@ struct CollectorThreadGuard {
 
 void run_collection(bool young_only) {
   CollectorThreadGuard collector_guard;
+  // The phases are timed separately because a whole-cycle figure cannot say
+  // which of them a change moved: the same graph is marked and then walked again
+  // by the sweep, so the two costs land in one number.
+  const CycleClock::time_point cycle_start = CycleClock::now();
   std::unique_lock<std::mutex> cycle_lock = acquire_collection_cycle();
+  const CycleClock::time_point prepare_start = CycleClock::now();
   begin_cycle(young_only);
+  cycle_timing.prepare_ns += cycle_ns(prepare_start);
   bool sweeping = false;
   for (;;) {
     bool finished = false;
@@ -3960,7 +4132,9 @@ void run_collection(bool young_only) {
     {
       HeapLockGuard lock(gc_mutex);
       if (!sweeping) {
+        const CycleClock::time_point mark_start = CycleClock::now();
         const bool marked = mark_slice_locked(kMarkSliceBytes);
+        cycle_timing.mark_ns += cycle_ns(mark_start);
         made_progress = true;
         if (marked) {
           // Freeze the unindexed list and capture the page set before releasing
@@ -3979,12 +4153,20 @@ void run_collection(bool young_only) {
       if (sweeping) {
         // Drain barriers that ran between sweep slices before freeing the next
         // chunk. A pending marked parent may still enqueue its children.
-        if (!mark_slice_locked(kMarkSliceBytes)) {
-          made_progress = true;
-        } else {
-          made_progress = true;
-          if (sweep_chunk_locked(kSweepSliceBytes)) {
+        const CycleClock::time_point mark_start = CycleClock::now();
+        const bool drained = mark_slice_locked(kMarkSliceBytes);
+        cycle_timing.mark_ns += cycle_ns(mark_start);
+        made_progress = true;
+        if (drained) {
+          const CycleClock::time_point sweep_start = CycleClock::now();
+          const bool chunk_done = sweep_chunk_locked(kSweepSliceBytes);
+          cycle_timing.sweep_ns += cycle_ns(sweep_start);
+          if (chunk_done) {
+            const CycleClock::time_point finish_start = CycleClock::now();
             finish_cycle_locked(young_only);
+            cycle_timing.finish_ns += cycle_ns(finish_start);
+            cycle_timing.pause_ns += cycle_ns(cycle_start);
+            ++cycle_timing.cycles;
             finished = true;
           }
         }
@@ -4052,10 +4234,17 @@ GcRepresentation select_representation(size_t payload_bytes,
   return GcRepresentation::Extended;
 }
 
-// Writes the header this representation uses and zeroes the payload. The layout
-// id is resolved once here, never on a read path.
+// Writes the header this representation uses and, unless the caller already knows
+// the storage is zero, zeroes the payload. The layout id is resolved once here,
+// never on a read path.
+//
+// `payload_is_zero` is decided by whoever handed out the storage, not by this
+// function: asking the page per object cost more than the fill it sometimes
+// saved, so the answer is carried in a register from the reservation that already
+// had to look at the page.
 void initialize_object(const ObjectRef& object, const nrq_object_layout* layout,
-                       uint32_t elements, size_t payload_bytes, bool young) {
+                       uint32_t elements, size_t payload_bytes, bool young,
+                       bool payload_is_zero) {
   switch (object.page->kind) {
     case PageKind::Headerless:
       object.page->h0_states[h0_state_index(object)] = young ? 1u : 0u;
@@ -4079,7 +4268,43 @@ void initialize_object(const ObjectRef& object, const nrq_object_layout* layout,
       break;
     }
   }
-  std::memset(object_payload(object), 0, payload_bytes);
+  // The payload is promised zero-initialised. Storage the OS has just committed
+  // already holds zeros, so the reservation that took it from the page's
+  // untouched tail passed `payload_is_zero` and the fill is skipped; anything that
+  // may have held an object before is filled as before.
+  if (payload_is_zero) return;
+  unsigned char* payload = static_cast<unsigned char*>(object_payload(object));
+  const size_t payload_offset = static_cast<size_t>(payload - object.page->storage);
+  std::memset(payload, 0, payload_bytes);
+  // The fill wrote zeros, so the known-zero suffix now starts at the end of this
+  // payload: nothing past it has been handed out since the page was committed.
+  const size_t payload_end = payload_offset + payload_bytes;
+  if (payload_end > object.page->zero_cursor)
+    object.page->zero_cursor = payload_end;
+}
+
+// Decides once, for a single object taken under the lock, whether the page's
+// storage already holds the zeros the payload owes, and charges the object's span
+// to the page's known-zero boundary. The value returned is what the caller passes
+// to initialize_object.
+bool take_page_zero_state_locked(GcPage& page, size_t header_offset,
+                                 size_t span) {
+  // Only a page the allocator dedicated to one object is worth asking about. The
+  // fill there is a whole payload - hundreds of kilobytes for the large-object
+  // shape - while a locked allocation on an ordinary page is a few dozen bytes,
+  // where the branch and its bookkeeping would cost more than the fill it saves.
+  // Those pages keep filling as they always did, and initialize_object advances
+  // their boundary from the payload it wrote.
+  if (page.capacity <= kGcPageBytes) return false;
+  const bool storage_is_zero = header_offset >= page.zero_cursor;
+  const size_t end = header_offset + span;
+  if (end > page.zero_cursor) page.zero_cursor = end;
+  zeroing_facts.payload_bytes += span;
+  if (storage_is_zero)
+    zeroing_facts.prezeroed_bytes += span;
+  else
+    zeroing_facts.filled_bytes += span;
+  return storage_is_zero;
 }
 
 // Updates every counter a newly visible object contributes to. Publication and
@@ -4209,7 +4434,8 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
       note_page_tail_locked(*page);
     }
     const ObjectRef object{page->storage + offset, page};
-    initialize_object(object, layout, 1, layout->payload_size, young);
+    initialize_object(object, layout, 1, layout->payload_size, young,
+                      take_page_zero_state_locked(*page, offset, slot));
     account_new_object_locked(object, layout->payload_size, young);
     add_since_collection_locked(layout->payload_size);
     debug_emit(NRQ_GC_EVENT_ALLOCATION, 0, layout->payload_size,
@@ -4282,7 +4508,8 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
   }
   const ObjectRef object{page->storage + header_offset, page};
   initialize_object(object, layout, static_cast<uint32_t>(elements), bytes,
-                    young);
+                    young,
+                    take_page_zero_state_locked(*page, header_offset, span));
   account_new_object_locked(object, bytes, young);
   add_since_collection_locked(bytes);
   debug_emit(NRQ_GC_EVENT_ALLOCATION, 0, bytes, object_payload(object));
@@ -4475,6 +4702,17 @@ void install_h0_tlab(MutatorState& mutator, GcPage* page, size_t offset,
   mutator.h0_layout = layout;
   mutator.h0_slot = slot;
   mutator.h0_generation = gc_page_generation.load(std::memory_order_acquire);
+  // Same decision as the ordinary reservation: a slab taken from a page's
+  // untouched tail needs no fill, and the reservation is charged to the page's
+  // known-zero boundary once instead of per object.
+  mutator.h0_payload_is_zero = offset >= page->zero_cursor;
+  const size_t end = offset + span;
+  if (end > page->zero_cursor) page->zero_cursor = end;
+  zeroing_facts.payload_bytes += span;
+  if (mutator.h0_payload_is_zero)
+    zeroing_facts.prezeroed_bytes += span;
+  else
+    zeroing_facts.filled_bytes += span;
 }
 
 // Pops a reserved headerless run. The list is thread-owned and the runs were
@@ -4549,12 +4787,7 @@ bool reserve_h0_tlab_locked(MutatorState& mutator,
         saturated_add(mutator.tlab_tail_reclaimed_bytes, span);
     release_span_locked(*mutator.h0_page, offset, span);
   }
-  mutator.h0_page = page;
-  mutator.h0_cursor = page->storage + page->used;
-  mutator.h0_end = mutator.h0_cursor + reserve;
-  mutator.h0_layout = layout;
-  mutator.h0_slot = slot;
-  mutator.h0_generation = gc_page_generation.load(std::memory_order_acquire);
+  install_h0_tlab(mutator, page, page->used, reserve, layout, slot);
   page->used += reserve;
   note_page_tail_locked(*page);
   return true;
@@ -4622,7 +4855,8 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
     }
     const ObjectRef object{thread_mutator.h0_cursor, thread_mutator.h0_page};
     thread_mutator.h0_cursor += slot;
-    initialize_object(object, layout, 1, layout->payload_size, young);
+    initialize_object(object, layout, 1, layout->payload_size, young,
+                      thread_mutator.h0_payload_is_zero);
     note_pending_range(thread_mutator, object.page, object.header, slot);
     account_tlab_allocation(thread_mutator, layout->payload_size);
     if (collection_phase.load(std::memory_order_acquire) !=
@@ -4668,7 +4902,7 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
   const ObjectRef object{thread_mutator.tlab_cursor, thread_mutator.tlab_page};
   thread_mutator.tlab_cursor += span;
   initialize_object(object, layout, static_cast<uint32_t>(elements), bytes,
-                    young);
+                    young, thread_mutator.tlab_payload_is_zero);
   // A non-young object only has to be counted: the count feeds the generational
   // policy, and the store barrier is raised by the policy itself (`begin_cycle`
   // covers a cycle, `nrq_gc_set_generational` covers the switch). Raising it here
@@ -6319,6 +6553,17 @@ uint64_t nrq_gc_reused_span_bytes(void) {
   return reused_span_bytes;
 }
 
+uint64_t nrq_gc_dropped_free_run_bytes(void) {
+  HeapLockGuard lock(gc_mutex);
+  return dropped_free_bytes_total;
+}
+
+uint64_t nrq_gc_dropped_free_run_count(void) { return dropped_free_runs_total; }
+
+nrq_gc_zeroing_facts nrq_gc_get_zeroing_facts(void) { return zeroing_facts; }
+
+void nrq_gc_reset_zeroing_facts(void) { zeroing_facts = nrq_gc_zeroing_facts{}; }
+
 nrq_gc_stats nrq_gc_get_stats(void) {
   // The registered-mutator vector is mutated under mutator_mutex. Take it
   // before gc_mutex to match the enter/leave lock order; taking only gc_mutex
@@ -6354,6 +6599,10 @@ uint64_t nrq_gc_get_collected_bytes(void) {
 uint64_t nrq_gc_get_collection_count(void) {
   return nrq_gc_get_stats().collections;
 }
+
+nrq_gc_cycle_timing nrq_gc_get_cycle_timing(void) { return cycle_timing; }
+
+void nrq_gc_reset_cycle_timing(void) { cycle_timing = nrq_gc_cycle_timing{}; }
 
 uint64_t nrq_gc_get_live_objects(void) {
   return nrq_gc_get_stats().live_objects;
