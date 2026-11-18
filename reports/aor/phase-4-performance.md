@@ -33,12 +33,21 @@ by the object count.
 
 | Shape | Allocate | Per object | Full GC, all live | Per object | Full GC, all dead |
 |---|---|---|---|---|---|
-| H0, 64 B record | 5.96 ms | 29.8 ns | 9.58 ms | 47.9 ns | 0.36 ms |
-| H8, 1 KiB record | 76.15 ms | 380.7 ns | 16.27 ms | 81.4 ns | 1.62 ms |
-| H16, 1 KiB array | 86.17 ms | 430.9 ns | 21.75 ms | 108.8 ns | 1.66 ms |
+| H0, 64 B record | 5.85 ms | 29.3 ns | 8.80 ms | 44.0 ns | 0.52 ms |
+| H8, 1 KiB record | 76.97 ms | 384.9 ns | 16.18 ms | 80.9 ns | 1.50 ms |
+| H16, 1 KiB array | 76.49 ms | 382.4 ns | 15.39 ms | 76.9 ns | 1.47 ms |
+| Mixed, one third each | 58.06 ms | 290.3 ns | 14.15 ms | 70.7 ns | 1.37 ms |
 
-A second invocation of the same binary (5 runs) produced 5.72 / 81.17 / 75.95 ms
-for allocation and 9.11 / 19.15 / 15.72 ms for the live collection. Run-to-run
+The mixed row is the interesting one: it is faster per object than either 1 KiB
+shape alone, because three shapes sharing the page cache keep fewer pages open.
+The first attempt at this row measured 878 ms and 66,667 compact pages for 66,667
+objects - one page per allocation. A mutator owns one slab, and every
+representation switch discarded the previous slab's tail; the second shape now
+allocates through the per-class page cache instead of evicting the slab. That bug
+is recorded in `phase-4.md`.
+
+An earlier invocation of the same binary produced 5.72 / 81.17 / 75.95 ms for
+allocation and 9.11 / 19.15 / 15.72 ms for the live collection. Run-to-run
 variation is up to ~20% on this laptop, so the table supports order-of-magnitude
 reading, not percentage comparisons between H8 and H16.
 
