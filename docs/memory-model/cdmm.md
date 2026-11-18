@@ -10,9 +10,13 @@ explicitly:
 | Pool | one slot | none | `pool_release` / `pool_reset` |
 | Collector-managed | reachability | 0, 8, or 16 bytes (AOR H0/H8/H16) | collection |
 
-Nothing selects a strategy automatically. A compiler pass that picks one from
-layout, size, or reference shape is future work; the runtime metadata it would
-need is in place (see *Introspection*).
+Nothing selects a strategy automatically yet. Phase 6 added the other half of that
+connection: `nrq_cdmm_pool_create_layout` and `nrq_cdmm_arena_allocate_layout`
+take a compiler layout descriptor, so the size a compiler computed and the slot a
+pool reserves cannot disagree, and a layout a deterministic region cannot trace is
+refused outright. A compiler pass that chooses between arena, pool and collector
+from the same metadata is still future work; see
+[`alloc-hints.md`](alloc-hints.md) for the hint and plan it would consume.
 
 ## Why the explicit strategies are headerless
 
