@@ -295,25 +295,25 @@ Sample run_gc_array_allocation(size_t count, bool planned, bool warm) {
 // not fit, so every allocation is a memo miss. The planned entry point validates
 // its own site's cached descriptor instead. This is the workload the per-site
 // cache exists for: many shapes, each hot at its own site.
-Sample run_gc_array_multishape(size_t count, bool planned) {
+Sample run_gc_array_multishape(size_t count, bool planned, size_t shapes) {
   Sample sample;
   constexpr uint32_t kArrayExtendedPlan = 1u | (3u << 8);
-  constexpr size_t kShapes = 8;
-  constexpr size_t kSizes[kShapes] = {16, 24, 32, 40, 48, 56, 64, 72};
-  void* caches[kShapes] = {};
+  std::vector<size_t> sizes(shapes);
+  for (size_t index = 0; index < shapes; ++index) sizes[index] = 16 + index * 8;
+  std::vector<void*> caches(shapes, nullptr);
   void* root = nullptr;
   nrq_gc_disable();
   nrq_gc_collect();
   nrq_gc_root_register(&root);
   const auto start = Clock::now();
   for (size_t index = 0; index < count; ++index) {
-    const size_t shape = index % kShapes;
+    const size_t shape = index % shapes;
     void* object = planned
                        ? nrq_gc_allocate_array_planned(
-                             &root, 2, kSizes[shape], nullptr, 0,
+                             &root, 2, sizes[shape], nullptr, 0,
                              &caches[shape], kArrayExtendedPlan)
                        : nrq_gc_allocate_array_typed_rooted(
-                             &root, 2, kSizes[shape], nullptr, 0);
+                             &root, 2, sizes[shape], nullptr, 0);
     if (!object) {
       std::fprintf(stderr, "multishape allocation failed at %zu\n", index);
       std::exit(2);
@@ -555,8 +555,14 @@ int main(int argc, char** argv) {
       {"gc-array-typed", [](size_t objects) { return run_gc_array_allocation(objects, false, true); }},
       {"gc-array-planned", [](size_t objects) { return run_gc_array_allocation(objects, true, true); }},
       {"gc-array-planned-cold", [](size_t objects) { return run_gc_array_allocation(objects, true, false); }},
-      {"gc-array-multishape-typed", [](size_t objects) { return run_gc_array_multishape(objects, false); }},
-      {"gc-array-multishape-planned", [](size_t objects) { return run_gc_array_multishape(objects, true); }},
+      {"gc-array-alt2-typed", [](size_t objects) { return run_gc_array_multishape(objects, false, 2); }},
+      {"gc-array-alt2-planned", [](size_t objects) { return run_gc_array_multishape(objects, true, 2); }},
+      {"gc-array-multishape-typed", [](size_t objects) { return run_gc_array_multishape(objects, false, 8); }},
+      {"gc-array-multishape-planned", [](size_t objects) { return run_gc_array_multishape(objects, true, 8); }},
+      {"gc-array-diverse24-typed", [](size_t objects) { return run_gc_array_multishape(objects, false, 24); }},
+      {"gc-array-diverse24-planned", [](size_t objects) { return run_gc_array_multishape(objects, true, 24); }},
+      {"gc-array-diverse40-typed", [](size_t objects) { return run_gc_array_multishape(objects, false, 40); }},
+      {"gc-array-diverse40-planned", [](size_t objects) { return run_gc_array_multishape(objects, true, 40); }},
       {"owned-64B", &run_owned},
       {"owned-churn-500", [](size_t objects) { return run_owned_churn(std::max<size_t>(1, objects / kChurnObjects)); }},
       {"arena-64B", &run_arena},
