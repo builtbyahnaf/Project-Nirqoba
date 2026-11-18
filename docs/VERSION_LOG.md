@@ -12,6 +12,94 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.613-beta
+
+### Summary of Changes (since `0.609-beta`)
+
+Performance recovery for stress-test 2, measured against the `0.613-beta` runtime
+before the change. The label stays at `0.613-beta`: one completed upgrade is
+recorded here, and the versioning rule moves the label after three.
+
+#### Confirmed problems (production configuration, the suite's own harness)
+
+| workload | phase | before | competitor | target |
+|---|---|---:|---:|---:|
+| 02 mark and sweep | `BUILD_MS` | 223 | Java 14 | < 14 |
+| 02 mark and sweep | `COLLECT_MS` | 69 | C++ 33 | < 33 |
+| 03 cyclic reclamation | `BUILD_MS` | 68 | Rust 4.7 | < 4.7 |
+
+#### Smoking guns
+
+- **The marking fast path excluded arrays.** `mark_slice_locked` sent an object
+  down `enqueue_narrow_children_locked` only when its layout was not an array, so
+  a one-element array with two references — the shape both stress workloads build
+  their nodes from — took the layout callback and a page-directory probe per edge
+  instead of the same-page resolution that path performs. A one-element array has
+  the geometry of a record: its payload is the single element and the descriptor's
+  offsets are relative to that element.
+- **Sweep is not a cost in these workloads.** The phase split shows 0.1 ns/object
+  for a fully live heap: whole-live pages are classified from their counts and
+  skipped without reading a header. A page-level bulk-promotion path was
+  implemented for the major-collection case, measured neutral for that reason, and
+  reverted.
+- **Marking is memory-latency bound, not instruction bound.** After the fix, a
+  live collection of 2 097 151 nodes still spends ~30 ns/object following two
+  edges over a 100 MB heap. Prefetching both children at enqueue was implemented
+  and measured slower (32.2 against 30.5 ns/object) and reverted.
+- **Allocation is ~26–31 ns per object of the ~108 ns/node `BUILD_MS`.** The
+  remaining cost is the per-activation protocol the compiler emits — a root frame
+  with two registrations, one barrier store into the frame, two field barrier
+  stores, two unpins and one pin transfer — not the bump allocator, which the same
+  probe measures at 26 ns for this shape in isolation.
+
+#### Implementation changes
+
+- `runtime/src/gc.cpp`: the narrow-shape test in `mark_slice_locked` now accepts a
+  single-element array, so the marker walks its two reference offsets directly and
+  resolves each child against the parent's page before consulting the directory.
+  Larger arrays keep the layout callback, which is the only path that knows the
+  element stride.
+- `benchmarks/stress_test_2/investigation/build_probe.cpp`: a replica of both
+  build phases and of a live collection over the tree, used to attribute the
+  phases. Diagnostic only; it writes no result file.
+- `scripts/stress2_build_timing.py`: runs the two build phases and reports their
+  medians and ranges.
+
+#### Results
+
+Same host, same harness, same configuration, one rebuild apart:
+
+| workload | phase | before | after | ratio |
+|---|---|---:|---:|---:|
+| 02 mark and sweep | `COLLECT_MS` | 69 | **43** | **1.60×** |
+| 02 mark and sweep | `BUILD_MS` | 223 | 231 | 1.04× (noise) |
+| 02 mark and sweep | `TRAVERSE_MS` | 5 | 5 | — |
+| 03 cyclic reclamation | `BUILD_MS` | 68 | 67 | 0.99× (noise) |
+
+`COLLECT_MS` moves from 2.1× the C++ figure to 1.3× it. **No target was reached:**
+`BUILD_MS` in both tests is unchanged by this change, and the collection is still
+above 33 ms.
+
+#### Validation
+
+- Unit tests: 457 / 457 in both configurations.
+- Integration: 624 / 624 in the development configuration.
+- Configuration equivalence: 67 agreed, 0 failed (`*gc*`).
+- Stress corpus 02 and 03: validation passed in both the development and the
+  production configuration.
+
+#### Remaining gaps
+
+`BUILD_MS` in test 02 (231 ms against a 14 ms target) is the per-activation GC
+protocol plus 26 ns of allocation per object; closing it needs the root frame,
+barrier, pin and transfer calls removed from the emitted sequence for a recursive
+builder, not a faster allocator. Test 03's 67 ms for a million nodes is the same
+protocol with a void return. Marking a 100 MB live heap at ~30 ns/object is limited
+by memory latency; the next lever is object density (40 bytes of node per 24 bytes
+of payload), not more instructions removed.
+
+---
+
 ## Version 0.609-beta
 
 ### Summary of Changes (since `0.605-beta`):
