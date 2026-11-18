@@ -18,6 +18,7 @@ add_executable(nirqoba_unit_tests
   unit/gc_representation_reuse_test.cpp
   unit/gc_representation_entrypoints_test.cpp
   unit/gc_representation_concurrency_test.cpp
+  unit/gc_phase7_test.cpp
   unit/gc_debug_test.cpp
   unit/gc_isolation_test.cpp
   unit/gc_slot_index_test.cpp
