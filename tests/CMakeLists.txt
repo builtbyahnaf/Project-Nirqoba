@@ -22,6 +22,7 @@ add_executable(nirqoba_unit_tests
   unit/strategy_boundary_test.cpp
   unit/gc_root_contract_test.cpp
   unit/gc_thread_stress_test.cpp
+  unit/gc_page_reuse_test.cpp
   unit/gc_debug_test.cpp
   unit/gc_isolation_test.cpp
   unit/gc_slot_index_test.cpp
