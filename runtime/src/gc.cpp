@@ -1651,18 +1651,16 @@ std::unordered_map<void*, RootInfo> roots;
 // `roots`; ordinary roots never touch gc_mutex after the stack is registered.
 struct ShadowRoot {
   void* slot = nullptr;
-  RootInfo info;
+  const nrq_object_layout* layout = nullptr;
 };
 // Per-slot bookkeeping for an active shadow root. `count` preserves
 // duplicate-registration semantics: a slot stays indexed while any frame still
 // owns a registration for it. `layout` is the validated descriptor shared by
-// every registration of that slot.
+// every registration of that slot (and `layout->payload_size` equals the
+// registered `object_size`).
 struct SlotState {
-  size_t count = 0;
-  size_t object_size = 0;
-  // The descriptor of the first registration. A repeat must agree on the
-  // pointer itself, which is one compare instead of an offset walk.
   const nrq_object_layout* layout = nullptr;
+  uint32_t count = 0;
   bool pointer_root = false;
 };
 // Thread-local index of active root slots. It answers the three questions the
@@ -1693,22 +1691,47 @@ struct PointerRootCache {
 
 struct ShadowStack {
   std::mutex mutex;
-  std::vector<ShadowRoot> roots;
-  struct Frame {
-    uint64_t marker;
-    size_t root_depth;
-  };
-  std::vector<Frame> frames;
+  std::vector<NrqGcFastRoot> roots_buffer;
+  std::vector<NrqGcFastFrame> frames_buffer;
+  NrqGcFastTls* fast = nullptr;
   uint64_t next_marker = 1;
-  // O(1) index of active root slots. Maintained by the owning thread only and
-  // never read by the collector. It replaces both the old full-root scan used
-  // for duplicate-layout validation and the pointer-root set that was rebuilt
-  // on every frame end.
+  // O(1) index of active root slots for dynamic registrations. Maintained by
+  // the owning thread only and never read by the collector.
   SlotIndex<SlotState> slot_states;
   PointerRootCache pointer_roots;
+  bool pointer_roots_has_unindexed = false;
 };
 std::vector<ShadowStack*> shadow_stacks;
 thread_local ShadowStack* thread_shadow_stack = nullptr;
+
+inline const void* encode_shadow_layout(const nrq_object_layout* layout,
+                                        bool indexed) {
+  if (!indexed && layout == &kPointerRootLayout) return nullptr;
+  const uintptr_t bits = reinterpret_cast<uintptr_t>(layout);
+  return reinterpret_cast<const void*>(indexed ? (bits | uintptr_t{1}) : bits);
+}
+
+inline const nrq_object_layout* decode_shadow_layout(const void* encoded) {
+  if (!encoded) return &kPointerRootLayout;
+  return reinterpret_cast<const nrq_object_layout*>(
+      reinterpret_cast<uintptr_t>(encoded) & ~uintptr_t{1});
+}
+
+inline bool shadow_layout_is_indexed(const void* encoded) {
+  return (reinterpret_cast<uintptr_t>(encoded) & uintptr_t{1}) != 0;
+}
+
+inline size_t shadow_root_count(const ShadowStack& stack) {
+  if (!stack.fast || !stack.fast->root_cursor || stack.roots_buffer.empty())
+    return 0;
+  return static_cast<size_t>(stack.fast->root_cursor - stack.roots_buffer.data());
+}
+
+inline size_t shadow_frame_count(const ShadowStack& stack) {
+  if (!stack.fast || !stack.fast->frame_cursor || stack.frames_buffer.empty())
+    return 0;
+  return static_cast<size_t>(stack.fast->frame_cursor - stack.frames_buffer.data());
+}
 
 // Cache of frame root descriptors this thread has already validated. Keying it
 // by address alone would be enough for the compiler's immutable tables, but the
@@ -1977,7 +2000,11 @@ void refresh_inline_config_locked() {
       inline_debug_alloc_enabled.load(std::memory_order_relaxed)
           ? NRQ_GC_INLINE_GATE_DEBUG_ALLOC_BIT
           : 0u;
-  const uint32_t gate = phase_bit | due_bit | debug_bit;
+  const uint32_t diag_roots_bit =
+      reference_diagnostics_enabled.load(std::memory_order_relaxed)
+          ? NRQ_GC_INLINE_GATE_DIAG_ROOTS_BIT
+          : 0u;
+  const uint32_t gate = phase_bit | due_bit | debug_bit | diag_roots_bit;
   const uint32_t initial_state =
       generational_collection_enabled.load(std::memory_order_relaxed)
           ? kYoungBit
@@ -2209,8 +2236,11 @@ void wait_for_fast_barriers() {
     {
       std::lock_guard<std::mutex> lock(mutator_mutex);
       for (const MutatorState* mutator : mutators) {
-        if (mutator && mutator != &thread_mutator &&
-            mutator->barrier_depth.load(std::memory_order_acquire) != 0) {
+        if (!mutator || mutator == &thread_mutator) continue;
+        if (mutator->barrier_depth.load(std::memory_order_acquire) != 0 ||
+            (mutator->fast &&
+             std::atomic_ref<uint32_t>(mutator->fast->inline_barrier)
+                     .load(std::memory_order_acquire) != 0)) {
           busy = true;
           break;
         }
@@ -2323,12 +2353,12 @@ void mark_value_locked(void* object) {
   resolve_reference_locked(object, active_mark);
 }
 
-void mark_root_values_locked(void* storage, const RootInfo& root) {
-  const nrq_object_layout* layout = root.layout;
+void mark_root_values_locked(void* storage, const nrq_object_layout* layout,
+                             size_t repeated_count) {
   if (!layout || layout->reference_count == 0) return;
   auto* bytes = static_cast<unsigned char*>(storage);
   const size_t stride = layout->payload_size;
-  const size_t elements = root.repeated_count != 0 ? root.repeated_count : 1;
+  const size_t elements = repeated_count != 0 ? repeated_count : 1;
   for (size_t element = 0; element < elements; ++element) {
     for (uint32_t index = 0; index < layout->reference_count; ++index) {
       const size_t offset = layout->reference_offsets[index];
@@ -2339,6 +2369,10 @@ void mark_root_values_locked(void* storage, const RootInfo& root) {
       mark_value_locked(reference);
     }
   }
+}
+
+void mark_root_values_locked(void* storage, const RootInfo& root) {
+  mark_root_values_locked(storage, root.layout, root.repeated_count);
 }
 
 struct ReferenceCountTarget {
@@ -2356,13 +2390,13 @@ void count_reference_to_target(void* object, void* opaque_context) {
     target->count = saturated_add(target->count, 1);
 }
 
-void enqueue_root_locked(void* root_storage, const RootInfo& root,
-                         MarkContext& context) {
-  const nrq_object_layout* layout = root.layout;
+void enqueue_root_layout_locked(void* root_storage,
+                                const nrq_object_layout* layout,
+                                size_t repeated_count, MarkContext& context) {
   if (!layout || layout->reference_count == 0) return;
   auto* bytes = static_cast<const unsigned char*>(root_storage);
   const size_t stride = layout->payload_size;
-  const size_t elements = root.repeated_count != 0 ? root.repeated_count : 1;
+  const size_t elements = repeated_count != 0 ? repeated_count : 1;
   for (size_t element = 0; element < elements; ++element) {
     const unsigned char* element_bytes = bytes + element * stride;
     for (uint32_t index = 0; index < layout->reference_count; ++index) {
@@ -2375,6 +2409,12 @@ void enqueue_root_locked(void* root_storage, const RootInfo& root,
   }
 }
 
+void enqueue_root_locked(void* root_storage, const RootInfo& root,
+                         MarkContext& context) {
+  enqueue_root_layout_locked(root_storage, root.layout, root.repeated_count,
+                             context);
+}
+
 void enqueue_roots_locked(MarkContext& context) {
   for (const auto& root : roots)
     enqueue_root_locked(root.first, root.second, context);
@@ -2382,10 +2422,20 @@ void enqueue_roots_locked(MarkContext& context) {
   // the collector copies a consistent view; ordinary registration does not take
   // gc_mutex, so collection never blocks the whole world to add a stack root.
   for (ShadowStack* stack : shadow_stacks) {
-    if (!stack) continue;
+    if (!stack || !stack->fast || !stack->fast->root_cursor) continue;
     std::lock_guard<std::mutex> stack_lock(stack->mutex);
-    for (const ShadowRoot& root : stack->roots)
-      enqueue_root_locked(root.slot, root.info, context);
+    const NrqGcFastRoot* begin = stack->roots_buffer.data();
+    const NrqGcFastRoot* end = stack->fast->root_cursor;
+    for (const NrqGcFastRoot* root = begin; root < end; ++root) {
+      if (!root->layout) {
+        void* ref = nullptr;
+        std::memcpy(&ref, root->slot, sizeof(ref));
+        enqueue_reference(ref, &context);
+      } else {
+        enqueue_root_layout_locked(root->slot, decode_shadow_layout(root->layout),
+                                   0, context);
+      }
+    }
   }
   for (const auto& pinned : pinned_objects) {
     if (pinned.second != 0) enqueue_reference(pinned.first, &context);
@@ -2524,6 +2574,11 @@ ThreadGcStateCleanup::~ThreadGcStateCleanup() {
     HeapLockGuard heap_lock(gc_mutex);
     auto found = std::find(shadow_stacks.begin(), shadow_stacks.end(), stack);
     if (found != shadow_stacks.end()) shadow_stacks.erase(found);
+    nrq_gc_fast_tls.root_cursor = nullptr;
+    nrq_gc_fast_tls.root_end = nullptr;
+    nrq_gc_fast_tls.frame_cursor = nullptr;
+    nrq_gc_fast_tls.frame_end = nullptr;
+    stack->fast = nullptr;
     thread_shadow_stack = nullptr;
   }
   delete stack;
@@ -3948,6 +4003,23 @@ std::atomic<uint64_t> transfer_pin_fallbacks{0};
 // with gc_mutex held, either by the collector after parking the mutator or by the
 // mutator itself, so the buffer cannot be written while it is being read.
 void drain_transfer_pins_locked(MutatorState& mutator) {
+  if (mutator.fast && mutator.fast->transfer_pin_fast) {
+    void* obj = mutator.fast->transfer_pin_fast;
+    mutator.fast->transfer_pin_fast = nullptr;
+    if (!find_object_locked(obj).valid() &&
+        !find_pending_header(mutator, obj).valid()) {
+      pin_violations = saturated_add(pin_violations, 1);
+    } else {
+      try {
+        size_t& count = pinned_objects[obj];
+        if (count == SIZE_MAX)
+          nrq_runtime_fatal("GC transfer pin count overflow");
+        ++count;
+      } catch (...) {
+        nrq_runtime_fatal("GC transfer pin registration failed");
+      }
+    }
+  }
   for (size_t index = 0; index < mutator.transfer_pin_count; ++index) {
     const TransferPinDelta& entry = mutator.transfer_pins[index];
     if (!entry.object || entry.delta == 0) continue;
@@ -5072,16 +5144,118 @@ void store_root_value_locked(void** slot, void* value) {
   defer_remembered_locked(value);
 }
 
+void sync_shadow_tls(ShadowStack& stack) {
+  if (!stack.fast) return;
+  const size_t root_count = shadow_root_count(stack);
+  const size_t frame_count = shadow_frame_count(stack);
+  // Note: callers using ensure_shadow_stack() initialize cursors once; growth
+  // updates them directly.
+  (void)root_count;
+  (void)frame_count;
+}
+
+bool grow_shadow_roots(ShadowStack& stack, size_t extra) {
+  if (!stack.fast) return false;
+  const size_t current = shadow_root_count(stack);
+  if (extra > SIZE_MAX - current) return false;
+  const size_t needed = current + extra;
+  size_t next_cap = stack.roots_buffer.empty() ? 256 : stack.roots_buffer.size();
+  while (next_cap < needed) {
+    if (next_cap > SIZE_MAX / 2) return false;
+    next_cap *= 2;
+  }
+  try {
+    std::vector<NrqGcFastRoot> replacement(next_cap);
+    NrqGcFastRoot* old_base = stack.roots_buffer.data();
+    NrqGcFastRoot* new_base = replacement.data();
+    if (current != 0)
+      std::memcpy(new_base, old_base, current * sizeof(NrqGcFastRoot));
+    // Rebase active frame prev_root_cursor pointers into the new buffer.
+    NrqGcFastFrame* f_begin = stack.frames_buffer.data();
+    NrqGcFastFrame* f_end = stack.fast->frame_cursor;
+    for (NrqGcFastFrame* f = f_begin; f < f_end; ++f) {
+      const size_t idx =
+          static_cast<size_t>(f->prev_root_cursor - old_base);
+      f->prev_root_cursor = new_base + idx;
+    }
+    stack.roots_buffer.swap(replacement);
+    stack.fast->root_cursor = new_base + current;
+    stack.fast->root_end = new_base + next_cap;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+bool grow_shadow_frames(ShadowStack& stack, size_t extra) {
+  if (!stack.fast) return false;
+  const size_t current = shadow_frame_count(stack);
+  if (extra > SIZE_MAX - current) return false;
+  const size_t needed = current + extra;
+  size_t next_cap =
+      stack.frames_buffer.empty() ? 128 : stack.frames_buffer.size();
+  while (next_cap < needed) {
+    if (next_cap > SIZE_MAX / 2) return false;
+    next_cap *= 2;
+  }
+  try {
+    std::vector<NrqGcFastFrame> replacement(next_cap);
+    if (current != 0) {
+      std::memcpy(replacement.data(), stack.frames_buffer.data(),
+                  current * sizeof(NrqGcFastFrame));
+    }
+    stack.frames_buffer.swap(replacement);
+    stack.fast->frame_cursor = stack.frames_buffer.data() + current;
+    stack.fast->frame_end = stack.frames_buffer.data() + next_cap;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+inline void ensure_shadow_capacity(ShadowStack& stack, size_t extra_roots,
+                                   size_t extra_frames) {
+  NrqGcFastTls& fast = *stack.fast;
+  if (extra_roots != 0 &&
+      static_cast<size_t>(fast.root_end - fast.root_cursor) < extra_roots) {
+    if (!grow_shadow_roots(stack, extra_roots))
+      nrq_runtime_fatal("GC shadow-stack root buffer growth failed");
+  }
+  if (extra_frames != 0 &&
+      static_cast<size_t>(fast.frame_end - fast.frame_cursor) < extra_frames) {
+    if (!grow_shadow_frames(stack, extra_frames))
+      nrq_runtime_fatal("GC shadow-stack frame buffer growth failed");
+  }
+}
+
 ShadowStack& ensure_shadow_stack() {
   if (thread_shadow_stack) return *thread_shadow_stack;
   thread_gc_cleanup.arm();
   auto* stack = new (std::nothrow) ShadowStack();
   if (!stack) nrq_runtime_fatal("GC shadow-stack allocation failed");
+  try {
+    stack->roots_buffer.resize(256);
+    stack->frames_buffer.resize(128);
+  } catch (...) {
+    delete stack;
+    nrq_runtime_fatal("GC shadow-stack allocation failed");
+  }
+  stack->fast = &nrq_gc_fast_tls;
+  nrq_gc_fast_tls.root_cursor = stack->roots_buffer.data();
+  nrq_gc_fast_tls.root_end =
+      stack->roots_buffer.data() + stack->roots_buffer.size();
+  nrq_gc_fast_tls.frame_cursor = stack->frames_buffer.data();
+  nrq_gc_fast_tls.frame_end =
+      stack->frames_buffer.data() + stack->frames_buffer.size();
   {
     HeapLockGuard lock(gc_mutex);
     try {
       shadow_stacks.push_back(stack);
     } catch (...) {
+      nrq_gc_fast_tls.root_cursor = nullptr;
+      nrq_gc_fast_tls.root_end = nullptr;
+      nrq_gc_fast_tls.frame_cursor = nullptr;
+      nrq_gc_fast_tls.frame_end = nullptr;
       delete stack;
       nrq_runtime_fatal("GC shadow-stack registration failed");
     }
@@ -5090,10 +5264,15 @@ ShadowStack& ensure_shadow_stack() {
   return *stack;
 }
 
+inline bool is_pointer_root_layout(const nrq_object_layout* layout) {
+  if (layout == &kPointerRootLayout) return true;
+  return layout && layout->payload_size == sizeof(void*) &&
+         layout->reference_count == 1 && layout->reference_offsets &&
+         layout->reference_offsets[0] == 0;
+}
+
 bool is_pointer_root(const RootInfo& root) {
-  return root.repeated_count == 0 && root.object_size == sizeof(void*) &&
-         root.layout && root.layout->reference_count == 1 &&
-         root.layout->reference_offsets[0] == 0;
+  return root.repeated_count == 0 && is_pointer_root_layout(root.layout);
 }
 
 // The descriptor for a root registration: the same interning path objects use.
@@ -5163,23 +5342,23 @@ const nrq_object_layout* root_layout(size_t object_size, size_t element_size,
                                reference_offsets, reference_count, false);
 }
 
-void add_slot_state(ShadowStack& stack, void* slot, const RootInfo& info,
-                    bool pointer_root) {
+void add_slot_state(ShadowStack& stack, void* slot,
+                    const nrq_object_layout* layout, bool pointer_root) {
   SlotState* state = stack.slot_states.insert(slot);
   if (!state)
     nrq_runtime_fatal("GC root slot index failed to grow");
   if (state->count == 0) {
     state->count = 1;
-    state->object_size = info.object_size;
-    state->layout = info.layout;
+    state->layout = layout;
     state->pointer_root = pointer_root;
   } else {
-    // Descriptor identity is layout identity, so agreement is one compare.
-    if (state->object_size != info.object_size ||
-        state->layout != info.layout ||
-        state->pointer_root != pointer_root)
+    // Descriptor identity is layout identity (payload_size is part of the
+    // interning key), so agreement is one compare.
+    if (state->layout != layout || state->pointer_root != pointer_root)
       nrq_runtime_fatal(
           "GC root slot was registered with an incompatible layout");
+    if (state->count == UINT32_MAX)
+      nrq_runtime_fatal("GC root slot registration count overflow");
     ++state->count;
   }
   // A slot that is a pointer root stays one while it is registered, so the
@@ -5203,44 +5382,81 @@ void remove_slot_state(ShadowStack& stack, void* slot, uint32_t count = 1) {
 constexpr size_t kMaxBatchedSlotRemovals = 32;
 
 struct PendingSlotRemoval {
-  void* slot = nullptr;
-  uint32_t count = 0;
+  void* slot;
+  uint32_t count;
 };
 
-void remove_frame_slots(ShadowStack& stack, size_t first, size_t end) {
-  PendingSlotRemoval batch[kMaxBatchedSlotRemovals];
-  size_t batch_size = 0;
-  bool overflowed = false;
-  for (size_t index = first; index < end; ++index) {
-    void* slot = stack.roots[index].slot;
-    size_t position = 0;
-    while (position < batch_size && batch[position].slot != slot) ++position;
-    if (position == batch_size) {
-      if (batch_size == kMaxBatchedSlotRemovals) {
-        overflowed = true;
-        break;
+void remove_frame_slots(ShadowStack& stack, NrqGcFastRoot* first,
+                        NrqGcFastRoot* end) {
+  if (first >= end) return;
+  if (stack.slot_states.size() != 0) {
+    const size_t total = static_cast<size_t>(end - first);
+    if (total == 1) {
+      if (shadow_layout_is_indexed(first->layout))
+        remove_slot_state(stack, first->slot, 1);
+    } else {
+      PendingSlotRemoval batch[kMaxBatchedSlotRemovals];
+      size_t batch_size = 0;
+      bool overflowed = false;
+      for (const NrqGcFastRoot* r = first; r < end; ++r) {
+        if (!shadow_layout_is_indexed(r->layout)) continue;
+        void* slot = r->slot;
+        size_t position = 0;
+        while (position < batch_size && batch[position].slot != slot) ++position;
+        if (position == batch_size) {
+          if (batch_size == kMaxBatchedSlotRemovals) {
+            overflowed = true;
+            break;
+          }
+          batch[batch_size].slot = slot;
+          batch[batch_size].count = 0;
+          ++batch_size;
+        }
+        ++batch[position].count;
       }
-      batch[batch_size].slot = slot;
-      batch[batch_size].count = 0;
-      ++batch_size;
+      if (overflowed) {
+        for (const NrqGcFastRoot* r = first; r < end; ++r) {
+          if (shadow_layout_is_indexed(r->layout))
+            remove_slot_state(stack, r->slot);
+        }
+      } else {
+        for (size_t position = 0; position < batch_size; ++position)
+          remove_slot_state(stack, batch[position].slot, batch[position].count);
+      }
     }
-    ++batch[position].count;
   }
-  if (overflowed) {
-    for (size_t index = first; index < end; ++index)
-      remove_slot_state(stack, stack.roots[index].slot);
-    return;
+  if (stack.pointer_roots_has_unindexed) {
+    for (const NrqGcFastRoot* r = first; r < end; ++r)
+      stack.pointer_roots.forget(r->slot);
+    if (first == stack.roots_buffer.data())
+      stack.pointer_roots_has_unindexed = false;
   }
-  for (size_t position = 0; position < batch_size; ++position)
-    remove_slot_state(stack, batch[position].slot, batch[position].count);
 }
 
 __forceinline bool shadow_has_pointer_root(ShadowStack& stack, void* slot) {
-  // The memo answers for the slots a loop reuses; anything else falls back to
-  // one probe in the per-thread index. Neither is ever read by the collector.
+  // The memo answers for the slots a loop reuses; anything else checks the
+  // dynamic slot index and then active frame roots from top down.
   if (stack.pointer_roots.contains(slot)) return true;
   const SlotState* found = stack.slot_states.find(slot);
-  return found != nullptr && found->pointer_root;
+  if (found != nullptr && found->pointer_root) {
+    stack.pointer_roots.insert(slot);
+    return true;
+  }
+  if (stack.fast && stack.fast->root_cursor) {
+    const NrqGcFastRoot* begin = stack.roots_buffer.data();
+    for (const NrqGcFastRoot* r = stack.fast->root_cursor; r > begin;) {
+      --r;
+      if (r->slot != slot) continue;
+      const nrq_object_layout* layout = decode_shadow_layout(r->layout);
+      if (is_pointer_root_layout(layout)) {
+        stack.pointer_roots.insert(slot);
+        stack.pointer_roots_has_unindexed = true;
+        return true;
+      }
+      return false;
+    }
+  }
+  return false;
 }
 
 ObjectRef find_pending_header(MutatorState& mutator, void* object) {
@@ -5825,23 +6041,20 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
     if (offset > object_size || sizeof(void*) > object_size - offset)
       nrq_runtime_fatal("GC root registration contains an out-of-range pointer offset");
   }
-  RootInfo info;
-  info.object_size = object_size;
-  info.references = reference_count;
-  info.layout = root_layout(object_size, object_size, 0, reference_offsets,
-                            reference_count);
-  if (!info.layout)
+  const nrq_object_layout* layout =
+      root_layout(object_size, object_size, 0, reference_offsets,
+                  reference_count);
+  if (!layout)
     nrq_runtime_fatal("GC root registration received an undescribable layout");
 
   ShadowStack& stack = ensure_shadow_stack();
+  const bool is_ptr_root = is_pointer_root_layout(layout);
+  const void* encoded = encode_shadow_layout(layout, /*indexed=*/true);
+  ensure_shadow_capacity(stack, 1, 0);
   auto push_root = [&]() {
     try {
-      const bool is_ptr_root = is_pointer_root(info);
-      stack.roots.push_back(ShadowRoot{slot, std::move(info)});
-      // Validate and count this slot in O(1). A slot may be registered more
-      // than once (nested frames or repeated registration); the per-slot count
-      // keeps the pointer-root index alive until the last owner exits.
-      add_slot_state(stack, slot, stack.roots.back().info, is_ptr_root);
+      add_slot_state(stack, slot, layout, is_ptr_root);
+      *stack.fast->root_cursor++ = NrqGcFastRoot{slot, encoded};
     } catch (...) {
       nrq_runtime_fatal("GC root registration failed to track the current thread");
     }
@@ -5870,7 +6083,7 @@ void nrq_gc_root_register_typed(void* slot, size_t object_size,
         collection_phase.load(std::memory_order_acquire);
     if (phase == CollectionPhase::Marking ||
         phase == CollectionPhase::Sweeping)
-      mark_root_values_locked(slot, info);
+      mark_root_values_locked(slot, layout, 0);
     push_root();
   }
 }
@@ -5882,34 +6095,20 @@ constexpr size_t kFrameRootHeaderWords = 2;
 // compile-time constant at both call sites, so the development configuration
 // keeps every check and the production configuration for a compiler-built table
 // contains none of them.
-static void register_frame_roots(void* const* slots, size_t slot_count,
-                                 const size_t* descriptor, bool validate) {
-  if (slot_count == 0) return;
-  if (!slots || !descriptor)
-    nrq_runtime_fatal("GC frame root registration received an invalid descriptor");
-
-  if (validate) {
-    if (descriptor[0] != slot_count)
-      nrq_runtime_fatal(
-          "GC frame root registration descriptor does not match its slot count");
-
-    for (size_t index = 0; index < slot_count; ++index) {
-      if (!slots[index])
-        nrq_runtime_fatal("GC frame root registration contains a null slot");
-    }
+static void validate_frame_descriptor(void* const* slots, size_t slot_count,
+                                      const size_t* descriptor) {
+  if (descriptor[0] != slot_count)
+    nrq_runtime_fatal(
+        "GC frame root registration descriptor does not match its slot count");
+  for (size_t index = 0; index < slot_count; ++index) {
+    if (!slots[index])
+      nrq_runtime_fatal("GC frame root registration contains a null slot");
   }
-
-  if (validate && !thread_validated_descriptors.matches(descriptor)) {
-    // The table states its own length, so a truncated descriptor is rejected
-    // before the walk can read past it. A table with no room for its own header or
-    // for the roots it claims is malformed in the same way.
+  if (!thread_validated_descriptors.matches(descriptor)) {
     const size_t word_count = descriptor[1];
     if (word_count < 2 || word_count < 2 + 2 * slot_count)
       nrq_runtime_fatal(
           "GC frame root registration descriptor is shorter than its roots");
-
-    // Validate the entire table before publishing any root: a malformed
-    // descriptor must fail with the frame untouched, not halfway registered.
     size_t cursor = 2;
     for (size_t index = 0; index < slot_count; ++index) {
       const size_t object_size = descriptor[cursor++];
@@ -5924,57 +6123,67 @@ static void register_frame_roots(void* const* slots, size_t slot_count,
       }
       cursor += reference_count;
     }
-    // The words the roots described have to account for the whole table.
     if (cursor != word_count)
       nrq_runtime_fatal(
           "GC frame root registration descriptor length does not match its roots");
     thread_validated_descriptors.insert(descriptor);
   }
+}
+
+// Shared body of the frame-registration entry points. `validate` and
+// `index_slots` are compile-time constants at call sites.
+static void register_frame_roots(void* const* slots, size_t slot_count,
+                                 const size_t* descriptor, bool validate,
+                                 bool index_slots) {
+  if (slot_count == 0) return;
+  if (!slots || !descriptor)
+    nrq_runtime_fatal("GC frame root registration received an invalid descriptor");
+
+  if (validate) validate_frame_descriptor(slots, slot_count, descriptor);
 
   ShadowStack& stack = ensure_shadow_stack();
-  // One reservation for the frame keeps a wide activation from growing the
-  // vector root by root; the per-root metadata itself stays allocation-free for
-  // every layout that fits the inline offset storage.
-  auto reserve_roots = [&]() {
-    try {
-      stack.roots.reserve(stack.roots.size() + slot_count);
-    } catch (...) {
-      nrq_runtime_fatal("GC frame root registration failed to reserve roots");
-    }
-  };
-  // Reads one slot's metadata out of the descriptor, advancing the cursor, and
-  // pushes it. The cursor walks the table once, so a wide frame costs one pass.
-  auto push_root = [&](void* slot, size_t& cursor) {
-    RootInfo info;
-    info.object_size = descriptor[cursor++];
+  ensure_shadow_capacity(stack, slot_count, 0);
+
+  auto read_slot_layout = [&](size_t& cursor, bool& is_ptr_root) {
+    const size_t object_size = descriptor[cursor++];
     const size_t reference_count = descriptor[cursor++];
-    info.references = reference_count;
-    info.layout = root_layout(info.object_size, info.object_size, 0,
-                              descriptor + cursor, reference_count);
-    if (!info.layout)
+    if (object_size == sizeof(void*) && reference_count == 1 &&
+        descriptor[cursor] == 0) {
+      ++cursor;
+      is_ptr_root = true;
+      return &kPointerRootLayout;
+    }
+    const nrq_object_layout* layout = root_layout(
+        object_size, object_size, 0, descriptor + cursor, reference_count);
+    if (!layout)
       nrq_runtime_fatal("GC root registration received an undescribable layout");
     cursor += reference_count;
-    const bool is_ptr_root = is_pointer_root(info);
-    try {
-      stack.roots.push_back(ShadowRoot{slot, std::move(info)});
-      add_slot_state(stack, slot, stack.roots.back().info, is_ptr_root);
-    } catch (...) {
-      nrq_runtime_fatal("GC root registration failed to track the current thread");
+    is_ptr_root = is_pointer_root_layout(layout);
+    return layout;
+  };
+
+  auto push_roots = [&](bool mark_active) {
+    size_t cursor = kFrameRootHeaderWords;
+    NrqGcFastRoot* dst = stack.fast->root_cursor;
+    for (size_t index = 0; index < slot_count; ++index) {
+      bool is_ptr_root = false;
+      const nrq_object_layout* layout = read_slot_layout(cursor, is_ptr_root);
+      if (mark_active) mark_root_values_locked(slots[index], layout, 0);
+      if (index_slots) {
+        add_slot_state(stack, slots[index], layout, is_ptr_root);
+      }
+      dst[index] = NrqGcFastRoot{slots[index],
+                                 encode_shadow_layout(layout, index_slots)};
     }
+    stack.fast->root_cursor = dst + slot_count;
   };
 
   if (begin_fast_barrier()) {
     if (diagnostics_reading_roots()) {
       std::lock_guard<std::mutex> stack_lock(stack.mutex);
-      reserve_roots();
-      size_t cursor = kFrameRootHeaderWords;
-      for (size_t index = 0; index < slot_count; ++index)
-        push_root(slots[index], cursor);
+      push_roots(false);
     } else {
-      reserve_roots();
-      size_t cursor = kFrameRootHeaderWords;
-      for (size_t index = 0; index < slot_count; ++index)
-        push_root(slots[index], cursor);
+      push_roots(false);
     }
     end_fast_barrier();
     return;
@@ -5985,46 +6194,27 @@ static void register_frame_roots(void* const* slots, size_t slot_count,
     std::lock_guard<std::mutex> stack_lock(stack.mutex);
     const CollectionPhase phase =
         collection_phase.load(std::memory_order_acquire);
-    reserve_roots();
-    size_t cursor = kFrameRootHeaderWords;
-    for (size_t index = 0; index < slot_count; ++index) {
-      // Mark exactly the roots the single-slot path marks: a root pushed while a
-      // snapshot is already running has to behave as if it had been part of it.
-      if (phase == CollectionPhase::Marking ||
-          phase == CollectionPhase::Sweeping) {
-        RootInfo info;
-        info.object_size = descriptor[cursor];
-        const size_t reference_count = descriptor[cursor + 1];
-        info.layout = root_layout(info.object_size, info.object_size, 0,
-                                  descriptor + cursor + 2, reference_count);
-        if (!info.layout)
-          nrq_runtime_fatal(
-              "GC root registration received an undescribable layout");
-        mark_root_values_locked(slots[index], info);
-      }
-      push_root(slots[index], cursor);
-    }
+    push_roots(phase == CollectionPhase::Marking ||
+               phase == CollectionPhase::Sweeping);
   }
 }
 
 // Dynamic entry point: the descriptor is supplied by the caller, so it is
-// validated on every activation (memoised only for an identical table).
+// validated on every activation (memoised only for an identical table) and slots
+// are tracked in `SlotIndex` for duplicate/layout contract validation.
 void nrq_gc_root_register_frame(void* const* slots, size_t slot_count,
                                 const size_t* descriptor) {
-  register_frame_roots(slots, slot_count, descriptor, /*validate=*/true);
+  register_frame_roots(slots, slot_count, descriptor, /*validate=*/true,
+                       /*index_slots=*/true);
 }
 
-// Static-descriptor entry point. Only the lowering emits this, and only with a
-// table it built itself: `nrq_gc_roots_*` is a constant private global whose
-// words the compiler derives from the slots it is about to publish, so the table
-// cannot disagree with the frame. The development configuration still validates
-// it, because a bug in that derivation must be caught where it is cheap to
-// diagnose; the production configuration skips the walk entirely, which is the
-// whole point of a separate entry point.
+// Static-descriptor entry point. Only the lowering emits this, with an
+// immutable module table for fresh local stack slots.
 void nrq_gc_root_register_frame_static(void* const* slots, size_t slot_count,
                                        const size_t* descriptor) {
   register_frame_roots(slots, slot_count, descriptor,
-                       /*validate=*/nirq::runtime_debug_enabled);
+                       /*validate=*/nirq::runtime_debug_enabled,
+                       /*index_slots=*/false);
 }
 
 void nrq_gc_root_register_array(void* data, size_t count, size_t element_size,
@@ -6086,14 +6276,29 @@ void nrq_gc_root_clear_array_references(void* data, size_t count,
 
 void nrq_gc_root_unregister(void** slot) {
   if (!slot) return;
-  if (thread_shadow_stack) {
+  if (thread_shadow_stack && thread_shadow_stack->fast &&
+      thread_shadow_stack->fast->root_cursor) {
     ShadowStack& stack = *thread_shadow_stack;
     std::lock_guard<std::mutex> stack_lock(stack.mutex);
-    for (auto entry = stack.roots.rbegin(); entry != stack.roots.rend();
-         ++entry) {
+    NrqGcFastRoot* begin = stack.roots_buffer.data();
+    NrqGcFastRoot* end = stack.fast->root_cursor;
+    for (NrqGcFastRoot* entry = end; entry > begin;) {
+      --entry;
       if (entry->slot != slot) continue;
-      remove_slot_state(stack, slot);
-      stack.roots.erase(std::next(entry).base());
+      if (shadow_layout_is_indexed(entry->layout)) {
+        remove_slot_state(stack, slot);
+      } else if (stack.pointer_roots_has_unindexed) {
+        stack.pointer_roots.forget(slot);
+      }
+      const size_t tail = static_cast<size_t>(end - (entry + 1));
+      if (tail != 0)
+        std::memmove(entry, entry + 1, tail * sizeof(NrqGcFastRoot));
+      stack.fast->root_cursor = end - 1;
+      NrqGcFastFrame* f_begin = stack.frames_buffer.data();
+      NrqGcFastFrame* f_end = stack.fast->frame_cursor;
+      for (NrqGcFastFrame* f = f_begin; f < f_end; ++f) {
+        if (f->prev_root_cursor > entry) --f->prev_root_cursor;
+      }
       return;
     }
   }
@@ -6180,63 +6385,132 @@ void nrq_gc_root_copy(void* destination, const void* source, size_t bytes) {
 }
 
 static uint64_t start_root_frame() {
-  // stack.frames, next_marker, and the root-depth checkpoint are thread-local
-  // bookkeeping only. The collector never reads stack.frames; it only reads
-  // stack.roots under stack.mutex. No mutex is required here.
   ShadowStack& stack = ensure_shadow_stack();
   if (stack.next_marker == UINT64_MAX)
     nrq_runtime_fatal("GC root frame marker space exhausted");
+  ensure_shadow_capacity(stack, 0, 1);
   const uint64_t marker = stack.next_marker++;
-  try {
-    stack.frames.push_back(ShadowStack::Frame{marker, stack.roots.size()});
-  } catch (...) {
-    nrq_runtime_fatal("GC root frame registration failed to allocate thread metadata");
-  }
+  *stack.fast->frame_cursor++ =
+      NrqGcFastFrame{marker, stack.fast->root_cursor};
   debug_emit(NRQ_GC_EVENT_ROOT_FRAME, 1, marker, nullptr);
   return marker;
 }
 
 uint64_t nrq_gc_root_frame_begin(void) { return start_root_frame(); }
 
-// The trusted fused entry. Generated code always opens a frame immediately
-// before publishing that frame's static roots, so doing both here removes a
-// second call and a second shadow-stack re-entry per activation. The frame
-// record is pushed first, exactly as the split pair did; a registration failure
-// terminates the process before the caller can observe anything, so a frame is
-// never visible to the collector with only part of its roots published.
-// `descriptor` must be the compiler-emitted table for exactly these slots -
-// the same precondition `nrq_gc_root_register_frame_static` documents.
+// The trusted fused entry. Pushes the frame record and publishes the static
+// roots in one call and one shadow-stack check.
 uint64_t nrq_gc_root_frame_open(void* const* slots, size_t slot_count,
                                 const size_t* descriptor) {
-  const uint64_t marker = start_root_frame();
-  register_frame_roots(slots, slot_count, descriptor,
-                       /*validate=*/nirq::runtime_debug_enabled);
+  if (slot_count == 0) return start_root_frame();
+  if (!slots || !descriptor)
+    nrq_runtime_fatal("GC frame root registration received an invalid descriptor");
+  if constexpr (nirq::runtime_debug_enabled) {
+    validate_frame_descriptor(slots, slot_count, descriptor);
+  }
+  ShadowStack& stack = ensure_shadow_stack();
+  if (stack.next_marker == UINT64_MAX)
+    nrq_runtime_fatal("GC root frame marker space exhausted");
+  ensure_shadow_capacity(stack, slot_count, 1);
+  const uint64_t marker = stack.next_marker++;
+  NrqGcFastRoot* const prev_roots = stack.fast->root_cursor;
+  *stack.fast->frame_cursor++ = NrqGcFastFrame{marker, prev_roots};
+  debug_emit(NRQ_GC_EVENT_ROOT_FRAME, 1, marker, nullptr);
+
+  auto push_static_roots = [&](bool mark_active) {
+    // Fast path for the common case where every slot is a plain 8-byte pointer
+    // root (`descriptor[1] == 2 + 3 * slot_count`).
+    if (descriptor[1] == kFrameRootHeaderWords + 3 * slot_count) {
+      bool all_pointer_roots = true;
+      size_t cursor = kFrameRootHeaderWords;
+      for (size_t index = 0; index < slot_count; ++index, cursor += 3) {
+        if (descriptor[cursor] != sizeof(void*) ||
+            descriptor[cursor + 1] != 1 || descriptor[cursor + 2] != 0) {
+          all_pointer_roots = false;
+          break;
+        }
+      }
+      if (all_pointer_roots) {
+        for (size_t index = 0; index < slot_count; ++index) {
+          if (mark_active)
+            mark_root_values_locked(slots[index], &kPointerRootLayout, 0);
+          prev_roots[index] = NrqGcFastRoot{slots[index], nullptr};
+        }
+        stack.fast->root_cursor = prev_roots + slot_count;
+        return;
+      }
+    }
+
+    size_t cursor = kFrameRootHeaderWords;
+    for (size_t index = 0; index < slot_count; ++index) {
+      const size_t object_size = descriptor[cursor++];
+      const size_t reference_count = descriptor[cursor++];
+      const nrq_object_layout* layout = nullptr;
+      if (object_size == sizeof(void*) && reference_count == 1 &&
+          descriptor[cursor] == 0) {
+        ++cursor;
+        layout = &kPointerRootLayout;
+      } else {
+        layout = root_layout(object_size, object_size, 0,
+                             descriptor + cursor, reference_count);
+        if (!layout)
+          nrq_runtime_fatal(
+              "GC root registration received an undescribable layout");
+        cursor += reference_count;
+      }
+      if (mark_active) mark_root_values_locked(slots[index], layout, 0);
+      prev_roots[index] =
+          NrqGcFastRoot{slots[index], encode_shadow_layout(layout, false)};
+    }
+    stack.fast->root_cursor = prev_roots + slot_count;
+  };
+
+  if (begin_fast_barrier()) {
+    if (diagnostics_reading_roots()) {
+      std::lock_guard<std::mutex> stack_lock(stack.mutex);
+      push_static_roots(false);
+    } else {
+      push_static_roots(false);
+    }
+    end_fast_barrier();
+    return marker;
+  }
+
+  HeapLockGuard heap_lock(gc_mutex);
+  {
+    std::lock_guard<std::mutex> stack_lock(stack.mutex);
+    const CollectionPhase phase =
+        collection_phase.load(std::memory_order_acquire);
+    push_static_roots(phase == CollectionPhase::Marking ||
+                      phase == CollectionPhase::Sweeping);
+  }
   return marker;
 }
 
 void nrq_gc_root_frame_end(uint64_t marker) {
-  if (!thread_shadow_stack)
+  if (!thread_shadow_stack || !thread_shadow_stack->fast ||
+      !thread_shadow_stack->fast->frame_cursor)
     nrq_runtime_fatal("GC root frame ended without a shadow stack");
   ShadowStack& stack = *thread_shadow_stack;
-  // stack.frames is thread-private; validate without a lock.
-  if (stack.frames.empty() || stack.frames.back().marker != marker ||
-      stack.frames.back().root_depth > stack.roots.size())
+  NrqGcFastTls& fast = *stack.fast;
+  NrqGcFastFrame* const frames_begin = stack.frames_buffer.data();
+  NrqGcFastRoot* const roots_begin = stack.roots_buffer.data();
+  if (fast.frame_cursor <= frames_begin)
     nrq_runtime_fatal("GC root frames must end in LIFO order with a valid marker");
-  const size_t target_depth = stack.frames.back().root_depth;
-  stack.frames.pop_back();
+  const NrqGcFastFrame top = *(fast.frame_cursor - 1);
+  if (top.marker != marker || top.prev_root_cursor < roots_begin ||
+      top.prev_root_cursor > fast.root_cursor)
+    nrq_runtime_fatal("GC root frames must end in LIFO order with a valid marker");
+  --fast.frame_cursor;
   debug_emit(NRQ_GC_EVENT_ROOT_FRAME, 0, marker, nullptr);
+  if (top.prev_root_cursor == fast.root_cursor) return;
 
-  // Remove exactly the registrations owned by this frame. Complexities of this
-  // path are proportional to the number of roots the frame leaves behind, not
-  // to all roots still active on the thread.
   auto remove_owned_roots = [&]() {
-    remove_frame_slots(stack, target_depth, stack.roots.size());
-    stack.roots.resize(target_depth);
+    if (stack.slot_states.size() != 0 || stack.pointer_roots_has_unindexed)
+      remove_frame_slots(stack, top.prev_root_cursor, fast.root_cursor);
+    fast.root_cursor = top.prev_root_cursor;
   };
 
-  // Shrinking stack.roots requires coordination with the collector, which reads
-  // roots under stack.mutex. Use the fast barrier when idle so the collector
-  // cannot begin a snapshot between the resize and this function returning.
   if (begin_fast_barrier()) {
     if (diagnostics_reading_roots()) {
       std::lock_guard<std::mutex> lock(stack.mutex);
@@ -6247,8 +6521,6 @@ void nrq_gc_root_frame_end(uint64_t marker) {
     end_fast_barrier();
     return;
   }
-  // Collector is active; hold stack.mutex while shrinking roots so the
-  // collector sees a consistent view during its enumeration.
   std::lock_guard<std::mutex> lock(stack.mutex);
   remove_owned_roots();
 }
@@ -6256,38 +6528,40 @@ void nrq_gc_root_frame_end(uint64_t marker) {
 #if NRQ_DEBUG_ENABLED
 size_t nrq_gc_debug_snapshot_roots(nrq_gc_debug_root* out, size_t capacity) {
   if (!out || capacity == 0) return 0;
-  // A fast-path root push does not take the stack mutex, so reading a stack
-  // needs the same handshake the reference-count query uses: publish that a
-  // diagnostic reader is active, which makes every later push synchronize, then
-  // drain the pushes that entered the lock-free path before the flag became
-  // visible. Only then is every stack this function walks either quiescent or
-  // mutex-protected.
-  const bool previous = reference_diagnostics_enabled.exchange(
-      true, std::memory_order_acq_rel);
+  bool previous = false;
+  {
+    HeapLockGuard lock(gc_mutex);
+    previous = reference_diagnostics_enabled.exchange(true, std::memory_order_acq_rel);
+    refresh_inline_config_locked();
+  }
   struct RestoreFlag {
     bool previous;
     ~RestoreFlag() {
+      HeapLockGuard lock(gc_mutex);
       reference_diagnostics_enabled.store(previous, std::memory_order_release);
+      refresh_inline_config_locked();
     }
   } restore{previous};
+#if defined(_WIN32)
+  FlushProcessWriteBuffers();
+#endif
   wait_for_fast_barriers();
 
   size_t written = 0;
-  auto record = [&](void* slot, const RootInfo& info) {
+  auto record = [&](void* slot, const nrq_object_layout* layout,
+                    size_t repeated_count) {
     if (written == capacity) return;
     nrq_gc_debug_root& entry = out[written++];
     entry = nrq_gc_debug_root{};
     entry.slot = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(slot));
-    const nrq_object_layout* layout = info.layout;
     entry.reference_count = layout ? layout->reference_count : 0u;
     entry.element_size = static_cast<uint32_t>(layout ? layout->payload_size : 0);
-    entry.element_count = info.repeated_count != 0
-                             ? static_cast<uint32_t>(info.repeated_count)
+    entry.element_count = repeated_count != 0
+                             ? static_cast<uint32_t>(repeated_count)
                              : 1u;
-    entry.is_pointer_root = is_pointer_root(info) ? 1u : 0u;
+    entry.is_pointer_root =
+        (repeated_count == 0 && is_pointer_root_layout(layout)) ? 1u : 0u;
     if (!slot || !layout || layout->reference_count == 0) return;
-    // Report the object the slot currently holds at its first reference offset.
-    // For an array root that is the first element's first reference.
     const size_t span = layout->payload_size;
     const size_t offset = layout->reference_offsets[0];
     if (offset > span || sizeof(void*) > span - offset) return;
@@ -6299,11 +6573,15 @@ size_t nrq_gc_debug_snapshot_roots(nrq_gc_debug_root* out, size_t capacity) {
 
   {
     HeapLockGuard lock(gc_mutex);
-    for (const auto& root : roots) record(root.first, root.second);
+    for (const auto& root : roots)
+      record(root.first, root.second.layout, root.second.repeated_count);
     for (ShadowStack* stack : shadow_stacks) {
-      if (!stack) continue;
+      if (!stack || !stack->fast || !stack->fast->root_cursor) continue;
       std::lock_guard<std::mutex> stack_lock(stack->mutex);
-      for (const ShadowRoot& root : stack->roots) record(root.slot, root.info);
+      const NrqGcFastRoot* begin = stack->roots_buffer.data();
+      const NrqGcFastRoot* end = stack->fast->root_cursor;
+      for (const NrqGcFastRoot* root = begin; root < end; ++root)
+        record(root->slot, decode_shadow_layout(root->layout), 0);
     }
   }
   return written;
@@ -6368,6 +6646,7 @@ void nrq_gc_mutator_enter(void) {
   thread_gc_cleanup.arm();
   thread_mutator.fast = &nrq_gc_fast_tls;
   if (thread_mutator.depth++ != 0) return;
+  (void)ensure_shadow_stack();
 
   std::unique_lock<std::mutex> lock(mutator_mutex);
   while (collection_is_requested()) wait_until_not_requested(lock);
@@ -6831,6 +7110,11 @@ static void unpin_value(void* object) {
   // collector mutex stays out of the path.
   if (begin_fast_barrier()) {
     MutatorState& mutator = thread_mutator;
+    if (mutator.fast && mutator.fast->transfer_pin_fast == object) {
+      mutator.fast->transfer_pin_fast = nullptr;
+      end_fast_barrier();
+      return;
+    }
     TransferPinDelta* pending = find_transfer_delta(mutator, object);
     if (pending && pending->delta > 0) {
       // A buffered pin cancelled before the drain has no effect on the pin table,
@@ -6856,6 +7140,10 @@ static void unpin_value(void* object) {
     end_fast_barrier();
   }
   HeapLockGuard lock(gc_mutex);
+  if (thread_mutator.fast && thread_mutator.fast->transfer_pin_fast == object) {
+    thread_mutator.fast->transfer_pin_fast = nullptr;
+    return;
+  }
   if (buffer_fell_back) drain_transfer_pins_locked(thread_mutator);
   auto found = pinned_objects.find(object);
   if (found == pinned_objects.end()) return;
@@ -6920,23 +7208,31 @@ void* nrq_gc_pin_transfer(void* object) {
 }
 
 void nrq_gc_ref_count_start(void) {
-  // Mutators check this before touching their shadow stack without its mutex, so
-  // it has to be published before the next query reads any stack.
-  reference_diagnostics_enabled.store(true, std::memory_order_release);
+  {
+    HeapLockGuard lock(gc_mutex);
+    reference_diagnostics_enabled.store(true, std::memory_order_release);
+    refresh_inline_config_locked();
+  }
+#if defined(_WIN32)
+  FlushProcessWriteBuffers();
+#endif
+  wait_for_fast_barriers();
 }
 
 void nrq_gc_ref_count_stop(void) {
+  HeapLockGuard lock(gc_mutex);
   reference_diagnostics_enabled.store(false, std::memory_order_release);
+  refresh_inline_config_locked();
 }
 
 int64_t nrq_gc_get_ref_count(void* object) {
   // Diagnostics are off in normal execution, so a disabled query touches nothing.
   if (!diagnostics_reading_roots()) return -1;
-  // The query reads shadow stacks, and a mutator that entered its root fast path
-  // before the flag became visible is still inside a lock-free region. Drain
-  // those regions first: mutators that observe the flag afterwards take the
-  // stack mutex themselves. The mutator registry is taken before the heap lock
-  // to keep the documented lock order.
+  // Drain any fast-barrier or inline root sections that began before the flag
+  // became visible.
+#if defined(_WIN32)
+  FlushProcessWriteBuffers();
+#endif
   wait_for_fast_barriers();
   HeapLockGuard lock(gc_mutex);
   if (thread_mutator.depth != 0) publish_tlab_locked(thread_mutator);
@@ -6949,12 +7245,12 @@ int64_t nrq_gc_get_ref_count(void* object) {
       trace_children(object, count_reference_to_target, &target);
     });
     // Counts exactly what marking reads: the same descriptor, the same walk.
-    auto count_root = [&](const void* storage, const RootInfo& info) {
-      const nrq_object_layout* layout = info.layout;
+    auto count_root = [&](const void* storage, const nrq_object_layout* layout,
+                          size_t repeated_count) {
       if (!layout || layout->reference_count == 0) return;
       const auto* bytes = static_cast<const unsigned char*>(storage);
       const size_t stride = layout->payload_size;
-      const size_t elements = info.repeated_count != 0 ? info.repeated_count : 1;
+      const size_t elements = repeated_count != 0 ? repeated_count : 1;
       for (size_t element = 0; element < elements; ++element) {
         for (uint32_t index = 0; index < layout->reference_count; ++index) {
           const size_t offset = layout->reference_offsets[index];
@@ -6966,12 +7262,15 @@ int64_t nrq_gc_get_ref_count(void* object) {
         }
       }
     };
-    for (const auto& root : roots) count_root(root.first, root.second);
+    for (const auto& root : roots)
+      count_root(root.first, root.second.layout, root.second.repeated_count);
     for (ShadowStack* stack : shadow_stacks) {
-      if (!stack) continue;
+      if (!stack || !stack->fast || !stack->fast->root_cursor) continue;
       std::lock_guard<std::mutex> stack_lock(stack->mutex);
-      for (const ShadowRoot& root : stack->roots)
-        count_root(root.slot, root.info);
+      const NrqGcFastRoot* begin = stack->roots_buffer.data();
+      const NrqGcFastRoot* end = stack->fast->root_cursor;
+      for (const NrqGcFastRoot* root = begin; root < end; ++root)
+        count_root(root->slot, decode_shadow_layout(root->layout), 0);
     }
     auto pinned = pinned_objects.find(object);
     if (pinned != pinned_objects.end())
@@ -7034,9 +7333,33 @@ static_assert(offsetof(NrqGcFastTls, h0_state_cursor) == 104,
               "NrqGcFastTls::h0_state_cursor offset mismatch");
 static_assert(offsetof(NrqGcFastTls, pending_range_count) == 112,
               "NrqGcFastTls::pending_range_count offset mismatch");
+static_assert(sizeof(NrqGcFastRoot) == 16,
+              "NrqGcFastRoot size mismatch");
+static_assert(offsetof(NrqGcFastRoot, slot) == 0,
+              "NrqGcFastRoot::slot offset mismatch");
+static_assert(offsetof(NrqGcFastRoot, layout) == 8,
+              "NrqGcFastRoot::layout offset mismatch");
+static_assert(sizeof(NrqGcFastFrame) == 16,
+              "NrqGcFastFrame size mismatch");
+static_assert(offsetof(NrqGcFastFrame, marker) == 0,
+              "NrqGcFastFrame::marker offset mismatch");
+static_assert(offsetof(NrqGcFastFrame, prev_root_cursor) == 8,
+              "NrqGcFastFrame::prev_root_cursor offset mismatch");
 static_assert(offsetof(NrqGcFastTls, h0_slot_bytes) == 120,
               "NrqGcFastTls::h0_slot_bytes offset mismatch");
-static_assert(offsetof(NrqGcFastTls, pending_ranges) == 128,
+static_assert(offsetof(NrqGcFastTls, root_cursor) == 128,
+              "NrqGcFastTls::root_cursor offset mismatch");
+static_assert(offsetof(NrqGcFastTls, root_end) == 136,
+              "NrqGcFastTls::root_end offset mismatch");
+static_assert(offsetof(NrqGcFastTls, frame_cursor) == 144,
+              "NrqGcFastTls::frame_cursor offset mismatch");
+static_assert(offsetof(NrqGcFastTls, frame_end) == 152,
+              "NrqGcFastTls::frame_end offset mismatch");
+static_assert(offsetof(NrqGcFastTls, transfer_pin_fast) == 160,
+              "NrqGcFastTls::transfer_pin_fast offset mismatch");
+static_assert(offsetof(NrqGcFastTls, inline_barrier) == 168,
+              "NrqGcFastTls::inline_barrier offset mismatch");
+static_assert(offsetof(NrqGcFastTls, pending_ranges) == 176,
               "NrqGcFastTls::pending_ranges offset mismatch");
 
 uint32_t nrq_gc_layout_id(const nrq_object_layout* layout) {

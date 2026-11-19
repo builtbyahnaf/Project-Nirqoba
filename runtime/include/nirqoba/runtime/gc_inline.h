@@ -32,6 +32,7 @@ enum {
   NRQ_GC_INLINE_GATE_PHASE_BIT = 1u << 0,
   NRQ_GC_INLINE_GATE_DUE_BIT = 1u << 1,
   NRQ_GC_INLINE_GATE_DEBUG_ALLOC_BIT = 1u << 2,
+  NRQ_GC_INLINE_GATE_DIAG_ROOTS_BIT = 1u << 3,
 };
 
 typedef struct NrqGcPendingRange {
@@ -39,6 +40,22 @@ typedef struct NrqGcPendingRange {
   uint8_t* begin;
   uint8_t* end;
 } NrqGcPendingRange;
+
+// Fast shadow-stack root entry (16 bytes). `layout == NULL` denotes the
+// canonical single-pointer root (`&kPointerRootLayout`), allowing compiler-
+// inlined frames to publish pointer roots without referencing a runtime layout
+// symbol. Bit 0 of `layout` is set iff the slot is also tracked in `SlotIndex`.
+typedef struct NrqGcFastRoot {
+  void* slot;
+  const void* layout;
+} NrqGcFastRoot;
+
+// Fast shadow-stack frame record (16 bytes). `marker == 0` denotes a frame
+// opened inline by generated code; `marker >= 1` denotes a runtime-opened frame.
+typedef struct NrqGcFastFrame {
+  uint64_t marker;
+  NrqGcFastRoot* prev_root_cursor;
+} NrqGcFastFrame;
 
 // Read-mostly collector configuration checked on every inline fast path.
 // `packed_state` packs `gate` in the low 32 bits and `initial_state` in the
@@ -77,6 +94,13 @@ typedef struct NrqGcFastTls {
   uint32_t pending_range_count;
   uint32_t reserved1;
   size_t h0_slot_bytes;
+  NrqGcFastRoot* root_cursor;
+  NrqGcFastRoot* root_end;
+  NrqGcFastFrame* frame_cursor;
+  NrqGcFastFrame* frame_end;
+  void* transfer_pin_fast;
+  uint32_t inline_barrier;
+  uint32_t reserved2;
   NrqGcPendingRange pending_ranges[NRQ_GC_INLINE_PENDING_CAPACITY];
 } NrqGcFastTls;
 
