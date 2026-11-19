@@ -504,22 +504,28 @@ TEST(GcInlineTlabTest, InlineConfigPackedStateAndTransitionsAreConsistent) {
 
   nrq_gc_set_generational(1);
   packed = read_packed();
-  ASSERT_EQ(nrq_gc_inline_unpack_gate(packed), uint32_t{0});
+  ASSERT_EQ(nrq_gc_inline_unpack_gate(packed) &
+                static_cast<uint32_t>(NRQ_GC_INLINE_GATE_ALLOC_MASK),
+            uint32_t{0});
+  ASSERT_NE(nrq_gc_inline_unpack_gate(packed) &
+                static_cast<uint32_t>(NRQ_GC_INLINE_GATE_STORE_BARRIER_BIT),
+            uint32_t{0});
   ASSERT_EQ(nrq_gc_inline_unpack_initial_state(packed),
             uint32_t{NRQ_GC_STATE_YOUNG});
   ASSERT_EQ(read_store_barrier(), uint32_t{1});
 
-  // Lowering threshold below kAccountingBatchBytes (16 KiB) shrinks batch.
+  // Lowering threshold below kAccountingBatchBytes shrinks batch.
   const size_t default_batch = read_batch();
   ASSERT_TRUE(default_batch >= 1024);
   nrq_gc_set_threshold(512);
   ASSERT_EQ(read_batch(), size_t{512});
 
-  // Enabling debug allocation sets only DEBUG_ALLOC_BIT while preserving initial_state.
+  // Enabling debug allocation sets only DEBUG_ALLOC_BIT (on alloc mask) while preserving initial_state.
   nrq_gc_debug_set_event_mask(NRQ_GC_EVENT_ALLOCATION);
   packed = read_packed();
   ASSERT_EQ(nrq_gc_inline_unpack_gate(packed),
-            uint32_t{NRQ_GC_INLINE_GATE_DEBUG_ALLOC_BIT});
+            uint32_t{NRQ_GC_INLINE_GATE_DEBUG_ALLOC_BIT |
+                     NRQ_GC_INLINE_GATE_STORE_BARRIER_BIT});
   ASSERT_EQ(nrq_gc_inline_unpack_initial_state(packed),
             uint32_t{NRQ_GC_STATE_YOUNG});
 

@@ -33,6 +33,10 @@ enum {
   NRQ_GC_INLINE_GATE_DUE_BIT = 1u << 1,
   NRQ_GC_INLINE_GATE_DEBUG_ALLOC_BIT = 1u << 2,
   NRQ_GC_INLINE_GATE_DIAG_ROOTS_BIT = 1u << 3,
+  NRQ_GC_INLINE_GATE_STORE_BARRIER_BIT = 1u << 5,
+  // Gate bits that disable inline TLAB allocation and inline static frames;
+  // `STORE_BARRIER_BIT` only affects reference write barriers.
+  NRQ_GC_INLINE_GATE_ALLOC_MASK = 0xFFFFFFDFu,
 };
 
 typedef struct NrqGcPendingRange {
@@ -56,6 +60,15 @@ typedef struct NrqGcFastFrame {
   uint64_t marker;
   NrqGcFastRoot* prev_root_cursor;
 } NrqGcFastFrame;
+
+// Stack-allocated intrusive frame record for static single-pointer root
+// activations. The `void* slots[slot_count]` storage immediately follows this
+// header in the activation's entry alloca so fast frame open/close is a single
+// pointer push/pop on `NrqGcFastTls::stack_frame_top` with no capacity check.
+typedef struct NrqGcStackFrame {
+  struct NrqGcStackFrame* prev;
+  uint64_t slot_count;
+} NrqGcStackFrame;
 
 // Read-mostly collector configuration checked on every inline fast path.
 // `packed_state` packs `gate` in the low 32 bits and `initial_state` in the
@@ -107,6 +120,7 @@ typedef struct NrqGcFastTls {
   uint32_t inline_barrier;
   uint32_t reserved2;
   NrqGcPendingRange pending_ranges[NRQ_GC_INLINE_PENDING_CAPACITY];
+  NrqGcStackFrame* stack_frame_top;
 } NrqGcFastTls;
 
 #if defined(_MSC_VER)
@@ -169,7 +183,9 @@ inline void* try_allocate_tlab_inline(uint32_t expected_kind, size_t header_byte
   const uint64_t packed_state =
       std::atomic_ref<uint64_t>(nrq_gc_inline_config.packed_state)
           .load(std::memory_order_acquire);
-  if (nrq_gc_inline_unpack_gate(packed_state) != 0) return nullptr;
+  if ((nrq_gc_inline_unpack_gate(packed_state) &
+       static_cast<uint32_t>(NRQ_GC_INLINE_GATE_ALLOC_MASK)) != 0)
+    return nullptr;
   const uint32_t initial_state =
       nrq_gc_inline_unpack_initial_state(packed_state);
   NrqGcFastTls& tls = nrq_gc_fast_tls;
@@ -222,7 +238,9 @@ inline void* nrq_gc_inline_try_allocate_h0(const void* layout,
   const uint64_t packed_state =
       std::atomic_ref<uint64_t>(nrq_gc_inline_config.packed_state)
           .load(std::memory_order_acquire);
-  if (nrq_gc_inline_unpack_gate(packed_state) != 0) return nullptr;
+  if ((nrq_gc_inline_unpack_gate(packed_state) &
+       static_cast<uint32_t>(NRQ_GC_INLINE_GATE_ALLOC_MASK)) != 0)
+    return nullptr;
   const uint32_t initial_state =
       nrq_gc_inline_unpack_initial_state(packed_state);
   const size_t accounting_batch =

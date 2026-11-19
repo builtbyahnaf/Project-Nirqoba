@@ -208,6 +208,7 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     policy.willreturn = true;
+    policy.cold = true;
     policy.memory = MemoryEffectKind::ArgNoneOtherReadWrite;
     return policy;
   }
@@ -217,6 +218,7 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
   if (symbol == "nrq_gc_root_register_typed") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
+    policy.cold = true;
     policy.memory = MemoryEffectKind::ArgReadWriteOtherReadWrite;
     policy.nocapture_args_mask = (1u << 2);
     return policy;
@@ -231,6 +233,7 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
       symbol == "nrq_gc_root_frame_open") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
+    if (symbol == "nrq_gc_root_frame_open") policy.cold = true;
     policy.memory = MemoryEffectKind::ArgReadWriteOtherReadWrite;
     return policy;
   }
@@ -249,6 +252,7 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
       symbol == "nrq_gc_root_copy") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
+    policy.cold = true;
     policy.memory = MemoryEffectKind::ArgReadWriteOtherReadWrite;
     return policy;
   }
@@ -258,6 +262,7 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     policy.willreturn = true;
+    if (symbol == "nrq_gc_unpin") policy.cold = true;
     policy.memory = MemoryEffectKind::ArgNoneOtherReadWrite;
     policy.nocapture_args_mask = (1u << 0);
     return policy;
@@ -268,6 +273,7 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
   if (symbol == "nrq_gc_pin" || symbol == "nrq_gc_pin_transfer") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
+    if (symbol == "nrq_gc_pin_transfer") policy.cold = true;
     policy.memory = MemoryEffectKind::ArgReadWriteOtherReadWrite;
     return policy;
   }
@@ -280,6 +286,7 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
       symbol == "nrq_gc_allocate_soa_planned") {
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
+    if (symbol != "nrq_gc_allocate_array_typed_rooted") policy.cold = true;
     policy.return_noalias = true;
     policy.memory = MemoryEffectKind::ArgReadWriteOtherReadWrite;
     return policy;
@@ -288,6 +295,7 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
     RuntimeFunctionPolicy policy;
     policy.nounwind = true;
     policy.willreturn = true;
+    policy.cold = true;
     policy.memory = MemoryEffectKind::OtherReadWriteArgRead;
     policy.nocapture_args_mask = (1u << 0);
     return policy;

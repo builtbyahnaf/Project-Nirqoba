@@ -2071,6 +2071,9 @@ std::atomic<size_t> old_object_count{0};
 // stale value therefore records remembered-set entries it did not have to, never
 // skips one it needed.
 void raise_store_barrier() {
+  std::atomic_ref<uint64_t>(nrq_gc_inline_config.packed_state)
+      .fetch_or(uint64_t{NRQ_GC_INLINE_GATE_STORE_BARRIER_BIT},
+                std::memory_order_acq_rel);
   std::atomic_ref<uint32_t>(nrq_gc_inline_config.store_barrier)
       .store(1u, std::memory_order_release);
   store_barrier_active.store(true, std::memory_order_release);
@@ -2082,6 +2085,9 @@ void lower_store_barrier() {
   store_barrier_active.store(false, std::memory_order_release);
   std::atomic_ref<uint32_t>(nrq_gc_inline_config.store_barrier)
       .store(0u, std::memory_order_release);
+  std::atomic_ref<uint64_t>(nrq_gc_inline_config.packed_state)
+      .fetch_and(~uint64_t{NRQ_GC_INLINE_GATE_STORE_BARRIER_BIT},
+                 std::memory_order_acq_rel);
 }
 
 uint64_t saturated_add(uint64_t left, uint64_t right) {
@@ -2112,7 +2118,10 @@ void refresh_inline_config_locked() {
       reference_diagnostics_enabled.load(std::memory_order_relaxed)
           ? NRQ_GC_INLINE_GATE_DIAG_ROOTS_BIT
           : 0u;
-  const uint32_t gate = phase_bit | due_bit | debug_bit | diag_roots_bit;
+  const bool sb_active = store_barrier_active.load(std::memory_order_acquire);
+  const uint32_t sb_bit = sb_active ? NRQ_GC_INLINE_GATE_STORE_BARRIER_BIT : 0u;
+  const uint32_t gate =
+      phase_bit | due_bit | debug_bit | diag_roots_bit | sb_bit;
   const uint32_t initial_state =
       generational_collection_enabled.load(std::memory_order_relaxed)
           ? kYoungBit
@@ -2124,8 +2133,7 @@ void refresh_inline_config_locked() {
   // is ordered after the updated `accounting_batch` as well.
   const uint64_t packed = nrq_gc_inline_pack_state(gate, initial_state);
   std::atomic_ref<uint32_t>(nrq_gc_inline_config.store_barrier)
-      .store(store_barrier_active.load(std::memory_order_acquire) ? 1u : 0u,
-             std::memory_order_release);
+      .store(sb_active ? 1u : 0u, std::memory_order_release);
   std::atomic_ref<size_t>(nrq_gc_inline_config.accounting_batch)
       .store(batch, std::memory_order_release);
   std::atomic_ref<uint64_t>(nrq_gc_inline_config.packed_state)
@@ -2569,6 +2577,29 @@ void enqueue_root_locked(void* root_storage, const RootInfo& root,
                              context);
 }
 
+inline bool is_pointer_root_layout(const nrq_object_layout* layout);
+
+template <typename Callback>
+void for_each_fast_root_slot_locked(const ShadowStack& stack, Callback&& callback) {
+  if (!stack.fast) return;
+  if (stack.fast->root_cursor) {
+    const NrqGcFastRoot* begin = stack.roots_buffer.data();
+    const NrqGcFastRoot* end = stack.fast->root_cursor;
+    for (const NrqGcFastRoot* root = begin; root < end; ++root) {
+      callback(root->slot, decode_shadow_layout(root->layout));
+    }
+  }
+  for (const NrqGcStackFrame* frame =
+           std::atomic_ref<NrqGcStackFrame* const>(stack.fast->stack_frame_top)
+               .load(std::memory_order_acquire);
+       frame != nullptr; frame = frame->prev) {
+    void* const* slots = reinterpret_cast<void* const*>(frame + 1);
+    for (uint64_t index = 0; index < frame->slot_count; ++index) {
+      callback(const_cast<void**>(&slots[index]), &kPointerRootLayout);
+    }
+  }
+}
+
 void enqueue_roots_locked(MarkContext& context) {
   for (const auto& root : roots)
     enqueue_root_locked(root.first, root.second, context);
@@ -2576,20 +2607,18 @@ void enqueue_roots_locked(MarkContext& context) {
   // the collector copies a consistent view; ordinary registration does not take
   // gc_mutex, so collection never blocks the whole world to add a stack root.
   for (ShadowStack* stack : shadow_stacks) {
-    if (!stack || !stack->fast || !stack->fast->root_cursor) continue;
+    if (!stack || !stack->fast) continue;
     std::lock_guard<std::mutex> stack_lock(stack->mutex);
-    const NrqGcFastRoot* begin = stack->roots_buffer.data();
-    const NrqGcFastRoot* end = stack->fast->root_cursor;
-    for (const NrqGcFastRoot* root = begin; root < end; ++root) {
-      if (!root->layout) {
-        void* ref = nullptr;
-        std::memcpy(&ref, root->slot, sizeof(ref));
-        enqueue_reference(ref, &context);
-      } else {
-        enqueue_root_layout_locked(root->slot, decode_shadow_layout(root->layout),
-                                   0, context);
-      }
-    }
+    for_each_fast_root_slot_locked(
+        *stack, [&](void* slot, const nrq_object_layout* layout) {
+          if (is_pointer_root_layout(layout)) {
+            void* ref = nullptr;
+            std::memcpy(&ref, slot, sizeof(ref));
+            enqueue_reference(ref, &context);
+          } else {
+            enqueue_root_layout_locked(slot, layout, 0, context);
+          }
+        });
   }
   for (const auto& pinned : pinned_objects) {
     if (pinned.second != 0) enqueue_reference(pinned.first, &context);
@@ -2732,6 +2761,8 @@ ThreadGcStateCleanup::~ThreadGcStateCleanup() {
     nrq_gc_fast_tls.root_end = nullptr;
     nrq_gc_fast_tls.frame_cursor = nullptr;
     nrq_gc_fast_tls.frame_end = nullptr;
+    std::atomic_ref<NrqGcStackFrame*>(nrq_gc_fast_tls.stack_frame_top)
+        .store(nullptr, std::memory_order_release);
     stack->fast = nullptr;
     thread_shadow_stack = nullptr;
   }
@@ -5622,18 +5653,31 @@ __forceinline bool shadow_has_pointer_root(ShadowStack& stack, void* slot) {
     stack.pointer_roots.insert(slot);
     return true;
   }
-  if (stack.fast && stack.fast->root_cursor) {
-    const NrqGcFastRoot* begin = stack.roots_buffer.data();
-    for (const NrqGcFastRoot* r = stack.fast->root_cursor; r > begin;) {
-      --r;
-      if (r->slot != slot) continue;
-      const nrq_object_layout* layout = decode_shadow_layout(r->layout);
-      if (is_pointer_root_layout(layout)) {
+  if (stack.fast) {
+    if (stack.fast->root_cursor) {
+      const NrqGcFastRoot* begin = stack.roots_buffer.data();
+      for (const NrqGcFastRoot* r = stack.fast->root_cursor; r > begin;) {
+        --r;
+        if (r->slot != slot) continue;
+        const nrq_object_layout* layout = decode_shadow_layout(r->layout);
+        if (is_pointer_root_layout(layout)) {
+          stack.pointer_roots.insert(slot);
+          stack.pointer_roots_has_unindexed = true;
+          return true;
+        }
+        return false;
+      }
+    }
+    for (const NrqGcStackFrame* frame =
+             std::atomic_ref<NrqGcStackFrame* const>(stack.fast->stack_frame_top)
+                 .load(std::memory_order_acquire);
+         frame != nullptr; frame = frame->prev) {
+      void* const* slots = reinterpret_cast<void* const*>(frame + 1);
+      if (slot >= slots && slot < slots + frame->slot_count) {
         stack.pointer_roots.insert(slot);
         stack.pointer_roots_has_unindexed = true;
         return true;
       }
-      return false;
     }
   }
   return false;
@@ -6764,12 +6808,12 @@ size_t nrq_gc_debug_snapshot_roots(nrq_gc_debug_root* out, size_t capacity) {
     for (const auto& root : roots)
       record(root.first, root.second.layout, root.second.repeated_count);
     for (ShadowStack* stack : shadow_stacks) {
-      if (!stack || !stack->fast || !stack->fast->root_cursor) continue;
+      if (!stack || !stack->fast) continue;
       std::lock_guard<std::mutex> stack_lock(stack->mutex);
-      const NrqGcFastRoot* begin = stack->roots_buffer.data();
-      const NrqGcFastRoot* end = stack->fast->root_cursor;
-      for (const NrqGcFastRoot* root = begin; root < end; ++root)
-        record(root->slot, decode_shadow_layout(root->layout), 0);
+      for_each_fast_root_slot_locked(
+          *stack, [&](void* slot, const nrq_object_layout* layout) {
+            record(slot, layout, 0);
+          });
     }
   }
   return written;
@@ -6811,6 +6855,9 @@ void nrq_gc_set_generational(int32_t enabled) {
   if (enabled) {
     // Raise the derived switch first: a mutator that still sees the switch raised
     // after generations are turned off only records extra entries.
+    std::atomic_ref<uint64_t>(nrq_gc_inline_config.packed_state)
+        .fetch_or(uint64_t{NRQ_GC_INLINE_GATE_STORE_BARRIER_BIT},
+                  std::memory_order_acq_rel);
     std::atomic_ref<uint32_t>(nrq_gc_inline_config.store_barrier)
         .store(1u, std::memory_order_release);
     store_barrier_active.store(true, std::memory_order_release);
@@ -7488,12 +7535,12 @@ int64_t nrq_gc_get_ref_count(void* object) {
     for (const auto& root : roots)
       count_root(root.first, root.second.layout, root.second.repeated_count);
     for (ShadowStack* stack : shadow_stacks) {
-      if (!stack || !stack->fast || !stack->fast->root_cursor) continue;
+      if (!stack || !stack->fast) continue;
       std::lock_guard<std::mutex> stack_lock(stack->mutex);
-      const NrqGcFastRoot* begin = stack->roots_buffer.data();
-      const NrqGcFastRoot* end = stack->fast->root_cursor;
-      for (const NrqGcFastRoot* root = begin; root < end; ++root)
-        count_root(root->slot, decode_shadow_layout(root->layout), 0);
+      for_each_fast_root_slot_locked(
+          *stack, [&](void* slot, const nrq_object_layout* layout) {
+            count_root(slot, layout, 0);
+          });
     }
     auto pinned = pinned_objects.find(object);
     if (pinned != pinned_objects.end())
@@ -7586,8 +7633,18 @@ static_assert(offsetof(NrqGcFastTls, transfer_pin_fast) == 160,
               "NrqGcFastTls::transfer_pin_fast offset mismatch");
 static_assert(offsetof(NrqGcFastTls, inline_barrier) == 168,
               "NrqGcFastTls::inline_barrier offset mismatch");
+static_assert(sizeof(NrqGcStackFrame) == 16,
+              "NrqGcStackFrame size mismatch");
+static_assert(offsetof(NrqGcStackFrame, prev) == 0,
+              "NrqGcStackFrame::prev offset mismatch");
+static_assert(offsetof(NrqGcStackFrame, slot_count) == 8,
+              "NrqGcStackFrame::slot_count offset mismatch");
 static_assert(offsetof(NrqGcFastTls, pending_ranges) == 176,
               "NrqGcFastTls::pending_ranges offset mismatch");
+static_assert(offsetof(NrqGcFastTls, stack_frame_top) ==
+                  offsetof(NrqGcFastTls, pending_ranges) +
+                      sizeof(NrqGcPendingRange) * NRQ_GC_INLINE_PENDING_CAPACITY,
+              "NrqGcFastTls::stack_frame_top offset mismatch");
 
 uint32_t nrq_gc_layout_id(const nrq_object_layout* layout) {
   return layout_id_for(layout);
