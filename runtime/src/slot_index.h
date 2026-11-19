@@ -36,12 +36,9 @@ namespace nirq::gc::detail {
 // deliberately colliding addresses without duplicating the mixing constants.
 inline size_t slot_hash(void* slot) {
   uint64_t value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(slot));
-  value ^= value >> 30;
-  value *= UINT64_C(0xbf58476d1ce4e5b9);
-  value ^= value >> 27;
-  value *= UINT64_C(0x94d049bb133111eb);
-  value ^= value >> 31;
-  return static_cast<size_t>(value);
+  value ^= value >> 16;
+  value *= UINT64_C(0x9e3779b97f4a7c15);
+  return static_cast<size_t>(value ^ (value >> 32));
 }
 
 // `State` is the per-slot payload owned by the caller. It must be default
@@ -239,16 +236,17 @@ class SlotIndex {
   bool rehash(size_t capacity) {
     if (capacity == 0 || size_ >= capacity) return false;
     try {
-      std::vector<Entry> replacement(capacity);
+      rehash_scratch_.assign(capacity, Entry{});
       const size_t mask = capacity - 1;
       for (Entry& entry : entries_) {
         if (!entry.slot || entry.slot == kTombstone()) continue;
         size_t index = slot_hash(entry.slot) & mask;
-        while (replacement[index].slot != nullptr) index = (index + 1) & mask;
-        replacement[index] = std::move(entry);
+        while (rehash_scratch_[index].slot != nullptr)
+          index = (index + 1) & mask;
+        rehash_scratch_[index] = std::move(entry);
       }
       const size_t previous_capacity = entries_.size();
-      entries_.swap(replacement);
+      entries_.swap(rehash_scratch_);
       tombstones_ = 0;
       record_rehash(previous_capacity, capacity);
       return true;
@@ -280,6 +278,7 @@ class SlotIndex {
   }
 
   std::vector<Entry> entries_;
+  std::vector<Entry> rehash_scratch_;
   size_t size_ = 0;
   size_t tombstones_ = 0;
   size_t rehash_count_ = 0;
