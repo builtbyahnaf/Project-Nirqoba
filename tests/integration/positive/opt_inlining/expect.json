@@ -3,10 +3,10 @@
   "expect_stdout_contains": ["6"],
   "expect_optimized_ir_not_contains": [
     "@add_pair",
-    "@build_node",
     "@fold"
   ],
   "expect_optimized_ir_counts": {
-    "define noundef i32 @main(": 1
+    "define noundef i32 @main(": 1,
+    "ptr @build_node(": 0
   }
 }
