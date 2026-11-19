@@ -363,3 +363,89 @@ TEST(GcSlotIndexTest, DeepNestedRootFramesDoNotExplodeCapacity) {
   ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
   ASSERT_TRUE(elapsed_ms(start) < kTestTimeoutMs);
 }
+
+TEST(GcSlotIndexTest, DeepFusedFramesGrowAndRebaseAcrossCollections) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+
+  constexpr int kDepth = 350;
+  const size_t descriptor[] = {2, 8, sizeof(void*), 1, 0, sizeof(void*), 1, 0};
+  std::vector<uint64_t> markers(kDepth);
+  std::vector<void*> storage(static_cast<size_t>(kDepth) * 2, nullptr);
+
+  for (int d = 0; d < kDepth; ++d) {
+    void* slots[2] = {&storage[static_cast<size_t>(d) * 2],
+                      &storage[static_cast<size_t>(d) * 2 + 1]};
+    markers[d] = nrq_gc_root_frame_open(slots, 2, descriptor);
+    void* a = alloc_leaf();
+    void* b = alloc_leaf();
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+    nrq_gc_root_store(&storage[static_cast<size_t>(d) * 2], a);
+    nrq_gc_root_store(&storage[static_cast<size_t>(d) * 2 + 1], b);
+  }
+
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(),
+            baseline + static_cast<uint64_t>(kDepth) * 2);
+
+  for (int d = kDepth - 1; d >= 0; --d) {
+    nrq_gc_root_frame_end(markers[d]);
+  }
+  storage.clear();
+
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+  nrq_gc_enable();
+}
+
+TEST(GcSlotIndexTest, FusedFramesAndDynamicRootsCoexistAcrossUnregisterAndPlannedAlloc) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  const uint64_t baseline = nrq_gc_get_live_objects();
+
+  void* dyn_a = alloc_leaf();
+  ASSERT_NE(dyn_a, nullptr);
+  nrq_gc_root_register(&dyn_a);
+
+  void* f1_slots_storage[2] = {nullptr, nullptr};
+  void* f1_slots[2] = {&f1_slots_storage[0], &f1_slots_storage[1]};
+  const size_t descriptor[] = {2, 8, sizeof(void*), 1, 0, sizeof(void*), 1, 0};
+  const uint64_t f1 = nrq_gc_root_frame_open(f1_slots, 2, descriptor);
+
+  void* dyn_b = alloc_leaf();
+  ASSERT_NE(dyn_b, nullptr);
+  nrq_gc_root_register(&dyn_b);
+
+  // Verify pointer-root lookup sees static frame slots via slow planned alloc.
+  void* site_cache = nullptr;
+  void* planned = nrq_gc_allocate_array_planned(
+      &f1_slots_storage[0], 1, sizeof(void*), nullptr, 0, &site_cache, 0);
+  ASSERT_NE(planned, nullptr);
+  ASSERT_EQ(f1_slots_storage[0], planned);
+
+  void* f2_slots_storage[2] = {nullptr, nullptr};
+  void* f2_slots[2] = {&f2_slots_storage[0], &f2_slots_storage[1]};
+  const uint64_t f2 = nrq_gc_root_frame_open(f2_slots, 2, descriptor);
+  nrq_gc_root_store(&f2_slots_storage[1], alloc_leaf());
+
+  // Unregister dynamic root inserted between f1 and f2; frame depths must adjust.
+  nrq_gc_root_unregister(&dyn_b);
+  dyn_b = nullptr;
+
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 3);
+
+  nrq_gc_root_frame_end(f2);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 2);
+
+  nrq_gc_root_frame_end(f1);
+  nrq_gc_root_unregister(&dyn_a);
+  dyn_a = nullptr;
+
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+  nrq_gc_enable();
+}
