@@ -1275,6 +1275,7 @@ struct MutatorState {
   // the lifetime of every registered entry in `mutators`.
   NrqGcFastTls* fast = nullptr;
   uint8_t* tlab_slab_end = nullptr;
+  uint8_t* ext_slab_end = nullptr;
   size_t tlab_accounted_pending_bytes = 0;
   uint64_t tlab_generation = 0;
   const nrq_object_layout* h0_layout = nullptr;
@@ -1657,15 +1658,24 @@ void record_tlab_diag_slow_call(void** site_cache, size_t count,
   } else if (expected_kind == NRQ_GC_INLINE_KIND_NONE ||
              span > NRQ_GC_INLINE_TLAB_BYTES) {
     tlab_diag.reason_plan_ineligible.fetch_add(1, std::memory_order_relaxed);
-  } else if (fast && fast->tlab_kind != expected_kind) {
-    tlab_diag.reason_tlab_kind_mismatch.fetch_add(1, std::memory_order_relaxed);
-  } else if (fast && (!fast->tlab_cursor || !fast->tlab_end ||
-                      static_cast<size_t>(fast->tlab_end - fast->tlab_cursor) < span)) {
-    if (fast->tlab_cursor && thread_mutator.tlab_slab_end &&
-        thread_mutator.tlab_slab_end >= fast->tlab_cursor + span) {
-      tlab_diag.reason_accounting_batch.fetch_add(1, std::memory_order_relaxed);
+  } else if (fast) {
+    uint8_t* const cur = expected_kind == NRQ_GC_INLINE_KIND_EXTENDED
+                             ? fast->ext_cursor
+                             : fast->tlab_cursor;
+    uint8_t* const end = expected_kind == NRQ_GC_INLINE_KIND_EXTENDED
+                             ? fast->ext_end
+                             : fast->tlab_end;
+    uint8_t* const slab_end = expected_kind == NRQ_GC_INLINE_KIND_EXTENDED
+                                  ? thread_mutator.ext_slab_end
+                                  : thread_mutator.tlab_slab_end;
+    if (!cur || !end || static_cast<size_t>(end - cur) < span) {
+      if (cur && slab_end && slab_end >= cur + span) {
+        tlab_diag.reason_accounting_batch.fetch_add(1, std::memory_order_relaxed);
+      } else {
+        tlab_diag.reason_tlab_exhausted.fetch_add(1, std::memory_order_relaxed);
+      }
     } else {
-      tlab_diag.reason_tlab_exhausted.fetch_add(1, std::memory_order_relaxed);
+      tlab_diag.reason_other.fetch_add(1, std::memory_order_relaxed);
     }
   } else {
     tlab_diag.reason_other.fetch_add(1, std::memory_order_relaxed);
@@ -2166,28 +2176,33 @@ void sync_inline_unflushed(MutatorState& mutator) {
   }
 }
 
-void update_tlab_end_clamp(MutatorState& mutator) {
-  if (!mutator.fast || !mutator.fast->tlab_cursor || !mutator.tlab_slab_end)
-    return;
-  if (mutator.tlab_slab_end <= mutator.fast->tlab_cursor) {
-    mutator.fast->tlab_end = mutator.tlab_slab_end;
-    return;
-  }
-  const size_t remaining_slab =
-      static_cast<size_t>(mutator.tlab_slab_end - mutator.fast->tlab_cursor);
-  if (!automatic_collection_enabled.load(std::memory_order_relaxed)) {
-    mutator.fast->tlab_end = mutator.tlab_slab_end;
+void clamp_tlab_window(uint8_t* cursor, uint8_t*& end, uint8_t* slab_end,
+                       size_t unflushed_bytes) {
+  if (!cursor || !slab_end) return;
+  if (slab_end <= cursor ||
+      !automatic_collection_enabled.load(std::memory_order_relaxed)) {
+    end = slab_end;
     return;
   }
+  const size_t remaining_slab = static_cast<size_t>(slab_end - cursor);
   const size_t batch =
       std::atomic_ref<size_t>(nrq_gc_inline_config.accounting_batch)
           .load(std::memory_order_relaxed);
   const size_t budget =
-      batch > mutator.fast->unflushed_bytes
-          ? batch - mutator.fast->unflushed_bytes
-          : 0;
-  mutator.fast->tlab_end =
-      mutator.fast->tlab_cursor + std::min(remaining_slab, budget);
+      batch > unflushed_bytes ? batch - unflushed_bytes : 0;
+  end = cursor + std::min(remaining_slab, budget);
+}
+
+void update_tlab_end_clamp(MutatorState& mutator) {
+  if (!mutator.fast) return;
+  if (mutator.fast->tlab_active_range) {
+    clamp_tlab_window(mutator.fast->tlab_cursor, mutator.fast->tlab_end,
+                      mutator.tlab_slab_end, mutator.fast->unflushed_bytes);
+  }
+  if (mutator.fast->ext_active_range) {
+    clamp_tlab_window(mutator.fast->ext_cursor, mutator.fast->ext_end,
+                      mutator.ext_slab_end, mutator.fast->unflushed_bytes);
+  }
 }
 
 // Fold a mutator's locally batched allocation bytes into the shared trigger
@@ -2202,13 +2217,20 @@ void flush_mutator_accounting_locked(MutatorState& mutator) {
 
 inline void sync_active_ranges(NrqGcFastTls& fast) {
   if (fast.tlab_active_range) fast.tlab_active_range->end = fast.tlab_cursor;
+  if (fast.ext_active_range) fast.ext_active_range->end = fast.ext_cursor;
   if (fast.h0_active_range) fast.h0_active_range->end = fast.h0_cursor;
 }
 
 void clear_tlab_fast_path(NrqGcFastTls& fast) {
   if (fast.tlab_active_range) fast.tlab_active_range->end = fast.tlab_cursor;
   fast.tlab_active_range = nullptr;
+  if (fast.ext_active_range) fast.ext_active_range->end = fast.ext_cursor;
+  fast.ext_active_range = nullptr;
   fast.tlab_kind = NRQ_GC_INLINE_KIND_NONE;
+  // Shrink the bump limit down to cursor (keeping `*_slab_end` intact) so the
+  // next allocation attaches a fresh pending range via `allocate_tlab`.
+  if (fast.tlab_cursor) fast.tlab_end = fast.tlab_cursor;
+  if (fast.ext_cursor) fast.ext_end = fast.ext_cursor;
 }
 
 void clear_h0_fast_path(NrqGcFastTls& fast) {
@@ -3589,35 +3611,53 @@ size_t take_free_runs_locked(size_t minimum, size_t byte_budget, size_t max_runs
 // Records the unused remainder of the reservation this thread is leaving behind.
 // The space stays charged to its page until the page is recycled, so this is the
 // only measurement of what an abandoned slab costs.
-void account_tlab_tail(MutatorState& mutator) {
-  if (!mutator.fast) return;
-  NrqGcFastTls& fast = *mutator.fast;
-  uint8_t* const slab_end =
-      mutator.tlab_slab_end ? mutator.tlab_slab_end : fast.tlab_end;
-  if (!fast.tlab_cursor || slab_end <= fast.tlab_cursor) return;
-  const size_t tail = static_cast<size_t>(slab_end - fast.tlab_cursor);
+void account_tlab_tail_slot(MutatorState& mutator, uint8_t* cursor,
+                            uint8_t* end, uint8_t* slab_end_ptr) {
+  uint8_t* const slab_end = slab_end_ptr ? slab_end_ptr : end;
+  if (!cursor || slab_end <= cursor) return;
+  const size_t tail = static_cast<size_t>(slab_end - cursor);
   mutator.tlab_tail_bytes = saturated_add(mutator.tlab_tail_bytes, tail);
   if (tail > mutator.tlab_tail_max_bytes) mutator.tlab_tail_max_bytes = tail;
+}
+
+void release_one_tlab_slot_locked(MutatorState& mutator, void*& page_ref,
+                                  uint8_t*& cursor_ref, uint8_t*& end_ref,
+                                  uint8_t*& slab_end_ref,
+                                  NrqGcPendingRange*& active_range_ref) {
+  GcPage* const page = static_cast<GcPage*>(page_ref);
+  uint8_t* const slab_end = slab_end_ref ? slab_end_ref : end_ref;
+  if (page && cursor_ref && slab_end > cursor_ref) {
+    const size_t offset = static_cast<size_t>(cursor_ref - page->storage);
+    const size_t span = static_cast<size_t>(slab_end - cursor_ref);
+    mutator.tlab_tail_reclaimed_bytes =
+        saturated_add(mutator.tlab_tail_reclaimed_bytes, span);
+    release_span_locked(*page, offset, span);
+  }
+  if (active_range_ref) active_range_ref->end = cursor_ref;
+  active_range_ref = nullptr;
+  page_ref = nullptr;
+  cursor_ref = nullptr;
+  end_ref = nullptr;
+  slab_end_ref = nullptr;
+}
+
+void account_tlab_tail(MutatorState& mutator) {
+  if (!mutator.fast) return;
+  account_tlab_tail_slot(mutator, mutator.fast->tlab_cursor,
+                         mutator.fast->tlab_end, mutator.tlab_slab_end);
+  account_tlab_tail_slot(mutator, mutator.fast->ext_cursor,
+                         mutator.fast->ext_end, mutator.ext_slab_end);
 }
 
 void release_tlab_tail_locked(MutatorState& mutator) {
   if (!mutator.fast) return;
   NrqGcFastTls& fast = *mutator.fast;
-  GcPage* const tlab_page = static_cast<GcPage*>(fast.tlab_page);
-  uint8_t* const slab_end =
-      mutator.tlab_slab_end ? mutator.tlab_slab_end : fast.tlab_end;
-  if (tlab_page && fast.tlab_cursor && slab_end > fast.tlab_cursor) {
-    const size_t offset =
-        static_cast<size_t>(fast.tlab_cursor - tlab_page->storage);
-    const size_t span = static_cast<size_t>(slab_end - fast.tlab_cursor);
-    mutator.tlab_tail_reclaimed_bytes =
-        saturated_add(mutator.tlab_tail_reclaimed_bytes, span);
-    release_span_locked(*tlab_page, offset, span);
-  }
-  fast.tlab_page = nullptr;
-  fast.tlab_cursor = nullptr;
-  fast.tlab_end = nullptr;
-  mutator.tlab_slab_end = nullptr;
+  release_one_tlab_slot_locked(mutator, fast.tlab_page, fast.tlab_cursor,
+                               fast.tlab_end, mutator.tlab_slab_end,
+                               fast.tlab_active_range);
+  release_one_tlab_slot_locked(mutator, fast.ext_page, fast.ext_cursor,
+                               fast.ext_end, mutator.ext_slab_end,
+                               fast.ext_active_range);
   clear_tlab_fast_path(fast);
   GcPage* const h0_page = static_cast<GcPage*>(fast.h0_page);
   if (h0_page && fast.h0_cursor && fast.h0_end > fast.h0_cursor) {
@@ -3636,18 +3676,26 @@ void release_tlab_tail_locked(MutatorState& mutator) {
   mutator.h0_layout = nullptr;
   mutator.h0_slot = 0;
 }
-// Installs a new thread-local cursor, accounting whatever the thread is giving
-// up. Every path that starts a reservation goes through here, so a tail is
-// never replaced without being counted.
+
 void install_tlab(MutatorState& mutator, GcPage* page, size_t offset, size_t span) {
-  account_tlab_tail(mutator);
   sync_inline_unflushed(mutator);
   NrqGcFastTls& fast = *mutator.fast;
-  clear_tlab_fast_path(fast);
-  fast.tlab_page = page;
-  fast.tlab_cursor = page->storage + offset;
-  mutator.tlab_slab_end = fast.tlab_cursor + span;
-  update_tlab_end_clamp(mutator);
+  const bool is_ext = page->kind == PageKind::Extended;
+  uint8_t*& cursor_ref = is_ext ? fast.ext_cursor : fast.tlab_cursor;
+  uint8_t*& end_ref = is_ext ? fast.ext_end : fast.tlab_end;
+  void*& page_ref = is_ext ? fast.ext_page : fast.tlab_page;
+  uint8_t*& slab_end_ref = is_ext ? mutator.ext_slab_end : mutator.tlab_slab_end;
+  NrqGcPendingRange*& active_ref =
+      is_ext ? fast.ext_active_range : fast.tlab_active_range;
+
+  account_tlab_tail_slot(mutator, cursor_ref, end_ref, slab_end_ref);
+  if (active_ref) active_ref->end = cursor_ref;
+  active_ref = nullptr;
+  page_ref = page;
+  cursor_ref = page->storage + offset;
+  slab_end_ref = cursor_ref + span;
+  clamp_tlab_window(cursor_ref, end_ref, slab_end_ref, fast.unflushed_bytes);
+  if (!is_ext) fast.tlab_kind = NRQ_GC_INLINE_KIND_COMPACT;
   mutator.tlab_generation = gc_page_generation.load(std::memory_order_acquire);
   // Ensure the entire reservation is zero-filled at install time so inline
   // allocation never pays a per-object zeroing branch or memset.
@@ -3734,9 +3782,13 @@ void discard_stale_tlab(MutatorState& mutator) {
     mutator.fast->tlab_page = nullptr;
     mutator.fast->tlab_cursor = nullptr;
     mutator.fast->tlab_end = nullptr;
+    mutator.fast->ext_page = nullptr;
+    mutator.fast->ext_cursor = nullptr;
+    mutator.fast->ext_end = nullptr;
     clear_tlab_fast_path(*mutator.fast);
   }
   mutator.tlab_slab_end = nullptr;
+  mutator.ext_slab_end = nullptr;
   mutator.tlab_generation = gc_page_generation.load(std::memory_order_acquire);
   // Only the runs a cycle boundary failed to return are abandoned here, and only
   // those whose reservation predates the current page set. A run reserved after
@@ -5047,14 +5099,24 @@ void account_tlab_allocation(MutatorState& mutator, size_t bytes) {
 // range; a page switch or a cursor jump starts a new one. The table is bounded,
 // and a full table publishes the current batch under the collector lock instead
 // of growing it, so publication still never allocates.
-void note_pending_range(MutatorState& mutator, GcPage* page,
-                        unsigned char* header_storage, size_t span) {
+NrqGcPendingRange* note_pending_range(MutatorState& mutator, GcPage* page,
+                                      unsigned char* header_storage, size_t span) {
   NrqGcFastTls& fast = *mutator.fast;
+  auto try_extend = [&](NrqGcPendingRange* r) -> NrqGcPendingRange* {
+    if (r && r->page == page && r->end == header_storage) {
+      r->end += span;
+      return r;
+    }
+    return nullptr;
+  };
+  if (NrqGcPendingRange* r = try_extend(fast.tlab_active_range)) return r;
+  if (NrqGcPendingRange* r = try_extend(fast.ext_active_range)) return r;
+  if (NrqGcPendingRange* r = try_extend(fast.h0_active_range)) return r;
   if (fast.pending_range_count != 0) {
     NrqGcPendingRange& last = fast.pending_ranges[fast.pending_range_count - 1];
     if (last.page == page && last.end == header_storage) {
       last.end += span;
-      return;
+      return &last;
     }
   }
   if (fast.pending_range_count == MutatorState::kPendingRangeCapacity) {
@@ -5065,6 +5127,7 @@ void note_pending_range(MutatorState& mutator, GcPage* page,
   range.page = page;
   range.begin = header_storage;
   range.end = header_storage + span;
+  return &range;
 }
 
 // Thread-local bump allocation. The payload size has already been checked by the
@@ -5245,10 +5308,10 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
     ++fast.h0_state_cursor;
     initialize_object(object, layout, 1, layout->payload_size, young,
                       fast.h0_payload_zero != 0);
-    note_pending_range(thread_mutator, object.page, object.header, slot);
-    account_tlab_allocation(thread_mutator, layout->payload_size);
-    fast.h0_active_range = &fast.pending_ranges[fast.pending_range_count - 1];
+    fast.h0_active_range =
+        note_pending_range(thread_mutator, object.page, object.header, slot);
     fast.h0_fast_layout = layout;
+    account_tlab_allocation(thread_mutator, layout->payload_size);
     if (collection_phase.load(std::memory_order_acquire) !=
         CollectionPhase::Idle) {
       HeapLockGuard lock(gc_mutex);
@@ -5264,14 +5327,6 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
                                                             : PageKind::Extended;
   const size_t span = object_span_bytes(header_bytes, bytes);
   if (span > kGcTlabBytes) return nullptr;
-  // A mutator owns one slab. A request of another representation must not evict
-  // it: a workload that alternates two shapes would abandon a mostly-full slab
-  // on every switch and take a fresh page per object. The object is allocated
-  // through the page cache under the lock instead, and the slab is still there
-  // when its own shape comes back.
-  GcPage* tlab_page = static_cast<GcPage*>(fast.tlab_page);
-  if (fast.tlab_cursor && tlab_page && tlab_page->kind != kind)
-    return nullptr;
   handled = true;
 
   if (thread_mutator.tlab_generation != gc_page_generation.load(std::memory_order_acquire))
@@ -5286,19 +5341,25 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
       flush_mutator_accounting_locked(thread_mutator);
     }
   }
-  tlab_page = static_cast<GcPage*>(fast.tlab_page);
-  if (fast.tlab_cursor && tlab_page && tlab_page->kind == kind &&
-      thread_mutator.tlab_slab_end &&
-      thread_mutator.tlab_slab_end > fast.tlab_cursor &&
-      static_cast<size_t>(thread_mutator.tlab_slab_end - fast.tlab_cursor) >= span) {
-    // Physical slab still has room; only the clamped accounting window expired.
-    update_tlab_end_clamp(thread_mutator);
-  } else if (!fast.tlab_cursor || !fast.tlab_end || !tlab_page ||
-             tlab_page->kind != kind ||
-             fast.tlab_cursor > fast.tlab_end ||
-             span > static_cast<size_t>(fast.tlab_end - fast.tlab_cursor)) {
-    // A run reserved earlier answers this without the allocator lock: that is
-    // what a fragmented heap needs, because its runs are only a few cells each.
+  const bool is_ext = kind == PageKind::Extended;
+  uint8_t*& cursor_ref = is_ext ? fast.ext_cursor : fast.tlab_cursor;
+  uint8_t*& end_ref = is_ext ? fast.ext_end : fast.tlab_end;
+  void*& page_ref = is_ext ? fast.ext_page : fast.tlab_page;
+  uint8_t*& slab_end_ref =
+      is_ext ? thread_mutator.ext_slab_end : thread_mutator.tlab_slab_end;
+  NrqGcPendingRange*& active_ref =
+      is_ext ? fast.ext_active_range : fast.tlab_active_range;
+
+  GcPage* tlab_page = static_cast<GcPage*>(page_ref);
+  if (cursor_ref && tlab_page && tlab_page->kind == kind &&
+      slab_end_ref && slab_end_ref > cursor_ref &&
+      static_cast<size_t>(slab_end_ref - cursor_ref) >= span) {
+    // Physical slab still has room; only the clamped accounting window expired
+    // or was shrunk on batch publication.
+    clamp_tlab_window(cursor_ref, end_ref, slab_end_ref, fast.unflushed_bytes);
+  } else if (!cursor_ref || !end_ref || !tlab_page ||
+             tlab_page->kind != kind || cursor_ref > end_ref ||
+             span > static_cast<size_t>(end_ref - cursor_ref)) {
     if (take_spare_run(thread_mutator, span, kind)) {
       if (tlab_diag.enabled.load(std::memory_order_relaxed))
         tlab_diag.spare_run_hits.fetch_add(1, std::memory_order_relaxed);
@@ -5306,29 +5367,24 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
       HeapLockGuard lock(gc_mutex);
       if (!reserve_tlab_locked(thread_mutator, span, kind)) return nullptr;
     }
-    tlab_page = static_cast<GcPage*>(fast.tlab_page);
+    tlab_page = static_cast<GcPage*>(page_ref);
   }
 
-  const ObjectRef object{fast.tlab_cursor, tlab_page};
+  const ObjectRef object{cursor_ref, tlab_page};
   sync_active_ranges(fast);
-  fast.tlab_cursor += span;
+  cursor_ref += span;
   initialize_object(object, layout, static_cast<uint32_t>(elements), bytes,
                     young, fast.tlab_payload_zero != 0);
-  // A non-young object only has to be counted: the count feeds the generational
-  // policy, and the store barrier is raised by the policy itself (`begin_cycle`
-  // covers a cycle, `nrq_gc_set_generational` covers the switch). Raising it here
-  // as well would undo `nrq_gc_set_generational(0)` on the next allocation and
-  // make every later store record a remembered entry that no minor can use, and
-  // the counter update would be a locked instruction on the allocation path. The
-  // count is folded in where the batch is published.
-  note_pending_range(thread_mutator, object.page, object.header, span);
-  account_tlab_allocation(thread_mutator, bytes);
+  NrqGcPendingRange* const active_range =
+      note_pending_range(thread_mutator, object.page, object.header, span);
   if (page_is_representable(object.page->kind) &&
       (object.page->kind == PageKind::Compact ||
        object.page->kind == PageKind::Extended)) {
-    fast.tlab_active_range = &fast.pending_ranges[fast.pending_range_count - 1];
-    fast.tlab_kind = inline_kind_for(object.page->kind);
+    active_ref = active_range;
+    if (!is_ext) fast.tlab_kind = NRQ_GC_INLINE_KIND_COMPACT;
   }
+  account_tlab_allocation(thread_mutator, bytes);
+  clamp_tlab_window(cursor_ref, end_ref, slab_end_ref, fast.unflushed_bytes);
 
   // During a cycle an unpublished young object is invisible to the marker and
   // to the root barrier. Publish it immediately so a barrier can identify it.
@@ -7579,34 +7635,23 @@ static_assert(offsetof(NrqGcFastTls, tlab_cursor) == 0,
               "NrqGcFastTls::tlab_cursor offset mismatch");
 static_assert(offsetof(NrqGcFastTls, tlab_end) == 8,
               "NrqGcFastTls::tlab_end offset mismatch");
-static_assert(offsetof(NrqGcFastTls, tlab_active_range) == 16,
-              "NrqGcFastTls::tlab_active_range offset mismatch");
-static_assert(offsetof(NrqGcFastTls, tlab_page) == 24,
-              "NrqGcFastTls::tlab_page offset mismatch");
-static_assert(offsetof(NrqGcFastTls, tlab_kind) == 32,
-              "NrqGcFastTls::tlab_kind offset mismatch");
-static_assert(offsetof(NrqGcFastTls, tlab_payload_zero) == 36,
-              "NrqGcFastTls::tlab_payload_zero offset mismatch");
-static_assert(offsetof(NrqGcFastTls, pending_bytes) == 40,
+static_assert(offsetof(NrqGcFastTls, stack_frame_top) == 16,
+              "NrqGcFastTls::stack_frame_top offset mismatch");
+static_assert(offsetof(NrqGcFastTls, transfer_pin_fast) == 24,
+              "NrqGcFastTls::transfer_pin_fast offset mismatch");
+static_assert(offsetof(NrqGcFastTls, pending_bytes) == 32,
               "NrqGcFastTls::pending_bytes offset mismatch");
-static_assert(offsetof(NrqGcFastTls, pending_count) == 48,
+static_assert(offsetof(NrqGcFastTls, pending_count) == 40,
               "NrqGcFastTls::pending_count offset mismatch");
-static_assert(offsetof(NrqGcFastTls, unflushed_bytes) == 56,
-              "NrqGcFastTls::unflushed_bytes offset mismatch");
-static_assert(offsetof(NrqGcFastTls, h0_cursor) == 64,
-              "NrqGcFastTls::h0_cursor offset mismatch");
-static_assert(offsetof(NrqGcFastTls, h0_end) == 72,
-              "NrqGcFastTls::h0_end offset mismatch");
-static_assert(offsetof(NrqGcFastTls, h0_active_range) == 80,
-              "NrqGcFastTls::h0_active_range offset mismatch");
-static_assert(offsetof(NrqGcFastTls, h0_page) == 88,
-              "NrqGcFastTls::h0_page offset mismatch");
-static_assert(offsetof(NrqGcFastTls, h0_fast_layout) == 96,
-              "NrqGcFastTls::h0_fast_layout offset mismatch");
-static_assert(offsetof(NrqGcFastTls, h0_state_cursor) == 104,
-              "NrqGcFastTls::h0_state_cursor offset mismatch");
-static_assert(offsetof(NrqGcFastTls, pending_range_count) == 112,
-              "NrqGcFastTls::pending_range_count offset mismatch");
+static_assert(offsetof(NrqGcFastTls, ext_cursor) == 48,
+              "NrqGcFastTls::ext_cursor offset mismatch");
+static_assert(offsetof(NrqGcFastTls, ext_end) == 56,
+              "NrqGcFastTls::ext_end offset mismatch");
+static_assert(offsetof(NrqGcFastTls, frame_end) <
+                  offsetof(NrqGcFastTls, pending_ranges),
+              "NrqGcFastTls hot pointers must precede pending_ranges");
+static_assert(offsetof(NrqGcFastTls, stack_frame_top) < 64,
+              "NrqGcFastTls::stack_frame_top must sit in cache line 0");
 static_assert(sizeof(NrqGcFastRoot) == 16,
               "NrqGcFastRoot size mismatch");
 static_assert(offsetof(NrqGcFastRoot, slot) == 0,
@@ -7619,32 +7664,12 @@ static_assert(offsetof(NrqGcFastFrame, marker) == 0,
               "NrqGcFastFrame::marker offset mismatch");
 static_assert(offsetof(NrqGcFastFrame, prev_root_cursor) == 8,
               "NrqGcFastFrame::prev_root_cursor offset mismatch");
-static_assert(offsetof(NrqGcFastTls, h0_slot_bytes) == 120,
-              "NrqGcFastTls::h0_slot_bytes offset mismatch");
-static_assert(offsetof(NrqGcFastTls, root_cursor) == 128,
-              "NrqGcFastTls::root_cursor offset mismatch");
-static_assert(offsetof(NrqGcFastTls, root_end) == 136,
-              "NrqGcFastTls::root_end offset mismatch");
-static_assert(offsetof(NrqGcFastTls, frame_cursor) == 144,
-              "NrqGcFastTls::frame_cursor offset mismatch");
-static_assert(offsetof(NrqGcFastTls, frame_end) == 152,
-              "NrqGcFastTls::frame_end offset mismatch");
-static_assert(offsetof(NrqGcFastTls, transfer_pin_fast) == 160,
-              "NrqGcFastTls::transfer_pin_fast offset mismatch");
-static_assert(offsetof(NrqGcFastTls, inline_barrier) == 168,
-              "NrqGcFastTls::inline_barrier offset mismatch");
 static_assert(sizeof(NrqGcStackFrame) == 16,
               "NrqGcStackFrame size mismatch");
 static_assert(offsetof(NrqGcStackFrame, prev) == 0,
               "NrqGcStackFrame::prev offset mismatch");
 static_assert(offsetof(NrqGcStackFrame, slot_count) == 8,
               "NrqGcStackFrame::slot_count offset mismatch");
-static_assert(offsetof(NrqGcFastTls, pending_ranges) == 176,
-              "NrqGcFastTls::pending_ranges offset mismatch");
-static_assert(offsetof(NrqGcFastTls, stack_frame_top) ==
-                  offsetof(NrqGcFastTls, pending_ranges) +
-                      sizeof(NrqGcPendingRange) * NRQ_GC_INLINE_PENDING_CAPACITY,
-              "NrqGcFastTls::stack_frame_top offset mismatch");
 
 uint32_t nrq_gc_layout_id(const nrq_object_layout* layout) {
   return layout_id_for(layout);

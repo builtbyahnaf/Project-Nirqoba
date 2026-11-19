@@ -3020,12 +3020,10 @@ class FunctionTranslator {
     // Dynamic count sizing and representation selection.
     mlir::Value is_one_cond;
     mlir::Value count_ok;
-    mlir::Value expected_kind;
     mlir::Value header_bytes;
     mlir::Value payload_bytes;
     mlir::Value span_bytes;
     if (fixed_geometry) {
-      expected_kind = c_i32(static_cast<int32_t>(fixed_kind));
       header_bytes = c_i64(fixed_header);
       payload_bytes = c_i64(fixed_payload);
       span_bytes = c_i64(fixed_span);
@@ -3035,7 +3033,6 @@ class FunctionTranslator {
       if (max_multi_count == 0) {
         // Only count == 1 fits inside a TLAB page for this element size.
         count_ok = is_one_cond;
-        expected_kind = c_i32(static_cast<int32_t>(NRQ_GC_INLINE_KIND_COMPACT));
         header_bytes = c_i64(8);
         payload_bytes = c_i64(*const_elem);
         span_bytes = c_i64(align_span_bytes(8 + *const_elem));
@@ -3046,13 +3043,8 @@ class FunctionTranslator {
             loc, mlir::LLVM::ICmpPredicate::ule, count_m1,
             c_i64(max_multi_count - 1)).getResult();
         if (force_extended) {
-          expected_kind = c_i32(static_cast<int32_t>(NRQ_GC_INLINE_KIND_EXTENDED));
           header_bytes = c_i64(16);
         } else {
-          expected_kind = builder_.create<mlir::LLVM::SelectOp>(
-              loc, is_one_cond,
-              c_i32(static_cast<int32_t>(NRQ_GC_INLINE_KIND_COMPACT)),
-              c_i32(static_cast<int32_t>(NRQ_GC_INLINE_KIND_EXTENDED))).getResult();
           header_bytes = builder_.create<mlir::LLVM::SelectOp>(
               loc, is_one_cond, c_i64(8), c_i64(16)).getResult();
         }
@@ -3110,25 +3102,47 @@ class FunctionTranslator {
         loc, global_ok, check_tlab_block, mlir::ValueRange{},
         slow_block, mlir::ValueRange{}, likely_weights);
 
-    // Hot TLAB check: verifies active TLAB kind matches and clamped bump range
-    // has room for `span_bytes`. `tlab_end` is clamped by `accounting_batch`
-    // in runtime slab installation/extension.
+    // Hot TLAB check: verifies the representation's clamped bump range has
+    // room for `span_bytes`. `tlab_end`/`ext_end` is clamped by
+    // `accounting_batch` in runtime slab installation/extension.
     builder_.setInsertionPointToStart(check_tlab_block);
     mlir::Value tls = ensure_fast_tls_global(loc);
 
-    auto kind_load = builder_.create<mlir::LLVM::LoadOp>(
-        loc, i32, byte_gep(tls, offsetof(NrqGcFastTls, tlab_kind)));
-    kind_load.setAlignment(4);
-    mlir::Value kind_ok = builder_.create<mlir::LLVM::ICmpOp>(
-        loc, mlir::LLVM::ICmpPredicate::eq, kind_load.getResult(),
-        expected_kind).getResult();
+    mlir::Value cursor_ptr;
+    mlir::Value end_ptr;
+    if (fixed_geometry) {
+      const bool use_ext = fixed_kind == NRQ_GC_INLINE_KIND_EXTENDED;
+      cursor_ptr = byte_gep(
+          tls, static_cast<int64_t>(use_ext ? offsetof(NrqGcFastTls, ext_cursor)
+                                            : offsetof(NrqGcFastTls, tlab_cursor)));
+      end_ptr = byte_gep(
+          tls, static_cast<int64_t>(use_ext ? offsetof(NrqGcFastTls, ext_end)
+                                            : offsetof(NrqGcFastTls, tlab_end)));
+    } else if (force_extended) {
+      cursor_ptr = byte_gep(tls, static_cast<int64_t>(offsetof(NrqGcFastTls, ext_cursor)));
+      end_ptr = byte_gep(tls, static_cast<int64_t>(offsetof(NrqGcFastTls, ext_end)));
+    } else if (max_multi_count == 0) {
+      cursor_ptr = byte_gep(tls, static_cast<int64_t>(offsetof(NrqGcFastTls, tlab_cursor)));
+      end_ptr = byte_gep(tls, static_cast<int64_t>(offsetof(NrqGcFastTls, tlab_end)));
+    } else {
+      mlir::Value cursor_off = builder_.create<mlir::LLVM::SelectOp>(
+          loc, is_one_cond,
+          c_i64(static_cast<int64_t>(offsetof(NrqGcFastTls, tlab_cursor))),
+          c_i64(static_cast<int64_t>(offsetof(NrqGcFastTls, ext_cursor)))).getResult();
+      mlir::Value end_off = builder_.create<mlir::LLVM::SelectOp>(
+          loc, is_one_cond,
+          c_i64(static_cast<int64_t>(offsetof(NrqGcFastTls, tlab_end))),
+          c_i64(static_cast<int64_t>(offsetof(NrqGcFastTls, ext_end)))).getResult();
+      cursor_ptr = builder_.create<mlir::LLVM::GEPOp>(
+          loc, ptr, i8, tls, mlir::ValueRange{cursor_off}).getResult();
+      end_ptr = builder_.create<mlir::LLVM::GEPOp>(
+          loc, ptr, i8, tls, mlir::ValueRange{end_off}).getResult();
+    }
 
-    auto cursor_load = builder_.create<mlir::LLVM::LoadOp>(
-        loc, ptr, byte_gep(tls, offsetof(NrqGcFastTls, tlab_cursor)));
+    auto cursor_load = builder_.create<mlir::LLVM::LoadOp>(loc, ptr, cursor_ptr);
     cursor_load.setAlignment(8);
     mlir::Value cursor = cursor_load.getResult();
-    auto end_load = builder_.create<mlir::LLVM::LoadOp>(
-        loc, ptr, byte_gep(tls, offsetof(NrqGcFastTls, tlab_end)));
+    auto end_load = builder_.create<mlir::LLVM::LoadOp>(loc, ptr, end_ptr);
     end_load.setAlignment(8);
     mlir::Value cursor_int = builder_.create<mlir::LLVM::PtrToIntOp>(
         loc, i64, cursor).getResult();
@@ -3139,10 +3153,8 @@ class FunctionTranslator {
     mlir::Value room_ok = builder_.create<mlir::LLVM::ICmpOp>(
         loc, mlir::LLVM::ICmpPredicate::ule, new_cursor_int, end_int).getResult();
 
-    mlir::Value fast_ok = builder_.create<mlir::LLVM::AndOp>(
-        loc, kind_ok, room_ok).getResult();
     builder_.create<mlir::LLVM::CondBrOp>(
-        loc, fast_ok, fast_block, mlir::ValueRange{},
+        loc, room_ok, fast_block, mlir::ValueRange{},
         slow_block, mlir::ValueRange{}, likely_weights);
 
     // Hot inline bump allocation: advance cursor, write Compact (H8) or
@@ -3152,7 +3164,7 @@ class FunctionTranslator {
     mlir::Value new_cursor = builder_.create<mlir::LLVM::GEPOp>(
         loc, ptr, i8, cursor, mlir::ValueRange{span_bytes}).getResult();
     auto store_cursor = builder_.create<mlir::LLVM::StoreOp>(
-        loc, new_cursor, byte_gep(tls, offsetof(NrqGcFastTls, tlab_cursor)));
+        loc, new_cursor, cursor_ptr);
     store_cursor.setAlignment(8);
 
     mlir::Value initial_state64 = builder_.create<mlir::LLVM::LShrOp>(

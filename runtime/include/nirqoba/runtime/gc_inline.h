@@ -87,21 +87,29 @@ typedef struct NrqGcInlineConfig {
   uint32_t reserved;
 } NrqGcInlineConfig;
 
-// Per-thread fast allocation state. Hot fields for H8/H16 bump allocation sit
-// within the first 64-byte cache line (offsets 0..63).
-// Zero-initialization leaves `tlab_kind == NRQ_GC_INLINE_KIND_NONE` and
+// Per-thread fast allocation state. Hot fields for inline bump allocation and
+// stack-frame linking sit inside the first 64-byte cache line (offsets 0..63).
+// Zero-initialization leaves `tlab_cursor == NULL`, `ext_cursor == NULL`, and
 // `h0_fast_layout == NULL`, routing unregistered threads to the slow path.
 typedef struct NrqGcFastTls {
   uint8_t* tlab_cursor;
   uint8_t* tlab_end;
+  NrqGcStackFrame* stack_frame_top;
+  void* transfer_pin_fast;
+  size_t pending_bytes;
+  size_t pending_count;
+  uint8_t* ext_cursor;
+  uint8_t* ext_end;
   NrqGcPendingRange* tlab_active_range;
   void* tlab_page;
+  NrqGcPendingRange* ext_active_range;
+  void* ext_page;
   uint32_t tlab_kind;
   uint8_t tlab_payload_zero;
   uint8_t h0_payload_zero;
   uint8_t reserved0[2];
-  size_t pending_bytes;
-  size_t pending_count;
+  uint32_t inline_barrier;
+  uint32_t pending_range_count;
   size_t unflushed_bytes;
   uint8_t* h0_cursor;
   uint8_t* h0_end;
@@ -109,18 +117,12 @@ typedef struct NrqGcFastTls {
   void* h0_page;
   const void* h0_fast_layout;
   uint8_t* h0_state_cursor;
-  uint32_t pending_range_count;
-  uint32_t reserved1;
   size_t h0_slot_bytes;
   NrqGcFastRoot* root_cursor;
   NrqGcFastRoot* root_end;
   NrqGcFastFrame* frame_cursor;
   NrqGcFastFrame* frame_end;
-  void* transfer_pin_fast;
-  uint32_t inline_barrier;
-  uint32_t reserved2;
   NrqGcPendingRange pending_ranges[NRQ_GC_INLINE_PENDING_CAPACITY];
-  NrqGcStackFrame* stack_frame_top;
 } NrqGcFastTls;
 
 #if defined(_MSC_VER)
@@ -189,12 +191,15 @@ inline void* try_allocate_tlab_inline(uint32_t expected_kind, size_t header_byte
   const uint32_t initial_state =
       nrq_gc_inline_unpack_initial_state(packed_state);
   NrqGcFastTls& tls = nrq_gc_fast_tls;
-  if (tls.tlab_kind != expected_kind) return nullptr;
-  uint8_t* cursor = tls.tlab_cursor;
-  uint8_t* end = tls.tlab_end;
+  uint8_t*& cursor_ref = expected_kind == NRQ_GC_INLINE_KIND_COMPACT
+                             ? tls.tlab_cursor
+                             : tls.ext_cursor;
+  uint8_t* end = expected_kind == NRQ_GC_INLINE_KIND_COMPACT ? tls.tlab_end
+                                                             : tls.ext_end;
+  uint8_t* cursor = cursor_ref;
   if (static_cast<size_t>(end - cursor) < span) return nullptr;
   uint8_t* new_cursor = cursor + span;
-  tls.tlab_cursor = new_cursor;
+  cursor_ref = new_cursor;
   if (header_bytes == 8) {
     uint32_t* header = reinterpret_cast<uint32_t*>(cursor);
     header[0] = initial_state;
