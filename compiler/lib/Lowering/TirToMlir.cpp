@@ -2442,7 +2442,9 @@ class FunctionTranslator {
     site_id_load.setOrdering(mlir::LLVM::AtomicOrdering::acquire);
     mlir::Value site_id = site_id_load.getResult();
 
-    auto cfg64_load = builder_.create<mlir::LLVM::LoadOp>(loc, i64, cfg_addr);
+    auto cfg64_load = builder_.create<mlir::LLVM::LoadOp>(
+        loc, i64,
+        byte_gep(cfg_addr, offsetof(NrqGcInlineConfig, packed_state)));
     cfg64_load.setAlignment(8);
     cfg64_load.setOrdering(mlir::LLVM::AtomicOrdering::acquire);
     mlir::Value cfg64 = cfg64_load.getResult();

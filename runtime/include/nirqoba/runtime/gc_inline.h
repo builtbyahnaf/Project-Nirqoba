@@ -13,6 +13,10 @@
 #include <string.h>
 
 #ifdef __cplusplus
+#include <atomic>
+#endif
+
+#ifdef __cplusplus
 extern "C" {
 #endif
 
@@ -37,13 +41,14 @@ typedef struct NrqGcPendingRange {
 } NrqGcPendingRange;
 
 // Read-mostly collector configuration checked on every inline fast path.
-// `gate` and `initial_state` sit adjacent in the low 64 bits so compiled code
-// can load both in a single 64-bit acquire load on x86-64.
+// `packed_state` packs `gate` in the low 32 bits and `initial_state` in the
+// high 32 bits of a single 64-bit atomic word so writers (64-bit release store)
+// and readers (64-bit acquire load in compiled code and C++ inline helpers)
+// share one atomic width with no mixed-width accesses or torn snapshots.
 // `gate` is 0 iff the collector is Idle, automatic collection is not yet due,
 // and debug allocation event tracing is disabled.
 typedef struct NrqGcInlineConfig {
-  uint32_t gate;
-  uint32_t initial_state;
+  uint64_t packed_state;
   size_t accounting_batch;
 } NrqGcInlineConfig;
 
@@ -90,12 +95,28 @@ extern NRQ_THREAD_LOCAL NrqGcFastTls nrq_gc_fast_tls;
 // (0 on null/error). Called only on the cold first-site initialization path.
 uint32_t nrq_gc_layout_id(const struct nrq_object_layout* layout);
 
-// Mirrors NRQ_GC_EVENT_ALLOCATION selection into `nrq_gc_inline_config.gate`
-// so development builds never skip debug allocation event emission.
+// Mirrors NRQ_GC_EVENT_ALLOCATION selection into the gate bits of
+// `nrq_gc_inline_config.packed_state` so development builds never skip debug
+// allocation event emission.
 void nrq_gc_set_inline_debug_alloc(int32_t enabled);
 
 #ifdef __cplusplus
 }  // extern "C"
+
+inline constexpr uint64_t nrq_gc_inline_pack_state(
+    uint32_t gate, uint32_t initial_state) noexcept {
+  return (static_cast<uint64_t>(initial_state) << 32) |
+         static_cast<uint64_t>(gate);
+}
+
+inline constexpr uint32_t nrq_gc_inline_unpack_gate(uint64_t packed) noexcept {
+  return static_cast<uint32_t>(packed);
+}
+
+inline constexpr uint32_t nrq_gc_inline_unpack_initial_state(
+    uint64_t packed) noexcept {
+  return static_cast<uint32_t>(packed >> 32);
+}
 
 namespace nirq::gc::inline_detail {
 
@@ -103,8 +124,10 @@ inline void commit_inline_bump(NrqGcFastTls& tls, uint8_t* new_cursor,
                                void* payload, size_t payload_bytes,
                                uint8_t payload_is_zero, void** root_slot) {
   if (!payload_is_zero) memset(payload, 0, payload_bytes);
-  tls.pending_bytes += payload_bytes;
-  ++tls.pending_count;
+  std::atomic_ref<size_t>(tls.pending_bytes)
+      .store(tls.pending_bytes + payload_bytes, std::memory_order_relaxed);
+  std::atomic_ref<size_t>(tls.pending_count)
+      .store(tls.pending_count + 1, std::memory_order_relaxed);
   tls.unflushed_bytes += payload_bytes;
   if (root_slot) *root_slot = payload;
   (void)new_cursor;
@@ -116,12 +139,19 @@ inline void* try_allocate_tlab_inline(uint32_t expected_kind, size_t header_byte
                                       void** root_slot) {
   if (layout_id == 0 || span == 0 || span > NRQ_GC_INLINE_TLAB_BYTES)
     return nullptr;
-  const NrqGcInlineConfig config = nrq_gc_inline_config;
-  if (config.gate != 0) return nullptr;
+  const uint64_t packed_state =
+      std::atomic_ref<uint64_t>(nrq_gc_inline_config.packed_state)
+          .load(std::memory_order_acquire);
+  if (nrq_gc_inline_unpack_gate(packed_state) != 0) return nullptr;
+  const uint32_t initial_state =
+      nrq_gc_inline_unpack_initial_state(packed_state);
+  const size_t accounting_batch =
+      std::atomic_ref<size_t>(nrq_gc_inline_config.accounting_batch)
+          .load(std::memory_order_relaxed);
   NrqGcFastTls& tls = nrq_gc_fast_tls;
   if (tls.tlab_kind != expected_kind) return nullptr;
   if (tls.unflushed_bytes > SIZE_MAX - payload_bytes ||
-      tls.unflushed_bytes + payload_bytes >= config.accounting_batch)
+      tls.unflushed_bytes + payload_bytes >= accounting_batch)
     return nullptr;
   uint8_t* cursor = tls.tlab_cursor;
   uint8_t* end = tls.tlab_end;
@@ -130,12 +160,12 @@ inline void* try_allocate_tlab_inline(uint32_t expected_kind, size_t header_byte
   tls.tlab_cursor = new_cursor;
   if (header_bytes == 8) {
     uint32_t* header = reinterpret_cast<uint32_t*>(cursor);
-    header[0] = config.initial_state;
+    header[0] = initial_state;
     header[1] = layout_id;
   } else {
     uint32_t* header = reinterpret_cast<uint32_t*>(cursor);
     header[0] = elements;
-    header[1] = config.initial_state;
+    header[1] = initial_state;
     header[2] = layout_id;
     header[3] = 0;
   }
@@ -169,13 +199,20 @@ inline void* nrq_gc_inline_try_allocate_h0(const void* layout,
                                            size_t slot_bytes,
                                            void** root_slot) {
   if (!layout || slot_bytes == 0) return nullptr;
-  const NrqGcInlineConfig config = nrq_gc_inline_config;
-  if (config.gate != 0) return nullptr;
+  const uint64_t packed_state =
+      std::atomic_ref<uint64_t>(nrq_gc_inline_config.packed_state)
+          .load(std::memory_order_acquire);
+  if (nrq_gc_inline_unpack_gate(packed_state) != 0) return nullptr;
+  const uint32_t initial_state =
+      nrq_gc_inline_unpack_initial_state(packed_state);
+  const size_t accounting_batch =
+      std::atomic_ref<size_t>(nrq_gc_inline_config.accounting_batch)
+          .load(std::memory_order_relaxed);
   NrqGcFastTls& tls = nrq_gc_fast_tls;
   if (tls.h0_fast_layout != layout || tls.h0_slot_bytes != slot_bytes)
     return nullptr;
   if (tls.unflushed_bytes > SIZE_MAX - payload_bytes ||
-      tls.unflushed_bytes + payload_bytes >= config.accounting_batch)
+      tls.unflushed_bytes + payload_bytes >= accounting_batch)
     return nullptr;
   uint8_t* cursor = tls.h0_cursor;
   uint8_t* end = tls.h0_end;
@@ -183,7 +220,7 @@ inline void* nrq_gc_inline_try_allocate_h0(const void* layout,
   uint8_t* new_cursor = cursor + slot_bytes;
   tls.h0_cursor = new_cursor;
   *tls.h0_state_cursor++ =
-      static_cast<uint8_t>((config.initial_state >> 1) & 1u);
+      static_cast<uint8_t>((initial_state >> 1) & 1u);
   nirq::gc::inline_detail::commit_inline_bump(
       tls, new_cursor, cursor, payload_bytes, tls.h0_payload_zero, root_slot);
   return cursor;

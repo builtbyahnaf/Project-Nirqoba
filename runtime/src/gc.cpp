@@ -1984,12 +1984,14 @@ void refresh_inline_config_locked() {
           : 0u;
   const size_t batch =
       std::min(kAccountingBatchBytes, threshold == 0 ? size_t{1} : threshold);
-  std::atomic_ref<uint32_t>(nrq_gc_inline_config.gate)
-      .store(gate, std::memory_order_release);
-  std::atomic_ref<uint32_t>(nrq_gc_inline_config.initial_state)
-      .store(initial_state, std::memory_order_release);
+  // Publish `accounting_batch` before `packed_state` with release ordering so
+  // any fast-path reader whose 64-bit acquire load observes this `packed_state`
+  // is ordered after the updated `accounting_batch` as well.
+  const uint64_t packed = nrq_gc_inline_pack_state(gate, initial_state);
   std::atomic_ref<size_t>(nrq_gc_inline_config.accounting_batch)
       .store(batch, std::memory_order_release);
+  std::atomic_ref<uint64_t>(nrq_gc_inline_config.packed_state)
+      .store(packed, std::memory_order_release);
 }
 
 // `bytes_since_collection` has exactly one writer-path class - the collection
@@ -6981,19 +6983,23 @@ int64_t nrq_gc_get_ref_count(void* object) {
 }
 
 alignas(nirq::nrq_cache_line_bytes) NrqGcInlineConfig nrq_gc_inline_config = {
-    0u, kYoungBit, kAccountingBatchBytes};
+    nrq_gc_inline_pack_state(0u, kYoungBit), kAccountingBatchBytes};
 NRQ_THREAD_LOCAL NrqGcFastTls nrq_gc_fast_tls = {};
 
 static_assert(NRQ_GC_INLINE_TLAB_BYTES == kGcTlabBytes,
               "inline TLAB limit must match kGcTlabBytes");
 static_assert(NRQ_GC_INLINE_SPAN_ALIGNMENT == kObjectStartAlignment,
               "inline span alignment must match kObjectStartAlignment");
-static_assert(offsetof(NrqGcInlineConfig, gate) == 0,
-              "NrqGcInlineConfig::gate offset mismatch");
-static_assert(offsetof(NrqGcInlineConfig, initial_state) == 4,
-              "NrqGcInlineConfig::initial_state offset mismatch");
+static_assert(sizeof(NrqGcInlineConfig) == 16,
+              "NrqGcInlineConfig size mismatch");
+static_assert(offsetof(NrqGcInlineConfig, packed_state) == 0,
+              "NrqGcInlineConfig::packed_state offset mismatch");
 static_assert(offsetof(NrqGcInlineConfig, accounting_batch) == 8,
               "NrqGcInlineConfig::accounting_batch offset mismatch");
+static_assert(std::atomic_ref<uint64_t>::is_always_lock_free,
+              "NrqGcInlineConfig::packed_state must be lock-free");
+static_assert(std::atomic_ref<size_t>::is_always_lock_free,
+              "NrqGcInlineConfig::accounting_batch must be lock-free");
 static_assert(sizeof(NrqGcPendingRange) == 24,
               "NrqGcPendingRange size mismatch");
 static_assert(offsetof(NrqGcFastTls, tlab_cursor) == 0,
