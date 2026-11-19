@@ -1277,6 +1277,7 @@ struct MutatorState {
   uint8_t* tlab_slab_end = nullptr;
   uint8_t* ext_slab_end = nullptr;
   size_t tlab_accounted_pending_bytes = 0;
+  std::vector<NrqGcPendingRange> deferred_ranges;
   uint64_t tlab_generation = 0;
   const nrq_object_layout* h0_layout = nullptr;
   size_t h0_slot = 0;
@@ -1604,6 +1605,9 @@ struct TlabDiagCounters {
   std::atomic<uint64_t> reason_accounting_batch{0};
   std::atomic<uint64_t> reason_tlab_kind_mismatch{0};
   std::atomic<uint64_t> reason_tlab_exhausted{0};
+  std::atomic<uint64_t> slow_ns{0};
+  std::atomic<uint64_t> publish_ns{0};
+  std::atomic<uint64_t> install_memset_ns{0};
   std::atomic<uint64_t> reason_other{0};
   std::mutex site_mutex;
   struct SiteEntry {
@@ -2239,62 +2243,106 @@ void clear_h0_fast_path(NrqGcFastTls& fast) {
   fast.h0_fast_layout = nullptr;
 }
 
+void publish_one_range_locked(const NrqGcPendingRange& range,
+                              bool collection_active,
+                              uint64_t next_epoch) {
+  if (!range.page || !range.begin) return;
+  GcPage& page = *static_cast<GcPage*>(range.page);
+  const PageKind kind = page.kind;
+  const size_t header_bytes = page_header_bytes(kind);
+  const bool indexed = page_uses_index(&page);
+  const bool is_h0 = kind == PageKind::Headerless;
+  const bool is_compact = kind == PageKind::Compact;
+  uint64_t range_objects = 0;
+  size_t range_bytes = 0;
+  size_t range_young = 0;
+  size_t range_old = 0;
+  uint32_t cached_layout_id = 0;
+  size_t cached_payload_bytes = 0;
+
+  for (unsigned char* cursor = range.begin; cursor < range.end;) {
+    const ObjectRef object{cursor, &page};
+    size_t payload_bytes = 0;
+    if (is_compact) {
+      const auto* hdr = reinterpret_cast<const uint32_t*>(cursor);
+      const uint32_t lid = hdr[1];
+      if (lid != 0 && lid == cached_layout_id) {
+        payload_bytes = cached_payload_bytes;
+      } else {
+        payload_bytes = object_payload_bytes(object);
+        if (lid != 0) {
+          cached_layout_id = lid;
+          cached_payload_bytes = payload_bytes;
+        }
+      }
+    } else {
+      payload_bytes = object_payload_bytes(object);
+    }
+    const size_t span = is_h0 ? page.slot_bytes
+                              : object_span_bytes(header_bytes, payload_bytes);
+    if (span == 0 || cursor + span > range.end)
+      nrq_runtime_fatal("GC pending range has an invalid span");
+    if (indexed) {
+      if (!object_index.insert(object_payload(object), cursor, &page))
+        nrq_runtime_fatal("GC failed to publish a thread-local allocation");
+      ++page.indexed_objects;
+      try {
+        unindexed_objects.push_back(object);
+      } catch (...) {
+        nrq_runtime_fatal("GC unindexed object list allocation failed");
+      }
+    } else {
+      mark_object_start(page, static_cast<size_t>(cursor - page.storage));
+    }
+    ++range_objects;
+    if (range_bytes > SIZE_MAX - payload_bytes)
+      nrq_runtime_fatal("GC page live-byte count overflow");
+    range_bytes += payload_bytes;
+    if (collection_active) mark_object_born(object, next_epoch);
+    if (object_young(object)) {
+      ++range_young;
+    } else {
+      ++range_old;
+    }
+    cursor += span;
+  }
+
+  if (page.live_objects > SIZE_MAX - range_objects)
+    nrq_runtime_fatal("GC page live-object count overflow");
+  page.live_objects += range_objects;
+  if (page.live_payload_bytes > SIZE_MAX - range_bytes)
+    nrq_runtime_fatal("GC page live-byte count overflow");
+  page.live_payload_bytes += range_bytes;
+  page.young_objects += range_young;
+  if (range_old != 0)
+    old_object_count.fetch_add(range_old, std::memory_order_relaxed);
+  statistics.allocated_bytes =
+      saturated_add(statistics.allocated_bytes, range_bytes);
+  statistics.live_objects =
+      saturated_add(statistics.live_objects, range_objects);
+  live_heap_bytes = saturated_add(live_heap_bytes, range_bytes);
+}
+
 void publish_tlab_locked(MutatorState& mutator) {
   if (!mutator.fast) return;
+  const bool track_timing = tlab_diag.enabled.load(std::memory_order_relaxed);
+  const auto publish_start = track_timing
+                                 ? std::chrono::steady_clock::now()
+                                 : std::chrono::steady_clock::time_point{};
   NrqGcFastTls& fast = *mutator.fast;
   sync_active_ranges(fast);
+  const bool collection_active =
+      collection_phase.load(std::memory_order_acquire) != CollectionPhase::Idle;
+  const uint64_t next_epoch =
+      collection_active ? next_cycle_epoch.load(std::memory_order_relaxed) : 0;
+  for (const NrqGcPendingRange& range : mutator.deferred_ranges) {
+    publish_one_range_locked(range, collection_active, next_epoch);
+  }
+  mutator.deferred_ranges.clear();
   const uint32_t range_count = fast.pending_range_count;
   for (uint32_t range_index = 0; range_index < range_count; ++range_index) {
-    const NrqGcPendingRange range = fast.pending_ranges[range_index];
-    if (!range.page || !range.begin) continue;
-    GcPage& page = *static_cast<GcPage*>(range.page);
-    const size_t header_bytes = page_header_bytes(page.kind);
-    for (unsigned char* cursor = range.begin; cursor < range.end;) {
-      const ObjectRef object{cursor, &page};
-      const size_t payload_bytes = object_payload_bytes(object);
-      // A headerless range advances by its one slot size; the others read the
-      // span from the object they are looking at.
-      const size_t span = page.kind == PageKind::Headerless
-                              ? page.slot_bytes
-                              : object_span_bytes(header_bytes, payload_bytes);
-      if (span == 0 || cursor + span > range.end)
-        nrq_runtime_fatal("GC pending range has an invalid span");
-      const bool indexed = page_uses_index(&page);
-      if (indexed) {
-        if (!object_index.insert(object_payload(object), cursor, &page))
-          nrq_runtime_fatal("GC failed to publish a thread-local allocation");
-        ++page.indexed_objects;
-        try {
-          unindexed_objects.push_back(object);
-        } catch (...) {
-          nrq_runtime_fatal("GC unindexed object list allocation failed");
-        }
-      } else {
-        mark_object_start(page, static_cast<size_t>(cursor - page.storage));
-      }
-      if (page.live_objects == SIZE_MAX)
-        nrq_runtime_fatal("GC page live-object count overflow");
-      ++page.live_objects;
-      if (page.live_payload_bytes > SIZE_MAX - payload_bytes)
-        nrq_runtime_fatal("GC page live-byte count overflow");
-      page.live_payload_bytes += payload_bytes;
-      if (collection_phase.load(std::memory_order_acquire) !=
-          CollectionPhase::Idle)
-        mark_object_born(object, next_cycle_epoch.load(std::memory_order_relaxed));
-      if (object_young(object)) {
-        ++page.young_objects;
-      } else {
-        // Objects become visible here, so this is where the generational
-        // policy's old-object count is updated - once per published batch
-        // instead of once per allocation.
-        old_object_count.fetch_add(1, std::memory_order_relaxed);
-      }
-      statistics.allocated_bytes =
-          saturated_add(statistics.allocated_bytes, payload_bytes);
-      statistics.live_objects = saturated_add(statistics.live_objects, 1);
-      live_heap_bytes = saturated_add(live_heap_bytes, payload_bytes);
-      cursor += span;
-    }
+    publish_one_range_locked(fast.pending_ranges[range_index],
+                             collection_active, next_epoch);
   }
   if (tlab_diag.enabled.load(std::memory_order_relaxed)) {
     tlab_diag.published_tlab_objects.fetch_add(
@@ -2307,6 +2355,14 @@ void publish_tlab_locked(MutatorState& mutator) {
   clear_h0_fast_path(fast);
   std::atomic_ref<size_t>(fast.pending_bytes).store(0, std::memory_order_relaxed);
   std::atomic_ref<size_t>(fast.pending_count).store(0, std::memory_order_relaxed);
+  if (track_timing) {
+    tlab_diag.publish_ns.fetch_add(
+        static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - publish_start)
+                .count()),
+        std::memory_order_relaxed);
+  }
 }
 
 bool collection_is_requested() {
@@ -3700,8 +3756,21 @@ void install_tlab(MutatorState& mutator, GcPage* page, size_t offset, size_t spa
   // Ensure the entire reservation is zero-filled at install time so inline
   // allocation never pays a per-object zeroing branch or memset.
   const bool payload_zero = offset >= page->zero_cursor;
-  if (!payload_zero && span != 0)
+  if (!payload_zero && span != 0) {
+    const bool track_timing = tlab_diag.enabled.load(std::memory_order_relaxed);
+    const auto z_start = track_timing
+                             ? std::chrono::steady_clock::now()
+                             : std::chrono::steady_clock::time_point{};
     std::memset(page->storage + offset, 0, span);
+    if (track_timing) {
+      tlab_diag.install_memset_ns.fetch_add(
+          static_cast<uint64_t>(
+              std::chrono::duration_cast<std::chrono::nanoseconds>(
+                  std::chrono::steady_clock::now() - z_start)
+                  .count()),
+          std::memory_order_relaxed);
+    }
+  }
   fast.tlab_payload_zero = 1u;
   const size_t end = offset + span;
   if (end > page->zero_cursor) page->zero_cursor = end;
@@ -5120,8 +5189,24 @@ NrqGcPendingRange* note_pending_range(MutatorState& mutator, GcPage* page,
     }
   }
   if (fast.pending_range_count == MutatorState::kPendingRangeCapacity) {
-    HeapLockGuard lock(gc_mutex);
-    publish_tlab_locked(mutator);
+    if (collection_phase.load(std::memory_order_acquire) ==
+        CollectionPhase::Idle) {
+      sync_active_ranges(fast);
+      try {
+        mutator.deferred_ranges.insert(
+            mutator.deferred_ranges.end(), fast.pending_ranges,
+            fast.pending_ranges + fast.pending_range_count);
+        fast.pending_range_count = 0;
+        clear_tlab_fast_path(fast);
+        clear_h0_fast_path(fast);
+      } catch (...) {
+        HeapLockGuard lock(gc_mutex);
+        publish_tlab_locked(mutator);
+      }
+    } else {
+      HeapLockGuard lock(gc_mutex);
+      publish_tlab_locked(mutator);
+    }
   }
   NrqGcPendingRange& range = fast.pending_ranges[fast.pending_range_count++];
   range.page = page;
@@ -5155,8 +5240,21 @@ void install_h0_tlab(MutatorState& mutator, GcPage* page, size_t offset,
   // untouched tail needs no fill, and the reservation is charged to the page's
   // known-zero boundary once instead of per object.
   const bool payload_zero = offset >= page->zero_cursor;
-  if (!payload_zero && span != 0)
+  if (!payload_zero && span != 0) {
+    const bool track_timing = tlab_diag.enabled.load(std::memory_order_relaxed);
+    const auto z_start = track_timing
+                             ? std::chrono::steady_clock::now()
+                             : std::chrono::steady_clock::time_point{};
     std::memset(page->storage + offset, 0, span);
+    if (track_timing) {
+      tlab_diag.install_memset_ns.fetch_add(
+          static_cast<uint64_t>(
+              std::chrono::duration_cast<std::chrono::nanoseconds>(
+                  std::chrono::steady_clock::now() - z_start)
+                  .count()),
+          std::memory_order_relaxed);
+    }
+  }
   fast.h0_payload_zero = 1u;
   const size_t end = offset + span;
   if (end > page->zero_cursor) page->zero_cursor = end;
@@ -5739,27 +5837,40 @@ __forceinline bool shadow_has_pointer_root(ShadowStack& stack, void* slot) {
   return false;
 }
 
+ObjectRef find_pending_header_in_range(const NrqGcPendingRange& range,
+                                         void* object) {
+  if (!range.page || !range.begin) return ObjectRef{};
+  const auto* obj_bytes = static_cast<const unsigned char*>(object);
+  if (obj_bytes < range.begin || obj_bytes >= range.end) return ObjectRef{};
+  GcPage* const page = static_cast<GcPage*>(range.page);
+  const size_t header_bytes = page_header_bytes(page->kind);
+  for (unsigned char* cursor = range.begin; cursor < range.end;) {
+    const ObjectRef candidate{cursor, page};
+    if (object_payload(candidate) == object) return candidate;
+    const size_t span =
+        page->kind == PageKind::Headerless
+            ? page->slot_bytes
+            : object_span_bytes(header_bytes,
+                                object_payload_bytes(candidate));
+    if (span == 0 || cursor + span > range.end) break;
+    cursor += span;
+  }
+  return ObjectRef{};
+}
+
 ObjectRef find_pending_header(MutatorState& mutator, void* object) {
-  if (!mutator.fast) return ObjectRef{};
+  if (!mutator.fast || !object) return ObjectRef{};
   NrqGcFastTls& fast = *mutator.fast;
   sync_active_ranges(fast);
   const uint32_t range_count = fast.pending_range_count;
   for (uint32_t index = 0; index < range_count; ++index) {
-    const NrqGcPendingRange range = fast.pending_ranges[index];
-    if (!range.page || !range.begin) continue;
-    GcPage* const page = static_cast<GcPage*>(range.page);
-    const size_t header_bytes = page_header_bytes(page->kind);
-    for (unsigned char* cursor = range.begin; cursor < range.end;) {
-      const ObjectRef candidate{cursor, page};
-      if (object_payload(candidate) == object) return candidate;
-      const size_t span =
-          page->kind == PageKind::Headerless
-              ? page->slot_bytes
-              : object_span_bytes(header_bytes,
-                                  object_payload_bytes(candidate));
-      if (span == 0 || cursor + span > range.end) break;
-      cursor += span;
-    }
+    const ObjectRef found =
+        find_pending_header_in_range(fast.pending_ranges[index], object);
+    if (found.valid()) return found;
+  }
+  for (const NrqGcPendingRange& range : mutator.deferred_ranges) {
+    const ObjectRef found = find_pending_header_in_range(range, object);
+    if (found.valid()) return found;
   }
   return ObjectRef{};
 }
@@ -6091,7 +6202,11 @@ void* nrq_gc_allocate_array_planned(void** root_slot, size_t count,
   // See nrq_gc_allocate_planned: a deterministic plan is not this entry point's
   // to honour.
   if ((plan_flags & NRQ_ALLOC_PLAN_DETERMINISTIC) != 0) return nullptr;
-  if (tlab_diag.enabled.load(std::memory_order_relaxed))
+  const bool track_slow = tlab_diag.enabled.load(std::memory_order_relaxed);
+  const auto slow_start = track_slow
+                              ? std::chrono::steady_clock::now()
+                              : std::chrono::steady_clock::time_point{};
+  if (track_slow)
     record_tlab_diag_slow_call(site_cache, count, element_size, plan_flags);
   // Honour a usable array plan: Compact for eligible single-element arrays, or
   // Extended for multi-element, SoA, or explicit Extended requests. Anything else
@@ -6124,9 +6239,18 @@ void* nrq_gc_allocate_array_planned(void** root_slot, size_t count,
     if (site_cache)
       *site_cache = const_cast<nrq_object_layout*>(layout);
   }
-  return allocate_array_rooted_impl(root_slot, count, element_size,
-                                    reference_offsets, reference_count, layout,
-                                    hint);
+  void* result = allocate_array_rooted_impl(
+      root_slot, count, element_size, reference_offsets, reference_count,
+      layout, hint);
+  if (track_slow) {
+    tlab_diag.slow_ns.fetch_add(
+        static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - slow_start)
+                .count()),
+        std::memory_order_relaxed);
+  }
+  return result;
 }
 
 // Structure-of-arrays descriptors are interned by their column geometry. They keep
@@ -7805,6 +7929,17 @@ void print_tlab_diag_report() {
           s.expected_kind, static_cast<unsigned long long>(s.slow_calls));
     }
   }
+  std::fprintf(
+      stderr,
+      "[NRQ_GC_TLAB_TIMING] slow_ms=%.2f publish_ms=%.2f install_memset_ms=%.2f\n",
+      static_cast<double>(tlab_diag.slow_ns.load(std::memory_order_relaxed)) /
+          1e6,
+      static_cast<double>(
+          tlab_diag.publish_ns.load(std::memory_order_relaxed)) /
+          1e6,
+      static_cast<double>(
+          tlab_diag.install_memset_ns.load(std::memory_order_relaxed)) /
+          1e6);
   std::fprintf(
       stderr,
       "[NRQ_GC_CYCLE_TIMING] cycles=%llu pause_ms=%.2f prepare_ms=%.2f "
