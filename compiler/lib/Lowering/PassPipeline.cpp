@@ -303,6 +303,7 @@ bool llvm_op_accesses_no_memory(llvm::StringRef name) {
       "llvm.extractvalue", "llvm.insertvalue", "llvm.mlir.poison",
       "llvm.br", "llvm.cond_br", "llvm.switch", "llvm.return",
       "llvm.unreachable", "llvm.lifetime.start", "llvm.lifetime.end",
+      "llvm.intr.threadlocal.address",
   };
   return memory_free.count(name.str()) != 0;
 }

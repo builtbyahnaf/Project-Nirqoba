@@ -72,8 +72,11 @@ offset  field            bytes
 ```
 
 `element_count` is deliberately first. The SoA lowering reads the count at
-`payload - 16`, which is now `header + 0`; the read needed no change. Arrays are
-always extended, so that read can never land in an H0 or H8 object.
+`payload - 16`, which is now `header + 0`; the read needed no change. SoA
+containers and multi-element / oversized arrays always take the extended
+representation (`H16`), while eligible non-SoA one-element arrays use `Compact`
+(`H8`, distinguished from fixed records by `NRQ_OBJECT_LAYOUT_ARRAY` on their
+descriptor and with implicit `element_count == 1`).
 
 `flags` is written and preserved but carries no meaning yet. It is the word
 Phase 5 will use for compiler-side hints; leaving it in the header now keeps the

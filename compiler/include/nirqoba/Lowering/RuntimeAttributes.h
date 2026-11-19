@@ -284,6 +284,14 @@ inline std::optional<RuntimeFunctionPolicy> get_runtime_function_policy(llvm::St
     policy.memory = MemoryEffectKind::ArgReadWriteOtherReadWrite;
     return policy;
   }
+  if (symbol == "nrq_gc_layout_id") {
+    RuntimeFunctionPolicy policy;
+    policy.nounwind = true;
+    policy.willreturn = true;
+    policy.memory = MemoryEffectKind::OtherReadWriteArgRead;
+    policy.nocapture_args_mask = (1u << 0);
+    return policy;
+  }
   // The configuration marker the entry wrapper calls. It does nothing, but it
   // must survive optimization: as a side-effecting call it is what makes the
   // linker require the library built from the matching configuration.

@@ -140,6 +140,37 @@ TEST(GcPlannedAllocationTest, AOneElementArrayIsStillExtended) {
   nrq_gc_enable();
 }
 
+TEST(GcPlannedAllocationTest, AOneElementArrayUsesCompactWhenPlannedOrAuto) {
+  nrq_gc_disable();
+  nrq_gc_collect();
+  nrq_gc_root_register(&root_slot);
+  constexpr uint32_t kArrayCompactPlan =
+      NRQ_ALLOC_PLAN_ARRAY | NRQ_ALLOC_PLAN_REPEATED |
+      NRQ_ALLOC_PLAN_REPR_BITS(NRQ_ALLOC_REPR_COMPACT);
+  const size_t offsets[1] = {0};
+  void* site_cache = nullptr;
+  void* compact_planned = nrq_gc_allocate_array_planned(
+      &root_slot, 1, 24, offsets, 1, &site_cache, kArrayCompactPlan);
+  ASSERT_NE(compact_planned, nullptr);
+  ASSERT_EQ(nrq_gc_object_representation(compact_planned),
+            static_cast<int32_t>(NRQ_GC_REPR_COMPACT));
+  ASSERT_EQ(nrq_gc_object_header_size(compact_planned), size_t{8});
+  const nrq_object_layout* layout = nrq_gc_object_layout(compact_planned);
+  ASSERT_NE(layout, nullptr);
+  ASSERT_TRUE((layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) != 0);
+
+  void* compact_auto = nrq_gc_allocate_array_planned(
+      &root_slot, 1, 24, offsets, 1, &site_cache, 0);
+  ASSERT_NE(compact_auto, nullptr);
+  ASSERT_EQ(nrq_gc_object_representation(compact_auto),
+            static_cast<int32_t>(NRQ_GC_REPR_COMPACT));
+  ASSERT_EQ(nrq_gc_object_header_size(compact_auto), size_t{8});
+  nrq_gc_root_unregister(&root_slot);
+  nrq_gc_collect();
+  nrq_gc_collect();
+  nrq_gc_enable();
+}
+
 TEST(GcPlannedAllocationTest, PlannedSoAUsesAndCachesItsColumnLayout) {
   nrq_gc_disable();
   nrq_gc_collect();

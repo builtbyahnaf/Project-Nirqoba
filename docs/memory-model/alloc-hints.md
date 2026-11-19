@@ -38,11 +38,13 @@ The representation occupies two bits at a fixed shift
 (`NRQ_ALLOC_PLAN_REPR_SHIFT`), so `nrq_alloc_plan_flags` packs a whole plan into
 one 32-bit word. That is what a compiler emits at a call site.
 
-The policy the planner encodes is the Phase 4 policy, unchanged: an array or an
-object larger than a page is extended (H16), a fixed record up to 256 bytes is
-headerless (H0), anything in between is compact (H8). A rejected hint — zero
-payload, a non-power-of-two alignment — produces `NONE` plus the rejected flag
-rather than an exception or a partial plan.
+The policy the planner encodes matches the collector's representation policy:
+eligible non-SoA one-element arrays whose compact span (`8 + payload_bytes`
+aligned to 8 bytes) fits in a 64 KiB page choose compact (H8), multi-element,
+SoA, or page-exceeding arrays are extended (H16), fixed records up to 256 bytes
+are headerless (H0), and larger fixed records up to a page are compact (H8). A
+rejected hint — zero payload, a non-power-of-two alignment — produces `NONE`
+plus the rejected flag rather than an exception or a partial plan.
 
 ## The planned record entry point
 

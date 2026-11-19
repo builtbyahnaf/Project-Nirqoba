@@ -73,26 +73,33 @@ TEST(AllocPlanPropertyTest, ThePlanPredictsTheRepresentationForRecords) {
 TEST(AllocPlanPropertyTest, ThePlanPredictsTheRepresentationForArrays) {
   nrq_gc_disable();
   nrq_gc_collect();
-  for (const size_t element : {size_t{8}, size_t{16}, size_t{64}, size_t{257}}) {
-    void* root = nullptr;
-    nrq_gc_root_register(&root);
-    NrqAllocHint hint{};
-    hint.payload_bytes = element;
-    hint.element_count = 3;
-    hint.alignment = 8;
-    hint.flags = NRQ_ALLOC_HINT_MANAGED | NRQ_ALLOC_HINT_ARRAY;
-    const NrqAllocPlan plan = nrq_alloc_plan(&hint);
-    ASSERT_EQ(plan.representation, NRQ_ALLOC_REPR_EXTENDED);
-    void* site_cache = nullptr;
-    const size_t offsets[1] = {0};
-    void* object = nrq_gc_allocate_array_planned(
-        &root, 3, element, offsets, 1, &site_cache, plan_flags_for(plan));
-    ASSERT_NE(object, nullptr);
-    ASSERT_EQ(nrq_gc_object_representation(object), NRQ_GC_REPR_EXTENDED);
-    ASSERT_EQ(nrq_gc_object_header_size(object), size_t{16});
-    nrq_gc_root_unregister(&root);
-    nrq_gc_collect();
-    nrq_gc_collect();
+  for (const size_t count : {size_t{1}, size_t{3}}) {
+    for (const size_t element : {size_t{8}, size_t{16}, size_t{64}, size_t{257}}) {
+      void* root = nullptr;
+      nrq_gc_root_register(&root);
+      NrqAllocHint hint{};
+      hint.payload_bytes = element;
+      hint.element_count = count;
+      hint.alignment = 8;
+      hint.flags = NRQ_ALLOC_HINT_MANAGED | NRQ_ALLOC_HINT_ARRAY;
+      const NrqAllocPlan plan = nrq_alloc_plan(&hint);
+      const uint32_t expected_plan_repr =
+          count == 1 ? NRQ_ALLOC_REPR_COMPACT : NRQ_ALLOC_REPR_EXTENDED;
+      const int32_t expected_gc_repr =
+          count == 1 ? NRQ_GC_REPR_COMPACT : NRQ_GC_REPR_EXTENDED;
+      const size_t expected_header = count == 1 ? size_t{8} : size_t{16};
+      ASSERT_EQ(plan.representation, expected_plan_repr);
+      void* site_cache = nullptr;
+      const size_t offsets[1] = {0};
+      void* object = nrq_gc_allocate_array_planned(
+          &root, count, element, offsets, 1, &site_cache, plan_flags_for(plan));
+      ASSERT_NE(object, nullptr);
+      ASSERT_EQ(nrq_gc_object_representation(object), expected_gc_repr);
+      ASSERT_EQ(nrq_gc_object_header_size(object), expected_header);
+      nrq_gc_root_unregister(&root);
+      nrq_gc_collect();
+      nrq_gc_collect();
+    }
   }
   nrq_gc_enable();
 }

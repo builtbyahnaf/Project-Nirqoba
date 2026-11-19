@@ -1,0 +1,57 @@
+struct Node {
+    managed<Node> next;
+    int value;
+    int tag;
+}
+
+int function build_and_churn(int count) {
+    var head = array.allocate<Node>(1);
+    head[0].value = 1;
+    head[0].tag = 1;
+    for (var i = 0; i < count; i += 1) {
+        var dead = array.allocate<Node>(1);
+        dead[0].value = i + 99;
+        dead[0].tag = i + 77;
+        if (i % 100 == 0) {
+            var kept = array.allocate<Node>(1);
+            kept[0].value = i;
+            kept[0].tag = 2;
+            kept[0].next = head;
+            head = kept;
+        }
+    }
+    var sum = 0;
+    var cur = head;
+    for (var steps = 0; steps < 41; steps += 1) {
+        sum += cur[0].tag;
+        cur = cur[0].next;
+    }
+    return sum;
+}
+
+int function test_dynamic_and_multi(int dyn_count) {
+    var multi = array.allocate<Node>(4);
+    var dyn = array.allocate<Node>(dyn_count);
+    var single_dyn = array.allocate<Node>(1);
+    multi[3].value = 10;
+    dyn[dyn_count - 1].value = 20;
+    single_dyn[0].value = 30;
+    return multi[3].value + dyn[dyn_count - 1].value + single_dyn[0].value;
+}
+
+int function main() {
+    gc.disable();
+    gc.collect();
+    gc.set_threshold(32768);
+    gc.enable();
+
+    let live_sum = build_and_churn(4000);
+    gc.collect();
+    let churn_sum = build_and_churn(4000);
+    let multi_sum = test_dynamic_and_multi(3);
+    var huge = array.allocate<int>(10000);
+    huge[9999] = 5;
+
+    print(live_sum + churn_sum + multi_sum + huge[9999]);
+    return 0;
+}

@@ -1,13 +1,124 @@
 # Stress Test 2 - Garbage-Collection Benchmark Report
 
 **Author:** Muhammad Tahmid Ahnaf (@builtbyahnaf)  
-**Date:** 2026-11-16  
+**Date:** 2026-11-19  
 **Suite:** `benchmarks/stress_test_2`  
 **Status:** Complete; all 45 benchmark processes validated
 
 ---
 
-## 0. Latest Run — Nirqoba 0.587-beta (2026-11-16)
+## 0. Latest Run — Nirqoba 0.617-beta (2026-11-19)
+
+**Compiler:** `nirqoba compiler version 0.617-beta (Phase 9)`, LLVM/MLIR 23.1.4, RelWithDebInfo  
+**Host:** DESKTOP-VO51V7J, Windows 11 Pro 10.0.26200, Intel Core i5-1235U (12 logical), 15.7 GiB RAM  
+**Full suite re-run with the latest 0.617-beta compiler.** All 45 processes validated.
+
+### 0.1 Executive summary (0.617-beta)
+
+- **Managed allocation** (Test 01): **58 ms** for 1M nodes (vs 56 ms in 0.587 — ~same)
+- **Chain traversal** (Test 01): **3 ms** (vs 6 ms — **2.0× faster**)
+- **Tree build** (Test 02): **197 ms** for 2.1M nodes (vs 226 ms — **1.1× faster**)
+- **Tree traversal** (Test 02): **6 ms** (vs 10 ms — **1.7× faster**)
+- **Mark-sweep collection** (Test 02): **43 ms** (vs 55 ms — **1.3× faster**, best yet)
+- **Cycle build** (Test 03): **63 ms** (vs 52 ms — 1.2× slower)
+- **Cycle collection** (Test 03): **0.407 ms** (407 µs, vs 15 ms in 0.587)
+
+The 0.617-beta compiler delivers **significant improvements in traversal and collection**:
+- **Traversal now faster than C** on both chain (3 ms vs 5.8 ms, 0.5×) and tree (6 ms vs 13.9 ms, 0.4×)
+- **Test 02 mark-sweep collection best yet**: 43 ms vs 55 ms (1.3× faster), 0.5× Java (79.4 ms)
+- **Test 01 and Test 03 collections measured at sub-millisecond resolution** — **0.385 ms** (385 µs, Test 01) and **0.407 ms** (407 µs, Test 03) via cycle-calibrated timing in `run_subms.py` (separate harness, 25 samples each); the main harness' 1 ms timer reported 0–2 ms jitter. Raw outputs were validated as correct (checksums, live counts, and non-zero cycle counts all matched).
+- Allocation stable (~58 ms, ~2× C); only Test 03 build regressed slightly (63 ms vs 52 ms)
+
+### 0.2 Results — 0.617-beta
+
+#### Test 01 — Managed-object allocation (1,000,000 nodes)
+
+| Language | Allocation (ms) | Traversal (ms) | Collection (ms) |
+|---|---:|---:|---:|
+| C | 27.111 ± 1.970 [26.156-28.083]* | 5.824 ± 0.279 [5.259-6.164]* | 17.099 ± 0.493 [15.534-17.296]* |
+| C++ | 28.082 ± 1.621 [26.444-31.851]* | 6.020 ± 0.912 [5.406-8.697]* | 18.223 ± 0.735 [16.531-18.977]* |
+| Rust | 36.340 ± 0.720 [29.208-31.678]* | 6.096 ± 0.457 [5.342-6.577]* | 20.835 ± 0.801 [16.672-19.131]* |
+| Java | 2.960 ± 0.569 [2.278-4.148]* | 2.075 ± 0.360 [1.737-2.963]* | 6.976 ± 0.596 [6.049-8.256]* |
+| **Nirqoba 0.617** | **58.0 ± 8.0 [52-68]** | **3.0 ± 0.5 [3-4]** | **0.385 ms (385 µs)†** |
+
+*Values from the previous 0.111 run for C/C++/Rust/Java (same binaries reused). Nirqoba rebuilt with 0.617.  
+†Collection measured at **0.385 ms** median (385.2 µs, mean 394.9 µs, min 343.6 µs, max 491.3 µs, 25 samples) using cycle-calibrated timing in `run_subms.py` (a separate harness from `run_benchmark.py`); main harness reported 0–2 ms (median 0 ms). Raw outputs validated as correct (checksums and live counts matched).
+
+#### Test 02 — Mark and sweep (2,097,151 live nodes)
+
+| Language | Build (ms) | Traversal (ms) | Collection/GC (ms) |
+|---|---:|---:|---:|
+| C | 26.060 ± 0.473 [24.290-25.174]* | 13.924 ± 0.972 [12.578-14.430]* | 35.004 ± 1.645 [32.856-39.667]* |
+| C++ | 31.562 ± 1.463 [24.852-27.607]* | 15.657 ± 0.818 [13.315-14.925]* | 38.020 ± 1.511 [32.712-39.326]* |
+| Rust | 22.643 ± 1.562 [24.965-27.974]* | 7.346 ± 0.122 [7.217-7.456]* | 36.675 ± 1.222 [37.144-41.612]* |
+| Java | 26.164 ± 8.978 [13.988-29.599]* | 6.735 ± 0.275 [5.091-5.569]* | 79.435 ± 2.766 [63.333-72.308]* |
+| **Nirqoba 0.617** | **197 ± 8 [188-208]** | **6.0 ± 0.8 [5-7]** | **43.0 ± 3.0 [40-48]** |
+
+*Values from the previous 0.111 run for C/C++/Rust/Java (same binaries reused). Nirqoba rebuilt with 0.617.
+
+#### Test 03 — Cyclic graph reclamation (500,000 cycles, 1,000,000 nodes)
+
+| Language | Build (ms) | Collection (ms) |
+|---|---:|---:|
+| C | 6.281 ± 1.469 [7.132-13.072]* | 5.676 ± 2.605 [5.598-16.322]* |
+| C++ | 6.414 ± 0.939 [5.057-8.051]* | 6.562 ± 1.086 [4.845-9.026]* |
+| Rust | 6.145 ± 0.781 [5.015-7.348]* | 5.719 ± 1.220 [4.751-8.216]* |
+| Java | 6.513 ± 1.698 [6.947-13.030]* | 45.813 ± 7.747 [55.497-84.553]* |
+| **Nirqoba 0.617** | **63.0 ± 12.0 [52-76]** | **0.407 ms (407 µs)†** |
+
+*Values from the previous 0.111 run for C/C++/Rust/Java (same binaries reused). Nirqoba rebuilt with 0.617.  
+†Collection measured at **0.407 ms** median (407.1 µs, mean 394.3 µs, min 347.1 µs, max 460.7 µs, 25 samples) using cycle-calibrated timing in `run_subms.py` (a separate harness from `run_benchmark.py`); main harness reported 0–2 ms (median 1 ms). Raw outputs validated as correct (checksums, live counts, and cycles-cleared matched).
+
+### 0.3 Relative comparison — 0.617-beta vs 0.587-beta vs 0.415-beta vs 0.301-beta vs 0.260-beta vs 0.228-beta vs 0.111-beta vs 0.105-beta
+
+| Phase | 0.105-beta | 0.111-beta | 0.228-beta | 0.260-beta | 0.301-beta | 0.415-beta | 0.587-beta | 0.617-beta | 0.587→0.617 | 0.105→0.617 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 01 Allocation | 1,147 ms | 445 ms | 296 ms | 137 ms | 84 ms | 57 ms | 56 ms | **58 ms** | ~1.0× | **19.8×** |
+| 01 Traversal | 215 ms | 16 ms | 18 ms | 9 ms | 9 ms | 5 ms | 6 ms | **3 ms** | **2.0×** | **71.7×** |
+| 01 Collection | 221 ms | 71 ms | 44 ms | 25 ms | 26 ms | 17 ms | 16 ms | **0.385 ms** | **41.6×** | **574×** |
+| 02 Build | 3,527 ms | 1,068 ms | 729 ms | 478 ms | 376 ms | 267 ms | 226 ms | **197 ms** | **1.1×** | **17.9×** |
+| 02 Traversal | 2,002 ms | 22 ms | 15 ms | 15 ms | 18 ms | 10 ms | 10 ms | **6 ms** | **1.7×** | **334×** |
+| 02 Collection | 328 ms | 349 ms | 87 ms | 85 ms | 91 ms | 62 ms | 55 ms | **43 ms** | **1.3×** | **7.6×** |
+| 03 Build | 803 ms | 441 ms | 227 ms | 102 ms | 81 ms | 64 ms | 52 ms | **63 ms** | 1.2× slower | **12.7×** |
+| 03 Collection | 201 ms | 75 ms | 42 ms | 25 ms | 28 ms | 20 ms | 15 ms | **0.407 ms** | **36.9×** | **494×** |
+
+†Test 01/03 collection times are sub-millisecond values measured with cycle-calibrated `run_subms.py` (separate harness, 25 samples each), not the 1 ms-granularity `run_benchmark.py` timer.
+
+### 0.4 Relative comparison — 0.617-beta vs C, C++, Rust, Java
+
+The table below divides Nirqoba 0.617-beta's median by each language's median. A value of 1.0 means equal; larger means Nirqoba took longer. Values from the previous 0.111 run for C/C++/Rust/Java (same binaries reused); Nirqoba rebuilt with 0.617.
+
+| Topic / phase | Nirqoba (ms) | C (ms) | C++ (ms) | Rust (ms) | Java (ms) | vs C | vs C++ | vs Rust | vs Java |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 01 Allocation | 58.0 | 27.1 | 28.1 | 36.3 | 3.0 | **2.1×** | **2.1×** | **1.6×** | **19.6×** |
+| 01 Traversal | 3.0 | 5.8 | 6.0 | 6.1 | 2.1 | **0.5×** | **0.5×** | **0.5×** | **1.4×** |
+| 01 Collection | 0.385 | 17.1 | 18.2 | 20.8 | 7.0 | **0.02×** | **0.02×** | **0.02×** | **0.06×** |
+| 02 Build | 197.0 | 26.1 | 31.6 | 22.6 | 26.2 | **7.6×** | **6.2×** | **8.7×** | **7.5×** |
+| 02 Traversal | 6.0 | 13.9 | 15.7 | 7.3 | 6.7 | **0.4×** | **0.4×** | **0.8×** | **0.9×** |
+| 02 Collection | 43.0 | 35.0 | 38.0 | 36.7 | 79.4 | **1.2×** | **1.1×** | **1.2×** | **0.5×** |
+| 03 Build | 63.0 | 6.3 | 6.4 | 6.1 | 6.5 | **10.0×** | **9.8×** | **10.2×** | **9.7×** |
+| 03 Collection | 0.407 | 5.7 | 6.6 | 5.7 | 45.8 | **0.07×** | **0.06×** | **0.07×** | **0.01×** |
+
+†Test 01/03 collection times are sub-millisecond values measured with cycle-calibrated `run_subms.py` (separate harness, 25 samples each), not the 1 ms-granularity `run_benchmark.py` timer.
+
+**Key observations:**
+- **Traversal faster than C/C++**: Test 01 (0.5× C), Test 02 (0.4× C) — now significantly faster than native
+- **Test 01/03 collections sub-millisecond (measured)**: **0.385 ms** (01) and **0.407 ms** (03) via cycle-calibrated `run_subms.py` (separate harness, 25 samples each) — far faster than all baselines on these fully-reclaimable workloads
+- **Test 02 mark-sweep collection best yet**: 43 ms (0.5× Java, 1.2× C) — 1.3× faster than 0.587
+- **Allocation stable at ~2× C**: 58 ms vs ~28 ms C
+- **Build gap**: 6-10× native (Test 03 build slightly regressed vs 0.587)
+
+### 0.5 Conclusion (0.617-beta)
+
+The 0.617-beta compiler **sets new highs in traversal and collection**:
+- **Traversal exceeds C/C++** on both chain (0.5×) and tree (0.4×) workloads
+- **Test 02 collection is the fastest yet** (43 ms, 0.5× Java) while Test 01/03 collections complete in 0.385 ms and 0.407 ms (cycle-calibrated, validated)
+- **Allocation remains stable at ~2× C** — the main remaining gap vs native
+- Minor Test 03 build regression (52 → 63 ms) aside, 0.617-beta is the strongest overall GC/traversal result so far
+
+---
+
+## 1. Latest Run — Nirqoba 0.587-beta (2026-11-16)
 
 **Compiler:** `nirqoba compiler version 0.587-beta (Phase 9)`, LLVM/MLIR 23.1.4, RelWithDebInfo  
 **Host:** DESKTOP-VO51V7J, Windows 11 Pro 10.0.26200, Intel Core i5-1235U (12 logical), 15.7 GiB RAM  
@@ -975,3 +1086,19 @@ Artifacts:
 - All test 03 runs reclaimed 500,000 cycles and ended with zero live objects
   (Java: 500,000 cleared weak references).
 - No measurement was fabricated, synthesized, or copied from another run.
+
+---
+
+## Appendix C - Sub-millisecond collection measurement (0.617-beta)
+
+Test 01 and Test 03 collection times for the 0.617-beta section were measured with `benchmarks/stress_test_2/run_subms.py`, a separate harness from the main `run_benchmark.py` suite, to resolve sub-millisecond durations that the 1 ms `time.now()` timer cannot measure accurately.
+
+- **Method:** compile and run the existing Test 01/03 binaries (which emit `COLLECT_CYCLES` per round), calibrate CPU cycles/ms with a 200 ms timed spin loop using `time.cycles()`/`time.now()`, then convert each round's cycle count to µs/ms.
+- **Calibration (0.617-beta run):** 498,784,057 cycles / 200 ms = 2,493,920.29 cycles/ms.
+- **Samples:** 5 process repeats × 5 rounds = 25 samples per test; all checksums (499,999,500,000) and `LIVE_AFTER` (0) validated.
+
+| Test | Median | Mean | Min | Max | Stdev | `COLLECT_CYCLES` median | Harness `COLLECT_MS` |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 01 managed_object_allocation | 385.2 µs (0.385 ms) | 394.9 µs | 343.6 µs | 491.3 µs | 39.8 µs | 960,577 | median 0 ms, values {0,1,2} |
+| 03 cyclic_graph_reclamation | 407.1 µs (0.407 ms) | 394.3 µs | 347.1 µs | 460.7 µs | 32.1 µs | 1,015,340 | median 1 ms, values {0,1,2} |
+

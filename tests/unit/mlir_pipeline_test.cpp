@@ -806,3 +806,49 @@ TEST(MlirPipelineTest, BorrowingIntroducesNoRuntimeCalls) {
   }
   ASSERT_TRUE(calls.empty());
 }
+
+TEST(MlirPipelineTest, EmitsInlineTlabFastPathForEligibleArrays) {
+  constexpr const char* source = R"nrqba(
+struct Node {
+    managed<Node> next;
+    int value;
+}
+
+int function build(int count) {
+    var single = array.allocate<Node>(1);
+    var dynamic = array.allocate<Node>(count);
+    single[0].value = 5;
+    dynamic[0].value = 7;
+    return single[0].value + dynamic[0].value;
+}
+
+int function main() {
+    print(build(2));
+    return 0;
+}
+)nrqba";
+
+  mlir::DialectRegistry registry;
+  nirq::register_all_dialects(registry);
+  mlir::MLIRContext context(registry);
+  context.loadAllAvailableDialects();
+  nirq::DiagnosticEngine diagnostics;
+
+  auto module = lower_source_to_mlir(source, context, diagnostics);
+  ASSERT_FALSE(diagnostics.has_errors());
+  ASSERT_TRUE(static_cast<bool>(module));
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*module)));
+
+  std::string printed;
+  llvm::raw_string_ostream os(printed);
+  module->print(os);
+  os.flush();
+
+  ASSERT_TRUE(printed.find("nrq_gc_inline_config") != std::string::npos);
+  ASSERT_TRUE(printed.find("nrq_gc_fast_tls") != std::string::npos);
+  ASSERT_TRUE(printed.find("nrq_alloc_site_id_") != std::string::npos);
+  ASSERT_TRUE(printed.find("nrq_gc_layout_id") != std::string::npos);
+  ASSERT_TRUE(printed.find("llvm.intr.threadlocal.address") != std::string::npos);
+  ASSERT_TRUE(printed.find("llvm.intr.memset") != std::string::npos);
+  ASSERT_TRUE(printed.find("nrq_gc_allocate_array_planned") != std::string::npos);
+}

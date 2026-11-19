@@ -3,11 +3,15 @@
 #include "nirqoba/Lowering/TirToMlir.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include "nirqoba/runtime/gc_inline.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -1789,8 +1793,11 @@ class FunctionTranslator {
   // Cold blocks are built detached so they can be appended once the whole body
   // exists; a block has to live in the function's region to be a branch target.
   void attach_cold_blocks() {
-    if (!bounds_fail_block_) return;
-    func_op_.getBody().push_back(bounds_fail_block_);
+    if (bounds_fail_block_) func_op_.getBody().push_back(bounds_fail_block_);
+    for (mlir::Block* block : cold_alloc_blocks_) {
+      func_op_.getBody().push_back(block);
+    }
+    cold_alloc_blocks_.clear();
   }
 
   // Back edges poll the safepoint so another thread can snapshot this thread's
@@ -2178,81 +2185,528 @@ class FunctionTranslator {
         loc, llvm_ptr_type(ctx_), name).getResult();
   }
 
-  // A compiler-emitted word for one allocation site. The runtime writes the
-  // resolved layout descriptor into it on the first allocation, so later
-  // allocations at this site read one pointer instead of searching the layout
-  // memo. The global starts zeroed and is writable, which is why the runtime
-  // re-validates whatever it finds there.
-  mlir::Value allocation_site_cache(mlir::Location loc) {
+  struct AllocationSiteGlobals {
+    mlir::Value site_cache;
+    mlir::Value site_id;
+  };
+
+  // Compiler-emitted per-site cache pair. The pointer slot caches the runtime's
+  // resolved `nrq_object_layout*`, while the adjacent `i32` global caches the
+  // runtime's compact/extended header layout ID once resolved on the cold path.
+  AllocationSiteGlobals allocation_site_globals(mlir::Location loc) {
     static int counter = 0;
-    const std::string name =
-        "nrq_alloc_site_" + std::to_string(counter++);
+    const int index = counter++;
+    const std::string cache_name = "nrq_alloc_site_" + std::to_string(index);
+    const std::string id_name = "nrq_alloc_site_id_" + std::to_string(index);
     auto storage_type = mlir::LLVM::LLVMArrayType::get(builder_.getI8Type(), 8);
     {
       mlir::OpBuilder::InsertionGuard guard(builder_);
       builder_.setInsertionPointToStart(module_.getBody());
       builder_.create<mlir::LLVM::GlobalOp>(
           loc, storage_type, /*isConstant=*/false, mlir::LLVM::Linkage::Private,
-          name, builder_.getStringAttr(std::string(8, '\0')),
+          cache_name, builder_.getStringAttr(std::string(8, '\0')),
           /*alignment=*/8);
+      builder_.create<mlir::LLVM::GlobalOp>(
+          loc, builder_.getI32Type(), /*isConstant=*/false,
+          mlir::LLVM::Linkage::Private, id_name,
+          builder_.getI32IntegerAttr(0), /*alignment=*/4);
     }
-    return builder_.create<mlir::LLVM::AddressOfOp>(loc, llvm_ptr_type(ctx_), name)
-        .getResult();
+    mlir::Value site_cache = builder_.create<mlir::LLVM::AddressOfOp>(
+        loc, llvm_ptr_type(ctx_), cache_name).getResult();
+    mlir::Value site_id = builder_.create<mlir::LLVM::AddressOfOp>(
+        loc, llvm_ptr_type(ctx_), id_name).getResult();
+    return AllocationSiteGlobals{site_cache, site_id};
   }
 
-  // One rooted managed array allocation: the compiler's static plan, and this
-  // site's descriptor cache so the runtime resolves the layout once per site.
+  mlir::Value ensure_inline_gc_config_global(mlir::Location loc) {
+    constexpr const char* kSymbol = "nrq_gc_inline_config";
+    if (!module_.lookupSymbol<mlir::LLVM::GlobalOp>(kSymbol)) {
+      mlir::OpBuilder::InsertionGuard guard(builder_);
+      builder_.setInsertionPointToStart(module_.getBody());
+      auto storage_type = mlir::LLVM::LLVMArrayType::get(
+          builder_.getI8Type(), static_cast<unsigned>(sizeof(NrqGcInlineConfig)));
+      builder_.create<mlir::LLVM::GlobalOp>(
+          loc, storage_type, /*isConstant=*/false,
+          mlir::LLVM::Linkage::External, kSymbol, mlir::Attribute{},
+          /*alignment=*/64);
+    }
+    return builder_.create<mlir::LLVM::AddressOfOp>(
+        loc, llvm_ptr_type(ctx_), kSymbol).getResult();
+  }
+
+  mlir::Value ensure_fast_tls_global(mlir::Location loc) {
+    constexpr const char* kSymbol = "nrq_gc_fast_tls";
+    if (!module_.lookupSymbol<mlir::LLVM::GlobalOp>(kSymbol)) {
+      mlir::OpBuilder::InsertionGuard guard(builder_);
+      builder_.setInsertionPointToStart(module_.getBody());
+      auto storage_type = mlir::LLVM::LLVMArrayType::get(
+          builder_.getI8Type(), static_cast<unsigned>(sizeof(NrqGcFastTls)));
+      builder_.create<mlir::LLVM::GlobalOp>(
+          loc, storage_type, /*isConstant=*/false,
+          mlir::LLVM::Linkage::External, kSymbol, mlir::Attribute{},
+          /*alignment=*/64, /*addrSpace=*/0, /*dsoLocal=*/false,
+          /*threadLocal=*/true);
+    }
+    mlir::Value raw_addr = builder_.create<mlir::LLVM::AddressOfOp>(
+        loc, llvm_ptr_type(ctx_), kSymbol).getResult();
+    return builder_.create<mlir::LLVM::ThreadlocalAddressOp>(
+        loc, llvm_ptr_type(ctx_), raw_addr).getResult();
+  }
+
+  static std::optional<uint64_t> constant_u64_value(mlir::Value value) {
+    if (!value) return std::nullopt;
+    if (auto constant = value.getDefiningOp<mlir::LLVM::ConstantOp>()) {
+      if (auto int_attr = mlir::dyn_cast<mlir::IntegerAttr>(constant.getValue()))
+        return static_cast<uint64_t>(int_attr.getValue().getZExtValue());
+      return std::nullopt;
+    }
+    if (auto zext = value.getDefiningOp<mlir::LLVM::ZExtOp>())
+      return constant_u64_value(zext.getArg());
+    if (auto trunc = value.getDefiningOp<mlir::LLVM::TruncOp>()) {
+      auto inner = constant_u64_value(trunc.getArg());
+      if (!inner) return std::nullopt;
+      const unsigned bits = trunc.getType().getIntOrFloatBitWidth();
+      if (bits >= 64) return inner;
+      return *inner & ((uint64_t{1} << bits) - 1);
+    }
+    return std::nullopt;
+  }
+
+  static constexpr uint64_t align_span_bytes(uint64_t raw_bytes) {
+    constexpr uint64_t align = NRQ_GC_INLINE_SPAN_ALIGNMENT;
+    return (raw_bytes + align - 1) & ~(align - 1);
+  }
+
+  // Emits a TLAB bump-pointer fast path for eligible rooted array/SoA sites,
+  // branching to the runtime planned allocation entry point (`slow_symbol`) on
+  // cold site initialization, TLAB refill/exhaustion, active GC cycle, pending
+  // accounting flush, or oversized dynamic requests.
+  mlir::Value emit_inline_rooted_tlab_allocation(
+      mlir::Location loc, mlir::Value root_slot, mlir::Value count,
+      mlir::Value element_size, mlir::Value table_pointer,
+      mlir::Value table_count, const char* slow_symbol, bool force_extended) {
+    // NRQ_ALLOC_PLAN_ARRAY | NRQ_ALLOC_PLAN_REPEATED | NRQ_ALLOC_PLAN_REPR_BITS(...)
+    constexpr uint32_t kCompactPlanBits = 1u | 2u | (2u << 8);
+    constexpr uint32_t kExtendedPlanBits = 1u | 2u | (3u << 8);
+    constexpr uint64_t kTlabLimit = NRQ_GC_INLINE_TLAB_BYTES;
+    constexpr uint64_t kMaxCompactPayload = kTlabLimit - 8;
+    constexpr uint64_t kMaxExtendedPayload = kTlabLimit - 16;
+
+    const mlir::Type i8 = builder_.getI8Type();
+    const mlir::Type i32 = builder_.getI32Type();
+    const mlir::Type i64 = builder_.getI64Type();
+    const mlir::Type ptr = llvm_ptr_type(ctx_);
+
+    auto c_i8 = [&](int8_t v) {
+      return builder_.create<mlir::LLVM::ConstantOp>(
+          loc, i8, builder_.getI8IntegerAttr(v)).getResult();
+    };
+    auto c_i32 = [&](int32_t v) {
+      return builder_.create<mlir::LLVM::ConstantOp>(
+          loc, i32, builder_.getI32IntegerAttr(v)).getResult();
+    };
+    auto c_i64 = [&](uint64_t v) {
+      return builder_.create<mlir::LLVM::ConstantOp>(
+          loc, i64, builder_.getI64IntegerAttr(static_cast<int64_t>(v))).getResult();
+    };
+    auto byte_gep = [&](mlir::Value base, uint64_t offset) {
+      if (offset == 0) return base;
+      return builder_.create<mlir::LLVM::GEPOp>(
+          loc, ptr, i8, base, mlir::ValueRange{c_i64(offset)}).getResult();
+    };
+
+    auto slow_fn = ensure_runtime_fn(
+        module_, builder_, slow_symbol, ptr,
+        {ptr, i64, i64, ptr, i64, ptr, i32});
+    AllocationSiteGlobals site = allocation_site_globals(loc);
+
+    const std::optional<uint64_t> const_elem = constant_u64_value(element_size);
+    const std::optional<uint64_t> const_count = constant_u64_value(count);
+
+    bool inline_eligible = false;
+    bool fixed_geometry = false;
+    uint32_t fixed_kind = NRQ_GC_INLINE_KIND_NONE;
+    uint64_t fixed_header = 0;
+    uint64_t fixed_payload = 0;
+    uint64_t fixed_span = 0;
+    uint64_t max_multi_count = 0;
+
+    if (const_elem && *const_elem != 0) {
+      if (const_count) {
+        if (*const_count >= 1 &&
+            *const_count <= std::numeric_limits<uint32_t>::max()) {
+          const bool use_compact = !force_extended && *const_count == 1;
+          const uint64_t hdr = use_compact ? 8 : 16;
+          if (*const_elem <= (kTlabLimit - hdr) / *const_count) {
+            const uint64_t payload = (*const_count) * (*const_elem);
+            const uint64_t span = align_span_bytes(hdr + payload);
+            if (span <= kTlabLimit) {
+              inline_eligible = true;
+              fixed_geometry = true;
+              fixed_kind = use_compact ? NRQ_GC_INLINE_KIND_COMPACT
+                                       : NRQ_GC_INLINE_KIND_EXTENDED;
+              fixed_header = hdr;
+              fixed_payload = payload;
+              fixed_span = span;
+            }
+          }
+        }
+      } else if (force_extended) {
+        if (*const_elem <= kMaxExtendedPayload) {
+          max_multi_count = kMaxExtendedPayload / *const_elem;
+          if (max_multi_count >= 1) inline_eligible = true;
+        }
+      } else if (*const_elem <= kMaxCompactPayload) {
+        max_multi_count = kMaxExtendedPayload / *const_elem;
+        inline_eligible = true;
+      }
+    }
+
+    auto plan_value_for_slow = [&](mlir::Value is_one_val) {
+      if (force_extended || (fixed_geometry && fixed_kind == NRQ_GC_INLINE_KIND_EXTENDED))
+        return c_i32(static_cast<int32_t>(kExtendedPlanBits));
+      if (fixed_geometry && fixed_kind == NRQ_GC_INLINE_KIND_COMPACT)
+        return c_i32(static_cast<int32_t>(kCompactPlanBits));
+      return builder_.create<mlir::LLVM::SelectOp>(
+          loc, is_one_val, c_i32(static_cast<int32_t>(kCompactPlanBits)),
+          c_i32(static_cast<int32_t>(kExtendedPlanBits))).getResult();
+    };
+
+    if (!inline_eligible) {
+      mlir::Value plan = c_i32(static_cast<int32_t>(
+          (!force_extended && const_count && *const_count == 1 &&
+           const_elem && *const_elem <= kMaxCompactPayload)
+              ? kCompactPlanBits
+              : kExtendedPlanBits));
+      return builder_.create<mlir::LLVM::CallOp>(
+          loc, slow_fn,
+          mlir::ValueRange{root_slot, count, element_size, table_pointer,
+                           table_count, site.site_cache, plan}).getResult();
+    }
+
+    // Dynamic count sizing and representation selection.
+    mlir::Value is_one_cond;
+    mlir::Value count_ok;
+    mlir::Value expected_kind;
+    mlir::Value header_bytes;
+    mlir::Value payload_bytes;
+    mlir::Value span_bytes;
+    if (fixed_geometry) {
+      expected_kind = c_i32(static_cast<int32_t>(fixed_kind));
+      header_bytes = c_i64(fixed_header);
+      payload_bytes = c_i64(fixed_payload);
+      span_bytes = c_i64(fixed_span);
+    } else {
+      is_one_cond = builder_.create<mlir::LLVM::ICmpOp>(
+          loc, mlir::LLVM::ICmpPredicate::eq, count, c_i64(1)).getResult();
+      if (max_multi_count == 0) {
+        // Only count == 1 fits inside a TLAB page for this element size.
+        count_ok = is_one_cond;
+        expected_kind = c_i32(static_cast<int32_t>(NRQ_GC_INLINE_KIND_COMPACT));
+        header_bytes = c_i64(8);
+        payload_bytes = c_i64(*const_elem);
+        span_bytes = c_i64(align_span_bytes(8 + *const_elem));
+      } else {
+        mlir::Value count_m1 = builder_.create<mlir::LLVM::SubOp>(
+            loc, count, c_i64(1)).getResult();
+        count_ok = builder_.create<mlir::LLVM::ICmpOp>(
+            loc, mlir::LLVM::ICmpPredicate::ule, count_m1,
+            c_i64(max_multi_count - 1)).getResult();
+        if (force_extended) {
+          expected_kind = c_i32(static_cast<int32_t>(NRQ_GC_INLINE_KIND_EXTENDED));
+          header_bytes = c_i64(16);
+        } else {
+          expected_kind = builder_.create<mlir::LLVM::SelectOp>(
+              loc, is_one_cond,
+              c_i32(static_cast<int32_t>(NRQ_GC_INLINE_KIND_COMPACT)),
+              c_i32(static_cast<int32_t>(NRQ_GC_INLINE_KIND_EXTENDED))).getResult();
+          header_bytes = builder_.create<mlir::LLVM::SelectOp>(
+              loc, is_one_cond, c_i64(8), c_i64(16)).getResult();
+        }
+        payload_bytes = builder_.create<mlir::LLVM::MulOp>(
+            loc, count, c_i64(*const_elem)).getResult();
+        mlir::Value raw_span = builder_.create<mlir::LLVM::AddOp>(
+            loc, payload_bytes, header_bytes).getResult();
+        mlir::Value padded = builder_.create<mlir::LLVM::AddOp>(
+            loc, raw_span, c_i64(NRQ_GC_INLINE_SPAN_ALIGNMENT - 1)).getResult();
+        span_bytes = builder_.create<mlir::LLVM::AndOp>(
+            loc, padded,
+            c_i64(~uint64_t{NRQ_GC_INLINE_SPAN_ALIGNMENT - 1})).getResult();
+      }
+    }
+
+    mlir::Value cfg_addr = ensure_inline_gc_config_global(loc);
+    auto site_id_load = builder_.create<mlir::LLVM::LoadOp>(
+        loc, i32, site.site_id);
+    site_id_load.setAlignment(4);
+    site_id_load.setOrdering(mlir::LLVM::AtomicOrdering::acquire);
+    mlir::Value site_id = site_id_load.getResult();
+
+    auto cfg64_load = builder_.create<mlir::LLVM::LoadOp>(loc, i64, cfg_addr);
+    cfg64_load.setAlignment(8);
+    cfg64_load.setOrdering(mlir::LLVM::AtomicOrdering::acquire);
+    mlir::Value cfg64 = cfg64_load.getResult();
+
+    mlir::Value gate = builder_.create<mlir::LLVM::TruncOp>(
+        loc, i32, cfg64).getResult();
+    mlir::Value site_ready = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::ne, site_id, c_i32(0)).getResult();
+    mlir::Value gate_clear = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::eq, gate, c_i32(0)).getResult();
+    mlir::Value global_ok = builder_.create<mlir::LLVM::AndOp>(
+        loc, site_ready, gate_clear).getResult();
+    if (!fixed_geometry) {
+      global_ok = builder_.create<mlir::LLVM::AndOp>(
+          loc, global_ok, count_ok).getResult();
+    }
+
+    mlir::Block* check_tlab_block = func_op_.addBlock();
+    mlir::Block* fast_block = func_op_.addBlock();
+    mlir::Block* fill_block = func_op_.addBlock();
+    mlir::Block* commit_block = func_op_.addBlock();
+    mlir::Block* merge_block = func_op_.addBlock();
+    merge_block->addArgument(ptr, loc);
+
+    mlir::Block* slow_block = new mlir::Block();
+    mlir::Block* populate_site_block = new mlir::Block();
+    mlir::Block* slow_done_block = new mlir::Block();
+    cold_alloc_blocks_.push_back(slow_block);
+    cold_alloc_blocks_.push_back(populate_site_block);
+    cold_alloc_blocks_.push_back(slow_done_block);
+
+    const std::pair<uint32_t, uint32_t> likely_weights{2000u, 1u};
+    builder_.create<mlir::LLVM::CondBrOp>(
+        loc, global_ok, check_tlab_block, mlir::ValueRange{},
+        slow_block, mlir::ValueRange{}, likely_weights);
+
+    // Hot TLAB check: verifies active TLAB kind matches, pending accounting
+    // stays below `accounting_batch`, and bump range has room for `span_bytes`.
+    builder_.setInsertionPointToStart(check_tlab_block);
+    mlir::Value tls = ensure_fast_tls_global(loc);
+
+    auto batch_load = builder_.create<mlir::LLVM::LoadOp>(
+        loc, i64, byte_gep(cfg_addr, offsetof(NrqGcInlineConfig, accounting_batch)));
+    batch_load.setAlignment(8);
+    batch_load.setOrdering(mlir::LLVM::AtomicOrdering::monotonic);
+    mlir::Value batch = batch_load.getResult();
+
+    auto unflushed_load = builder_.create<mlir::LLVM::LoadOp>(
+        loc, i64, byte_gep(tls, offsetof(NrqGcFastTls, unflushed_bytes)));
+    unflushed_load.setAlignment(8);
+    mlir::Value new_unflushed = builder_.create<mlir::LLVM::AddOp>(
+        loc, unflushed_load.getResult(), payload_bytes).getResult();
+    mlir::Value batch_ok = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::ult, new_unflushed, batch).getResult();
+
+    auto kind_load = builder_.create<mlir::LLVM::LoadOp>(
+        loc, i32, byte_gep(tls, offsetof(NrqGcFastTls, tlab_kind)));
+    kind_load.setAlignment(4);
+    mlir::Value kind_ok = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::eq, kind_load.getResult(),
+        expected_kind).getResult();
+
+    auto cursor_load = builder_.create<mlir::LLVM::LoadOp>(
+        loc, ptr, byte_gep(tls, offsetof(NrqGcFastTls, tlab_cursor)));
+    cursor_load.setAlignment(8);
+    mlir::Value cursor = cursor_load.getResult();
+    auto end_load = builder_.create<mlir::LLVM::LoadOp>(
+        loc, ptr, byte_gep(tls, offsetof(NrqGcFastTls, tlab_end)));
+    end_load.setAlignment(8);
+    mlir::Value cursor_int = builder_.create<mlir::LLVM::PtrToIntOp>(
+        loc, i64, cursor).getResult();
+    mlir::Value end_int = builder_.create<mlir::LLVM::PtrToIntOp>(
+        loc, i64, end_load.getResult()).getResult();
+    mlir::Value new_cursor_int = builder_.create<mlir::LLVM::AddOp>(
+        loc, cursor_int, span_bytes).getResult();
+    mlir::Value room_ok = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::ule, new_cursor_int, end_int).getResult();
+
+    mlir::Value tlab_ready = builder_.create<mlir::LLVM::AndOp>(
+        loc, batch_ok, kind_ok).getResult();
+    mlir::Value fast_ok = builder_.create<mlir::LLVM::AndOp>(
+        loc, tlab_ready, room_ok).getResult();
+    builder_.create<mlir::LLVM::CondBrOp>(
+        loc, fast_ok, fast_block, mlir::ValueRange{},
+        slow_block, mlir::ValueRange{}, likely_weights);
+
+    // Hot inline bump allocation: advance cursor, write Compact (H8) or
+    // Extended (H16) header, then zero-fill payload unless pre-zeroed.
+    builder_.setInsertionPointToStart(fast_block);
+    mlir::Value new_cursor = builder_.create<mlir::LLVM::GEPOp>(
+        loc, ptr, i8, cursor, mlir::ValueRange{span_bytes}).getResult();
+    auto store_cursor = builder_.create<mlir::LLVM::StoreOp>(
+        loc, new_cursor, byte_gep(tls, offsetof(NrqGcFastTls, tlab_cursor)));
+    store_cursor.setAlignment(8);
+
+    mlir::Value initial_state64 = builder_.create<mlir::LLVM::LShrOp>(
+        loc, cfg64, c_i64(32)).getResult();
+    mlir::Value site_id64 = builder_.create<mlir::LLVM::ZExtOp>(
+        loc, i64, site_id).getResult();
+
+    auto write_h8_header = [&]() {
+      mlir::Value shifted_id = builder_.create<mlir::LLVM::ShlOp>(
+          loc, site_id64, c_i64(32)).getResult();
+      mlir::Value hdr64 = builder_.create<mlir::LLVM::OrOp>(
+          loc, initial_state64, shifted_id).getResult();
+      auto store_hdr = builder_.create<mlir::LLVM::StoreOp>(loc, hdr64, cursor);
+      store_hdr.setAlignment(8);
+    };
+    auto write_h16_header = [&]() {
+      mlir::Value count32 = builder_.create<mlir::LLVM::TruncOp>(
+          loc, i32, count).getResult();
+      mlir::Value count64 = builder_.create<mlir::LLVM::ZExtOp>(
+          loc, i64, count32).getResult();
+      mlir::Value shifted_state = builder_.create<mlir::LLVM::ShlOp>(
+          loc, initial_state64, c_i64(32)).getResult();
+      mlir::Value w0 = builder_.create<mlir::LLVM::OrOp>(
+          loc, count64, shifted_state).getResult();
+      auto store_w0 = builder_.create<mlir::LLVM::StoreOp>(loc, w0, cursor);
+      store_w0.setAlignment(8);
+      auto store_w1 = builder_.create<mlir::LLVM::StoreOp>(
+          loc, site_id64, byte_gep(cursor, 8));
+      store_w1.setAlignment(8);
+    };
+
+    mlir::Value payload;
+    if (fixed_geometry) {
+      if (fixed_header == 8) {
+        write_h8_header();
+        payload = byte_gep(cursor, 8);
+      } else {
+        write_h16_header();
+        payload = byte_gep(cursor, 16);
+      }
+    } else if (force_extended) {
+      write_h16_header();
+      payload = byte_gep(cursor, 16);
+    } else if (max_multi_count == 0) {
+      write_h8_header();
+      payload = byte_gep(cursor, 8);
+    } else {
+      mlir::Block* h8_hdr_block = func_op_.addBlock();
+      mlir::Block* h16_hdr_block = func_op_.addBlock();
+      mlir::Block* zero_check_block = func_op_.addBlock();
+      builder_.create<mlir::LLVM::CondBrOp>(
+          loc, is_one_cond, h8_hdr_block, h16_hdr_block);
+      builder_.setInsertionPointToStart(h8_hdr_block);
+      write_h8_header();
+      builder_.create<mlir::LLVM::BrOp>(loc, zero_check_block);
+      builder_.setInsertionPointToStart(h16_hdr_block);
+      write_h16_header();
+      builder_.create<mlir::LLVM::BrOp>(loc, zero_check_block);
+      builder_.setInsertionPointToStart(zero_check_block);
+      payload = builder_.create<mlir::LLVM::GEPOp>(
+          loc, ptr, i8, cursor, mlir::ValueRange{header_bytes}).getResult();
+    }
+
+    auto pz_load = builder_.create<mlir::LLVM::LoadOp>(
+        loc, i8, byte_gep(tls, offsetof(NrqGcFastTls, tlab_payload_zero)));
+    pz_load.setAlignment(1);
+    mlir::Value is_prezeroed = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::ne, pz_load.getResult(),
+        c_i8(0)).getResult();
+    builder_.create<mlir::LLVM::CondBrOp>(
+        loc, is_prezeroed, commit_block, fill_block);
+
+    builder_.setInsertionPointToStart(fill_block);
+    builder_.create<mlir::LLVM::MemsetOp>(
+        loc, payload, c_i8(0), payload_bytes, /*isVolatile=*/false);
+    builder_.create<mlir::LLVM::BrOp>(loc, commit_block);
+
+    // Update per-mutator accounting and publish root. `tlab_active_range->end`
+    // is synced lazily from `tlab_cursor` at publication/refill boundaries.
+    builder_.setInsertionPointToStart(commit_block);
+    mlir::Value pbytes_ptr = byte_gep(tls, offsetof(NrqGcFastTls, pending_bytes));
+    auto pbytes_load = builder_.create<mlir::LLVM::LoadOp>(loc, i64, pbytes_ptr);
+    pbytes_load.setAlignment(8);
+    mlir::Value next_pbytes = builder_.create<mlir::LLVM::AddOp>(
+        loc, pbytes_load.getResult(), payload_bytes).getResult();
+    auto store_pbytes = builder_.create<mlir::LLVM::StoreOp>(
+        loc, next_pbytes, pbytes_ptr);
+    store_pbytes.setAlignment(8);
+
+    mlir::Value pcount_ptr = byte_gep(tls, offsetof(NrqGcFastTls, pending_count));
+    auto pcount_load = builder_.create<mlir::LLVM::LoadOp>(loc, i64, pcount_ptr);
+    pcount_load.setAlignment(8);
+    mlir::Value next_pcount = builder_.create<mlir::LLVM::AddOp>(
+        loc, pcount_load.getResult(), c_i64(1)).getResult();
+    auto store_pcount = builder_.create<mlir::LLVM::StoreOp>(
+        loc, next_pcount, pcount_ptr);
+    store_pcount.setAlignment(8);
+
+    auto store_unflushed = builder_.create<mlir::LLVM::StoreOp>(
+        loc, new_unflushed,
+        byte_gep(tls, offsetof(NrqGcFastTls, unflushed_bytes)));
+    store_unflushed.setAlignment(8);
+
+    auto store_root = builder_.create<mlir::LLVM::StoreOp>(
+        loc, payload, root_slot);
+    store_root.setAlignment(8);
+    builder_.create<mlir::LLVM::BrOp>(
+        loc, mlir::ValueRange{payload}, merge_block);
+
+    // Cold slow path: invoke existing planned runtime allocation entry point and
+    // cache the resolved layout ID if this site is cold (`site_id == 0`).
+    builder_.setInsertionPointToStart(slow_block);
+    mlir::Value plan = plan_value_for_slow(is_one_cond);
+    mlir::Value slow_result = builder_.create<mlir::LLVM::CallOp>(
+        loc, slow_fn,
+        mlir::ValueRange{root_slot, count, element_size, table_pointer,
+                         table_count, site.site_cache, plan}).getResult();
+    mlir::Value need_site_id = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::eq, site_id, c_i32(0)).getResult();
+    builder_.create<mlir::LLVM::CondBrOp>(
+        loc, need_site_id, populate_site_block, slow_done_block);
+
+    builder_.setInsertionPointToStart(populate_site_block);
+    auto layout_load = builder_.create<mlir::LLVM::LoadOp>(
+        loc, ptr, site.site_cache);
+    layout_load.setAlignment(8);
+    auto layout_id_fn = ensure_runtime_fn(
+        module_, builder_, "nrq_gc_layout_id", i32, {ptr});
+    mlir::Value resolved_id = builder_.create<mlir::LLVM::CallOp>(
+        loc, layout_id_fn, mlir::ValueRange{layout_load.getResult()}).getResult();
+    auto store_site_id = builder_.create<mlir::LLVM::StoreOp>(
+        loc, resolved_id, site.site_id);
+    store_site_id.setAlignment(4);
+    store_site_id.setOrdering(mlir::LLVM::AtomicOrdering::release);
+    builder_.create<mlir::LLVM::BrOp>(loc, slow_done_block);
+
+    builder_.setInsertionPointToStart(slow_done_block);
+    builder_.create<mlir::LLVM::BrOp>(
+        loc, mlir::ValueRange{slow_result}, merge_block);
+
+    builder_.setInsertionPointToStart(merge_block);
+    return merge_block->getArgument(0);
+  }
+
+  // One rooted managed array allocation: uses an inline TLAB fast path when
+  // eligible and falls back to `nrq_gc_allocate_array_planned` when cold,
+  // refilling, or collecting. `force_extended` keeps headerless-free SoA
+  // blocks on H16 so `payload - 16` reads remain valid.
   mlir::Value emit_planned_rooted_array(mlir::Location loc,
                                         mlir::Value root_slot,
                                         mlir::Value count,
                                         mlir::Value element_size,
                                         mlir::Value offsets_pointer,
-                                        mlir::Value reference_count) {
-    // Array + extended, the only representation an array can use. Mirrors
-    // NRQ_ALLOC_PLAN_ARRAY | NRQ_ALLOC_PLAN_REPR_BITS(NRQ_ALLOC_REPR_EXTENDED)
-    // from runtime/include/nirqoba/runtime/alloc_hint.h; the runtime re-checks
-    // the plan and falls back to its own decision if the two ever disagree.
-    constexpr uint32_t kArrayAllocationPlan = 1u | (3u << 8);
-    auto fn = ensure_runtime_fn(module_, builder_,
-                                "nrq_gc_allocate_array_planned",
-                                llvm_ptr_type(ctx_),
-                                {llvm_ptr_type(ctx_), builder_.getI64Type(),
-                                 builder_.getI64Type(), llvm_ptr_type(ctx_),
-                                 builder_.getI64Type(), llvm_ptr_type(ctx_),
-                                 builder_.getI32Type()});
-    mlir::Value site_cache = allocation_site_cache(loc);
-    mlir::Value plan = builder_.create<mlir::LLVM::ConstantOp>(
-        loc, builder_.getI32Type(),
-        builder_.getI32IntegerAttr(static_cast<int32_t>(kArrayAllocationPlan)))
-                           .getResult();
-    return builder_.create<mlir::LLVM::CallOp>(
-        loc, fn, mlir::ValueRange{root_slot, count, element_size, offsets_pointer,
-                                  reference_count, site_cache, plan}).getResult();
+                                        mlir::Value reference_count,
+                                        bool force_extended = false) {
+    return emit_inline_rooted_tlab_allocation(
+        loc, root_slot, count, element_size, offsets_pointer, reference_count,
+        "nrq_gc_allocate_array_planned", force_extended);
   }
 
-  // The structure-of-arrays form of emit_planned_rooted_array: same static plan,
-  // same per-site descriptor cache, strided column table instead of an offset
-  // table.
+  // The structure-of-arrays form of emit_planned_rooted_array: same inline H16
+  // fast path and per-site descriptor cache, strided column table instead of
+  // an offset table.
   mlir::Value emit_planned_rooted_soa(mlir::Location loc,
                                       mlir::Value root_slot, mlir::Value count,
                                       mlir::Value element_size,
                                       mlir::Value pairs_pointer,
                                       mlir::Value pair_count) {
-    constexpr uint32_t kArrayAllocationPlan = 1u | (3u << 8);
-    auto fn = ensure_runtime_fn(module_, builder_, "nrq_gc_allocate_soa_planned",
-                                llvm_ptr_type(ctx_),
-                                {llvm_ptr_type(ctx_), builder_.getI64Type(),
-                                 builder_.getI64Type(), llvm_ptr_type(ctx_),
-                                 builder_.getI64Type(), llvm_ptr_type(ctx_),
-                                 builder_.getI32Type()});
-    mlir::Value site_cache = allocation_site_cache(loc);
-    mlir::Value plan = builder_.create<mlir::LLVM::ConstantOp>(
-        loc, builder_.getI32Type(),
-        builder_.getI32IntegerAttr(static_cast<int32_t>(kArrayAllocationPlan)))
-                           .getResult();
-    return builder_.create<mlir::LLVM::CallOp>(
-        loc, fn, mlir::ValueRange{root_slot, count, element_size, pairs_pointer,
-                                  pair_count, site_cache, plan}).getResult();
+    return emit_inline_rooted_tlab_allocation(
+        loc, root_slot, count, element_size, pairs_pointer, pair_count,
+        "nrq_gc_allocate_soa_planned", /*force_extended=*/true);
   }
 
   void emit_gc_root_registration(mlir::Value slot, const Type& value_type,
@@ -3169,7 +3623,8 @@ class FunctionTranslator {
             mlir::Value offsets_pointer = builder_.create<mlir::LLVM::ZeroOp>(
                 loc, llvm_ptr_type(ctx_)).getResult();
             result = emit_planned_rooted_array(loc, root_slot, count, size,
-                                               offsets_pointer, ref_count);
+                                               offsets_pointer, ref_count,
+                                               /*force_extended=*/true);
           } else {
             mlir::Value pairs_slot = reference_layout_descriptor(column_pairs, loc);
             if (!pairs_slot) {
@@ -4773,6 +5228,7 @@ class FunctionTranslator {
   std::size_t current_operation_index_ = 0;
   mlir::Value gc_root_frame_marker_;
   mlir::Block* bounds_fail_block_ = nullptr;
+  std::vector<mlir::Block*> cold_alloc_blocks_;
   mlir::Value safepoint_counter_;
   SlotPromotion promoted_slots_;
 };

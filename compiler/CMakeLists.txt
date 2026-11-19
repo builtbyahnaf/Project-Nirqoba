@@ -111,6 +111,8 @@ target_include_directories(nirqoba_compiler_lib
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
     "${CMAKE_CURRENT_BINARY_DIR}/include"   # generated Version.h and TableGen .inc
+  PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include"
 )
 
 target_link_libraries(nirqoba_compiler_lib

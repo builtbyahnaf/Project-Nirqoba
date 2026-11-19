@@ -12,6 +12,71 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.617-beta
+
+### Summary of Changes (since `0.613-beta`)
+
+Implemented the two allocation-architecture optimizations identified by the
+`0.613-beta` stress-test attribution (**Upgrade Phi** and **Upgrade Upsilon**),
+advancing the release label `+0.004` (`0.613-beta` -> `0.617-beta`) per the
+three-upgrade rule.
+
+#### Upgrade Phi — Compact Single-Element Array Representation
+
+- **`runtime/src/alloc_hint.cpp` & `runtime/src/gc.cpp`:** Eligible non-SoA
+  one-element arrays whose 8-byte-header span (`object_span_bytes(8, payload_bytes)`)
+  fits within `kGcPageBytes` (64 KiB) now select `Compact` (H8, 8-byte header)
+  instead of `Extended` (H16, 16-byte header). On `Compact` pages,
+  `object_element_count()` already returns `1`, while `layout->flags &
+  NRQ_OBJECT_LAYOUT_ARRAY` preserves array identity vs fixed records.
+- **SoA & large-object safety:** `memory.owned_soa<T>(count)` (including scalar
+  SoA blocks lowered through `emit_planned_rooted_array` with `force_extended`)
+  and `nrq_alloc_plan_for_layout` for SoA descriptors remain on H16 (`Extended`)
+  because `SoaColumnPtr` reads `element_count` at `payload - 16`. Single-element
+  arrays exceeding compact page capacity fall back to `Extended` / `Large`.
+- For 24-byte `TreeNode` (Test 02) and 16-byte `CycleNode` (Test 03) allocations,
+  per-object footprint drops from 40B -> 32B (-20%) and 32B -> 24B (-25%).
+
+#### Upgrade Upsilon — Compiler-Inlined TLAB Allocation
+
+- **`runtime/include/nirqoba/runtime/gc_inline.h` & `runtime/src/gc.cpp`:**
+  Defined a shared ABI (`NrqGcInlineConfig`, `NrqGcFastTls`, `NrqGcPendingRange`)
+  checked with `static_assert` offsets in `gc.cpp`, along with
+  `nrq_gc_layout_id`, `nrq_gc_set_inline_debug_alloc`, and C/C++ inline helpers
+  supporting H0, H8, and H16 (`nrq_gc_inline_try_allocate_{h0,h8,h16}`).
+  Pending-range end cursors are synced lazily from `tlab_cursor` / `h0_cursor`
+  at publication, refill, pending lookup, and mutator-leave boundaries, avoiding
+  an extra pointer load and indirect store per inline allocation.
+- **`compiler/lib/Lowering/TirToMlir.cpp`, `RuntimeAttributes.h`, `PassPipeline.cpp`:**
+  Replaced opaque per-site calls on eligible `array.allocate` and
+  `memory.owned_soa` paths with an inline bump-pointer TLAB fast path using
+  `llvm.intr.threadlocal.address(@nrq_gc_fast_tls)` and `@nrq_gc_inline_config`.
+  The fast path checks site initialization (`nrq_alloc_site_id_* != 0`), collector
+  gate (`Idle`, threshold not due, debug allocation trace disabled), accounting
+  batch budget, active TLAB kind (`H8` or `H16`), and remaining bump capacity,
+  writes the 8B/16B header, zeroes payload via `llvm.intr.memset` only when
+  `tlab_payload_zero == 0`, updates per-mutator accounting, and publishes `*root_slot`.
+  Refills, exhaustion, active GC cycles, threshold flushes, cold site resolution,
+  dynamic oversized requests, and debug event emission branch cleanly to a cold
+  slow path calling `nrq_gc_allocate_array_planned` / `nrq_gc_allocate_soa_planned`.
+- **`runtime/src/gc_debug.cpp`:** Propagates `NRQ_GC_EVENT_ALLOCATION` toggles
+  to `nrq_gc_inline_config.gate` so development event emission stays identical
+  between fast and slow paths.
+
+#### Validation & Measurements
+
+- **Isolated allocation microbenchmark (2,097,151 × 24B H8 nodes, Release runtime):**
+  - `nrq_gc_allocate_array_planned` call: `64.9–71.3 ms` (`30.9–34.0 ns/obj`)
+  - Inline TLAB fast path + slow-path refill: **`20.4–28.4 ms`** (`9.7–13.6 ns/obj`),
+    with **2,093,119 / 2,097,151 (99.81%)** fast-path hit rate.
+- **Stress Test 2 (`build/msvc-release`, 3-repeat suite medians):**
+  - Test 01 (`managed_object_allocation`): `ALLOC_MS` 80.0 ms, `TRAVERSE_MS` 3.0 ms, `COLLECT_MS` 1.0 ms.
+  - Test 02 (`mark_and_sweep`, 2,097,151 nodes): suite median `BUILD_MS` 262.0 ms / `COLLECT_MS` 58.0 ms (standalone quiet runs: `BUILD_MS` 183–277 ms, `COLLECT_MS` 40–60 ms; `BUILD_MS` remains dominated by per-activation frame/barrier/pin protocol calls).
+  - Test 03 (`cyclic_graph_reclamation`, 1,000,000 nodes): suite median `BUILD_MS` 69.0 ms / `COLLECT_MS` 1.0 ms.
+- **Tests:** 464 / 464 C++ unit tests (`GcInlineTlabTest`, `MlirPipelineTest`, `AllocHintTest`, `GcRepresentationTest`, `GcPlannedAllocationTest`, `AllocPlanPropertyTest`), 625 / 625 integration & memory-model cases (including `gc_inline_tlab_alloc`), 140 / 140 runtime invariant parity checks, and 37 / 37 `gc_*` configuration equivalence checks passed.
+
+---
+
 ## Version 0.613-beta
 
 ### Summary of Changes (since `0.609-beta`)

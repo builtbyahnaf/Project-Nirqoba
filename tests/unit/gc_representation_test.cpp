@@ -159,16 +159,15 @@ TEST(GcRepresentationTest, AnArrayReportsItsElementCountThroughItsLayout) {
 
 TEST(GcRepresentationTest, ASingleElementContainerIsStillAnArray) {
   // A container of one element has the same byte count as a fixed record of that
-  // size, so the shape has to be stated by the entry point. Describing it as a
-  // record would drop the element count from the header and the compiler's
-  // `payload - 16` length read would see page metadata instead.
+  // size, so the shape has to be stated by the entry point. Eligible 1-element
+  // arrays use Compact (H8) instead of H16 while preserving NRQ_OBJECT_LAYOUT_ARRAY.
   nrq_gc_disable();
   nrq_gc_collect();
   void* one = nrq_gc_allocate_array(1, sizeof(void*), nullptr);
   ASSERT_NE(one, nullptr);
-  ASSERT_EQ(nrq_gc_object_header_size(one), size_t{16});
+  ASSERT_EQ(nrq_gc_object_header_size(one), size_t{8});
   ASSERT_EQ(nrq_gc_object_representation(one),
-            static_cast<int32_t>(NRQ_GC_REPR_EXTENDED));
+            static_cast<int32_t>(NRQ_GC_REPR_COMPACT));
   const nrq_object_layout* layout = nrq_gc_object_layout(one);
   ASSERT_NE(layout, nullptr);
   ASSERT_TRUE((layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) != 0);

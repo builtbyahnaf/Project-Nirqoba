@@ -52,7 +52,7 @@ TEST(AllocHintTest, TheHeaderlessBoundaryIsTwoHundredFiftySixBytes) {
   ASSERT_EQ(nrq_alloc_plan(&past_limit).representation, NRQ_ALLOC_REPR_COMPACT);
 }
 
-TEST(AllocHintTest, AnArrayIsAlwaysExtended) {
+TEST(AllocHintTest, AnArrayIsExtendedExceptEligibleSingleElement) {
   const NrqAllocHint value = hint(16, 100, NRQ_ALLOC_HINT_MANAGED |
                                                NRQ_ALLOC_HINT_ARRAY);
   const NrqAllocPlan plan = nrq_alloc_plan(&value);
@@ -61,11 +61,17 @@ TEST(AllocHintTest, AnArrayIsAlwaysExtended) {
   ASSERT_EQ(plan.payload_bytes, uint64_t{16});
   ASSERT_EQ(plan.total_bytes, uint64_t{1600});
   ASSERT_TRUE((plan.flags & NRQ_ALLOC_PLAN_ARRAY) != 0);
-  // A one-element array is still an array: the count is what distinguishes it
-  // from a record, not the byte total.
-  const NrqAllocHint single = hint(16, 1, NRQ_ALLOC_HINT_MANAGED |
+  // Eligible single-element arrays use Compact (H8) while keeping the array flag.
+  const NrqAllocHint single = hint(24, 1, NRQ_ALLOC_HINT_MANAGED |
                                              NRQ_ALLOC_HINT_ARRAY);
-  ASSERT_EQ(nrq_alloc_plan(&single).representation, NRQ_ALLOC_REPR_EXTENDED);
+  const NrqAllocPlan single_plan = nrq_alloc_plan(&single);
+  ASSERT_EQ(single_plan.representation, NRQ_ALLOC_REPR_COMPACT);
+  ASSERT_EQ(single_plan.header_bytes, uint64_t{8});
+  ASSERT_TRUE((single_plan.flags & NRQ_ALLOC_PLAN_ARRAY) != 0);
+  // Single-element arrays whose header+payload exceeds one page stay Extended.
+  const NrqAllocHint oversized = hint(65529, 1, NRQ_ALLOC_HINT_MANAGED |
+                                                  NRQ_ALLOC_HINT_ARRAY);
+  ASSERT_EQ(nrq_alloc_plan(&oversized).representation, NRQ_ALLOC_REPR_EXTENDED);
 }
 
 TEST(AllocHintTest, ADeterministicSiteHasNoHeader) {

@@ -14,6 +14,7 @@
 #include "nirqoba/runtime/alloc_hint.h"
 #include "nirqoba/runtime/cache_line.h"
 #include "nirqoba/runtime/fatal.h"
+#include "nirqoba/runtime/gc_inline.h"
 
 #include "gc_debug_internal.h"
 #include "slot_index.h"
@@ -460,6 +461,15 @@ static_assert((kYoungBit & kAgeMask) == 0, "state fields overlap");
 static_assert((kRememberedBit & kAgeMask) == 0, "state fields overlap");
 static_assert(kAgeShift + 8 <= 32, "the age does not fit the state word");
 static_assert(kAgeMask <= 0xFFFFFFFFu, "the age mask leaves the word");
+static_assert((kYoungBit >> 1) == 1u, "H0 young bit must stay at bit 1");
+
+inline uint32_t inline_kind_for(PageKind kind) {
+  switch (kind) {
+    case PageKind::Compact: return NRQ_GC_INLINE_KIND_COMPACT;
+    case PageKind::Extended: return NRQ_GC_INLINE_KIND_EXTENDED;
+    default: return NRQ_GC_INLINE_KIND_NONE;
+  }
+}
 
 // H8. A fixed record that needs its own state word and its layout name, and
 // nothing else: the element count is always one and birth lives on the page.
@@ -1259,52 +1269,20 @@ struct TransferPinDelta {
 struct MutatorState {
   size_t depth = 0;
   bool parked = false;
-  GcPage* tlab_page = nullptr;
-  unsigned char* tlab_cursor = nullptr;
-  unsigned char* tlab_end = nullptr;
+  // Thread-local fast-allocation buffer shared with compiler-inlined sequences
+  // via `nrq_gc_fast_tls`. Initialized on mutator registration and valid for
+  // the lifetime of every registered entry in `mutators`.
+  NrqGcFastTls* fast = nullptr;
   uint64_t tlab_generation = 0;
-  // Set when the current reservation was taken from a page's untouched, freshly
-  // committed tail: its payloads already hold zeros, so the per-object fill is
-  // skipped. Decided at the refill, where the page is already being read.
-  bool tlab_payload_is_zero = false;
-  bool h0_payload_is_zero = false;
-  // A headerless reservation is separate from the ordinary one because the page
-  // is dedicated to one layout and one slot size. Switching layout therefore
-  // starts a new reservation instead of reinterpreting the cursor.
-  GcPage* h0_page = nullptr;
-  unsigned char* h0_cursor = nullptr;
-  unsigned char* h0_end = nullptr;
   const nrq_object_layout* h0_layout = nullptr;
   size_t h0_slot = 0;
   uint64_t h0_generation = 0;
-  // Unpublished allocations are described by contiguous page ranges instead of
-  // one intrusive link per object. A range is [begin, end) of header storage in
-  // one page; the publish walk advances by each object's span.
-  struct PendingRange {
-    GcPage* page = nullptr;
-    unsigned char* begin = nullptr;
-    unsigned char* end = nullptr;
-  };
-  static constexpr size_t kPendingRangeCapacity = 32;
-  PendingRange pending_ranges[kPendingRangeCapacity];
-  size_t pending_range_count = 0;
+  static constexpr size_t kPendingRangeCapacity = NRQ_GC_INLINE_PENDING_CAPACITY;
   // Depth of lock-free barrier regions this thread is currently inside. Each
   // mutator owns its own cache line, so a thread's store barrier never
   // invalidates another thread's copy; the collector reads the counters only
   // when it needs the handshake, and only over mutators that are registered.
   alignas(nirq::nrq_cache_line_bytes) std::atomic<uint32_t> barrier_depth{0};
-  // Per-mutator allocation accounting. The owner updates these while
-  // allocating; the collector reads them with gc_mutex held when publishing or
-  // when reporting statistics, so the fast path never touches a global counter.
-  std::atomic<size_t> pending_bytes{0};
-  std::atomic<size_t> pending_count{0};
-  // Owner-only mirrors of the two published counters. The stores below still
-  // publish the exact value after every allocation; the loads that preceded them
-  // are gone, because only this thread writes the counters and every clear
-  // happens while the owner is parked or is the one clearing.
-  size_t pending_bytes_local = 0;
-  size_t pending_count_local = 0;
-  size_t unflushed_bytes = 0;
   // Old-to-young stores buffer raw referents so ordinary stores do not need the
   // collector mutex. The owner drains this buffer at a safepoint/leave; the
   // collector drains every registered mutator after parking them.
@@ -1979,6 +1957,41 @@ uint64_t saturated_add(uint64_t left, uint64_t right) {
   return right > UINT64_MAX - left ? UINT64_MAX : left + right;
 }
 
+std::atomic<bool> inline_debug_alloc_enabled{false};
+
+void refresh_inline_config_locked() {
+  const uint32_t phase_bit =
+      collection_phase.load(std::memory_order_acquire) != CollectionPhase::Idle
+          ? NRQ_GC_INLINE_GATE_PHASE_BIT
+          : 0u;
+  const size_t threshold =
+      allocation_accounting.collection_threshold.load(std::memory_order_relaxed);
+  const size_t since =
+      allocation_accounting.bytes_since_collection.load(std::memory_order_relaxed);
+  const uint32_t due_bit =
+      (automatic_collection_enabled.load(std::memory_order_relaxed) &&
+       since >= threshold)
+          ? NRQ_GC_INLINE_GATE_DUE_BIT
+          : 0u;
+  const uint32_t debug_bit =
+      inline_debug_alloc_enabled.load(std::memory_order_relaxed)
+          ? NRQ_GC_INLINE_GATE_DEBUG_ALLOC_BIT
+          : 0u;
+  const uint32_t gate = phase_bit | due_bit | debug_bit;
+  const uint32_t initial_state =
+      generational_collection_enabled.load(std::memory_order_relaxed)
+          ? kYoungBit
+          : 0u;
+  const size_t batch =
+      std::min(kAccountingBatchBytes, threshold == 0 ? size_t{1} : threshold);
+  std::atomic_ref<uint32_t>(nrq_gc_inline_config.gate)
+      .store(gate, std::memory_order_release);
+  std::atomic_ref<uint32_t>(nrq_gc_inline_config.initial_state)
+      .store(initial_state, std::memory_order_release);
+  std::atomic_ref<size_t>(nrq_gc_inline_config.accounting_batch)
+      .store(batch, std::memory_order_release);
+}
+
 // `bytes_since_collection` has exactly one writer-path class - the collection
 // and allocation code that runs under gc_mutex - so the update is a plain
 // saturating load and store rather than a compare-exchange loop that can never
@@ -1990,22 +2003,43 @@ void add_since_collection_locked(size_t amount) {
   allocation_accounting.bytes_since_collection.store(
       amount > SIZE_MAX - current ? SIZE_MAX : current + amount,
       std::memory_order_relaxed);
+  refresh_inline_config_locked();
 }
 
 // Fold a mutator's locally batched allocation bytes into the shared trigger
 // counter. Callers hold gc_mutex.
 void flush_mutator_accounting_locked(MutatorState& mutator) {
-  if (mutator.unflushed_bytes == 0) return;
-  add_since_collection_locked(mutator.unflushed_bytes);
-  mutator.unflushed_bytes = 0;
+  if (!mutator.fast || mutator.fast->unflushed_bytes == 0) return;
+  add_since_collection_locked(mutator.fast->unflushed_bytes);
+  mutator.fast->unflushed_bytes = 0;
+}
+
+inline void sync_active_ranges(NrqGcFastTls& fast) {
+  if (fast.tlab_active_range) fast.tlab_active_range->end = fast.tlab_cursor;
+  if (fast.h0_active_range) fast.h0_active_range->end = fast.h0_cursor;
+}
+
+void clear_tlab_fast_path(NrqGcFastTls& fast) {
+  if (fast.tlab_active_range) fast.tlab_active_range->end = fast.tlab_cursor;
+  fast.tlab_active_range = nullptr;
+  fast.tlab_kind = NRQ_GC_INLINE_KIND_NONE;
+}
+
+void clear_h0_fast_path(NrqGcFastTls& fast) {
+  if (fast.h0_active_range) fast.h0_active_range->end = fast.h0_cursor;
+  fast.h0_active_range = nullptr;
+  fast.h0_fast_layout = nullptr;
 }
 
 void publish_tlab_locked(MutatorState& mutator) {
-  for (size_t range_index = 0; range_index < mutator.pending_range_count;
-       ++range_index) {
-    const MutatorState::PendingRange range = mutator.pending_ranges[range_index];
+  if (!mutator.fast) return;
+  NrqGcFastTls& fast = *mutator.fast;
+  sync_active_ranges(fast);
+  const uint32_t range_count = fast.pending_range_count;
+  for (uint32_t range_index = 0; range_index < range_count; ++range_index) {
+    const NrqGcPendingRange range = fast.pending_ranges[range_index];
     if (!range.page || !range.begin) continue;
-    GcPage& page = *range.page;
+    GcPage& page = *static_cast<GcPage*>(range.page);
     const size_t header_bytes = page_header_bytes(page.kind);
     for (unsigned char* cursor = range.begin; cursor < range.end;) {
       const ObjectRef object{cursor, &page};
@@ -2055,11 +2089,11 @@ void publish_tlab_locked(MutatorState& mutator) {
     }
   }
   flush_mutator_accounting_locked(mutator);
-  mutator.pending_range_count = 0;
-  mutator.pending_bytes_local = 0;
-  mutator.pending_bytes.store(0, std::memory_order_relaxed);
-  mutator.pending_count_local = 0;
-  mutator.pending_count.store(0, std::memory_order_relaxed);
+  fast.pending_range_count = 0;
+  clear_tlab_fast_path(fast);
+  clear_h0_fast_path(fast);
+  std::atomic_ref<size_t>(fast.pending_bytes).store(0, std::memory_order_relaxed);
+  std::atomic_ref<size_t>(fast.pending_count).store(0, std::memory_order_relaxed);
 }
 
 bool collection_is_requested() {
@@ -3314,8 +3348,10 @@ size_t take_free_runs_locked(size_t minimum, size_t byte_budget, size_t max_runs
 // The space stays charged to its page until the page is recycled, so this is the
 // only measurement of what an abandoned slab costs.
 void account_tlab_tail(MutatorState& mutator) {
-  if (!mutator.tlab_cursor || mutator.tlab_end <= mutator.tlab_cursor) return;
-  const size_t tail = static_cast<size_t>(mutator.tlab_end - mutator.tlab_cursor);
+  if (!mutator.fast) return;
+  NrqGcFastTls& fast = *mutator.fast;
+  if (!fast.tlab_cursor || fast.tlab_end <= fast.tlab_cursor) return;
+  const size_t tail = static_cast<size_t>(fast.tlab_end - fast.tlab_cursor);
   mutator.tlab_tail_bytes = saturated_add(mutator.tlab_tail_bytes, tail);
   if (tail > mutator.tlab_tail_max_bytes) mutator.tlab_tail_max_bytes = tail;
 }
@@ -3329,29 +3365,35 @@ void account_tlab_tail(MutatorState& mutator) {
 // Callers hold gc_mutex and this mutator is parked or finished. The cursor is
 // cleared so the tail is never released twice.
 void release_tlab_tail_locked(MutatorState& mutator) {
-  if (mutator.tlab_page && mutator.tlab_cursor &&
-      mutator.tlab_end > mutator.tlab_cursor) {
+  if (!mutator.fast) return;
+  NrqGcFastTls& fast = *mutator.fast;
+  GcPage* const tlab_page = static_cast<GcPage*>(fast.tlab_page);
+  if (tlab_page && fast.tlab_cursor && fast.tlab_end > fast.tlab_cursor) {
     const size_t offset =
-        static_cast<size_t>(mutator.tlab_cursor - mutator.tlab_page->storage);
-    const size_t span = static_cast<size_t>(mutator.tlab_end - mutator.tlab_cursor);
+        static_cast<size_t>(fast.tlab_cursor - tlab_page->storage);
+    const size_t span = static_cast<size_t>(fast.tlab_end - fast.tlab_cursor);
     mutator.tlab_tail_reclaimed_bytes =
         saturated_add(mutator.tlab_tail_reclaimed_bytes, span);
-    release_span_locked(*mutator.tlab_page, offset, span);
+    release_span_locked(*tlab_page, offset, span);
   }
-  mutator.tlab_page = nullptr;
-  mutator.tlab_cursor = nullptr;
-  mutator.tlab_end = nullptr;
-  if (mutator.h0_page && mutator.h0_cursor && mutator.h0_end > mutator.h0_cursor) {
-    const size_t offset =
-        static_cast<size_t>(mutator.h0_cursor - mutator.h0_page->storage);
-    const size_t span = static_cast<size_t>(mutator.h0_end - mutator.h0_cursor);
+  fast.tlab_page = nullptr;
+  fast.tlab_cursor = nullptr;
+  fast.tlab_end = nullptr;
+  clear_tlab_fast_path(fast);
+  GcPage* const h0_page = static_cast<GcPage*>(fast.h0_page);
+  if (h0_page && fast.h0_cursor && fast.h0_end > fast.h0_cursor) {
+    const size_t offset = static_cast<size_t>(fast.h0_cursor - h0_page->storage);
+    const size_t span = static_cast<size_t>(fast.h0_end - fast.h0_cursor);
     mutator.tlab_tail_reclaimed_bytes =
         saturated_add(mutator.tlab_tail_reclaimed_bytes, span);
-    release_span_locked(*mutator.h0_page, offset, span);
+    release_span_locked(*h0_page, offset, span);
   }
-  mutator.h0_page = nullptr;
-  mutator.h0_cursor = nullptr;
-  mutator.h0_end = nullptr;
+  fast.h0_page = nullptr;
+  fast.h0_cursor = nullptr;
+  fast.h0_end = nullptr;
+  fast.h0_state_cursor = nullptr;
+  fast.h0_slot_bytes = 0;
+  clear_h0_fast_path(fast);
   mutator.h0_layout = nullptr;
   mutator.h0_slot = 0;
 }
@@ -3360,9 +3402,11 @@ void release_tlab_tail_locked(MutatorState& mutator) {
 // never replaced without being counted.
 void install_tlab(MutatorState& mutator, GcPage* page, size_t offset, size_t span) {
   account_tlab_tail(mutator);
-  mutator.tlab_page = page;
-  mutator.tlab_cursor = page->storage + offset;
-  mutator.tlab_end = mutator.tlab_cursor + span;
+  NrqGcFastTls& fast = *mutator.fast;
+  clear_tlab_fast_path(fast);
+  fast.tlab_page = page;
+  fast.tlab_cursor = page->storage + offset;
+  fast.tlab_end = fast.tlab_cursor + span;
   mutator.tlab_generation = gc_page_generation.load(std::memory_order_acquire);
   // Whether objects from this reservation need their payload filled is decided
   // once, here, from the page's known-zero boundary: the reservation covers the
@@ -3370,11 +3414,12 @@ void install_tlab(MutatorState& mutator, GcPage* page, size_t offset, size_t spa
   // and costs one register pass per allocation instead of a page probe per
   // allocation. The reservation itself is charged to the boundary, because the
   // headers written into it will be the only non-zero bytes there.
-  mutator.tlab_payload_is_zero = offset >= page->zero_cursor;
+  const bool payload_zero = offset >= page->zero_cursor;
+  fast.tlab_payload_zero = payload_zero ? 1u : 0u;
   const size_t end = offset + span;
   if (end > page->zero_cursor) page->zero_cursor = end;
   zeroing_facts.payload_bytes += span;
-  if (mutator.tlab_payload_is_zero)
+  if (payload_zero)
     zeroing_facts.prezeroed_bytes += span;
   else
     zeroing_facts.filled_bytes += span;
@@ -3446,9 +3491,12 @@ bool reserve_spare_runs_locked(MutatorState& mutator, size_t minimum_span,
 // release build abandons the list rather than touch storage that may be gone.
 void discard_stale_tlab(MutatorState& mutator) {
   account_tlab_tail(mutator);
-  mutator.tlab_page = nullptr;
-  mutator.tlab_cursor = nullptr;
-  mutator.tlab_end = nullptr;
+  if (mutator.fast) {
+    mutator.fast->tlab_page = nullptr;
+    mutator.fast->tlab_cursor = nullptr;
+    mutator.fast->tlab_end = nullptr;
+    clear_tlab_fast_path(*mutator.fast);
+  }
   mutator.tlab_generation = gc_page_generation.load(std::memory_order_acquire);
   // Only the runs a cycle boundary failed to return are abandoned here, and only
   // those whose reservation predates the current page set. A run reserved after
@@ -3841,6 +3889,7 @@ void adapt_collection_policy_locked() {
 
   allocation_accounting.collection_threshold.store(threshold,
                                                   std::memory_order_relaxed);
+  refresh_inline_config_locked();
   ++collection_policy.adaptations;
 }
 
@@ -4046,6 +4095,7 @@ void begin_cycle(bool young_only) {
     raise_store_barrier();
     collection_phase.store(CollectionPhase::Preparing,
                            std::memory_order_release);
+    refresh_inline_config_locked();
   }
   stop_mutators();
   wait_for_fast_barriers();
@@ -4126,6 +4176,7 @@ void finish_cycle_locked(bool young_only) {
   active_mark.reset();
   collection_phase.store(CollectionPhase::Idle, std::memory_order_release);
   allocation_accounting.bytes_since_collection.store(0, std::memory_order_relaxed);
+  refresh_inline_config_locked();
 }
 
 // A registered mutator may request a collection while another thread is already
@@ -4247,15 +4298,39 @@ enum class GcRepresentation : uint8_t { Auto, Headerless, Compact, Extended };
 // than the alignment waste a dedicated uniform page would leave.
 constexpr size_t kHeaderlessMaxPayload = 256;
 
-GcRepresentation select_representation(size_t payload_bytes,
+GcRepresentation select_representation(size_t payload_bytes, size_t elements,
                                        const nrq_object_layout* layout,
                                        GcRepresentation hint, bool& valid) {
   const bool array = (layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) != 0;
+  const bool soa =
+      layout->soa_column_pairs != 0 && layout->soa_columns != nullptr;
   const bool fits_page =
       object_span_bytes(0, payload_bytes) <= kGcPageBytes;
   if (array) {
-    valid = hint != GcRepresentation::Headerless &&
-            hint != GcRepresentation::Compact;
+    // Non-SoA one-element arrays whose 8-byte-header span fits within a single
+    // page can use Compact (H8): Compact pages already imply element_count == 1,
+    // while `layout->flags & NRQ_OBJECT_LAYOUT_ARRAY` distinguishes them from
+    // fixed records. SoA containers read element_count at payload - 16 and keep H16.
+    const bool compact_eligible =
+        !soa && elements == 1 &&
+        object_span_bytes(page_header_bytes(PageKind::Compact), payload_bytes) <=
+            kGcPageBytes;
+    switch (hint) {
+      case GcRepresentation::Headerless:
+        valid = false;
+        return GcRepresentation::Extended;
+      case GcRepresentation::Compact:
+        valid = compact_eligible;
+        return valid ? GcRepresentation::Compact : GcRepresentation::Extended;
+      case GcRepresentation::Extended:
+        valid = true;
+        return GcRepresentation::Extended;
+      case GcRepresentation::Auto:
+        valid = true;
+        return compact_eligible ? GcRepresentation::Compact
+                                : GcRepresentation::Extended;
+    }
+    valid = false;
     return GcRepresentation::Extended;
   }
   switch (hint) {
@@ -4457,7 +4532,7 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
   if (!layout) return nullptr;
   bool valid = true;
   const GcRepresentation representation = select_representation(
-      layout->payload_size, layout, hint, valid);
+      layout->payload_size, elements, layout, hint, valid);
   if (!valid) return nullptr;
   const bool young =
       generational_collection_enabled.load(std::memory_order_relaxed);
@@ -4675,31 +4750,30 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span,
 }
 
 void account_tlab_allocation(MutatorState& mutator, size_t bytes) {
+  NrqGcFastTls& fast = *mutator.fast;
   // Both published counters are written only by this thread: publish_tlab_locked
   // clears them while the owner is parked (or is itself the publisher). A load
   // plus a store therefore has no lost update to guard against, and it keeps the
   // value immediately visible to a statistics query - unlike batching it, which
   // would make an in-flight allocation momentarily invisible. What it drops is
   // the locked read-modify-write, which cost more than the rest of this function.
-  if (mutator.pending_bytes_local > SIZE_MAX - bytes)
+  if (fast.pending_bytes > SIZE_MAX - bytes)
     nrq_runtime_fatal("GC thread-local allocation accounting overflow");
-  mutator.pending_bytes_local += bytes;
-  mutator.pending_bytes.store(mutator.pending_bytes_local,
-                              std::memory_order_relaxed);
-  if (mutator.pending_count_local == SIZE_MAX)
+  std::atomic_ref<size_t>(fast.pending_bytes)
+      .store(fast.pending_bytes + bytes, std::memory_order_relaxed);
+  if (fast.pending_count == SIZE_MAX)
     nrq_runtime_fatal("GC thread-local allocation accounting overflow");
-  ++mutator.pending_count_local;
-  mutator.pending_count.store(mutator.pending_count_local,
-                              std::memory_order_relaxed);
+  std::atomic_ref<size_t>(fast.pending_count)
+      .store(fast.pending_count + 1, std::memory_order_relaxed);
   // The trigger only needs batch granularity, so the trackable total behind it
   // stays owner-only until the batch closes.
-  if (bytes > SIZE_MAX - mutator.unflushed_bytes)
+  if (bytes > SIZE_MAX - fast.unflushed_bytes)
     nrq_runtime_fatal("GC thread-local batch accounting overflow");
-  mutator.unflushed_bytes += bytes;
-  const size_t threshold =
-      allocation_accounting.collection_threshold.load(std::memory_order_relaxed);
-  const size_t batch = std::min(kAccountingBatchBytes, threshold == 0 ? 1 : threshold);
-  if (mutator.unflushed_bytes < batch) return;
+  fast.unflushed_bytes += bytes;
+  const size_t batch =
+      std::atomic_ref<size_t>(nrq_gc_inline_config.accounting_batch)
+          .load(std::memory_order_relaxed);
+  if (fast.unflushed_bytes < batch) return;
   HeapLockGuard lock(gc_mutex);
   flush_mutator_accounting_locked(mutator);
 }
@@ -4711,20 +4785,19 @@ void account_tlab_allocation(MutatorState& mutator, size_t bytes) {
 // of growing it, so publication still never allocates.
 void note_pending_range(MutatorState& mutator, GcPage* page,
                         unsigned char* header_storage, size_t span) {
-  if (mutator.pending_range_count != 0) {
-    MutatorState::PendingRange& last =
-        mutator.pending_ranges[mutator.pending_range_count - 1];
+  NrqGcFastTls& fast = *mutator.fast;
+  if (fast.pending_range_count != 0) {
+    NrqGcPendingRange& last = fast.pending_ranges[fast.pending_range_count - 1];
     if (last.page == page && last.end == header_storage) {
       last.end += span;
       return;
     }
   }
-  if (mutator.pending_range_count == MutatorState::kPendingRangeCapacity) {
+  if (fast.pending_range_count == MutatorState::kPendingRangeCapacity) {
     HeapLockGuard lock(gc_mutex);
     publish_tlab_locked(mutator);
   }
-  MutatorState::PendingRange& range =
-      mutator.pending_ranges[mutator.pending_range_count++];
+  NrqGcPendingRange& range = fast.pending_ranges[fast.pending_range_count++];
   range.page = page;
   range.begin = header_storage;
   range.end = header_storage + span;
@@ -4741,20 +4814,25 @@ void note_pending_range(MutatorState& mutator, GcPage* page,
 void install_h0_tlab(MutatorState& mutator, GcPage* page, size_t offset,
                      size_t span, const nrq_object_layout* layout,
                      size_t slot) {
-  mutator.h0_page = page;
-  mutator.h0_cursor = page->storage + offset;
-  mutator.h0_end = mutator.h0_cursor + span;
+  NrqGcFastTls& fast = *mutator.fast;
+  clear_h0_fast_path(fast);
+  fast.h0_page = page;
+  fast.h0_cursor = page->storage + offset;
+  fast.h0_end = fast.h0_cursor + span;
+  fast.h0_state_cursor = page->h0_states.get() + (offset / slot);
+  fast.h0_slot_bytes = slot;
   mutator.h0_layout = layout;
   mutator.h0_slot = slot;
   mutator.h0_generation = gc_page_generation.load(std::memory_order_acquire);
   // Same decision as the ordinary reservation: a slab taken from a page's
   // untouched tail needs no fill, and the reservation is charged to the page's
   // known-zero boundary once instead of per object.
-  mutator.h0_payload_is_zero = offset >= page->zero_cursor;
+  const bool payload_zero = offset >= page->zero_cursor;
+  fast.h0_payload_zero = payload_zero ? 1u : 0u;
   const size_t end = offset + span;
   if (end > page->zero_cursor) page->zero_cursor = end;
   zeroing_facts.payload_bytes += span;
-  if (mutator.h0_payload_is_zero)
+  if (payload_zero)
     zeroing_facts.prezeroed_bytes += span;
   else
     zeroing_facts.filled_bytes += span;
@@ -4794,6 +4872,17 @@ bool reserve_h0_tlab_locked(MutatorState& mutator,
   const size_t taken = take_free_runs_locked(
       slot, byte_budget, MutatorState::kSpareRunCapacity, slot, run_page, runs,
       PageKind::Headerless, layout);
+  NrqGcFastTls& fast = *mutator.fast;
+  auto release_h0_tail = [&]() {
+    GcPage* const h0_page = static_cast<GcPage*>(fast.h0_page);
+    if (h0_page && fast.h0_cursor && fast.h0_end > fast.h0_cursor) {
+      const size_t offset = static_cast<size_t>(fast.h0_cursor - h0_page->storage);
+      const size_t span = static_cast<size_t>(fast.h0_end - fast.h0_cursor);
+      mutator.tlab_tail_reclaimed_bytes =
+          saturated_add(mutator.tlab_tail_reclaimed_bytes, span);
+      release_span_locked(*h0_page, offset, span);
+    }
+  };
   if (taken != 0) {
     for (size_t index = 0; index < taken; ++index) {
       if (mutator.spare_run_count == MutatorState::kSpareRunCapacity) break;
@@ -4805,16 +4894,7 @@ bool reserve_h0_tlab_locked(MutatorState& mutator,
     }
     mutator.spare_generation =
         gc_page_generation.load(std::memory_order_acquire);
-    if (mutator.h0_page && mutator.h0_cursor &&
-        mutator.h0_end > mutator.h0_cursor) {
-      const size_t offset = static_cast<size_t>(
-          mutator.h0_cursor - mutator.h0_page->storage);
-      const size_t span =
-          static_cast<size_t>(mutator.h0_end - mutator.h0_cursor);
-      mutator.tlab_tail_reclaimed_bytes =
-          saturated_add(mutator.tlab_tail_reclaimed_bytes, span);
-      release_span_locked(*mutator.h0_page, offset, span);
-    }
+    release_h0_tail();
     return take_h0_spare_run(mutator, layout, slot);
   }
   GcPage* page = find_headerless_page_locked(layout, slot);
@@ -4824,14 +4904,7 @@ bool reserve_h0_tlab_locked(MutatorState& mutator,
   const size_t available = page->capacity - page->used;
   const size_t reserve = whole_object_grant(std::min(kGcTlabBytes, available), slot);
   if (reserve < slot) return false;
-  if (mutator.h0_page && mutator.h0_cursor && mutator.h0_end > mutator.h0_cursor) {
-    const size_t offset = static_cast<size_t>(
-        mutator.h0_cursor - mutator.h0_page->storage);
-    const size_t span = static_cast<size_t>(mutator.h0_end - mutator.h0_cursor);
-    mutator.tlab_tail_reclaimed_bytes =
-        saturated_add(mutator.tlab_tail_reclaimed_bytes, span);
-    release_span_locked(*mutator.h0_page, offset, span);
-  }
+  release_h0_tail();
   install_h0_tlab(mutator, page, page->used, reserve, layout, slot);
   page->used += reserve;
   note_page_tail_locked(*page);
@@ -4844,7 +4917,8 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
                     const nrq_object_layout* resolved,
                     GcRepresentation hint, bool repeated = false) {
   handled = false;
-  if (thread_mutator.depth == 0) return nullptr;
+  if (thread_mutator.depth == 0 || !thread_mutator.fast) return nullptr;
+  NrqGcFastTls& fast = *thread_mutator.fast;
   const nrq_object_layout* layout =
       resolved ? resolved
                : layout_for_allocation(bytes, element_size, trace,
@@ -4853,7 +4927,7 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
   if (!layout) return nullptr;
   bool valid = true;
   const GcRepresentation representation = select_representation(
-      layout->payload_size, layout, hint, valid);
+      layout->payload_size, elements, layout, hint, valid);
   if (!valid) {
     handled = true;
     return nullptr;
@@ -4864,16 +4938,17 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
   GcRepresentation actual = representation;
   if (actual == GcRepresentation::Headerless) {
     const size_t slot = object_span_bytes(0, layout->payload_size);
-    if (thread_mutator.h0_generation != gc_page_generation.load(std::memory_order_acquire))
-      thread_mutator.h0_page = nullptr;
-    const bool same_shape = thread_mutator.h0_cursor &&
+    if (thread_mutator.h0_generation != gc_page_generation.load(std::memory_order_acquire)) {
+      fast.h0_page = nullptr;
+      clear_h0_fast_path(fast);
+    }
+    const bool same_shape = fast.h0_cursor &&
                             thread_mutator.h0_layout == layout &&
                             thread_mutator.h0_slot == slot;
     const bool has_room =
-        same_shape && static_cast<size_t>(thread_mutator.h0_end -
-                                          thread_mutator.h0_cursor) >= slot;
+        same_shape && static_cast<size_t>(fast.h0_end - fast.h0_cursor) >= slot;
     const bool slab_active =
-        thread_mutator.h0_cursor && thread_mutator.h0_cursor < thread_mutator.h0_end;
+        fast.h0_cursor && fast.h0_cursor < fast.h0_end;
     if (!has_room && slab_active) {
       // Another shape owns this thread's headerless slab. A uniform page holds
       // one layout, so serving this object here would evict a slab that is still
@@ -4887,23 +4962,27 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
   if (actual == GcRepresentation::Headerless) {
     handled = true;
     const size_t slot = object_span_bytes(0, layout->payload_size);
-    if (!thread_mutator.h0_cursor ||
+    if (!fast.h0_cursor ||
         thread_mutator.h0_layout != layout ||
         thread_mutator.h0_slot != slot ||
-        static_cast<size_t>(thread_mutator.h0_end -
-                            thread_mutator.h0_cursor) < slot) {
+        static_cast<size_t>(fast.h0_end - fast.h0_cursor) < slot) {
       // A batch reserved earlier answers this without the allocator lock.
       if (!take_h0_spare_run(thread_mutator, layout, slot)) {
         HeapLockGuard lock(gc_mutex);
         if (!reserve_h0_tlab_locked(thread_mutator, layout, slot)) return nullptr;
       }
     }
-    const ObjectRef object{thread_mutator.h0_cursor, thread_mutator.h0_page};
-    thread_mutator.h0_cursor += slot;
+    GcPage* const h0_page = static_cast<GcPage*>(fast.h0_page);
+    const ObjectRef object{fast.h0_cursor, h0_page};
+    sync_active_ranges(fast);
+    fast.h0_cursor += slot;
+    ++fast.h0_state_cursor;
     initialize_object(object, layout, 1, layout->payload_size, young,
-                      thread_mutator.h0_payload_is_zero);
+                      fast.h0_payload_zero != 0);
     note_pending_range(thread_mutator, object.page, object.header, slot);
     account_tlab_allocation(thread_mutator, layout->payload_size);
+    fast.h0_active_range = &fast.pending_ranges[fast.pending_range_count - 1];
+    fast.h0_fast_layout = layout;
     if (collection_phase.load(std::memory_order_acquire) !=
         CollectionPhase::Idle) {
       HeapLockGuard lock(gc_mutex);
@@ -4924,30 +5003,32 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
   // on every switch and take a fresh page per object. The object is allocated
   // through the page cache under the lock instead, and the slab is still there
   // when its own shape comes back.
-  if (thread_mutator.tlab_cursor && thread_mutator.tlab_page &&
-      thread_mutator.tlab_page->kind != kind)
+  GcPage* tlab_page = static_cast<GcPage*>(fast.tlab_page);
+  if (fast.tlab_cursor && tlab_page && tlab_page->kind != kind)
     return nullptr;
   handled = true;
 
   if (thread_mutator.tlab_generation != gc_page_generation.load(std::memory_order_acquire))
     discard_stale_tlab(thread_mutator);
-  if (!thread_mutator.tlab_cursor || !thread_mutator.tlab_end ||
-      thread_mutator.tlab_page->kind != kind ||
-      thread_mutator.tlab_cursor > thread_mutator.tlab_end ||
-      span > static_cast<size_t>(thread_mutator.tlab_end -
-                                 thread_mutator.tlab_cursor)) {
+  tlab_page = static_cast<GcPage*>(fast.tlab_page);
+  if (!fast.tlab_cursor || !fast.tlab_end || !tlab_page ||
+      tlab_page->kind != kind ||
+      fast.tlab_cursor > fast.tlab_end ||
+      span > static_cast<size_t>(fast.tlab_end - fast.tlab_cursor)) {
     // A run reserved earlier answers this without the allocator lock: that is
     // what a fragmented heap needs, because its runs are only a few cells each.
     if (!take_spare_run(thread_mutator, span, kind)) {
       HeapLockGuard lock(gc_mutex);
       if (!reserve_tlab_locked(thread_mutator, span, kind)) return nullptr;
     }
+    tlab_page = static_cast<GcPage*>(fast.tlab_page);
   }
 
-  const ObjectRef object{thread_mutator.tlab_cursor, thread_mutator.tlab_page};
-  thread_mutator.tlab_cursor += span;
+  const ObjectRef object{fast.tlab_cursor, tlab_page};
+  sync_active_ranges(fast);
+  fast.tlab_cursor += span;
   initialize_object(object, layout, static_cast<uint32_t>(elements), bytes,
-                    young, thread_mutator.tlab_payload_is_zero);
+                    young, fast.tlab_payload_zero != 0);
   // A non-young object only has to be counted: the count feeds the generational
   // policy, and the store barrier is raised by the policy itself (`begin_cycle`
   // covers a cycle, `nrq_gc_set_generational` covers the switch). Raising it here
@@ -4957,6 +5038,12 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
   // count is folded in where the batch is published.
   note_pending_range(thread_mutator, object.page, object.header, span);
   account_tlab_allocation(thread_mutator, bytes);
+  if (page_is_representable(object.page->kind) &&
+      (object.page->kind == PageKind::Compact ||
+       object.page->kind == PageKind::Extended)) {
+    fast.tlab_active_range = &fast.pending_ranges[fast.pending_range_count - 1];
+    fast.tlab_kind = inline_kind_for(object.page->kind);
+  }
 
   // During a cycle an unpublished young object is invisible to the marker and
   // to the root barrier. Publish it immediately so a barrier can identify it.
@@ -5155,16 +5242,21 @@ __forceinline bool shadow_has_pointer_root(ShadowStack& stack, void* slot) {
 }
 
 ObjectRef find_pending_header(MutatorState& mutator, void* object) {
-  for (size_t index = 0; index < mutator.pending_range_count; ++index) {
-    const MutatorState::PendingRange range = mutator.pending_ranges[index];
+  if (!mutator.fast) return ObjectRef{};
+  NrqGcFastTls& fast = *mutator.fast;
+  sync_active_ranges(fast);
+  const uint32_t range_count = fast.pending_range_count;
+  for (uint32_t index = 0; index < range_count; ++index) {
+    const NrqGcPendingRange range = fast.pending_ranges[index];
     if (!range.page || !range.begin) continue;
-    const size_t header_bytes = page_header_bytes(range.page->kind);
+    GcPage* const page = static_cast<GcPage*>(range.page);
+    const size_t header_bytes = page_header_bytes(page->kind);
     for (unsigned char* cursor = range.begin; cursor < range.end;) {
-      const ObjectRef candidate{cursor, range.page};
+      const ObjectRef candidate{cursor, page};
       if (object_payload(candidate) == object) return candidate;
       const size_t span =
-          range.page->kind == PageKind::Headerless
-              ? range.page->slot_bytes
+          page->kind == PageKind::Headerless
+              ? page->slot_bytes
               : object_span_bytes(header_bytes,
                                   object_payload_bytes(candidate));
       if (span == 0 || cursor + span > range.end) break;
@@ -5495,15 +5587,20 @@ void* nrq_gc_allocate_array_planned(void** root_slot, size_t count,
   // See nrq_gc_allocate_planned: a deterministic plan is not this entry point's
   // to honour.
   if ((plan_flags & NRQ_ALLOC_PLAN_DETERMINISTIC) != 0) return nullptr;
-  // The compiler's plan is used only when it says "array, extended". Anything
-  // else is treated as no plan at all, and the allocator decides as it would for
-  // a caller that said nothing.
-  const bool plan_usable =
-      (plan_flags & NRQ_ALLOC_PLAN_REJECTED) == 0 &&
-      (plan_flags & NRQ_ALLOC_PLAN_ARRAY) != 0 &&
-      NRQ_ALLOC_PLAN_REPR_OF(plan_flags) == NRQ_ALLOC_REPR_EXTENDED;
-  const GcRepresentation hint =
-      plan_usable ? GcRepresentation::Extended : GcRepresentation::Auto;
+  // Honour a usable array plan: Compact for eligible single-element arrays, or
+  // Extended for multi-element, SoA, or explicit Extended requests. Anything else
+  // falls back to Auto so an oversized or invalid hint never corrupts headers.
+  const uint32_t repr_bits = NRQ_ALLOC_PLAN_REPR_OF(plan_flags);
+  GcRepresentation hint = GcRepresentation::Auto;
+  if ((plan_flags & NRQ_ALLOC_PLAN_REJECTED) == 0 &&
+      (plan_flags & NRQ_ALLOC_PLAN_ARRAY) != 0) {
+    if (repr_bits == NRQ_ALLOC_REPR_COMPACT) {
+      if (count == 1 && object_span_bytes(8, element_size) <= kGcPageBytes)
+        hint = GcRepresentation::Compact;
+    } else if (repr_bits == NRQ_ALLOC_REPR_EXTENDED) {
+      hint = GcRepresentation::Extended;
+    }
+  }
   // A cached descriptor is only reused after it is checked against this call's
   // shape. The cache word is compiler-emitted and writable, so it is treated as
   // untrusted input, not as a guarantee.
@@ -6212,11 +6309,15 @@ size_t nrq_gc_debug_snapshot_roots(nrq_gc_debug_root* out, size_t capacity) {
 #endif  // NRQ_DEBUG_ENABLED
 
 void nrq_gc_enable(void) {
+  HeapLockGuard lock(gc_mutex);
   automatic_collection_enabled.store(true, std::memory_order_relaxed);
+  refresh_inline_config_locked();
 }
 
 void nrq_gc_disable(void) {
+  HeapLockGuard lock(gc_mutex);
   automatic_collection_enabled.store(false, std::memory_order_relaxed);
+  refresh_inline_config_locked();
 }
 
 void nrq_gc_collect(void) {
@@ -6231,15 +6332,18 @@ void nrq_gc_collect_minor(void) {
 }
 
 void nrq_gc_set_generational(int32_t enabled) {
+  HeapLockGuard lock(gc_mutex);
   if (enabled) {
     // Raise the derived switch first: a mutator that still sees the switch raised
     // after generations are turned off only records extra entries.
     store_barrier_active.store(true, std::memory_order_release);
     generational_collection_enabled.store(true, std::memory_order_relaxed);
+    refresh_inline_config_locked();
     return;
   }
   store_barrier_active.store(false, std::memory_order_release);
   generational_collection_enabled.store(false, std::memory_order_relaxed);
+  refresh_inline_config_locked();
 }
 
 int32_t nrq_gc_is_generational(void) {
@@ -6260,6 +6364,7 @@ void nrq_gc_mutator_enter(void) {
   if (thread_mutator.depth == SIZE_MAX)
     nrq_runtime_fatal("GC mutator nesting depth overflow");
   thread_gc_cleanup.arm();
+  thread_mutator.fast = &nrq_gc_fast_tls;
   if (thread_mutator.depth++ != 0) return;
 
   std::unique_lock<std::mutex> lock(mutator_mutex);
@@ -6329,6 +6434,7 @@ void nrq_gc_set_threshold(size_t bytes) {
   collection_policy.adaptations = 0;
   allocation_accounting.collection_threshold.store(bytes == 0 ? 1 : bytes,
                                                    std::memory_order_relaxed);
+  refresh_inline_config_locked();
 }
 
 size_t nrq_gc_get_threshold(void) {
@@ -6343,6 +6449,7 @@ void nrq_gc_set_adaptive(int32_t enabled) {
   // Re-enabling starts from the current live set instead of waiting for the next
   // cycle to correct a threshold the program may have pinned long ago.
   if (collection_policy.adaptive) adapt_collection_policy_locked();
+  else refresh_inline_config_locked();
 }
 
 int32_t nrq_gc_policy_is_adaptive(void) {
@@ -6622,11 +6729,13 @@ nrq_gc_stats nrq_gc_get_stats(void) {
   uint64_t pending_bytes = 0;
   uint64_t pending_count = 0;
   for (const MutatorState* mutator : mutators) {
-    if (!mutator) continue;
+    if (!mutator || !mutator->fast) continue;
     pending_bytes = saturated_add(
-        pending_bytes, mutator->pending_bytes.load(std::memory_order_relaxed));
+        pending_bytes, std::atomic_ref<size_t>(mutator->fast->pending_bytes)
+                           .load(std::memory_order_relaxed));
     pending_count = saturated_add(
-        pending_count, mutator->pending_count.load(std::memory_order_relaxed));
+        pending_count, std::atomic_ref<size_t>(mutator->fast->pending_count)
+                           .load(std::memory_order_relaxed));
   }
   result.allocated_bytes = saturated_add(result.allocated_bytes, pending_bytes);
   result.live_objects = saturated_add(result.live_objects, pending_count);
@@ -6869,6 +6978,69 @@ int64_t nrq_gc_get_ref_count(void* object) {
   } catch (...) {
     return -1;
   }
+}
+
+alignas(nirq::nrq_cache_line_bytes) NrqGcInlineConfig nrq_gc_inline_config = {
+    0u, kYoungBit, kAccountingBatchBytes};
+NRQ_THREAD_LOCAL NrqGcFastTls nrq_gc_fast_tls = {};
+
+static_assert(NRQ_GC_INLINE_TLAB_BYTES == kGcTlabBytes,
+              "inline TLAB limit must match kGcTlabBytes");
+static_assert(NRQ_GC_INLINE_SPAN_ALIGNMENT == kObjectStartAlignment,
+              "inline span alignment must match kObjectStartAlignment");
+static_assert(offsetof(NrqGcInlineConfig, gate) == 0,
+              "NrqGcInlineConfig::gate offset mismatch");
+static_assert(offsetof(NrqGcInlineConfig, initial_state) == 4,
+              "NrqGcInlineConfig::initial_state offset mismatch");
+static_assert(offsetof(NrqGcInlineConfig, accounting_batch) == 8,
+              "NrqGcInlineConfig::accounting_batch offset mismatch");
+static_assert(sizeof(NrqGcPendingRange) == 24,
+              "NrqGcPendingRange size mismatch");
+static_assert(offsetof(NrqGcFastTls, tlab_cursor) == 0,
+              "NrqGcFastTls::tlab_cursor offset mismatch");
+static_assert(offsetof(NrqGcFastTls, tlab_end) == 8,
+              "NrqGcFastTls::tlab_end offset mismatch");
+static_assert(offsetof(NrqGcFastTls, tlab_active_range) == 16,
+              "NrqGcFastTls::tlab_active_range offset mismatch");
+static_assert(offsetof(NrqGcFastTls, tlab_page) == 24,
+              "NrqGcFastTls::tlab_page offset mismatch");
+static_assert(offsetof(NrqGcFastTls, tlab_kind) == 32,
+              "NrqGcFastTls::tlab_kind offset mismatch");
+static_assert(offsetof(NrqGcFastTls, tlab_payload_zero) == 36,
+              "NrqGcFastTls::tlab_payload_zero offset mismatch");
+static_assert(offsetof(NrqGcFastTls, pending_bytes) == 40,
+              "NrqGcFastTls::pending_bytes offset mismatch");
+static_assert(offsetof(NrqGcFastTls, pending_count) == 48,
+              "NrqGcFastTls::pending_count offset mismatch");
+static_assert(offsetof(NrqGcFastTls, unflushed_bytes) == 56,
+              "NrqGcFastTls::unflushed_bytes offset mismatch");
+static_assert(offsetof(NrqGcFastTls, h0_cursor) == 64,
+              "NrqGcFastTls::h0_cursor offset mismatch");
+static_assert(offsetof(NrqGcFastTls, h0_end) == 72,
+              "NrqGcFastTls::h0_end offset mismatch");
+static_assert(offsetof(NrqGcFastTls, h0_active_range) == 80,
+              "NrqGcFastTls::h0_active_range offset mismatch");
+static_assert(offsetof(NrqGcFastTls, h0_page) == 88,
+              "NrqGcFastTls::h0_page offset mismatch");
+static_assert(offsetof(NrqGcFastTls, h0_fast_layout) == 96,
+              "NrqGcFastTls::h0_fast_layout offset mismatch");
+static_assert(offsetof(NrqGcFastTls, h0_state_cursor) == 104,
+              "NrqGcFastTls::h0_state_cursor offset mismatch");
+static_assert(offsetof(NrqGcFastTls, pending_range_count) == 112,
+              "NrqGcFastTls::pending_range_count offset mismatch");
+static_assert(offsetof(NrqGcFastTls, h0_slot_bytes) == 120,
+              "NrqGcFastTls::h0_slot_bytes offset mismatch");
+static_assert(offsetof(NrqGcFastTls, pending_ranges) == 128,
+              "NrqGcFastTls::pending_ranges offset mismatch");
+
+uint32_t nrq_gc_layout_id(const nrq_object_layout* layout) {
+  return layout_id_for(layout);
+}
+
+void nrq_gc_set_inline_debug_alloc(int32_t enabled) {
+  HeapLockGuard lock(gc_mutex);
+  inline_debug_alloc_enabled.store(enabled != 0, std::memory_order_relaxed);
+  refresh_inline_config_locked();
 }
 
 }  // extern "C"
