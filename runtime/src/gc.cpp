@@ -203,7 +203,7 @@ struct GcPage {
   // does not corrupt anything, but it makes the page unable to answer a request
   // and forces a fresh page, which is the fragmentation drift this bound exists
   // to avoid.
-  static constexpr size_t kMaxFreeSpans = 384;
+  static constexpr size_t kMaxFreeSpans = 64;
   // The list grows past the inline array only on a page that actually shatters.
   // A page that has lost every other object records one run per dead object, and
   // the old fixed bound dropped everything above 384 of them: at 16-byte slots
