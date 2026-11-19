@@ -619,12 +619,36 @@ def aggregate(test_id: str, runs: list[dict[str, Any]]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def git_revision() -> str | None:
+    """The commit the measurements were taken from, or None outside a checkout."""
+    try:
+        code, output, _timed_out = run_command(
+            ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, timeout=30
+        )
+    except Exception:
+        return None
+    return output.strip() if code == 0 else None
+
+
+def git_dirty() -> bool | None:
+    """Whether the working tree was modified when the run started, if known."""
+    try:
+        code, output, _timed_out = run_command(
+            ["git", "status", "--porcelain"], cwd=PROJECT_ROOT, timeout=30
+        )
+    except Exception:
+        return None
+    if code != 0:
+        return None
+    return any(line.strip() for line in output.splitlines())
+
+
 def environment_metadata() -> dict[str, Any]:
     """Capture enough context for the results to be reproducible."""
 
     def powershell(expression: str) -> str:
         try:
-            code, output = run_command(
+            code, output, _timed_out = run_command(
                 ["powershell", "-NoProfile", "-Command", expression], timeout=30
             )
             return output.strip() if code == 0 else ""
@@ -642,13 +666,13 @@ def environment_metadata() -> dict[str, Any]:
 
     compilers: dict[str, str] = {}
     try:
-        _, output = run_command([str(NRQ_EXE), "--version"], timeout=30)
+        _, output, _timed_out = run_command([str(NRQ_EXE), "--version"], timeout=30)
         lines = [line.strip() for line in output.splitlines() if line.strip()]
         compilers["nirqoba"] = lines[0] if lines else "unknown"
     except Exception:
         compilers["nirqoba"] = "unknown"
     try:
-        _, output = run_command(
+        _, output, _timed_out = run_command(
             f'call "{VCVARS_BAT}" >nul 2>&1 && cl 2>&1', shell=True, timeout=60
         )
         lines = [line.strip() for line in output.splitlines() if line.strip()]
@@ -656,13 +680,14 @@ def environment_metadata() -> dict[str, Any]:
     except Exception:
         compilers["msvc"] = "unknown"
     try:
-        _, output = run_command([str(RUSTC_EXE), "-Vv"], timeout=30)
+        _, output, _timed_out = run_command([str(RUSTC_EXE), "-Vv"], timeout=30)
         compilers["rustc"] = output.strip().splitlines()[0]
     except Exception:
         compilers["rustc"] = "unknown"
     try:
-        _, output = run_command([str(JAVA_EXE), "-version"], timeout=30)
-        compilers["java"] = output.strip().splitlines()[0]
+        _, output, _timed_out = run_command([str(JAVA_EXE), "-version"], timeout=30)
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        compilers["java"] = lines[0] if lines else "unknown"
     except Exception:
         compilers["java"] = "unknown"
 
@@ -675,6 +700,8 @@ def environment_metadata() -> dict[str, Any]:
         "logical_processors": os.cpu_count(),
         "memory_bytes": int(memory_bytes) if memory_bytes.isdigit() else None,
         "python": sys.version.split()[0],
+        "git_revision": git_revision(),
+        "git_dirty": git_dirty(),
         "compilers": compilers,
         "source_root": str(PROJECT_ROOT),
         "benchmark_directory": str(BENCH_DIR),
