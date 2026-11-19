@@ -460,3 +460,227 @@ TEST(GcInlineTlabTest, ConcurrentThreadsUseIndependentInlineTlabsAcrossGc) {
   nrq_gc_collect();
   nrq_gc_collect();
 }
+
+TEST(GcInlineTlabTest, InlineConfigPackedStateAndTransitionsAreConsistent) {
+  static_assert(sizeof(NrqGcInlineConfig) == 16,
+                "NrqGcInlineConfig must stay 16 bytes");
+  static_assert(offsetof(NrqGcInlineConfig, packed_state) == 0,
+                "packed_state must be at offset 0");
+  static_assert(offsetof(NrqGcInlineConfig, accounting_batch) == 8,
+                "accounting_batch must be at offset 8");
+
+  nrq_gc_disable();
+  nrq_gc_set_generational(1);
+  nrq_gc_collect();
+  nrq_gc_collect();
+
+  auto read_packed = []() {
+    return std::atomic_ref<uint64_t>(nrq_gc_inline_config.packed_state)
+        .load(std::memory_order_acquire);
+  };
+  auto read_batch = []() {
+    return std::atomic_ref<size_t>(nrq_gc_inline_config.accounting_batch)
+        .load(std::memory_order_relaxed);
+  };
+
+  // Idle, generational enabled, debug alloc disabled.
+  uint64_t packed = read_packed();
+  ASSERT_EQ(nrq_gc_inline_unpack_gate(packed), uint32_t{0});
+  ASSERT_EQ(nrq_gc_inline_unpack_initial_state(packed),
+            uint32_t{NRQ_GC_STATE_YOUNG});
+
+  // Toggling generational updates initial_state atomically without setting gate.
+  nrq_gc_set_generational(0);
+  packed = read_packed();
+  ASSERT_EQ(nrq_gc_inline_unpack_gate(packed), uint32_t{0});
+  ASSERT_EQ(nrq_gc_inline_unpack_initial_state(packed), uint32_t{0});
+
+  nrq_gc_set_generational(1);
+  packed = read_packed();
+  ASSERT_EQ(nrq_gc_inline_unpack_gate(packed), uint32_t{0});
+  ASSERT_EQ(nrq_gc_inline_unpack_initial_state(packed),
+            uint32_t{NRQ_GC_STATE_YOUNG});
+
+  // Lowering threshold below kAccountingBatchBytes (16 KiB) shrinks batch.
+  const size_t default_batch = read_batch();
+  ASSERT_TRUE(default_batch >= 1024);
+  nrq_gc_set_threshold(512);
+  ASSERT_EQ(read_batch(), size_t{512});
+
+  // Enabling debug allocation sets only DEBUG_ALLOC_BIT while preserving initial_state.
+  nrq_gc_debug_set_event_mask(NRQ_GC_EVENT_ALLOCATION);
+  packed = read_packed();
+  ASSERT_EQ(nrq_gc_inline_unpack_gate(packed),
+            uint32_t{NRQ_GC_INLINE_GATE_DEBUG_ALLOC_BIT});
+  ASSERT_EQ(nrq_gc_inline_unpack_initial_state(packed),
+            uint32_t{NRQ_GC_STATE_YOUNG});
+
+  nrq_gc_set_generational(0);
+  packed = read_packed();
+  ASSERT_EQ(nrq_gc_inline_unpack_gate(packed),
+            uint32_t{NRQ_GC_INLINE_GATE_DEBUG_ALLOC_BIT});
+  ASSERT_EQ(nrq_gc_inline_unpack_initial_state(packed), uint32_t{0});
+
+  nrq_gc_debug_set_event_mask(0);
+  nrq_gc_event drained[64];
+  while (nrq_gc_debug_drain_events(drained, 64) != 0) {}
+
+  nrq_gc_set_generational(1);
+  nrq_gc_set_adaptive(1);
+  nrq_gc_collect();
+  nrq_gc_collect();
+  nrq_gc_enable();
+}
+
+TEST(GcInlineTlabTest, ConcurrentConfigMutationsStayRaceFreeWithInlineTlab) {
+  nrq_gc_disable();
+  nrq_gc_set_generational(1);
+  nrq_gc_collect();
+  nrq_gc_collect();
+  nrq_gc_set_threshold(4096);
+  nrq_gc_enable();
+
+  constexpr size_t kWorkers = 4;
+  constexpr size_t kItersPerWorker = 3000;
+  std::atomic<bool> stop_controller{false};
+  std::atomic<bool> failed{false};
+  std::atomic<size_t> total_fast_hits{0};
+  std::atomic<size_t> finished_workers{0};
+
+  // Controller thread repeatedly mutates generational mode, threshold, enable,
+  // debug allocation gate, and triggers explicit collections while mutators run.
+  std::thread controller([&]() {
+    size_t step = 0;
+    while (!stop_controller.load(std::memory_order_acquire)) {
+      switch (step % 6) {
+        case 0:
+          nrq_gc_set_generational(0);
+          break;
+        case 1:
+          nrq_gc_set_generational(1);
+          break;
+        case 2:
+          nrq_gc_set_threshold(512);
+          break;
+        case 3:
+          nrq_gc_set_threshold(64 * 1024);
+          break;
+        case 4:
+          nrq_gc_debug_set_event_mask(NRQ_GC_EVENT_ALLOCATION);
+          break;
+        case 5: {
+          nrq_gc_debug_set_event_mask(0);
+          nrq_gc_event drained[64];
+          while (nrq_gc_debug_drain_events(drained, 64) != 0) {}
+          break;
+        }
+      }
+      if ((step % 4) == 0) nrq_gc_collect_minor();
+      ++step;
+      std::this_thread::yield();
+    }
+  });
+
+  std::vector<std::thread> workers;
+  workers.reserve(kWorkers);
+  for (size_t tid = 0; tid < kWorkers; ++tid) {
+    workers.emplace_back([&, tid]() {
+      nrq_gc_mutator_enter();
+      void* h8_head = nullptr;
+      void* h16_tmp = nullptr;
+      void* h0_tmp = nullptr;
+      nrq_gc_root_register(&h8_head);
+      nrq_gc_root_register(&h16_tmp);
+      nrq_gc_root_register(&h0_tmp);
+
+      const size_t tree_refs[2] = {0, sizeof(void*)};
+      void* h8_cache = nullptr;
+      uint32_t h8_id = 0;
+      void* h16_cache = nullptr;
+      uint32_t h16_id = 0;
+      void* h0_cache = nullptr;
+      size_t fast_hits = 0;
+      size_t slow_hits = 0;
+
+      for (size_t i = 0; i < kItersPerWorker; ++i) {
+        if ((i % 7) == 0) {
+          // Exercise H0 inline path under config transitions.
+          if (!h0_cache) {
+            h0_tmp = nrq_gc_allocate_planned(&h0_tmp, 64, nullptr, 0, &h0_cache,
+                                             0);
+          } else {
+            h0_tmp = nrq_gc_inline_try_allocate_h0(
+                h0_cache, 64, align_span(0, 64), &h0_tmp);
+            if (h0_tmp) {
+              ++fast_hits;
+            } else {
+              ++slow_hits;
+              h0_tmp = nrq_gc_allocate_planned(&h0_tmp, 64, nullptr, 0,
+                                               &h0_cache, 0);
+            }
+          }
+          if (!h0_tmp) {
+            failed.store(true);
+            break;
+          }
+        } else if ((i % 5) == 0) {
+          h16_tmp = allocate_h16_with_fallback(
+              &h16_tmp, 2, sizeof(void*) * 2, tree_refs, 1, &h16_cache, h16_id,
+              fast_hits, slow_hits);
+          if (!h16_tmp) {
+            failed.store(true);
+            break;
+          }
+        } else {
+          void* node_ptr = allocate_h8_with_fallback(
+              &h8_head, sizeof(TreeNode24), tree_refs, 2, &h8_cache, h8_id,
+              fast_hits, slow_hits);
+          if (!node_ptr) {
+            failed.store(true);
+            break;
+          }
+          auto* node = static_cast<TreeNode24*>(node_ptr);
+          if (node->left != nullptr || node->right != nullptr ||
+              node->value != 0) {
+            failed.store(true);
+            break;
+          }
+          node->value = (tid << 32) | i;
+          if ((i % 64) == 0) {
+            // Link a small retained spine; drop old tail occasionally.
+            node->left = h0_tmp;
+            nrq_gc_root_store(&h8_head, node_ptr);
+          }
+        }
+        if ((i % 128) == 0) nrq_gc_safepoint();
+      }
+
+      total_fast_hits.fetch_add(fast_hits);
+      nrq_gc_root_unregister(&h0_tmp);
+      nrq_gc_root_unregister(&h16_tmp);
+      nrq_gc_root_unregister(&h8_head);
+      nrq_gc_mutator_leave();
+      finished_workers.fetch_add(1, std::memory_order_release);
+    });
+  }
+
+  while (finished_workers.load(std::memory_order_acquire) < kWorkers) {
+    nrq_gc_safepoint();
+    std::this_thread::yield();
+  }
+  stop_controller.store(true, std::memory_order_release);
+  controller.join();
+  for (std::thread& worker : workers) worker.join();
+
+  nrq_gc_debug_set_event_mask(0);
+  nrq_gc_event drained[64];
+  while (nrq_gc_debug_drain_events(drained, 64) != 0) {}
+
+  ASSERT_FALSE(failed.load());
+  ASSERT_TRUE(total_fast_hits.load() > 0);
+
+  nrq_gc_set_generational(1);
+  nrq_gc_set_adaptive(1);
+  nrq_gc_collect();
+  nrq_gc_collect();
+}
