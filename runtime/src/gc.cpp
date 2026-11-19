@@ -134,28 +134,36 @@ struct GcPage {
   // allocation of a cycle clears the bitmap and stamps the page, so a stale bit
   // from an older cycle is never read and no page walk is needed to reset it.
   size_t born_this_cycle = 0;
-  std::unique_ptr<uint64_t[]> born_bits;
+  uint64_t* born_bits = nullptr;
   size_t born_words = 0;
   uint64_t born_epoch = 0;
   // Per-page mark metadata. Marks are off-heap: a header write is no longer
   // needed to set or test one, and the counts let sweep decide a page's fate
   // without reading every header in it.
-  std::unique_ptr<uint64_t[]> mark_bits;
+  uint64_t* mark_bits = nullptr;
   size_t mark_words = 0;
   size_t marked_objects = 0;
   size_t marked_young_objects = 0;
   // Remembered-set membership is a property of a young object, but it is
   // maintained as a page bitmap so the store barrier does not rewrite the
   // object's state word. `remembered_objects` is exact while the page is live.
-  std::unique_ptr<uint64_t[]> remembered_bits;
+  uint64_t* remembered_bits = nullptr;
   size_t remembered_words = 0;
   size_t remembered_objects = 0;
   // Page-local object-start metadata. One bit per max_align_t-sized slot lets
   // reference resolution validate an address and derive its header without a
   // global hash probe. Pages larger than kGcPageBytes are not indexed; their
   // references keep using ObjectIndex.
-  std::unique_ptr<uint64_t[]> object_starts;
+  uint64_t* object_starts = nullptr;
   size_t object_start_words = 0;
+  // Ordinary pages store all four bitmaps contiguously inside the page struct
+  // so acquiring a page performs one heap allocation and one contiguous zero
+  // instead of five separate allocations. Large pages fall back to a single
+  // dynamically sized buffer for the three bitmaps they use.
+  static constexpr size_t kInlineBitmapWords =
+      ((kGcPageBytes / kObjectStartAlignment) + 63) / 64;
+  std::array<uint64_t, 4 * kInlineBitmapWords> inline_bitmaps;
+  std::unique_ptr<uint64_t[]> grown_bitmaps;
   // Per-object state for headerless pages. With no object word to hold young and
   // promotion age, one byte per object carries them: bit 0 young, bits 1-7 age.
   // A headerless page has one slot size, so the table is indexed by the object's
@@ -602,7 +610,7 @@ inline void mark_object_born(const ObjectRef& ref, uint64_t epoch) {
   GcPage& page = *ref.page;
   if (!page.born_bits) return;
   if (page.born_epoch < epoch) {
-    std::memset(page.born_bits.get(), 0, page.born_words * sizeof(uint64_t));
+    std::memset(page.born_bits, 0, page.born_words * sizeof(uint64_t));
     page.born_epoch = epoch;
     page.born_this_cycle = 0;
   }
@@ -674,7 +682,7 @@ inline void set_object_marked(const ObjectRef& ref, bool value) {
 // one write that remains is clearing its marks so the next cycle starts clean.
 inline void clear_page_marks(GcPage& page) {
   if (page.mark_bits && page.mark_words != 0) {
-    std::memset(page.mark_bits.get(), 0, page.mark_words * sizeof(uint64_t));
+    std::memset(page.mark_bits, 0, page.mark_words * sizeof(uint64_t));
   }
   page.marked_objects = 0;
   page.marked_young_objects = 0;
@@ -712,7 +720,7 @@ inline void set_object_remembered(const ObjectRef& ref, bool value) {
 
 inline void clear_page_remembered(GcPage& page) {
   if (page.remembered_bits && page.remembered_words != 0) {
-    std::memset(page.remembered_bits.get(), 0,
+    std::memset(page.remembered_bits, 0,
                 page.remembered_words * sizeof(uint64_t));
   }
   page.remembered_objects = 0;
@@ -1575,7 +1583,7 @@ std::vector<std::unique_ptr<GcPage>> recycled_pages;
 // bitmap setup for a heap that is about to grow again, not to hold a heap's worth
 // of storage for a program that has stopped allocating: a page that leaves the pool
 // goes back to its run and its commit charge goes back to the OS.
-constexpr size_t kMaxRecycledPages = 128;
+constexpr size_t kMaxRecycledPages = 256;
 // Large-object pages can be much bigger than kGcPageBytes. Retaining a pool of
 // them would make the page-count bound meaningless, so only ordinary-sized
 // pages are recycled and oversized pages return to the process heap.
@@ -3160,7 +3168,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
         clear_page_marks(*page);
         clear_page_remembered(*page);
         if (page->object_starts && page->object_start_words != 0) {
-          std::memset(page->object_starts.get(), 0,
+          std::memset(page->object_starts, 0,
                       page->object_start_words * sizeof(uint64_t));
         }
         // The whole bump area is now reusable. Existing runs are all inside
@@ -3892,7 +3900,7 @@ void discard_stale_tlab(MutatorState& mutator) {
 // that shrinks returns its commit charge through MEM_DECOMMIT instead of holding
 // it.
 constexpr size_t kPageRunBytes = size_t{8} << 20;
-constexpr size_t kPageRunCommitBytes = size_t{1} << 20;
+constexpr size_t kPageRunCommitBytes = size_t{4} << 20;
 // Commit granularity of the OS. A carve's extent is the commit extent as well.
 constexpr size_t kPageCommitGranularity = size_t{4} << 10;
 
@@ -3928,7 +3936,7 @@ std::vector<FreePageStorage> released_page_storage;
 // One run's worth of bytes, so a busy heap never holds more than this much
 // committed-but-unused storage in the free list. Anything beyond it is decommitted
 // immediately.
-constexpr size_t kMaxRetainedBytes = kPageRunBytes;
+constexpr size_t kMaxRetainedBytes = 4 * kPageRunBytes;
 size_t retained_page_bytes = 0;
 // The largest page a run will carve. A single object can be far larger than a run,
 // and that case still needs the direct mapping.
@@ -4049,7 +4057,8 @@ unsigned char* commit_page_storage(size_t bytes, bool& zeroed) {
 void release_page_storage(unsigned char* storage, size_t bytes) {
   if (!storage) return;
   if (find_page_run(storage)) {
-    if (retained_page_bytes + bytes <= kMaxRetainedBytes) {
+    if (bytes <= kGcPageBytes &&
+        retained_page_bytes + bytes <= kMaxRetainedBytes) {
       try {
         free_page_storage.push_back(FreePageStorage{storage, bytes});
         retained_page_bytes += bytes;
@@ -4096,14 +4105,22 @@ void reset_page_gc_metadata_locked(GcPage& page) {
   // would make every future sweep skip the page as unwalkable.
   page.use_object_index = false;
   page.retired = false;
-  clear_page_marks(page);
-  clear_page_remembered(page);
-  if (page.object_starts && page.object_start_words != 0) {
-    std::memset(page.object_starts.get(), 0,
-                page.object_start_words * sizeof(uint64_t));
-  }
-  if (page.born_bits && page.born_words != 0) {
-    std::memset(page.born_bits.get(), 0, page.born_words * sizeof(uint64_t));
+  if (!page.grown_bitmaps && page.mark_words != 0) {
+    std::memset(page.inline_bitmaps.data(), 0,
+                4 * page.mark_words * sizeof(uint64_t));
+    page.marked_objects = 0;
+    page.marked_young_objects = 0;
+    page.remembered_objects = 0;
+  } else {
+    clear_page_marks(page);
+    clear_page_remembered(page);
+    if (page.object_starts && page.object_start_words != 0) {
+      std::memset(page.object_starts, 0,
+                  page.object_start_words * sizeof(uint64_t));
+    }
+    if (page.born_bits && page.born_words != 0) {
+      std::memset(page.born_bits, 0, page.born_words * sizeof(uint64_t));
+    }
   }
   if (page.h0_states) {
     std::memset(page.h0_states.get(), 0, page.h0_state_capacity);
@@ -4111,7 +4128,7 @@ void reset_page_gc_metadata_locked(GcPage& page) {
 }
 
 std::unique_ptr<GcPage> acquire_page(size_t capacity, PageKind kind) {
-  for (auto entry = recycled_pages.begin(); entry != recycled_pages.end();
+  for (auto entry = recycled_pages.rbegin(); entry != recycled_pages.rend();
        ++entry) {
     // The pooled storage can only serve the page size it was committed for: an
     // ordinary page is carved on a kGcPageBytes boundary and recoverable by
@@ -4120,16 +4137,18 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity, PageKind kind) {
     // failed instead of falling through to fresh storage.
     if ((*entry)->capacity != capacity) continue;
     std::unique_ptr<GcPage> page = std::move(*entry);
-    recycled_pages.erase(entry);
-    page->retired = false;
-    if (page->free_span_count != 0) {
-      unindex_span_page_locked(*page);
-      total_free_spans -= page->free_span_count;
-      page->free_span_count = 0;
-      page->free_span_bytes = 0;
+    if (&*entry != &recycled_pages.back()) {
+      *entry = std::move(recycled_pages.back());
     }
-    set_page_max_free_span_locked(*page, 0, 0);
-    reset_page_gc_metadata_locked(*page);
+    recycled_pages.pop_back();
+    if constexpr (nirq::runtime_debug_enabled) {
+      if (page->retired || page->free_span_count != 0 || page->used != 0 ||
+          page->live_objects != 0 || page->use_object_index ||
+          page->max_free_span != 0 || page->marked_objects != 0 ||
+          page->remembered_objects != 0) {
+        nrq_runtime_fatal("recycled GC page carried stale metadata");
+      }
+    }
     const PageKind requested = page->capacity > kGcPageBytes
                                    ? PageKind::Large
                                    : kind;
@@ -4174,21 +4193,30 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity, PageKind kind) {
     }
     const size_t slots = capacity / kObjectStartAlignment;
     const size_t mark_words = (slots + 63) / 64;
-    page->mark_bits.reset(new (std::nothrow) uint64_t[mark_words]());
-    page->remembered_bits.reset(new (std::nothrow) uint64_t[mark_words]());
-    page->born_bits.reset(new (std::nothrow) uint64_t[mark_words]());
-    if (!page->mark_bits || !page->remembered_bits || !page->born_bits) {
-      release_page_storage(storage, capacity);
-      return nullptr;
+    if (mark_words <= GcPage::kInlineBitmapWords) {
+      std::memset(page->inline_bitmaps.data(), 0,
+                  4 * mark_words * sizeof(uint64_t));
+      page->mark_bits = page->inline_bitmaps.data();
+      page->remembered_bits = page->mark_bits + mark_words;
+      page->born_bits = page->remembered_bits + mark_words;
+      if (capacity <= kGcPageBytes) {
+        page->object_starts = page->born_bits + mark_words;
+        page->object_start_words = mark_words;
+      }
+    } else {
+      page->grown_bitmaps.reset(new (std::nothrow) uint64_t[3 * mark_words]());
+      if (!page->grown_bitmaps) {
+        release_page_storage(storage, capacity);
+        return nullptr;
+      }
+      page->mark_bits = page->grown_bitmaps.get();
+      page->remembered_bits = page->mark_bits + mark_words;
+      page->born_bits = page->remembered_bits + mark_words;
     }
     page->mark_words = mark_words;
     page->remembered_words = mark_words;
     page->born_words = mark_words;
     page->kind = capacity > kGcPageBytes ? PageKind::Large : kind;
-    if (capacity <= kGcPageBytes) {
-      page->object_starts.reset(new (std::nothrow) uint64_t[mark_words]());
-      if (page->object_starts) page->object_start_words = mark_words;
-    }
 
     return page;
   } catch (...) {
