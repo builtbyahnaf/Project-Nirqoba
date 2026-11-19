@@ -2079,13 +2079,62 @@ class FunctionTranslator {
     }
   }
 
+  // A container allocation publishes its object through a root slot. When the
+  // language declares a managed local and immediately initialises it with that
+  // object, the local is the better publish target: the activation then carries
+  // one root slot for the object instead of two, which is one frame entry, one
+  // cleared slot and one publish store fewer for every activation that allocates.
+  //
+  // The substitution is only sound for a fresh slot: declared in the same
+  // straight-line block right after the allocation and initialised immediately,
+  // in a block no branch targets. A slot an earlier iteration had already
+  // written would hold an older reference, and the allocation publishes with a
+  // plain store inside its own barrier region instead of going through the store
+  // barrier that would retain that older reference.
+  mlir::Value coalesced_allocation_root(const tir::Op& call_op,
+                                        mlir::Location loc) {
+    const std::vector<tir::Op>& operations = tir_fn_.operations();
+    const std::size_t call_index = current_operation_index_;
+    if (call_index + 2 >= operations.size()) return {};
+    const tir::Op& declaration = operations[call_index + 1];
+    const tir::Op& initialisation = operations[call_index + 2];
+    if (declaration.kind != tir::OpKind::Alloca) return {};
+    if (initialisation.kind != tir::OpKind::Store) return {};
+    if (initialisation.lhs.id != declaration.result.id) return {};
+    if (initialisation.operand.id != call_op.result.id) return {};
+    if (!declaration.result.type.is_managed_pointer()) return {};
+    if (gc_roots_.rooted_slots.count(declaration.result.id) == 0) return {};
+    if (promoted_slots_.slots.count(declaration.result.id) != 0) return {};
+    // The declaration block must be reachable by fallthrough alone: a branch
+    // target can be entered again with an earlier reference still in the slot.
+    int block_label = -1;
+    for (std::size_t index = 0; index <= call_index + 1; ++index)
+      if (operations[index].kind == tir::OpKind::Label)
+        block_label = operations[index].label_id;
+    if (block_label >= 0) {
+      for (const tir::Op& other : operations) {
+        if ((other.kind == tir::OpKind::Branch &&
+             other.label_id == block_label) ||
+            (other.kind == tir::OpKind::BranchCond &&
+             (other.true_label == block_label ||
+              other.false_label == block_label)))
+          return {};
+      }
+    }
+    // The local's storage is created here so the allocation can publish into it;
+    // the declaration op that follows reuses this slot instead of making another.
+    mlir::Value slot = alloca_at_entry(llvm_ptr_type(ctx_), loc);
+    if (!slot) return {};
+    precreated_slots_[declaration.result.id] = slot;
+    return slot;
+  }
+
   // Every root slot in the activation is described once, before the body runs.
   // Registrations are queued until all managed slots are known, then emitted
   // after the frame begins and before any body operation can trigger collection.
   void register_gc_root(mlir::Value slot, const Type& value_type,
                         mlir::Location loc,
-                        mlir::Value initial_value = {}) {
-    std::vector<uint64_t> offsets;
+                        mlir::Value initial_value = {}) {    std::vector<uint64_t> offsets;
     collect_managed_reference_offsets(value_type, 0, offsets);
     if (offsets.empty()) {
       // The two answers this lowering can give about a type must agree: a type
@@ -3837,7 +3886,17 @@ class FunctionTranslator {
           diag_.error("NRQ4005", op.location, "internal: alloca of unsupported type");
           return false;
         }
-        mlir::Value slot = alloca_at_entry(elem_type, loc);
+        // A managed local initialised directly from a container allocation is
+        // declared after that allocation, which already created its storage so
+        // the object could be published into it. Reuse that slot.
+        mlir::Value slot;
+        if (auto precreated = precreated_slots_.find(op.result.id);
+            precreated != precreated_slots_.end()) {
+          slot = precreated->second;
+          precreated_slots_.erase(precreated);
+        } else {
+          slot = alloca_at_entry(elem_type, loc);
+        }
         if (!slot) {
           diag_.error("NRQ4005", op.location, "internal: no entry block for a stack slot");
           return false;
@@ -4555,15 +4614,19 @@ class FunctionTranslator {
               return false;
             }
           }
-          mlir::Value root_slot = alloca_at_entry(
-              llvm_ptr_type(ctx_), loc);
+          mlir::Value root_slot;
+          if (!gc_roots_.only_cold_alloc_roots)
+            root_slot = coalesced_allocation_root(op, loc);
+          if (!root_slot) {
+            root_slot = alloca_at_entry(llvm_ptr_type(ctx_), loc);
+            if (root_slot && !gc_roots_.only_cold_alloc_roots)
+              register_gc_root(root_slot, op.result.type, loc);
+          }
           if (!root_slot) {
             diag_.error("NRQ4005", op.location,
                         "internal: no entry block for a managed allocation root");
             return false;
           }
-          if (!gc_roots_.only_cold_alloc_roots)
-            register_gc_root(root_slot, op.result.type, loc);
           mlir::Value size = builder_.create<mlir::LLVM::ConstantOp>(
               loc, builder_.getI64Type(),
               builder_.getI64IntegerAttr(element_size)).getResult();
@@ -5832,6 +5895,12 @@ class FunctionTranslator {
   std::unordered_map<int, std::size_t> label_positions_;
   mlir::Block* entry_block_;
   std::vector<PendingGcRoot> pending_gc_roots_;
+  // Container allocations whose object is published through a root slot that
+  // exists for the call alone, keyed by the call's TIR result. A following store
+  // into a fresh managed slot takes that slot over as the publish target.
+  // Slots created ahead of the declaration that introduces them, so an
+  // allocation can publish into the local that will hold its result.
+  std::unordered_map<int, mlir::Value> precreated_slots_;
   // Reference most recently stored through the write barrier into a stack
   // address, keyed by the TIR address value. `nrq_gc_root_store` writes the
   // reference into the slot before returning, so a load of the same address in
