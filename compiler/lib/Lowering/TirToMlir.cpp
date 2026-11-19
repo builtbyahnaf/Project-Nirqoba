@@ -2115,13 +2115,8 @@ class FunctionTranslator {
         // reference: the barrier takes it directly, so the activation needs no
         // staging slot and no byte copy to initialise its root.
         if (root.type.is_managed_pointer()) {
-          auto store_fn = ensure_runtime_fn(
-              module_, builder_, "nrq_gc_root_store",
-              mlir::LLVM::LLVMVoidType::get(ctx_),
-              {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)});
-          builder_.create<mlir::LLVM::CallOp>(
-              root.loc, store_fn,
-              mlir::ValueRange{root.slot, root.initial_value});
+          emit_inline_root_store(root.slot, root.initial_value, root.loc,
+                                 /*known_stack_slot=*/true);
           continue;
         }
         mlir::Value initial_slot = alloca_at_entry(value_type, root.loc);
@@ -2440,6 +2435,275 @@ class FunctionTranslator {
     }
 
     return true;
+  }
+
+  void emit_inline_root_store(mlir::Value slot, mlir::Value value,
+                              mlir::Location loc, bool known_stack_slot,
+                              const tir::Value* alignment_lhs = nullptr,
+                              const Type* alignment_type = nullptr) {
+    const mlir::Type i8 = builder_.getI8Type();
+    const mlir::Type i32 = builder_.getI32Type();
+    const mlir::Type i64 = builder_.getI64Type();
+    const mlir::Type ptr = llvm_ptr_type(ctx_);
+
+    mlir::Block* cur_block = builder_.getInsertionBlock();
+    mlir::Block* cont_block = cur_block->splitBlock(builder_.getInsertionPoint());
+    mlir::Block* fast_block = new mlir::Block();
+    mlir::Block* slow_block = new mlir::Block();
+    func_op_.getBlocks().insert(cont_block->getIterator(), fast_block);
+    func_op_.getBlocks().push_back(slow_block);
+
+    const std::pair<uint32_t, uint32_t> likely_weights{2000u, 1u};
+
+    builder_.setInsertionPointToEnd(cur_block);
+    auto c_i32 = [&](int32_t v) {
+      return builder_.create<mlir::LLVM::ConstantOp>(
+          loc, i32, builder_.getI32IntegerAttr(v)).getResult();
+    };
+    auto c_i64 = [&](int64_t v) {
+      return builder_.create<mlir::LLVM::ConstantOp>(
+          loc, i64, builder_.getI64IntegerAttr(v)).getResult();
+    };
+    auto byte_gep = [&](mlir::Value base, int64_t offset) {
+      if (offset == 0) return base;
+      return builder_.create<mlir::LLVM::GEPOp>(
+          loc, ptr, i8, base, mlir::ValueRange{c_i64(offset)}).getResult();
+    };
+
+    mlir::Value cfg_addr = ensure_inline_gc_config_global(loc);
+    auto cfg64 = builder_.create<mlir::LLVM::LoadOp>(
+        loc, i64,
+        byte_gep(cfg_addr,
+                 static_cast<int64_t>(offsetof(NrqGcInlineConfig, packed_state))));
+    cfg64.setAlignment(8);
+    cfg64.setOrdering(mlir::LLVM::AtomicOrdering::acquire);
+    mlir::Value gate =
+        builder_.create<mlir::LLVM::TruncOp>(loc, i32, cfg64.getResult())
+            .getResult();
+    mlir::Value phase_masked = builder_.create<mlir::LLVM::AndOp>(
+        loc, gate, c_i32(static_cast<int32_t>(NRQ_GC_INLINE_GATE_PHASE_BIT)))
+                                   .getResult();
+    mlir::Value cond = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::eq, phase_masked, c_i32(0)).getResult();
+    if (!known_stack_slot) {
+      auto sb_load = builder_.create<mlir::LLVM::LoadOp>(
+          loc, i32,
+          byte_gep(cfg_addr,
+                   static_cast<int64_t>(offsetof(NrqGcInlineConfig, store_barrier))));
+      sb_load.setAlignment(4);
+      sb_load.setOrdering(mlir::LLVM::AtomicOrdering::acquire);
+      mlir::Value sb_clear = builder_.create<mlir::LLVM::ICmpOp>(
+          loc, mlir::LLVM::ICmpPredicate::eq, sb_load.getResult(), c_i32(0))
+                                 .getResult();
+      cond = builder_.create<mlir::LLVM::AndOp>(loc, cond, sb_clear).getResult();
+    }
+    builder_.create<mlir::LLVM::CondBrOp>(
+        loc, cond, fast_block, mlir::ValueRange{},
+        slow_block, mlir::ValueRange{}, likely_weights);
+
+    builder_.setInsertionPointToStart(fast_block);
+    auto store = builder_.create<mlir::LLVM::StoreOp>(loc, value, slot);
+    if (alignment_lhs && alignment_type) {
+      apply_access_alignment(store, *alignment_lhs, *alignment_type);
+    } else {
+      store.setAlignment(8);
+    }
+    builder_.create<mlir::LLVM::BrOp>(loc, cont_block);
+
+    builder_.setInsertionPointToStart(slow_block);
+    auto store_fn = ensure_runtime_fn(
+        module_, builder_, "nrq_gc_root_store",
+        mlir::LLVM::LLVMVoidType::get(ctx_), {ptr, ptr});
+    builder_.create<mlir::LLVM::CallOp>(loc, store_fn,
+                                        mlir::ValueRange{slot, value});
+    builder_.create<mlir::LLVM::BrOp>(loc, cont_block);
+
+    builder_.setInsertionPointToStart(cont_block);
+  }
+
+  void emit_inline_pin_transfer(mlir::Value reference, mlir::Location loc) {
+    const mlir::Type i8 = builder_.getI8Type();
+    const mlir::Type i32 = builder_.getI32Type();
+    const mlir::Type i64 = builder_.getI64Type();
+    const mlir::Type ptr = llvm_ptr_type(ctx_);
+
+    mlir::Block* cur_block = builder_.getInsertionBlock();
+    mlir::Block* cont_block = cur_block->splitBlock(builder_.getInsertionPoint());
+    mlir::Block* fast_block = new mlir::Block();
+    mlir::Block* slow_block = new mlir::Block();
+    func_op_.getBlocks().insert(cont_block->getIterator(), fast_block);
+    func_op_.getBlocks().push_back(slow_block);
+
+    const std::pair<uint32_t, uint32_t> likely_weights{2000u, 1u};
+
+    builder_.setInsertionPointToEnd(cur_block);
+    auto c_i32 = [&](int32_t v) {
+      return builder_.create<mlir::LLVM::ConstantOp>(
+          loc, i32, builder_.getI32IntegerAttr(v)).getResult();
+    };
+    auto c_i64 = [&](int64_t v) {
+      return builder_.create<mlir::LLVM::ConstantOp>(
+          loc, i64, builder_.getI64IntegerAttr(v)).getResult();
+    };
+    auto byte_gep = [&](mlir::Value base, int64_t offset) {
+      if (offset == 0) return base;
+      return builder_.create<mlir::LLVM::GEPOp>(
+          loc, ptr, i8, base, mlir::ValueRange{c_i64(offset)}).getResult();
+    };
+
+    mlir::Value tls = ensure_fast_tls_global(loc);
+    mlir::Value cfg_addr = ensure_inline_gc_config_global(loc);
+    mlir::Value barrier_ptr =
+        byte_gep(tls, static_cast<int64_t>(offsetof(NrqGcFastTls, inline_barrier)));
+    builder_.create<mlir::LLVM::StoreOp>(loc, c_i32(1), barrier_ptr)
+        .setAlignment(4);
+
+    auto cfg64 = builder_.create<mlir::LLVM::LoadOp>(
+        loc, i64,
+        byte_gep(cfg_addr,
+                 static_cast<int64_t>(offsetof(NrqGcInlineConfig, packed_state))));
+    cfg64.setAlignment(8);
+    cfg64.setOrdering(mlir::LLVM::AtomicOrdering::acquire);
+    mlir::Value gate =
+        builder_.create<mlir::LLVM::TruncOp>(loc, i32, cfg64.getResult())
+            .getResult();
+    mlir::Value phase_masked = builder_.create<mlir::LLVM::AndOp>(
+        loc, gate, c_i32(static_cast<int32_t>(NRQ_GC_INLINE_GATE_PHASE_BIT)))
+                                   .getResult();
+    mlir::Value phase_clear = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::eq, phase_masked, c_i32(0)).getResult();
+
+    mlir::Value null_ptr = builder_.create<mlir::LLVM::ZeroOp>(loc, ptr).getResult();
+    auto fend = builder_.create<mlir::LLVM::LoadOp>(
+        loc, ptr,
+        byte_gep(tls, static_cast<int64_t>(offsetof(NrqGcFastTls, frame_end))));
+    fend.setAlignment(8);
+    mlir::Value mutator_ready = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::ne, fend.getResult(), null_ptr)
+                                    .getResult();
+
+    mlir::Value pin_slot = byte_gep(
+        tls, static_cast<int64_t>(offsetof(NrqGcFastTls, transfer_pin_fast)));
+    auto cur_pin = builder_.create<mlir::LLVM::LoadOp>(loc, ptr, pin_slot);
+    cur_pin.setAlignment(8);
+    mlir::Value pin_empty = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::eq, cur_pin.getResult(), null_ptr)
+                                .getResult();
+
+    mlir::Value ready =
+        builder_.create<mlir::LLVM::AndOp>(loc, phase_clear, mutator_ready)
+            .getResult();
+    mlir::Value fast_ok =
+        builder_.create<mlir::LLVM::AndOp>(loc, ready, pin_empty).getResult();
+    builder_.create<mlir::LLVM::CondBrOp>(
+        loc, fast_ok, fast_block, mlir::ValueRange{},
+        slow_block, mlir::ValueRange{}, likely_weights);
+
+    builder_.setInsertionPointToStart(fast_block);
+    builder_.create<mlir::LLVM::StoreOp>(loc, reference, pin_slot)
+        .setAlignment(8);
+    builder_.create<mlir::LLVM::StoreOp>(loc, c_i32(0), barrier_ptr)
+        .setAlignment(4);
+    builder_.create<mlir::LLVM::BrOp>(loc, cont_block);
+
+    builder_.setInsertionPointToStart(slow_block);
+    builder_.create<mlir::LLVM::StoreOp>(loc, c_i32(0), barrier_ptr)
+        .setAlignment(4);
+    auto pin_fn = ensure_runtime_fn(
+        module_, builder_, "nrq_gc_pin_transfer", ptr, {ptr});
+    builder_.create<mlir::LLVM::CallOp>(loc, pin_fn,
+                                        mlir::ValueRange{reference});
+    builder_.create<mlir::LLVM::BrOp>(loc, cont_block);
+
+    builder_.setInsertionPointToStart(cont_block);
+  }
+
+  void emit_inline_unpin(mlir::Value reference, mlir::Location loc) {
+    const mlir::Type i8 = builder_.getI8Type();
+    const mlir::Type i32 = builder_.getI32Type();
+    const mlir::Type i64 = builder_.getI64Type();
+    const mlir::Type ptr = llvm_ptr_type(ctx_);
+
+    mlir::Block* cur_block = builder_.getInsertionBlock();
+    mlir::Block* cont_block = cur_block->splitBlock(builder_.getInsertionPoint());
+    mlir::Block* fast_block = new mlir::Block();
+    mlir::Block* slow_block = new mlir::Block();
+    func_op_.getBlocks().insert(cont_block->getIterator(), fast_block);
+    func_op_.getBlocks().push_back(slow_block);
+
+    const std::pair<uint32_t, uint32_t> likely_weights{2000u, 1u};
+
+    builder_.setInsertionPointToEnd(cur_block);
+    auto c_i32 = [&](int32_t v) {
+      return builder_.create<mlir::LLVM::ConstantOp>(
+          loc, i32, builder_.getI32IntegerAttr(v)).getResult();
+    };
+    auto c_i64 = [&](int64_t v) {
+      return builder_.create<mlir::LLVM::ConstantOp>(
+          loc, i64, builder_.getI64IntegerAttr(v)).getResult();
+    };
+    auto byte_gep = [&](mlir::Value base, int64_t offset) {
+      if (offset == 0) return base;
+      return builder_.create<mlir::LLVM::GEPOp>(
+          loc, ptr, i8, base, mlir::ValueRange{c_i64(offset)}).getResult();
+    };
+
+    mlir::Value tls = ensure_fast_tls_global(loc);
+    mlir::Value cfg_addr = ensure_inline_gc_config_global(loc);
+    mlir::Value barrier_ptr =
+        byte_gep(tls, static_cast<int64_t>(offsetof(NrqGcFastTls, inline_barrier)));
+    builder_.create<mlir::LLVM::StoreOp>(loc, c_i32(1), barrier_ptr)
+        .setAlignment(4);
+
+    auto cfg64 = builder_.create<mlir::LLVM::LoadOp>(
+        loc, i64,
+        byte_gep(cfg_addr,
+                 static_cast<int64_t>(offsetof(NrqGcInlineConfig, packed_state))));
+    cfg64.setAlignment(8);
+    cfg64.setOrdering(mlir::LLVM::AtomicOrdering::acquire);
+    mlir::Value gate =
+        builder_.create<mlir::LLVM::TruncOp>(loc, i32, cfg64.getResult())
+            .getResult();
+    mlir::Value phase_masked = builder_.create<mlir::LLVM::AndOp>(
+        loc, gate, c_i32(static_cast<int32_t>(NRQ_GC_INLINE_GATE_PHASE_BIT)))
+                                   .getResult();
+    mlir::Value phase_clear = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::eq, phase_masked, c_i32(0)).getResult();
+
+    mlir::Value pin_slot = byte_gep(
+        tls, static_cast<int64_t>(offsetof(NrqGcFastTls, transfer_pin_fast)));
+    auto cur_pin = builder_.create<mlir::LLVM::LoadOp>(loc, ptr, pin_slot);
+    cur_pin.setAlignment(8);
+    mlir::Value pin_matches = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::eq, cur_pin.getResult(), reference)
+                                  .getResult();
+
+    mlir::Value fast_ok =
+        builder_.create<mlir::LLVM::AndOp>(loc, phase_clear, pin_matches)
+            .getResult();
+    builder_.create<mlir::LLVM::CondBrOp>(
+        loc, fast_ok, fast_block, mlir::ValueRange{},
+        slow_block, mlir::ValueRange{}, likely_weights);
+
+    builder_.setInsertionPointToStart(fast_block);
+    mlir::Value null_ptr = builder_.create<mlir::LLVM::ZeroOp>(loc, ptr).getResult();
+    builder_.create<mlir::LLVM::StoreOp>(loc, null_ptr, pin_slot)
+        .setAlignment(8);
+    builder_.create<mlir::LLVM::StoreOp>(loc, c_i32(0), barrier_ptr)
+        .setAlignment(4);
+    builder_.create<mlir::LLVM::BrOp>(loc, cont_block);
+
+    builder_.setInsertionPointToStart(slow_block);
+    builder_.create<mlir::LLVM::StoreOp>(loc, c_i32(0), barrier_ptr)
+        .setAlignment(4);
+    auto unpin_fn = ensure_runtime_fn(
+        module_, builder_, "nrq_gc_unpin",
+        mlir::LLVM::LLVMVoidType::get(ctx_), {ptr});
+    builder_.create<mlir::LLVM::CallOp>(loc, unpin_fn,
+                                        mlir::ValueRange{reference});
+    builder_.create<mlir::LLVM::BrOp>(loc, cont_block);
+
+    builder_.setInsertionPointToStart(cont_block);
   }
 
   mlir::Type i8_type() { return builder_.getI8Type(); }
@@ -3222,6 +3486,10 @@ class FunctionTranslator {
     std::vector<uint64_t> offsets;
     collect_managed_reference_offsets(type, 0, offsets);
     if (offsets.empty() || !value) return value;
+    if (type.is_managed_pointer() && offsets.size() == 1 && offsets[0] == 0) {
+      emit_inline_pin_transfer(value, loc);
+      return value;
+    }
     mlir::Type value_type = tir_type_to_mlir(type, ctx_, builder_);
     if (!value_type) return value;
     mlir::Value slot = alloca_at_entry(value_type, loc);
@@ -3258,19 +3526,15 @@ class FunctionTranslator {
     // owns it can receive the reference directly. Staging it in another slot and
     // copying eight bytes out of that slot cost an alloca, a store and a copy
     // call for a value the barrier can take as an argument.
-    const bool direct_pointer_root = keep_root && type.is_managed_pointer() &&
-                                    offsets.size() == 1 && offsets[0] == 0;
+    const bool single_pointer = type.is_managed_pointer() &&
+                                offsets.size() == 1 && offsets[0] == 0;
+    const bool direct_pointer_root = keep_root && single_pointer;
     mlir::Value slot;
     if (direct_pointer_root) {
       slot = alloca_at_entry(value_type, loc);
       register_gc_root(slot, type, loc);
-      auto store_fn = ensure_runtime_fn(
-          module_, builder_, "nrq_gc_root_store",
-          mlir::LLVM::LLVMVoidType::get(ctx_),
-          {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)});
-      builder_.create<mlir::LLVM::CallOp>(loc, store_fn,
-                                          mlir::ValueRange{slot, value});
-    } else {
+      emit_inline_root_store(slot, value, loc, /*known_stack_slot=*/true);
+    } else if (!single_pointer) {
       slot = alloca_at_entry(value_type, loc);
       builder_.create<mlir::LLVM::StoreOp>(loc, value, slot);
       if (keep_root) {
@@ -3288,15 +3552,15 @@ class FunctionTranslator {
         slot = root_slot;
       }
     }
+    if (single_pointer) {
+      // The root holds exactly the value that was just published into it, so the
+      // release needs no reload of the slot it was stored into.
+      emit_inline_unpin(value, loc);
+      return;
+    }
     auto unpin = ensure_runtime_fn(
         module_, builder_, "nrq_gc_unpin",
         mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
-    if (direct_pointer_root) {
-      // The root holds exactly the value that was just published into it, so the
-      // release needs no reload of the slot it was stored into.
-      builder_.create<mlir::LLVM::CallOp>(loc, unpin, mlir::ValueRange{value});
-      return;
-    }
     for (uint64_t offset : offsets) {
       mlir::Value byte_offset = builder_.create<mlir::LLVM::ConstantOp>(
           loc, builder_.getI64Type(),
@@ -3578,11 +3842,10 @@ class FunctionTranslator {
             forwarded_root_values_.erase(op.lhs.id);
             return true;
           }
-          auto store_fn = ensure_runtime_fn(module_, builder_, "nrq_gc_root_store",
-                                            mlir::LLVM::LLVMVoidType::get(ctx_),
-                                            {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)});
-          builder_.create<mlir::LLVM::CallOp>(loc, store_fn,
-                                              mlir::ValueRange{ptr, val});
+          emit_inline_root_store(
+              ptr, val, loc,
+              ptr.getDefiningOp<mlir::LLVM::AllocaOp>() != nullptr, &op.lhs,
+              &op.operand.type);
           // The barrier writes exactly this reference into the slot before it
           // returns, so a later load of the same address can use the value
           // directly. Without this the emitted code reloads the pointer it just
