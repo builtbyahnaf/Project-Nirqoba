@@ -194,8 +194,8 @@ struct GcPage {
   // leaves one run per two dead objects, and the old 16-byte entry capped a page
   // at 96 of them and silently dropped the rest.
   struct FreeSpan {
-    uint32_t offset = 0;
-    uint32_t span = 0;
+    uint32_t offset;
+    uint32_t span;
   };
   // A headerless page packs twice as many objects into a 64 KiB page as an H32
   // page did, so a workload that frees every other object produces twice as many
@@ -212,7 +212,7 @@ struct GcPage {
   // Growing on demand pays the extra metadata only where it buys back space.
   static constexpr size_t kMaxGrownFreeSpans = 4096;
   static constexpr size_t kNoSpanIndex = SIZE_MAX;
-  std::array<FreeSpan, kMaxFreeSpans> inline_free_spans{};
+  std::array<FreeSpan, kMaxFreeSpans> inline_free_spans;
   // Points at the inline array until the list outgrows it. Every reader and
   // writer of the run list uses this pointer, so there is one representation of
   // "where the runs live" rather than two paths to keep in step.

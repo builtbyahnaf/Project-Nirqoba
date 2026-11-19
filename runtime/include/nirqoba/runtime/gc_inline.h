@@ -100,6 +100,7 @@ typedef struct NrqGcFastTls {
   size_t pending_count;
   uint8_t* ext_cursor;
   uint8_t* ext_end;
+  NrqGcFastFrame* frame_end;
   NrqGcPendingRange* tlab_active_range;
   void* tlab_page;
   NrqGcPendingRange* ext_active_range;
@@ -121,7 +122,6 @@ typedef struct NrqGcFastTls {
   NrqGcFastRoot* root_cursor;
   NrqGcFastRoot* root_end;
   NrqGcFastFrame* frame_cursor;
-  NrqGcFastFrame* frame_end;
   NrqGcPendingRange pending_ranges[NRQ_GC_INLINE_PENDING_CAPACITY];
 } NrqGcFastTls;
 
