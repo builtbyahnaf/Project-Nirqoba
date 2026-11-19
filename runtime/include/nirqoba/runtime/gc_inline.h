@@ -64,9 +64,14 @@ typedef struct NrqGcFastFrame {
 // share one atomic width with no mixed-width accesses or torn snapshots.
 // `gate` is 0 iff the collector is Idle, automatic collection is not yet due,
 // and debug allocation event tracing is disabled.
+// `store_barrier` mirrors the generational write-barrier gate so compiler-
+// inlined pointer stores can bypass `nrq_gc_root_store` when both
+// `collection_phase == Idle` and `store_barrier == 0`.
 typedef struct NrqGcInlineConfig {
   uint64_t packed_state;
   size_t accounting_batch;
+  uint32_t store_barrier;
+  uint32_t reserved;
 } NrqGcInlineConfig;
 
 // Per-thread fast allocation state. Hot fields for H8/H16 bump allocation sit

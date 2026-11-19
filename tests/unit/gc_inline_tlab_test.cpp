@@ -462,12 +462,14 @@ TEST(GcInlineTlabTest, ConcurrentThreadsUseIndependentInlineTlabsAcrossGc) {
 }
 
 TEST(GcInlineTlabTest, InlineConfigPackedStateAndTransitionsAreConsistent) {
-  static_assert(sizeof(NrqGcInlineConfig) == 16,
-                "NrqGcInlineConfig must stay 16 bytes");
+  static_assert(sizeof(NrqGcInlineConfig) == 24,
+                "NrqGcInlineConfig must stay 24 bytes");
   static_assert(offsetof(NrqGcInlineConfig, packed_state) == 0,
                 "packed_state must be at offset 0");
   static_assert(offsetof(NrqGcInlineConfig, accounting_batch) == 8,
                 "accounting_batch must be at offset 8");
+  static_assert(offsetof(NrqGcInlineConfig, store_barrier) == 16,
+                "store_barrier must be at offset 16");
 
   nrq_gc_disable();
   nrq_gc_set_generational(1);
@@ -489,17 +491,23 @@ TEST(GcInlineTlabTest, InlineConfigPackedStateAndTransitionsAreConsistent) {
   ASSERT_EQ(nrq_gc_inline_unpack_initial_state(packed),
             uint32_t{NRQ_GC_STATE_YOUNG});
 
-  // Toggling generational updates initial_state atomically without setting gate.
+  // Toggling generational updates initial_state and store_barrier atomically without setting gate.
+  auto read_store_barrier = []() {
+    return std::atomic_ref<uint32_t>(nrq_gc_inline_config.store_barrier)
+        .load(std::memory_order_acquire);
+  };
   nrq_gc_set_generational(0);
   packed = read_packed();
   ASSERT_EQ(nrq_gc_inline_unpack_gate(packed), uint32_t{0});
   ASSERT_EQ(nrq_gc_inline_unpack_initial_state(packed), uint32_t{0});
+  ASSERT_EQ(read_store_barrier(), uint32_t{0});
 
   nrq_gc_set_generational(1);
   packed = read_packed();
   ASSERT_EQ(nrq_gc_inline_unpack_gate(packed), uint32_t{0});
   ASSERT_EQ(nrq_gc_inline_unpack_initial_state(packed),
             uint32_t{NRQ_GC_STATE_YOUNG});
+  ASSERT_EQ(read_store_barrier(), uint32_t{1});
 
   // Lowering threshold below kAccountingBatchBytes (16 KiB) shrinks batch.
   const size_t default_batch = read_batch();
@@ -683,4 +691,54 @@ TEST(GcInlineTlabTest, ConcurrentConfigMutationsStayRaceFreeWithInlineTlab) {
   nrq_gc_set_adaptive(1);
   nrq_gc_collect();
   nrq_gc_collect();
+}
+
+TEST(GcInlineTlabTest, PinTransferFastSlotAndFallbackPreserveObjectsAcrossCollections) {
+  nrq_gc_mutator_enter();
+  nrq_gc_disable();
+  nrq_gc_collect();
+  nrq_gc_collect();
+
+  void* site_cache = nullptr;
+  uint32_t site_id = 0;
+  size_t fast_hits = 0;
+  size_t slow_hits = 0;
+  void* tmp_slot = nullptr;
+  nrq_gc_root_register(&tmp_slot);
+  const size_t baseline = nrq_gc_get_live_objects();
+  ASSERT_EQ(nrq_gc_fast_tls.transfer_pin_fast, nullptr);
+
+  void* first = allocate_h8_with_fallback(
+      &tmp_slot, sizeof(TreeNode24), nullptr, 0, &site_cache, site_id,
+      fast_hits, slow_hits);
+  ASSERT_TRUE(first != nullptr);
+  ASSERT_EQ(nrq_gc_pin_transfer(first), first);
+  ASSERT_EQ(nrq_gc_fast_tls.transfer_pin_fast, first);
+
+  // Second concurrent transfer pin while `transfer_pin_fast` is occupied must
+  // overflow cleanly to the buffered delta list without displacing `first`.
+  void* second = allocate_h8_with_fallback(
+      &tmp_slot, sizeof(TreeNode24), nullptr, 0, &site_cache, site_id,
+      fast_hits, slow_hits);
+  ASSERT_TRUE(second != nullptr);
+  ASSERT_EQ(nrq_gc_pin_transfer(second), second);
+  ASSERT_EQ(nrq_gc_fast_tls.transfer_pin_fast, first);
+  nrq_gc_root_store(&tmp_slot, nullptr);
+
+  nrq_gc_collect();
+  // Cycle preparation drains `transfer_pin_fast` into `pinned_objects` and clears it.
+  ASSERT_EQ(nrq_gc_fast_tls.transfer_pin_fast, nullptr);
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 2);
+
+  nrq_gc_unpin(first);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline + 1);
+
+  nrq_gc_unpin(second);
+  nrq_gc_collect();
+  ASSERT_EQ(nrq_gc_get_live_objects(), baseline);
+
+  nrq_gc_root_unregister(&tmp_slot);
+  nrq_gc_set_adaptive(1);
+  nrq_gc_mutator_leave();
 }

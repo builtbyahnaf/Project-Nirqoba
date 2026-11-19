@@ -1967,6 +1967,8 @@ std::atomic<size_t> old_object_count{0};
 // stale value therefore records remembered-set entries it did not have to, never
 // skips one it needed.
 void raise_store_barrier() {
+  std::atomic_ref<uint32_t>(nrq_gc_inline_config.store_barrier)
+      .store(1u, std::memory_order_release);
   store_barrier_active.store(true, std::memory_order_release);
   generational_barrier_active.store(true, std::memory_order_release);
 }
@@ -1974,6 +1976,8 @@ void raise_store_barrier() {
 void lower_store_barrier() {
   generational_barrier_active.store(false, std::memory_order_release);
   store_barrier_active.store(false, std::memory_order_release);
+  std::atomic_ref<uint32_t>(nrq_gc_inline_config.store_barrier)
+      .store(0u, std::memory_order_release);
 }
 
 uint64_t saturated_add(uint64_t left, uint64_t right) {
@@ -2015,6 +2019,9 @@ void refresh_inline_config_locked() {
   // any fast-path reader whose 64-bit acquire load observes this `packed_state`
   // is ordered after the updated `accounting_batch` as well.
   const uint64_t packed = nrq_gc_inline_pack_state(gate, initial_state);
+  std::atomic_ref<uint32_t>(nrq_gc_inline_config.store_barrier)
+      .store(store_barrier_active.load(std::memory_order_acquire) ? 1u : 0u,
+             std::memory_order_release);
   std::atomic_ref<size_t>(nrq_gc_inline_config.accounting_batch)
       .store(batch, std::memory_order_release);
   std::atomic_ref<uint64_t>(nrq_gc_inline_config.packed_state)
@@ -6616,12 +6623,16 @@ void nrq_gc_set_generational(int32_t enabled) {
   if (enabled) {
     // Raise the derived switch first: a mutator that still sees the switch raised
     // after generations are turned off only records extra entries.
+    std::atomic_ref<uint32_t>(nrq_gc_inline_config.store_barrier)
+        .store(1u, std::memory_order_release);
     store_barrier_active.store(true, std::memory_order_release);
     generational_collection_enabled.store(true, std::memory_order_relaxed);
     refresh_inline_config_locked();
     return;
   }
   store_barrier_active.store(false, std::memory_order_release);
+  std::atomic_ref<uint32_t>(nrq_gc_inline_config.store_barrier)
+      .store(0u, std::memory_order_release);
   generational_collection_enabled.store(false, std::memory_order_relaxed);
   refresh_inline_config_locked();
 }
@@ -7161,6 +7172,11 @@ void* nrq_gc_pin_transfer(void* object) {
   // results.
   if (begin_fast_barrier()) {
     MutatorState& mutator = thread_mutator;
+    if (mutator.fast && mutator.fast->transfer_pin_fast == nullptr) {
+      mutator.fast->transfer_pin_fast = object;
+      end_fast_barrier();
+      return object;
+    }
     TransferPinDelta* pending = find_transfer_delta(mutator, object);
     if (pending) {
       // A pin cancels a buffered release, which is the same net effect a table pin
@@ -7282,23 +7298,27 @@ int64_t nrq_gc_get_ref_count(void* object) {
 }
 
 alignas(nirq::nrq_cache_line_bytes) NrqGcInlineConfig nrq_gc_inline_config = {
-    nrq_gc_inline_pack_state(0u, kYoungBit), kAccountingBatchBytes};
+    nrq_gc_inline_pack_state(0u, kYoungBit), kAccountingBatchBytes, 0u, 0u};
 NRQ_THREAD_LOCAL NrqGcFastTls nrq_gc_fast_tls = {};
 
 static_assert(NRQ_GC_INLINE_TLAB_BYTES == kGcTlabBytes,
               "inline TLAB limit must match kGcTlabBytes");
 static_assert(NRQ_GC_INLINE_SPAN_ALIGNMENT == kObjectStartAlignment,
               "inline span alignment must match kObjectStartAlignment");
-static_assert(sizeof(NrqGcInlineConfig) == 16,
+static_assert(sizeof(NrqGcInlineConfig) == 24,
               "NrqGcInlineConfig size mismatch");
 static_assert(offsetof(NrqGcInlineConfig, packed_state) == 0,
               "NrqGcInlineConfig::packed_state offset mismatch");
 static_assert(offsetof(NrqGcInlineConfig, accounting_batch) == 8,
               "NrqGcInlineConfig::accounting_batch offset mismatch");
+static_assert(offsetof(NrqGcInlineConfig, store_barrier) == 16,
+              "NrqGcInlineConfig::store_barrier offset mismatch");
 static_assert(std::atomic_ref<uint64_t>::is_always_lock_free,
               "NrqGcInlineConfig::packed_state must be lock-free");
 static_assert(std::atomic_ref<size_t>::is_always_lock_free,
               "NrqGcInlineConfig::accounting_batch must be lock-free");
+static_assert(std::atomic_ref<uint32_t>::is_always_lock_free,
+              "NrqGcInlineConfig::store_barrier must be lock-free");
 static_assert(sizeof(NrqGcPendingRange) == 24,
               "NrqGcPendingRange size mismatch");
 static_assert(offsetof(NrqGcFastTls, tlab_cursor) == 0,
