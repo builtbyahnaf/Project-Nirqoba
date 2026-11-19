@@ -903,3 +903,54 @@ int function main() {
   ASSERT_TRUE(printed.find("nrq_gc_root_frame_begin") != std::string::npos);
   ASSERT_TRUE(printed.find("nrq_gc_root_frame_end") != std::string::npos);
 }
+
+TEST(MlirPipelineTest, ElidesOuterRootFrameForColdOnlyLeafAllocations) {
+  constexpr const char* source = R"nrqba(
+struct Node {
+    managed<Node> next;
+    int value;
+}
+
+managed<Node> function make_leaf_node(int v) {
+    var a = array.allocate<Node>(1);
+    a[0].value = v;
+    return a;
+}
+
+int function main() {
+    var n = make_leaf_node(7);
+    print(n[0].value);
+    return 0;
+}
+)nrqba";
+
+  mlir::DialectRegistry registry;
+  nirq::register_all_dialects(registry);
+  mlir::MLIRContext context(registry);
+  context.loadAllAvailableDialects();
+  nirq::DiagnosticEngine diagnostics;
+
+  auto module = lower_source_to_mlir(source, context, diagnostics);
+  ASSERT_FALSE(diagnostics.has_errors());
+  ASSERT_TRUE(static_cast<bool>(module));
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*module)));
+
+  mlir::func::FuncOp leaf_fn;
+  module->walk([&](mlir::func::FuncOp fn) {
+    if (fn.getName().contains("make_leaf_node")) {
+      leaf_fn = fn;
+    }
+  });
+  ASSERT_TRUE(static_cast<bool>(leaf_fn));
+
+  std::string fn_printed;
+  llvm::raw_string_ostream os(fn_printed);
+  leaf_fn.print(os);
+  os.flush();
+
+  ASSERT_TRUE(fn_printed.find("nrq_gc_allocate_array_planned") != std::string::npos);
+  ASSERT_TRUE(fn_printed.find("nrq_gc_root_frame_begin") != std::string::npos);
+  ASSERT_TRUE(fn_printed.find("nrq_gc_root_frame_end") != std::string::npos);
+  ASSERT_TRUE(fn_printed.find("nrq_gc_root_frame_open") == std::string::npos);
+  ASSERT_TRUE(fn_printed.find("nrq_gc_pin_transfer") != std::string::npos);
+}
