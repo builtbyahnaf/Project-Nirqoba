@@ -852,3 +852,54 @@ int function main() {
   ASSERT_TRUE(printed.find("llvm.intr.memset") != std::string::npos);
   ASSERT_TRUE(printed.find("nrq_gc_allocate_array_planned") != std::string::npos);
 }
+
+TEST(MlirPipelineTest, EmitsInlineStaticRootFrameWithColdRuntimeFallback) {
+  constexpr const char* source = R"nrqba(
+struct Node {
+    managed<Node> next;
+    int value;
+}
+
+int function single_root(int v) {
+    var a = array.allocate<Node>(1);
+    a[0].value = v;
+    return a[0].value;
+}
+
+int function multi_root(int v) {
+    var a = array.allocate<Node>(1);
+    var b = array.allocate<Node>(1);
+    a[0].next = b;
+    a[0].value = v;
+    b[0].value = v + 1;
+    return a[0].value + b[0].value;
+}
+
+int function main() {
+    print(single_root(3) + multi_root(4));
+    return 0;
+}
+)nrqba";
+
+  mlir::DialectRegistry registry;
+  nirq::register_all_dialects(registry);
+  mlir::MLIRContext context(registry);
+  context.loadAllAvailableDialects();
+  nirq::DiagnosticEngine diagnostics;
+
+  auto module = lower_source_to_mlir(source, context, diagnostics);
+  ASSERT_FALSE(diagnostics.has_errors());
+  ASSERT_TRUE(static_cast<bool>(module));
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*module)));
+
+  std::string printed;
+  llvm::raw_string_ostream os(printed);
+  module->print(os);
+  os.flush();
+
+  ASSERT_TRUE(printed.find("nrq_gc_fast_tls") != std::string::npos);
+  ASSERT_TRUE(printed.find("nrq_gc_inline_config") != std::string::npos);
+  ASSERT_TRUE(printed.find("nrq_gc_root_frame_open") != std::string::npos);
+  ASSERT_TRUE(printed.find("nrq_gc_root_frame_begin") != std::string::npos);
+  ASSERT_TRUE(printed.find("nrq_gc_root_frame_end") != std::string::npos);
+}

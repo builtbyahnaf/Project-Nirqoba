@@ -206,7 +206,10 @@ extern "C" {
 void nrq_gc_debug_set_event_mask(uint32_t mask) {
   nirq::gc::detail::debug_event_mask().store(mask, std::memory_order_relaxed);
   if constexpr (nirq::runtime_debug_enabled) {
-    nrq_gc_set_inline_debug_alloc((mask & NRQ_GC_EVENT_ALLOCATION) != 0 ? 1 : 0);
+    nrq_gc_set_inline_debug_alloc(
+        (mask & (NRQ_GC_EVENT_ALLOCATION | NRQ_GC_EVENT_ROOT_FRAME)) != 0
+            ? 1
+            : 0);
   }
 }
 

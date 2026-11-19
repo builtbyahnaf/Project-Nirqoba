@@ -1,0 +1,4 @@
+{
+  "mode": "build_and_run",
+  "expect_stdout": "33525\n"
+}

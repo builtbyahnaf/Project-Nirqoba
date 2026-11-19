@@ -1,0 +1,28 @@
+struct Node {
+    int value;
+    managed<Node> next;
+}
+
+// Recursively open >128 nested inline static root frames so the TLS fast
+// frame/root cursors exhaust mid-recursion and fall back to slow runtime
+// frame growth, collect at the bottom, then unwind and verify all roots.
+int function deep_chain(int depth) {
+    var left = array.allocate<Node>(1);
+    var right = array.allocate<Node>(1);
+    left[0].value = depth;
+    right[0].value = depth * 2;
+    left[0].next = right;
+    if (depth > 0) {
+        left[0].value = left[0].value + deep_chain(depth - 1);
+    } else {
+        gc.collect();
+    }
+    return left[0].value + right[0].value;
+}
+
+int function main() {
+    var result = deep_chain(149);
+    gc.collect();
+    print(result);
+    return 0;
+}
