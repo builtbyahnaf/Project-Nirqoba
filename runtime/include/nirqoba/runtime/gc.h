@@ -513,6 +513,32 @@ void nrq_gc_ref_count_start(void);
 void nrq_gc_ref_count_stop(void);
 int64_t nrq_gc_get_ref_count(void* object);
 
+// Diagnostic-only TLAB hit, refill, and slow-path fallback classification.
+// Zero cost on the inline fast path when disabled; activated either via
+// `nrq_gc_set_tlab_diag(1)` or setting `NRQ_GC_TLAB_DIAG=1`.
+struct nrq_gc_tlab_diag_facts {
+  uint64_t inline_fast_hits;
+  uint64_t slow_planned_calls;
+  uint64_t slow_tlab_handled;
+  uint64_t slow_locked_fallbacks;
+  uint64_t refill_count;
+  uint64_t spare_run_hits;
+  uint64_t site_count;
+  uint64_t reason_cold_site_init;
+  uint64_t reason_gc_active;
+  uint64_t reason_collection_due;
+  uint64_t reason_debug_alloc_gate;
+  uint64_t reason_diag_roots_gate;
+  uint64_t reason_plan_ineligible;
+  uint64_t reason_accounting_batch;
+  uint64_t reason_tlab_kind_mismatch;
+  uint64_t reason_tlab_exhausted;
+  uint64_t reason_other;
+};
+void nrq_gc_set_tlab_diag(int32_t enabled);
+struct nrq_gc_tlab_diag_facts nrq_gc_get_tlab_diag_facts(void);
+void nrq_gc_reset_tlab_diag_facts(void);
+
 #ifdef __cplusplus
 }
 #endif

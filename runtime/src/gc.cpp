@@ -27,6 +27,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -1580,6 +1581,107 @@ uint64_t recycled_page_reuse_count = 0;
 // that cannot hand out a useful slab turns every few objects into a refill, so the
 // count is the direct measure of that cost.
 uint64_t tlab_refill_count = 0;
+
+struct TlabDiagCounters {
+  std::atomic<bool> enabled{false};
+  std::atomic<bool> env_checked{false};
+  std::atomic<bool> print_on_exit{false};
+  std::atomic<uint64_t> published_tlab_objects{0};
+  std::atomic<uint64_t> slow_planned_calls{0};
+  std::atomic<uint64_t> slow_tlab_handled{0};
+  std::atomic<uint64_t> slow_locked_fallbacks{0};
+  std::atomic<uint64_t> refill_count{0};
+  std::atomic<uint64_t> spare_run_hits{0};
+  std::atomic<uint64_t> reason_cold_site_init{0};
+  std::atomic<uint64_t> reason_gc_active{0};
+  std::atomic<uint64_t> reason_collection_due{0};
+  std::atomic<uint64_t> reason_debug_alloc_gate{0};
+  std::atomic<uint64_t> reason_diag_roots_gate{0};
+  std::atomic<uint64_t> reason_plan_ineligible{0};
+  std::atomic<uint64_t> reason_accounting_batch{0};
+  std::atomic<uint64_t> reason_tlab_kind_mismatch{0};
+  std::atomic<uint64_t> reason_tlab_exhausted{0};
+  std::atomic<uint64_t> reason_other{0};
+  std::mutex site_mutex;
+  struct SiteEntry {
+    void** cache = nullptr;
+    size_t element_size = 0;
+    size_t last_count = 0;
+    uint32_t expected_kind = NRQ_GC_INLINE_KIND_NONE;
+    uint64_t slow_calls = 0;
+  };
+  static constexpr size_t kMaxSites = 64;
+  SiteEntry sites[kMaxSites]{};
+  size_t site_count = 0;
+};
+TlabDiagCounters tlab_diag;
+
+void record_tlab_diag_slow_call(void** site_cache, size_t count,
+                                size_t element_size, uint32_t plan_flags) {
+  tlab_diag.slow_planned_calls.fetch_add(1, std::memory_order_relaxed);
+  const uint64_t packed =
+      std::atomic_ref<uint64_t>(nrq_gc_inline_config.packed_state)
+          .load(std::memory_order_acquire);
+  const uint32_t gate = nrq_gc_inline_unpack_gate(packed);
+  const uint32_t repr_bits = NRQ_ALLOC_PLAN_REPR_OF(plan_flags);
+  uint32_t expected_kind = NRQ_GC_INLINE_KIND_NONE;
+  size_t header_bytes = 16;
+  if ((plan_flags & NRQ_ALLOC_PLAN_REJECTED) == 0 &&
+      (plan_flags & NRQ_ALLOC_PLAN_ARRAY) != 0) {
+    if (repr_bits == NRQ_ALLOC_REPR_COMPACT && count == 1) {
+      expected_kind = NRQ_GC_INLINE_KIND_COMPACT;
+      header_bytes = 8;
+    } else if (repr_bits == NRQ_ALLOC_REPR_EXTENDED) {
+      expected_kind = NRQ_GC_INLINE_KIND_EXTENDED;
+      header_bytes = 16;
+    }
+  }
+  const size_t payload_bytes = count * element_size;
+  const size_t span =
+      (header_bytes + payload_bytes + NRQ_GC_INLINE_SPAN_ALIGNMENT - 1) &
+      ~size_t{NRQ_GC_INLINE_SPAN_ALIGNMENT - 1};
+  const size_t batch =
+      std::atomic_ref<size_t>(nrq_gc_inline_config.accounting_batch)
+          .load(std::memory_order_relaxed);
+  const NrqGcFastTls* fast = thread_mutator.fast;
+
+  if (site_cache && *site_cache == nullptr) {
+    tlab_diag.reason_cold_site_init.fetch_add(1, std::memory_order_relaxed);
+  } else if ((gate & NRQ_GC_INLINE_GATE_PHASE_BIT) != 0) {
+    tlab_diag.reason_gc_active.fetch_add(1, std::memory_order_relaxed);
+  } else if ((gate & NRQ_GC_INLINE_GATE_DUE_BIT) != 0) {
+    tlab_diag.reason_collection_due.fetch_add(1, std::memory_order_relaxed);
+  } else if ((gate & NRQ_GC_INLINE_GATE_DEBUG_ALLOC_BIT) != 0) {
+    tlab_diag.reason_debug_alloc_gate.fetch_add(1, std::memory_order_relaxed);
+  } else if ((gate & NRQ_GC_INLINE_GATE_DIAG_ROOTS_BIT) != 0) {
+    tlab_diag.reason_diag_roots_gate.fetch_add(1, std::memory_order_relaxed);
+  } else if (expected_kind == NRQ_GC_INLINE_KIND_NONE ||
+             span > NRQ_GC_INLINE_TLAB_BYTES) {
+    tlab_diag.reason_plan_ineligible.fetch_add(1, std::memory_order_relaxed);
+  } else if (fast && fast->unflushed_bytes + payload_bytes >= batch) {
+    tlab_diag.reason_accounting_batch.fetch_add(1, std::memory_order_relaxed);
+  } else if (fast && fast->tlab_kind != expected_kind) {
+    tlab_diag.reason_tlab_kind_mismatch.fetch_add(1, std::memory_order_relaxed);
+  } else if (fast && (!fast->tlab_cursor || !fast->tlab_end ||
+                      static_cast<size_t>(fast->tlab_end - fast->tlab_cursor) < span)) {
+    tlab_diag.reason_tlab_exhausted.fetch_add(1, std::memory_order_relaxed);
+  } else {
+    tlab_diag.reason_other.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  std::lock_guard<std::mutex> lock(tlab_diag.site_mutex);
+  for (size_t i = 0; i < tlab_diag.site_count; ++i) {
+    if (tlab_diag.sites[i].cache == site_cache) {
+      ++tlab_diag.sites[i].slow_calls;
+      tlab_diag.sites[i].last_count = count;
+      return;
+    }
+  }
+  if (tlab_diag.site_count < TlabDiagCounters::kMaxSites) {
+    tlab_diag.sites[tlab_diag.site_count++] = TlabDiagCounters::SiteEntry{
+        site_cache, element_size, count, expected_kind, 1};
+  }
+}
 // Counts allocations served from space freed by an earlier sweep rather than
 // from a page's untouched tail.
 uint64_t recycled_span_reuse_count = 0;
@@ -2123,6 +2225,10 @@ void publish_tlab_locked(MutatorState& mutator) {
       live_heap_bytes = saturated_add(live_heap_bytes, payload_bytes);
       cursor += span;
     }
+  }
+  if (tlab_diag.enabled.load(std::memory_order_relaxed)) {
+    tlab_diag.published_tlab_objects.fetch_add(
+        fast.pending_count, std::memory_order_relaxed);
   }
   flush_mutator_accounting_locked(mutator);
   fast.pending_range_count = 0;
@@ -4720,6 +4826,8 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
 bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span,
                          PageKind kind) {
   tlab_refill_count = saturated_add(tlab_refill_count, 1);
+  if (tlab_diag.enabled.load(std::memory_order_relaxed))
+    tlab_diag.refill_count.fetch_add(1, std::memory_order_relaxed);
   if (mutator.tlab_generation != gc_page_generation.load(std::memory_order_acquire)) discard_stale_tlab(mutator);
   // A merged run of reclaimed space can host a whole thread-local reservation.
   // Taking it here is what turns a fragmented page back into a usable bump
@@ -5098,7 +5206,10 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
       span > static_cast<size_t>(fast.tlab_end - fast.tlab_cursor)) {
     // A run reserved earlier answers this without the allocator lock: that is
     // what a fragmented heap needs, because its runs are only a few cells each.
-    if (!take_spare_run(thread_mutator, span, kind)) {
+    if (take_spare_run(thread_mutator, span, kind)) {
+      if (tlab_diag.enabled.load(std::memory_order_relaxed))
+        tlab_diag.spare_run_hits.fetch_add(1, std::memory_order_relaxed);
+    } else {
       HeapLockGuard lock(gc_mutex);
       if (!reserve_tlab_locked(thread_mutator, span, kind)) return nullptr;
     }
@@ -5491,6 +5602,8 @@ ObjectRef find_pending_header(MutatorState& mutator, void* object) {
   return ObjectRef{};
 }
 
+void print_tlab_diag_report();
+
 }  // namespace
 
 extern "C" {
@@ -5734,6 +5847,8 @@ void* allocate_array_rooted_impl(void** root_slot, size_t count,
                                    reference_offsets, reference_count, handled,
                                    resolved, hint, true);
       if (handled) {
+        if (tlab_diag.enabled.load(std::memory_order_relaxed))
+          tlab_diag.slow_tlab_handled.fetch_add(1, std::memory_order_relaxed);
         *root_slot = object;
         end_fast_barrier();
         return object;
@@ -5743,6 +5858,8 @@ void* allocate_array_rooted_impl(void** root_slot, size_t count,
   }
 
   HeapLockGuard lock(gc_mutex);
+  if (tlab_diag.enabled.load(std::memory_order_relaxed))
+    tlab_diag.slow_locked_fallbacks.fetch_add(1, std::memory_order_relaxed);
   if (thread_shadow_stack &&
       !shadow_has_pointer_root(*thread_shadow_stack, root_slot))
     nrq_runtime_fatal(
@@ -5812,6 +5929,8 @@ void* nrq_gc_allocate_array_planned(void** root_slot, size_t count,
   // See nrq_gc_allocate_planned: a deterministic plan is not this entry point's
   // to honour.
   if ((plan_flags & NRQ_ALLOC_PLAN_DETERMINISTIC) != 0) return nullptr;
+  if (tlab_diag.enabled.load(std::memory_order_relaxed))
+    record_tlab_diag_slow_call(site_cache, count, element_size, plan_flags);
   // Honour a usable array plan: Compact for eligible single-element arrays, or
   // Extended for multi-element, SoA, or explicit Extended requests. Anything else
   // falls back to Auto so an oversized or invalid hint never corrupts headers.
@@ -6654,6 +6773,14 @@ uint64_t nrq_gc_get_major_collection_count(void) {
 void nrq_gc_mutator_enter(void) {
   if (thread_mutator.depth == SIZE_MAX)
     nrq_runtime_fatal("GC mutator nesting depth overflow");
+  if (!tlab_diag.env_checked.exchange(true, std::memory_order_relaxed)) {
+    if (const char* env = std::getenv("NRQ_GC_TLAB_DIAG")) {
+      if (*env == '1') {
+        tlab_diag.enabled.store(true, std::memory_order_relaxed);
+        tlab_diag.print_on_exit.store(true, std::memory_order_relaxed);
+      }
+    }
+  }
   thread_gc_cleanup.arm();
   thread_mutator.fast = &nrq_gc_fast_tls;
   if (thread_mutator.depth++ != 0) return;
@@ -6675,36 +6802,43 @@ void nrq_gc_mutator_leave(void) {
     nrq_runtime_fatal("GC mutator leave without matching enter");
   if (--thread_mutator.depth != 0) return;
 
-  std::lock_guard<std::mutex> lock(mutator_mutex);
+  bool should_print_tlab_diag = false;
   {
-    HeapLockGuard heap_lock(gc_mutex);
-    publish_tlab_locked(thread_mutator);
-    // This thread is never visited by cycle preparation again, so the space it
-    // reserved has to be returned to its pages here.
-    flush_spare_runs_locked(thread_mutator);
-    release_tlab_tail_locked(thread_mutator);
-    tlab_tail_bytes_total =
-        saturated_add(tlab_tail_bytes_total, thread_mutator.tlab_tail_bytes);
-    if (thread_mutator.tlab_tail_max_bytes > tlab_tail_max_bytes_total)
-      tlab_tail_max_bytes_total = thread_mutator.tlab_tail_max_bytes;
-    tlab_tail_reclaimed_bytes_total = saturated_add(
-        tlab_tail_reclaimed_bytes_total,
-        thread_mutator.tlab_tail_reclaimed_bytes);
-    drain_remembered_locked(thread_mutator, /*defer_unresolved=*/true);
-    // A thread that leaves the registry is never visited by cycle preparation
-    // again, so its buffered handoffs have to be settled here.
-    drain_transfer_pins_locked(thread_mutator);
+    std::lock_guard<std::mutex> lock(mutator_mutex);
+    {
+      HeapLockGuard heap_lock(gc_mutex);
+      publish_tlab_locked(thread_mutator);
+      // This thread is never visited by cycle preparation again, so the space it
+      // reserved has to be returned to its pages here.
+      flush_spare_runs_locked(thread_mutator);
+      release_tlab_tail_locked(thread_mutator);
+      tlab_tail_bytes_total =
+          saturated_add(tlab_tail_bytes_total, thread_mutator.tlab_tail_bytes);
+      if (thread_mutator.tlab_tail_max_bytes > tlab_tail_max_bytes_total)
+        tlab_tail_max_bytes_total = thread_mutator.tlab_tail_max_bytes;
+      tlab_tail_reclaimed_bytes_total = saturated_add(
+          tlab_tail_reclaimed_bytes_total,
+          thread_mutator.tlab_tail_reclaimed_bytes);
+      drain_remembered_locked(thread_mutator, /*defer_unresolved=*/true);
+      // A thread that leaves the registry is never visited by cycle preparation
+      // again, so its buffered handoffs have to be settled here.
+      drain_transfer_pins_locked(thread_mutator);
+    }
+    thread_mutator.parked = false;
+    auto found = std::find(mutators.begin(), mutators.end(), &thread_mutator);
+    if (found == mutators.end())
+      nrq_runtime_fatal("GC mutator registry lost an active thread");
+    mutators.erase(found);
+    --registered_mutator_count;
+    should_print_tlab_diag =
+        registered_mutator_count == 0 &&
+        tlab_diag.print_on_exit.load(std::memory_order_relaxed);
+    // The collector's park predicate compares against the registry size, so a
+    // shrinking registry has to wake it.
+    collector_condition.notify_all();
+    mutator_condition.notify_all();
   }
-  thread_mutator.parked = false;
-  auto found = std::find(mutators.begin(), mutators.end(), &thread_mutator);
-  if (found == mutators.end())
-    nrq_runtime_fatal("GC mutator registry lost an active thread");
-  mutators.erase(found);
-  --registered_mutator_count;
-  // The collector's park predicate compares against the registry size, so a
-  // shrinking registry has to wake it.
-  collector_condition.notify_all();
-  mutator_condition.notify_all();
+  if (should_print_tlab_diag) print_tlab_diag_report();
 }
 
 void nrq_gc_safepoint(void) {
@@ -7392,4 +7526,143 @@ void nrq_gc_set_inline_debug_alloc(int32_t enabled) {
   refresh_inline_config_locked();
 }
 
+void nrq_gc_set_tlab_diag(int32_t enabled) {
+  tlab_diag.enabled.store(enabled != 0, std::memory_order_relaxed);
+}
+
+struct nrq_gc_tlab_diag_facts nrq_gc_get_tlab_diag_facts(void) {
+  std::lock_guard<std::mutex> registry_lock(mutator_mutex);
+  uint64_t live_pending = 0;
+  for (const MutatorState* mutator : mutators) {
+    if (!mutator || !mutator->fast) continue;
+    live_pending = saturated_add(
+        live_pending, std::atomic_ref<size_t>(mutator->fast->pending_count)
+                          .load(std::memory_order_relaxed));
+  }
+  const uint64_t total_tlab_objects = saturated_add(
+      tlab_diag.published_tlab_objects.load(std::memory_order_relaxed),
+      live_pending);
+  const uint64_t slow_tlab =
+      tlab_diag.slow_tlab_handled.load(std::memory_order_relaxed);
+
+  nrq_gc_tlab_diag_facts facts{};
+  facts.inline_fast_hits =
+      total_tlab_objects >= slow_tlab ? total_tlab_objects - slow_tlab : 0;
+  facts.slow_planned_calls =
+      tlab_diag.slow_planned_calls.load(std::memory_order_relaxed);
+  facts.slow_tlab_handled = slow_tlab;
+  facts.slow_locked_fallbacks =
+      tlab_diag.slow_locked_fallbacks.load(std::memory_order_relaxed);
+  facts.refill_count =
+      tlab_diag.refill_count.load(std::memory_order_relaxed);
+  facts.spare_run_hits =
+      tlab_diag.spare_run_hits.load(std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> site_lock(tlab_diag.site_mutex);
+    facts.site_count = tlab_diag.site_count;
+  }
+  facts.reason_cold_site_init =
+      tlab_diag.reason_cold_site_init.load(std::memory_order_relaxed);
+  facts.reason_gc_active =
+      tlab_diag.reason_gc_active.load(std::memory_order_relaxed);
+  facts.reason_collection_due =
+      tlab_diag.reason_collection_due.load(std::memory_order_relaxed);
+  facts.reason_debug_alloc_gate =
+      tlab_diag.reason_debug_alloc_gate.load(std::memory_order_relaxed);
+  facts.reason_diag_roots_gate =
+      tlab_diag.reason_diag_roots_gate.load(std::memory_order_relaxed);
+  facts.reason_plan_ineligible =
+      tlab_diag.reason_plan_ineligible.load(std::memory_order_relaxed);
+  facts.reason_accounting_batch =
+      tlab_diag.reason_accounting_batch.load(std::memory_order_relaxed);
+  facts.reason_tlab_kind_mismatch =
+      tlab_diag.reason_tlab_kind_mismatch.load(std::memory_order_relaxed);
+  facts.reason_tlab_exhausted =
+      tlab_diag.reason_tlab_exhausted.load(std::memory_order_relaxed);
+  facts.reason_other = tlab_diag.reason_other.load(std::memory_order_relaxed);
+  return facts;
+}
+
+void nrq_gc_reset_tlab_diag_facts(void) {
+  tlab_diag.published_tlab_objects.store(0, std::memory_order_relaxed);
+  tlab_diag.slow_planned_calls.store(0, std::memory_order_relaxed);
+  tlab_diag.slow_tlab_handled.store(0, std::memory_order_relaxed);
+  tlab_diag.slow_locked_fallbacks.store(0, std::memory_order_relaxed);
+  tlab_diag.refill_count.store(0, std::memory_order_relaxed);
+  tlab_diag.spare_run_hits.store(0, std::memory_order_relaxed);
+  tlab_diag.reason_cold_site_init.store(0, std::memory_order_relaxed);
+  tlab_diag.reason_gc_active.store(0, std::memory_order_relaxed);
+  tlab_diag.reason_collection_due.store(0, std::memory_order_relaxed);
+  tlab_diag.reason_debug_alloc_gate.store(0, std::memory_order_relaxed);
+  tlab_diag.reason_diag_roots_gate.store(0, std::memory_order_relaxed);
+  tlab_diag.reason_plan_ineligible.store(0, std::memory_order_relaxed);
+  tlab_diag.reason_accounting_batch.store(0, std::memory_order_relaxed);
+  tlab_diag.reason_tlab_kind_mismatch.store(0, std::memory_order_relaxed);
+  tlab_diag.reason_tlab_exhausted.store(0, std::memory_order_relaxed);
+  tlab_diag.reason_other.store(0, std::memory_order_relaxed);
+  std::lock_guard<std::mutex> site_lock(tlab_diag.site_mutex);
+  tlab_diag.site_count = 0;
+}
+
 }  // extern "C"
+
+namespace {
+void print_tlab_diag_report() {
+  const nrq_gc_tlab_diag_facts f = nrq_gc_get_tlab_diag_facts();
+  const nrq_gc_cycle_timing t = nrq_gc_get_cycle_timing();
+  const uint64_t total_planned = f.inline_fast_hits + f.slow_planned_calls;
+  const double hit_pct = total_planned > 0
+                             ? (100.0 * static_cast<double>(f.inline_fast_hits)) /
+                                   static_cast<double>(total_planned)
+                             : 0.0;
+  std::fprintf(
+      stderr,
+      "[NRQ_GC_TLAB_DIAG] inline_hits=%llu slow_calls=%llu hit_rate=%.4f%% "
+      "slow_tlab=%llu slow_locked=%llu refills=%llu spare_hits=%llu sites=%llu "
+      "reasons={cold=%llu gc_active=%llu due=%llu dbg=%llu diag=%llu inel=%llu "
+      "batch=%llu kind=%llu exhaust=%llu other=%llu}\n",
+      static_cast<unsigned long long>(f.inline_fast_hits),
+      static_cast<unsigned long long>(f.slow_planned_calls), hit_pct,
+      static_cast<unsigned long long>(f.slow_tlab_handled),
+      static_cast<unsigned long long>(f.slow_locked_fallbacks),
+      static_cast<unsigned long long>(f.refill_count),
+      static_cast<unsigned long long>(f.spare_run_hits),
+      static_cast<unsigned long long>(f.site_count),
+      static_cast<unsigned long long>(f.reason_cold_site_init),
+      static_cast<unsigned long long>(f.reason_gc_active),
+      static_cast<unsigned long long>(f.reason_collection_due),
+      static_cast<unsigned long long>(f.reason_debug_alloc_gate),
+      static_cast<unsigned long long>(f.reason_diag_roots_gate),
+      static_cast<unsigned long long>(f.reason_plan_ineligible),
+      static_cast<unsigned long long>(f.reason_accounting_batch),
+      static_cast<unsigned long long>(f.reason_tlab_kind_mismatch),
+      static_cast<unsigned long long>(f.reason_tlab_exhausted),
+      static_cast<unsigned long long>(f.reason_other));
+  {
+    std::lock_guard<std::mutex> site_lock(tlab_diag.site_mutex);
+    for (size_t i = 0; i < tlab_diag.site_count; ++i) {
+      const auto& s = tlab_diag.sites[i];
+      std::fprintf(
+          stderr,
+          "[NRQ_GC_TLAB_SITE %zu] cache=%p elem_bytes=%zu last_count=%zu "
+          "expected_kind=%u slow_calls=%llu\n",
+          i, static_cast<void*>(s.cache), s.element_size, s.last_count,
+          s.expected_kind, static_cast<unsigned long long>(s.slow_calls));
+    }
+  }
+  std::fprintf(
+      stderr,
+      "[NRQ_GC_CYCLE_TIMING] cycles=%llu pause_ms=%.2f prepare_ms=%.2f "
+      "mark_ms=%.2f sweep_ms=%.2f finish_ms=%.2f mark_objs=%llu mark_refs=%llu "
+      "sweep_objs=%llu\n",
+      static_cast<unsigned long long>(t.cycles),
+      static_cast<double>(t.pause_ns) / 1e6,
+      static_cast<double>(t.prepare_ns) / 1e6,
+      static_cast<double>(t.mark_ns) / 1e6,
+      static_cast<double>(t.sweep_ns) / 1e6,
+      static_cast<double>(t.finish_ns) / 1e6,
+      static_cast<unsigned long long>(t.mark_objects),
+      static_cast<unsigned long long>(t.mark_references),
+      static_cast<unsigned long long>(t.sweep_objects));
+}
+}  // namespace

@@ -742,3 +742,44 @@ TEST(GcInlineTlabTest, PinTransferFastSlotAndFallbackPreserveObjectsAcrossCollec
   nrq_gc_set_adaptive(1);
   nrq_gc_mutator_leave();
 }
+
+TEST(GcInlineTlabTest, TlabDiagClassifiesInlineHitsRefillsAndFallbackReasons) {
+  nrq_gc_mutator_enter();
+  nrq_gc_disable();
+  nrq_gc_collect();
+  nrq_gc_collect();
+
+  nrq_gc_reset_tlab_diag_facts();
+  nrq_gc_set_tlab_diag(1);
+
+  void* site_cache = nullptr;
+  uint32_t site_id = 0;
+  size_t fast_hits = 0;
+  size_t slow_hits = 0;
+  void* root_slot = nullptr;
+  nrq_gc_root_register(&root_slot);
+
+  for (int i = 0; i < 4000; ++i) {
+    void* p = allocate_h8_with_fallback(
+        &root_slot, sizeof(TreeNode24), nullptr, 0, &site_cache, site_id,
+        fast_hits, slow_hits);
+    ASSERT_TRUE(p != nullptr);
+  }
+
+  const nrq_gc_tlab_diag_facts facts = nrq_gc_get_tlab_diag_facts();
+  nrq_gc_set_tlab_diag(0);
+  nrq_gc_root_unregister(&root_slot);
+
+  ASSERT_TRUE(facts.inline_fast_hits > uint64_t{3500});
+  ASSERT_TRUE(facts.slow_planned_calls >= uint64_t{1});
+  ASSERT_TRUE(facts.reason_cold_site_init >= uint64_t{1});
+  ASSERT_TRUE(facts.refill_count >= uint64_t{1});
+
+  nrq_gc_reset_tlab_diag_facts();
+  const nrq_gc_tlab_diag_facts cleared = nrq_gc_get_tlab_diag_facts();
+  ASSERT_EQ(cleared.slow_planned_calls, uint64_t{0});
+  ASSERT_EQ(cleared.refill_count, uint64_t{0});
+
+  nrq_gc_set_adaptive(1);
+  nrq_gc_mutator_leave();
+}
