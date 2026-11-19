@@ -1034,7 +1034,7 @@ class MarkWorklist {
   void push(const ObjectRef& ref) {
     if (!ref.valid()) return;
     if (count_ < kInlineCapacity) {
-      inline_[(head_ + count_) % kInlineCapacity] = ref;
+      inline_[(head_ + count_) & (kInlineCapacity - 1)] = ref;
       ++count_;
       return;
     }
@@ -1048,7 +1048,7 @@ class MarkWorklist {
   ObjectRef pop() {
     if (count_ != 0) {
       const ObjectRef ref = inline_[head_];
-      head_ = (head_ + 1) % kInlineCapacity;
+      head_ = (head_ + 1) & (kInlineCapacity - 1);
       --count_;
       if (count_ != 0) {
         prefetch_object(inline_[head_]);
@@ -1400,9 +1400,7 @@ ObjectRef find_child_in_page_locked(void* object, const GcPage* page) {
   if (payload_offset < header_bytes) return ObjectRef{};
   const size_t span_offset = payload_offset - header_bytes;
   if (!test_object_start(*page, span_offset)) return ObjectRef{};
-  ObjectRef ref{page->storage + span_offset, const_cast<GcPage*>(page)};
-  if (object_payload(ref) != object) return ObjectRef{};
-  return ref;
+  return ObjectRef{page->storage + span_offset, const_cast<GcPage*>(page)};
 }
 
 ObjectRef find_object_locked(void* object) {
@@ -1415,10 +1413,8 @@ ObjectRef find_object_locked(void* object) {
       const size_t header_bytes = page_header_bytes(*page);
       if (payload_offset >= header_bytes && payload_offset < page->capacity) {
         const size_t span_offset = payload_offset - header_bytes;
-        if (test_object_start(*page, span_offset)) {
-          ObjectRef ref{page->storage + span_offset, page};
-          if (object_payload(ref) == object) return ref;
-        }
+        if (test_object_start(*page, span_offset))
+          return ObjectRef{page->storage + span_offset, page};
       }
     }
     // The address lies inside a page whose start bitmap is authoritative, so a
@@ -2906,11 +2902,12 @@ void buffer_remembered(void* object) {
 // indirect call per object. Anything else - a callback, a typed array, a wider
 // layout - still goes through trace_children.
 void enqueue_narrow_children_locked(const ObjectRef& object,
+                                    size_t header_bytes,
                                     const nrq_object_layout* layout,
                                     size_t payload_bytes,
                                     MarkContext& context) {
   const auto* bytes =
-      static_cast<const unsigned char*>(object_payload(object));
+      static_cast<const unsigned char*>(object.header + header_bytes);
   // The descriptor and the payload size are the ones the caller already
   // resolved for its budget accounting and its narrow-shape test. Resolving them
   // again here cost a second descriptor lookup and a second element-count/size
@@ -2940,11 +2937,17 @@ bool mark_slice_locked(size_t budget_bytes) {
   while (!active_mark.worklist.empty() && touched < budget_bytes) {
     ++cycle_timing.mark_objects;
     const ObjectRef object = active_mark.worklist.pop();
-    prefetch_object(object);
-    const size_t payload_bytes = object_payload_bytes(object);
-    touched += payload_bytes + object_header_bytes(object);
-    if (active_mark.young_only && !object_young(object)) continue;
+    const PageKind kind = object.page->kind;
+    const size_t header_bytes = page_header_bytes(kind);
     const nrq_object_layout* layout = object_layout(object);
+    const uint32_t elem_count =
+        (kind == PageKind::Headerless || kind == PageKind::Compact)
+            ? 1u
+            : reinterpret_cast<const ExtendedHeader*>(object.header)->element_count;
+    const size_t payload_bytes =
+        static_cast<size_t>(elem_count) * layout->payload_size;
+    touched += payload_bytes + header_bytes;
+    if (active_mark.young_only && !object_young(object)) continue;
     const size_t reference_count = layout->reference_count;
     // A one-element array has the geometry of a record: its payload is the single
     // element and the descriptor's offsets are relative to that element, so the
@@ -2953,16 +2956,18 @@ bool mark_slice_locked(size_t budget_bytes) {
     const bool narrow_shape = !layout->trace && reference_count != 0 &&
                               reference_count <= 2 &&
                               ((layout->flags & NRQ_OBJECT_LAYOUT_ARRAY) == 0 ||
-                               object_element_count(object) == 1);
+                               elem_count == 1u);
     if (narrow_shape) {
-      enqueue_narrow_children_locked(object, layout, payload_bytes,
-                                    active_mark);
+      enqueue_narrow_children_locked(object, header_bytes, layout,
+                                     payload_bytes, active_mark);
     } else {
       trace_children(object, enqueue_reference, &active_mark);
+      if (active_mark.reference_count != 0)
+        flush_reference_batch_locked(active_mark);
     }
-    flush_reference_batch_locked(active_mark);
   }
-  flush_reference_batch_locked(active_mark);
+  if (active_mark.reference_count != 0)
+    flush_reference_batch_locked(active_mark);
   return active_mark.worklist.empty() && active_mark.reference_count == 0;
 }
 
