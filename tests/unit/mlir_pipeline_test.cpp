@@ -849,7 +849,7 @@ int function main() {
   ASSERT_TRUE(printed.find("nrq_alloc_site_id_") != std::string::npos);
   ASSERT_TRUE(printed.find("nrq_gc_layout_id") != std::string::npos);
   ASSERT_TRUE(printed.find("llvm.intr.threadlocal.address") != std::string::npos);
-  ASSERT_TRUE(printed.find("llvm.intr.memset") != std::string::npos);
+  ASSERT_TRUE(printed.find("llvm.intr.memset") == std::string::npos);
   ASSERT_TRUE(printed.find("nrq_gc_allocate_array_planned") != std::string::npos);
 }
 

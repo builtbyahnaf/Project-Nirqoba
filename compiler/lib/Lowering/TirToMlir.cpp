@@ -3024,8 +3024,6 @@ class FunctionTranslator {
 
     mlir::Block* check_tlab_block = func_op_.addBlock();
     mlir::Block* fast_block = func_op_.addBlock();
-    mlir::Block* fill_block = func_op_.addBlock();
-    mlir::Block* commit_block = func_op_.addBlock();
     mlir::Block* merge_block = func_op_.addBlock();
     merge_block->addArgument(ptr, loc);
 
@@ -3041,24 +3039,11 @@ class FunctionTranslator {
         loc, global_ok, check_tlab_block, mlir::ValueRange{},
         slow_block, mlir::ValueRange{}, likely_weights);
 
-    // Hot TLAB check: verifies active TLAB kind matches, pending accounting
-    // stays below `accounting_batch`, and bump range has room for `span_bytes`.
+    // Hot TLAB check: verifies active TLAB kind matches and clamped bump range
+    // has room for `span_bytes`. `tlab_end` is clamped by `accounting_batch`
+    // in runtime slab installation/extension.
     builder_.setInsertionPointToStart(check_tlab_block);
     mlir::Value tls = ensure_fast_tls_global(loc);
-
-    auto batch_load = builder_.create<mlir::LLVM::LoadOp>(
-        loc, i64, byte_gep(cfg_addr, offsetof(NrqGcInlineConfig, accounting_batch)));
-    batch_load.setAlignment(8);
-    batch_load.setOrdering(mlir::LLVM::AtomicOrdering::monotonic);
-    mlir::Value batch = batch_load.getResult();
-
-    auto unflushed_load = builder_.create<mlir::LLVM::LoadOp>(
-        loc, i64, byte_gep(tls, offsetof(NrqGcFastTls, unflushed_bytes)));
-    unflushed_load.setAlignment(8);
-    mlir::Value new_unflushed = builder_.create<mlir::LLVM::AddOp>(
-        loc, unflushed_load.getResult(), payload_bytes).getResult();
-    mlir::Value batch_ok = builder_.create<mlir::LLVM::ICmpOp>(
-        loc, mlir::LLVM::ICmpPredicate::ult, new_unflushed, batch).getResult();
 
     auto kind_load = builder_.create<mlir::LLVM::LoadOp>(
         loc, i32, byte_gep(tls, offsetof(NrqGcFastTls, tlab_kind)));
@@ -3083,16 +3068,15 @@ class FunctionTranslator {
     mlir::Value room_ok = builder_.create<mlir::LLVM::ICmpOp>(
         loc, mlir::LLVM::ICmpPredicate::ule, new_cursor_int, end_int).getResult();
 
-    mlir::Value tlab_ready = builder_.create<mlir::LLVM::AndOp>(
-        loc, batch_ok, kind_ok).getResult();
     mlir::Value fast_ok = builder_.create<mlir::LLVM::AndOp>(
-        loc, tlab_ready, room_ok).getResult();
+        loc, kind_ok, room_ok).getResult();
     builder_.create<mlir::LLVM::CondBrOp>(
         loc, fast_ok, fast_block, mlir::ValueRange{},
         slow_block, mlir::ValueRange{}, likely_weights);
 
     // Hot inline bump allocation: advance cursor, write Compact (H8) or
-    // Extended (H16) header, then zero-fill payload unless pre-zeroed.
+    // Extended (H16) header (slab storage is pre-zeroed at reservation time),
+    // update pending counters, and publish root.
     builder_.setInsertionPointToStart(fast_block);
     mlir::Value new_cursor = builder_.create<mlir::LLVM::GEPOp>(
         loc, ptr, i8, cursor, mlir::ValueRange{span_bytes}).getResult();
@@ -3147,37 +3131,22 @@ class FunctionTranslator {
     } else {
       mlir::Block* h8_hdr_block = func_op_.addBlock();
       mlir::Block* h16_hdr_block = func_op_.addBlock();
-      mlir::Block* zero_check_block = func_op_.addBlock();
+      mlir::Block* commit_block = func_op_.addBlock();
       builder_.create<mlir::LLVM::CondBrOp>(
           loc, is_one_cond, h8_hdr_block, h16_hdr_block);
       builder_.setInsertionPointToStart(h8_hdr_block);
       write_h8_header();
-      builder_.create<mlir::LLVM::BrOp>(loc, zero_check_block);
+      builder_.create<mlir::LLVM::BrOp>(loc, commit_block);
       builder_.setInsertionPointToStart(h16_hdr_block);
       write_h16_header();
-      builder_.create<mlir::LLVM::BrOp>(loc, zero_check_block);
-      builder_.setInsertionPointToStart(zero_check_block);
+      builder_.create<mlir::LLVM::BrOp>(loc, commit_block);
+      builder_.setInsertionPointToStart(commit_block);
       payload = builder_.create<mlir::LLVM::GEPOp>(
           loc, ptr, i8, cursor, mlir::ValueRange{header_bytes}).getResult();
     }
 
-    auto pz_load = builder_.create<mlir::LLVM::LoadOp>(
-        loc, i8, byte_gep(tls, offsetof(NrqGcFastTls, tlab_payload_zero)));
-    pz_load.setAlignment(1);
-    mlir::Value is_prezeroed = builder_.create<mlir::LLVM::ICmpOp>(
-        loc, mlir::LLVM::ICmpPredicate::ne, pz_load.getResult(),
-        c_i8(0)).getResult();
-    builder_.create<mlir::LLVM::CondBrOp>(
-        loc, is_prezeroed, commit_block, fill_block);
-
-    builder_.setInsertionPointToStart(fill_block);
-    builder_.create<mlir::LLVM::MemsetOp>(
-        loc, payload, c_i8(0), payload_bytes, /*isVolatile=*/false);
-    builder_.create<mlir::LLVM::BrOp>(loc, commit_block);
-
     // Update per-mutator accounting and publish root. `tlab_active_range->end`
     // is synced lazily from `tlab_cursor` at publication/refill boundaries.
-    builder_.setInsertionPointToStart(commit_block);
     mlir::Value pbytes_ptr = byte_gep(tls, offsetof(NrqGcFastTls, pending_bytes));
     auto pbytes_load = builder_.create<mlir::LLVM::LoadOp>(loc, i64, pbytes_ptr);
     pbytes_load.setAlignment(8);
@@ -3195,11 +3164,6 @@ class FunctionTranslator {
     auto store_pcount = builder_.create<mlir::LLVM::StoreOp>(
         loc, next_pcount, pcount_ptr);
     store_pcount.setAlignment(8);
-
-    auto store_unflushed = builder_.create<mlir::LLVM::StoreOp>(
-        loc, new_unflushed,
-        byte_gep(tls, offsetof(NrqGcFastTls, unflushed_bytes)));
-    store_unflushed.setAlignment(8);
 
     auto store_root = builder_.create<mlir::LLVM::StoreOp>(
         loc, payload, root_slot);

@@ -151,13 +151,11 @@ namespace nirq::gc::inline_detail {
 
 inline void commit_inline_bump(NrqGcFastTls& tls, uint8_t* new_cursor,
                                void* payload, size_t payload_bytes,
-                               uint8_t payload_is_zero, void** root_slot) {
-  if (!payload_is_zero) memset(payload, 0, payload_bytes);
+                               void** root_slot) {
   std::atomic_ref<size_t>(tls.pending_bytes)
       .store(tls.pending_bytes + payload_bytes, std::memory_order_relaxed);
   std::atomic_ref<size_t>(tls.pending_count)
       .store(tls.pending_count + 1, std::memory_order_relaxed);
-  tls.unflushed_bytes += payload_bytes;
   if (root_slot) *root_slot = payload;
   (void)new_cursor;
 }
@@ -174,14 +172,8 @@ inline void* try_allocate_tlab_inline(uint32_t expected_kind, size_t header_byte
   if (nrq_gc_inline_unpack_gate(packed_state) != 0) return nullptr;
   const uint32_t initial_state =
       nrq_gc_inline_unpack_initial_state(packed_state);
-  const size_t accounting_batch =
-      std::atomic_ref<size_t>(nrq_gc_inline_config.accounting_batch)
-          .load(std::memory_order_relaxed);
   NrqGcFastTls& tls = nrq_gc_fast_tls;
   if (tls.tlab_kind != expected_kind) return nullptr;
-  if (tls.unflushed_bytes > SIZE_MAX - payload_bytes ||
-      tls.unflushed_bytes + payload_bytes >= accounting_batch)
-    return nullptr;
   uint8_t* cursor = tls.tlab_cursor;
   uint8_t* end = tls.tlab_end;
   if (static_cast<size_t>(end - cursor) < span) return nullptr;
@@ -199,8 +191,7 @@ inline void* try_allocate_tlab_inline(uint32_t expected_kind, size_t header_byte
     header[3] = 0;
   }
   void* payload = cursor + header_bytes;
-  commit_inline_bump(tls, new_cursor, payload, payload_bytes,
-                     tls.tlab_payload_zero, root_slot);
+  commit_inline_bump(tls, new_cursor, payload, payload_bytes, root_slot);
   return payload;
 }
 
@@ -250,8 +241,9 @@ inline void* nrq_gc_inline_try_allocate_h0(const void* layout,
   tls.h0_cursor = new_cursor;
   *tls.h0_state_cursor++ =
       static_cast<uint8_t>((initial_state >> 1) & 1u);
+  tls.unflushed_bytes += payload_bytes;
   nirq::gc::inline_detail::commit_inline_bump(
-      tls, new_cursor, cursor, payload_bytes, tls.h0_payload_zero, root_slot);
+      tls, new_cursor, cursor, payload_bytes, root_slot);
   return cursor;
 }
 #endif
