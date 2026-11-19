@@ -954,3 +954,117 @@ int function main() {
   ASSERT_TRUE(fn_printed.find("nrq_gc_root_frame_open") == std::string::npos);
   ASSERT_TRUE(fn_printed.find("nrq_gc_pin_transfer") != std::string::npos);
 }
+
+// A container allocation publishes its object through a root slot. When the
+// language declares a local and initialises it with that object, the local is a
+// better publish target, and the activation frame carries one slot instead of
+// two. The frame type is the observable part: it is the literal struct the
+// inline root frame is allocated from, so the slot count is exactly the array
+// length in its type.
+TEST(MlirPipelineTest, CoalescesAContainerAllocationIntoTheLocalThatHoldsIt) {
+  constexpr const char* source = R"nrqba(
+struct Node {
+    managed<Node> next;
+    int value;
+}
+
+managed<Node> function build(int v) {
+    var node = array.allocate<Node>(1);
+    node[0].value = v;
+    gc.collect();
+    return node;
+}
+
+int function main() {
+    var n = build(3);
+    print(n[0].value);
+    return 0;
+}
+)nrqba";
+
+  mlir::DialectRegistry registry;
+  nirq::register_all_dialects(registry);
+  mlir::MLIRContext context(registry);
+  context.loadAllAvailableDialects();
+  nirq::DiagnosticEngine diagnostics;
+
+  auto module = lower_source_to_mlir(source, context, diagnostics);
+  ASSERT_FALSE(diagnostics.has_errors());
+  ASSERT_TRUE(static_cast<bool>(module));
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*module)));
+
+  mlir::func::FuncOp build_fn;
+  module->walk([&](mlir::func::FuncOp fn) {
+    if (fn.getName().contains("build")) build_fn = fn;
+  });
+  ASSERT_TRUE(static_cast<bool>(build_fn));
+
+  std::string fn_printed;
+  llvm::raw_string_ostream os(fn_printed);
+  build_fn.print(os);
+  os.flush();
+
+  // One slot for the object: the allocation publishes into the local the
+  // language declared, and no second slot is described or cleared.
+  ASSERT_TRUE(fn_printed.find("array<1 x ptr>") != std::string::npos);
+  ASSERT_TRUE(fn_printed.find("array<2 x ptr>") == std::string::npos);
+  // The runtime entry point is still the refill and collection path.
+  ASSERT_TRUE(fn_printed.find("nrq_gc_allocate_array_planned") != std::string::npos);
+  // The language store still goes through the write barrier, so publish-then-
+  // release ordering at a handoff is unchanged by the coalescing.
+  ASSERT_TRUE(fn_printed.find("nrq_gc_root_store") != std::string::npos);
+}
+
+// The coalescing is only for a local the allocation itself initialises. A slot
+// that already held a reference keeps the call's own root slot, because the
+// allocation's plain publish store would replace that reference without the
+// write barrier's retain step.
+TEST(MlirPipelineTest, KeepsASeparateRootSlotWhenTheLocalIsNotFresh) {
+  constexpr const char* source = R"nrqba(
+struct Node {
+    managed<Node> next;
+    int value;
+}
+
+managed<Node> function assign(int v, managed<Node> existing) {
+    var slot = existing;
+    slot = array.allocate<Node>(1);
+    slot[0].value = v;
+    gc.collect();
+    return slot;
+}
+
+int function main() {
+    var seed = array.allocate<Node>(1);
+    var n = assign(3, seed);
+    print(n[0].value);
+    return 0;
+}
+)nrqba";
+
+  mlir::DialectRegistry registry;
+  nirq::register_all_dialects(registry);
+  mlir::MLIRContext context(registry);
+  context.loadAllAvailableDialects();
+  nirq::DiagnosticEngine diagnostics;
+
+  auto module = lower_source_to_mlir(source, context, diagnostics);
+  ASSERT_FALSE(diagnostics.has_errors());
+  ASSERT_TRUE(static_cast<bool>(module));
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*module)));
+
+  mlir::func::FuncOp assign_fn;
+  module->walk([&](mlir::func::FuncOp fn) {
+    if (fn.getName().contains("assign")) assign_fn = fn;
+  });
+  ASSERT_TRUE(static_cast<bool>(assign_fn));
+
+  std::string fn_printed;
+  llvm::raw_string_ostream os(fn_printed);
+  assign_fn.print(os);
+  os.flush();
+
+  // The call keeps its own publish slot, and the local stays a root of its own.
+  ASSERT_TRUE(fn_printed.find("array<2 x ptr>") != std::string::npos);
+  ASSERT_TRUE(fn_printed.find("nrq_gc_allocate_array_planned") != std::string::npos);
+}
