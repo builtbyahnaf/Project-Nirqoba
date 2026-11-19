@@ -12,6 +12,64 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.621-beta
+
+### Summary of Changes (since `0.617-beta`)
+
+Closed out the `0.617-beta` test-02 build attribution: a fresh container
+allocation now publishes straight through the local that holds it, and the
+benchmark harness records the host/toolchain metadata the last round was
+missing. Release label `+0.004` (`0.617-beta` -> `0.621-beta`) per the
+three-upgrade rule.
+
+#### Root-Slot Coalescing for Initialising Allocations
+
+- **`compiler/lib/Lowering/TirToMlir.cpp`:** `array.allocate` minted a synthetic
+  root slot and then the declaration stored the result into its own rooted slot,
+  so every `var node = array.allocate<T>(1)` opened two shadow-stack slots,
+  cleared both, and wrote the reference twice. `coalesced_allocation_root()`
+  now reuses the local's slot when the declaration and its initialiser are the
+  next two TIR operations, the slot is a managed-pointer alloca that the root
+  plan already keeps live across a collection point, the slot is not promoted,
+  and its block is not a branch target (so no earlier iteration left an older
+  reference there that the plain publish store would not retain). Every other
+  allocation keeps its synthetic slot.
+- Effect on emitted IR: the stress test 2 `build_tree` frame goes from
+  `[2 x ptr]` to `[1 x ptr]`, and single-root activations take the
+  `nrq_gc_root_frame_begin` + `nrq_gc_root_register_typed` shape instead of the
+  batched `nrq_gc_root_frame_open` descriptor. Multi-root frames keep the
+  batched shape with one slot fewer (`@nrq_gc_roots_4_15_8_1_0_8_1_0_8_1_0_16_2_0_8`
+  -> `@nrq_gc_roots_3_12_8_1_0_8_1_0_16_2_0_8` in `gc_frame_roots`,
+  `4` -> `2` in `gc_fused_frame_open`, `5` -> `3` in `gc_root_completeness`).
+- Measured effect: neutral. Interleaved A/B over 10 runs each put test 02 build
+  at 21.5 -> 21.5 ms and collection at 32.0 -> 31.5 ms, i.e. inside the noise of
+  this host. The change is kept for the one removed publish store/barrier and
+  the smaller frame, not as a headline win, and the same A/B rejected the
+  `OptimizerLastEP` `HotColdSplittingPass` experiment outright, so that
+  experiment was reverted.
+
+#### Benchmark Harness Metadata
+
+- **`benchmarks/stress_test_2/run_benchmark.py`:** `environment_metadata()`
+  unpacked `run_command()`'s three-value `(code, output, timed_out)` result as
+  two values, so the metadata block was silently dropped from every run. Fixed
+  the unpacks, the per-compiler version probe, and the broken `try`/`except`
+  around the java probe. Results now record the CPU model, installed RAM, the
+  git revision and dirty flag, and the four toolchain versions.
+
+#### Coverage
+
+- **`tests/unit/mlir_pipeline_test.cpp`:** two tests pin the coalesced and
+  non-coalesced frame shapes (`array<1 x ptr>` vs `array<2 x ptr>`).
+- **Integration expectations** were updated to the root-frame shapes the
+  lowering now emits: `gc_frame_early_return_cleanup`, `gc_frame_roots`,
+  `gc_fused_frame_open`, `gc_protocol_elision`, `gc_root_audit_control_flow`,
+  `gc_root_completeness`, `gc_root_null_init`, and `opt_inlining`, which now
+  asserts the absence of a `@build_node` definition or call instead of any
+  mention, so the outlined `@build_node.cold.1` clone no longer trips it.
+
+---
+
 ## Version 0.617-beta
 
 ### Summary of Changes (since `0.613-beta`)
