@@ -1068,3 +1068,60 @@ int function main() {
   ASSERT_TRUE(fn_printed.find("array<2 x ptr>") != std::string::npos);
   ASSERT_TRUE(fn_printed.find("nrq_gc_allocate_array_planned") != std::string::npos);
 }
+
+// A declaration inside a loop is fresh textually but not in time: the block is a
+// branch target, so an earlier iteration may have left a reference in the slot.
+// The allocation's publish store is not a write barrier and would replace that
+// reference without retaining it, so the call keeps its own root slot.
+TEST(MlirPipelineTest, KeepsASeparateRootSlotWhenTheDeclarationIsALoopBody) {
+  constexpr const char* source = R"nrqba(
+struct Node {
+    managed<Node> next;
+    int value;
+}
+
+int function spin(int count) {
+    var i = 0;
+    while (i < count) {
+        var node = array.allocate<Node>(1);
+        node[0].value = i;
+        gc.collect();
+        print(node[0].value);
+        i += 1;
+    }
+    return i;
+}
+
+int function main() {
+    print(spin(2));
+    return 0;
+}
+)nrqba";
+
+  mlir::DialectRegistry registry;
+  nirq::register_all_dialects(registry);
+  mlir::MLIRContext context(registry);
+  context.loadAllAvailableDialects();
+  nirq::DiagnosticEngine diagnostics;
+
+  auto module = lower_source_to_mlir(source, context, diagnostics);
+  ASSERT_FALSE(diagnostics.has_errors());
+  ASSERT_TRUE(static_cast<bool>(module));
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*module)));
+
+  mlir::func::FuncOp spin_fn;
+  module->walk([&](mlir::func::FuncOp fn) {
+    if (fn.getName().contains("spin")) spin_fn = fn;
+  });
+  ASSERT_TRUE(static_cast<bool>(spin_fn));
+
+  std::string fn_printed;
+  llvm::raw_string_ostream os(fn_printed);
+  spin_fn.print(os);
+  os.flush();
+
+  // The allocation publishes into its own slot, and the loop-carried local keeps
+  // a second one: two slots in one frame.
+  ASSERT_TRUE(fn_printed.find("array<2 x ptr>") != std::string::npos);
+  ASSERT_TRUE(fn_printed.find("nrq_gc_allocate_array_planned") != std::string::npos);
+}
