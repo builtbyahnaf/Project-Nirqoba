@@ -7,7 +7,53 @@
 
 ---
 
-## 0. Latest Run — Nirqoba 0.617-beta (2026-11-19)
+## 0. Latest Run — Nirqoba 0.621-beta (2026-11-20)
+
+**Compiler:** `nirqoba compiler version 0.621-beta (Phase 9)`, LLVM/MLIR 23.1.4, RelWithDebInfo  
+**Host:** DESKTOP-VO51V7J, Windows 11 Pro 10.0.26300, Intel Core i5-1235U (12 logical), 15.7 GiB RAM  
+**Command:** `run_benchmark.py --test 01 --test 02 --test 03 --impl nirqoba --repeats 15`  
+**Artifact:** `benchmark_results.json` — `valid: true`, no validation failures.
+
+### 0.1 Targets
+
+| Test | Metric | Target | Median | Mean | Min–Max | Samples |
+|---|---|---:|---:|---:|---|---:|
+| 01 managed-object allocation | `ALLOC_MS` | < 5 ms | **4.0** | 4.36 | 3–7 | 75 |
+| 02 mark and sweep | `BUILD_MS` | < 22 ms | **20.0** | 20.27 | 17–22 | 15 |
+| 02 mark and sweep | `COLLECT_MS` | < 35 ms | **27.0** | 27.33 | 26–29 | 75 |
+| 03 cyclic graph reclamation | `BUILD_MS` | < 6 ms | **4.0** | 4.23 | 3–7 | 75 |
+
+Supporting phases: test 01 `TRAVERSE_MS` 2.0 ms (75 samples), test 01 `COLLECT_MS` 5.0 ms,
+test 02 `TRAVERSE_MS` 5.0 ms (15 samples), test 03 `COLLECT_MS` 5.0 ms. Checksums and live
+counts matched on every repeat (`499999500000` / `0`, `2199022206976` / `2097151`,
+`499999500000` / `0`).
+
+Test 02 measures the build once per process and the collection five times per process, so 15
+repeats give 15 build samples and 75 collection samples; the build target is judged on the 15
+independent build samples.
+
+### 0.2 What produced the change from 0.617-beta
+
+- **Root-slot coalescing** (`4d0f6c8`): an initialising `var x = array.allocate<T>(n)` now
+  publishes through the local's own rooted slot, so the activation frame carries one slot
+  instead of two. Interleaved A/B (10 runs per arm): `BUILD_MS` 21.5 -> 21.5 ms,
+  `COLLECT_MS` 32.0 -> 31.5 ms — neutral on this host, kept for the removed store/barrier.
+- **`HotColdSplittingPass` in `OptimizerLastEP`** was benchmarked and reverted: identical
+  build medians (25.0 vs 25.0 ms).
+- **Harness metadata fix:** `benchmark_results.json` now carries the CPU model, RAM, git
+  revision/dirty flag, and the nirqoba/MSVC/rustc/java versions it was produced with.
+
+### 0.3 Reading the numbers
+
+The host is a laptop on the Windows `Balanced` power plan with Defender running, so individual
+samples wander (the min/max columns show it). The medians above are the comparable statistic and
+the sample counts are large enough that a single spike cannot move them. Details and the full
+analysis are in `reports/performance/stress-test-2-0.621-beta.md`; the correctness evidence for
+the lowering change is in `reports/regression/root-slot-coalescing-validation.md`.
+
+---
+
+## 0a. Previous Run — Nirqoba 0.617-beta (2026-11-19)
 
 **Compiler:** `nirqoba compiler version 0.617-beta (Phase 9)`, LLVM/MLIR 23.1.4, RelWithDebInfo  
 **Host:** DESKTOP-VO51V7J, Windows 11 Pro 10.0.26200, Intel Core i5-1235U (12 logical), 15.7 GiB RAM  

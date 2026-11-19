@@ -1,18 +1,20 @@
 {
   "metadata": {
-    "generated_at": "2026-11-19T10:15:26.622603+06:00",
+    "generated_at": "2026-11-20T00:20:29.806085+06:00",
     "host": "DESKTOP-VO51V7J",
-    "os": "Windows-11-10.0.26300-SP0",
+    "os": "Microsoft Windows 11 Pro 10.0.26300",
     "architecture": "AMD64",
-    "cpu": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+    "cpu": "12th Gen Intel(R) Core(TM) i5-1235U",
     "logical_processors": 12,
-    "memory_bytes": null,
+    "memory_bytes": 16890978304,
     "python": "3.12.7",
+    "git_revision": "1030bd57dea0a3ee8d9c77b17a8885eba75e0762",
+    "git_dirty": true,
     "compilers": {
-      "nirqoba": "unknown",
-      "msvc": "unknown",
-      "rustc": "unknown",
-      "java": "unknown"
+      "nirqoba": "nirqoba compiler version 0.621-beta (Phase 9)",
+      "msvc": "Microsoft (R) C/C++ Optimizing Compiler Version 19.51.36260 for x64",
+      "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+      "java": "openjdk version \"17.0.20.1\" 2026-08-18"
     },
     "source_root": "D:\\Actual Project Files\\Project Nirqoba",
     "benchmark_directory": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2"
@@ -24,31 +26,31 @@
       "nirqoba": {
         "metrics": {
           "ALLOC_MS": {
-            "samples": 15,
-            "median": 58.0,
-            "mean": 60.067,
-            "min": 55.0,
-            "max": 68.0,
-            "stdev": 4.964
+            "samples": 75,
+            "median": 4.0,
+            "mean": 4.36,
+            "min": 3.0,
+            "max": 7.0,
+            "stdev": 0.832
           },
           "TRAVERSE_MS": {
-            "samples": 15,
-            "median": 3.0,
-            "mean": 2.933,
-            "min": 2.0,
-            "max": 4.0,
-            "stdev": 0.799
+            "samples": 75,
+            "median": 2.0,
+            "mean": 2.413,
+            "min": 1.0,
+            "max": 6.0,
+            "stdev": 0.931
           },
           "COLLECT_MS": {
-            "samples": 15,
-            "median": 1.0,
-            "mean": 0.533,
-            "min": 0.0,
-            "max": 1.0,
-            "stdev": 0.516
+            "samples": 75,
+            "median": 5.0,
+            "mean": 4.613,
+            "min": 3.0,
+            "max": 7.0,
+            "stdev": 0.695
           }
         },
-        "round_samples": 15,
+        "round_samples": 75,
         "checksums": [
           499999500000
         ],
@@ -58,7 +60,7 @@
         "runs": [
           {
             "repeat": 1,
-            "wall_seconds": 0.474,
+            "wall_seconds": 0.177,
             "globals": {
               "TEST": "managed_object_allocation",
               "IMPL": "nirqoba",
@@ -69,46 +71,46 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "ALLOC_MS": "55",
+                "ALLOC_MS": "4",
                 "TRAVERSE_MS": "2",
-                "COLLECT_MS": "1",
-                "COLLECT_CYCLES": "1027042",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10310184",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 1,
-                "ALLOC_MS": "56",
-                "TRAVERSE_MS": "4",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1057763",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "1",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10376072",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 2,
-                "ALLOC_MS": "55",
-                "TRAVERSE_MS": "3",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "937670",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11587064",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 3,
-                "ALLOC_MS": "65",
-                "TRAVERSE_MS": "4",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1037315",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12258039",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 4,
-                "ALLOC_MS": "66",
-                "TRAVERSE_MS": "3",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1073981",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10356179",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               }
@@ -116,7 +118,7 @@
           },
           {
             "repeat": 2,
-            "wall_seconds": 0.558,
+            "wall_seconds": 0.146,
             "globals": {
               "TEST": "managed_object_allocation",
               "IMPL": "nirqoba",
@@ -127,46 +129,46 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "ALLOC_MS": "68",
-                "TRAVERSE_MS": "2",
-                "COLLECT_MS": "1",
-                "COLLECT_CYCLES": "1052399",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11425050",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 1,
-                "ALLOC_MS": "63",
-                "TRAVERSE_MS": "4",
-                "COLLECT_MS": "1",
-                "COLLECT_CYCLES": "1196046",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "12517849",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 2,
-                "ALLOC_MS": "59",
+                "ALLOC_MS": "5",
                 "TRAVERSE_MS": "3",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "972022",
+                "COLLECT_MS": "6",
+                "COLLECT_CYCLES": "11816619",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 3,
-                "ALLOC_MS": "65",
-                "TRAVERSE_MS": "2",
-                "COLLECT_MS": "1",
-                "COLLECT_CYCLES": "1011825",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11307853",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 4,
-                "ALLOC_MS": "58",
-                "TRAVERSE_MS": "2",
-                "COLLECT_MS": "1",
-                "COLLECT_CYCLES": "1067634",
+                "ALLOC_MS": "6",
+                "TRAVERSE_MS": "1",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10494114",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               }
@@ -174,7 +176,7 @@
           },
           {
             "repeat": 3,
-            "wall_seconds": 0.459,
+            "wall_seconds": 0.096,
             "globals": {
               "TEST": "managed_object_allocation",
               "IMPL": "nirqoba",
@@ -185,94 +187,115 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "ALLOC_MS": "57",
+                "ALLOC_MS": "4",
                 "TRAVERSE_MS": "2",
-                "COLLECT_MS": "1",
-                "COLLECT_CYCLES": "976302",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10146906",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 1,
-                "ALLOC_MS": "56",
-                "TRAVERSE_MS": "3",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1070111",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 2,
-                "ALLOC_MS": "56",
+                "ALLOC_MS": "4",
                 "TRAVERSE_MS": "4",
-                "COLLECT_MS": "1",
-                "COLLECT_CYCLES": "1110062",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11746177",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
-                "ROUND": 3,
-                "ALLOC_MS": "55",
+                "ROUND": 2,
+                "ALLOC_MS": "4",
                 "TRAVERSE_MS": "3",
-                "COLLECT_MS": "1",
-                "COLLECT_CYCLES": "1155251",
+                "COLLECT_MS": "6",
+                "COLLECT_CYCLES": "11440505",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0"
+              },
+              {
+                "ROUND": 3,
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "1",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11096940",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 4,
-                "ALLOC_MS": "67",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10888051",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0"
+              }
+            ]
+          },
+          {
+            "repeat": 4,
+            "wall_seconds": 0.098,
+            "globals": {
+              "TEST": "managed_object_allocation",
+              "IMPL": "nirqoba",
+              "OBJECTS": "1000000",
+              "WARMUP_ROUNDS": "2",
+              "MEASURE_ROUNDS": "5"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "1",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11182780",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0"
+              },
+              {
+                "ROUND": 1,
+                "ALLOC_MS": "5",
                 "TRAVERSE_MS": "3",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "917926",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12176263",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0"
+              },
+              {
+                "ROUND": 2,
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12101127",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0"
+              },
+              {
+                "ROUND": 3,
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10352329",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0"
+              },
+              {
+                "ROUND": 4,
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12429661",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               }
             ]
-          }
-        ]
-      },
-      "c": {
-        "metrics": {
-          "ALLOC_MS": {
-            "samples": 15,
-            "median": 27.111,
-            "mean": 28.008,
-            "min": 24.515,
-            "max": 31.896,
-            "stdev": 2.1
           },
-          "TRAVERSE_MS": {
-            "samples": 15,
-            "median": 5.824,
-            "mean": 5.925,
-            "min": 5.086,
-            "max": 7.829,
-            "stdev": 0.697
-          },
-          "COLLECT_MS": {
-            "samples": 15,
-            "median": 17.099,
-            "mean": 17.58,
-            "min": 15.784,
-            "max": 20.157,
-            "stdev": 1.358
-          }
-        },
-        "round_samples": 15,
-        "checksums": [
-          499999500000
-        ],
-        "live_after": [
-          0
-        ],
-        "runs": [
           {
-            "repeat": 1,
-            "wall_seconds": 0.698,
+            "repeat": 5,
+            "wall_seconds": 0.109,
             "globals": {
               "TEST": "managed_object_allocation",
-              "IMPL": "c",
+              "IMPL": "nirqoba",
               "OBJECTS": "1000000",
               "WARMUP_ROUNDS": "2",
               "MEASURE_ROUNDS": "5"
@@ -280,52 +303,57 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "ALLOC_MS": "24.515",
-                "TRAVERSE_MS": "5.269",
-                "COLLECT_MS": "16.027",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11126675",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 1,
-                "ALLOC_MS": "26.195",
-                "TRAVERSE_MS": "5.389",
-                "COLLECT_MS": "16.646",
+                "ALLOC_MS": "6",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10911179",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 2,
-                "ALLOC_MS": "25.888",
-                "TRAVERSE_MS": "5.328",
-                "COLLECT_MS": "16.524",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "14641006",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 3,
-                "ALLOC_MS": "26.372",
-                "TRAVERSE_MS": "5.559",
-                "COLLECT_MS": "16.511",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "12298435",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 4,
-                "ALLOC_MS": "26.139",
-                "TRAVERSE_MS": "5.086",
-                "COLLECT_MS": "15.784",
+                "ALLOC_MS": "6",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11533486",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               }
             ]
           },
           {
-            "repeat": 2,
-            "wall_seconds": 0.384,
+            "repeat": 6,
+            "wall_seconds": 0.105,
             "globals": {
               "TEST": "managed_object_allocation",
-              "IMPL": "c",
+              "IMPL": "nirqoba",
               "OBJECTS": "1000000",
               "WARMUP_ROUNDS": "2",
               "MEASURE_ROUNDS": "5"
@@ -333,52 +361,57 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "ALLOC_MS": "29.643",
-                "TRAVERSE_MS": "7.829",
-                "COLLECT_MS": "20.157",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10532580",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 1,
-                "ALLOC_MS": "31.896",
-                "TRAVERSE_MS": "5.716",
-                "COLLECT_MS": "19.796",
+                "ALLOC_MS": "3",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10367884",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 2,
-                "ALLOC_MS": "29.941",
-                "TRAVERSE_MS": "6.738",
-                "COLLECT_MS": "19.322",
+                "ALLOC_MS": "7",
+                "TRAVERSE_MS": "6",
+                "COLLECT_MS": "7",
+                "COLLECT_CYCLES": "17159035",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 3,
-                "ALLOC_MS": "29.145",
-                "TRAVERSE_MS": "6.482",
-                "COLLECT_MS": "18.326",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11473889",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 4,
-                "ALLOC_MS": "29.546",
-                "TRAVERSE_MS": "5.824",
-                "COLLECT_MS": "16.791",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10488874",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               }
             ]
           },
           {
-            "repeat": 3,
-            "wall_seconds": 0.366,
+            "repeat": 7,
+            "wall_seconds": 0.093,
             "globals": {
               "TEST": "managed_object_allocation",
-              "IMPL": "c",
+              "IMPL": "nirqoba",
               "OBJECTS": "1000000",
               "WARMUP_ROUNDS": "2",
               "MEASURE_ROUNDS": "5"
@@ -386,89 +419,57 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "ALLOC_MS": "26.944",
-                "TRAVERSE_MS": "5.874",
-                "COLLECT_MS": "17.099",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10884109",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 1,
-                "ALLOC_MS": "26.940",
-                "TRAVERSE_MS": "5.839",
-                "COLLECT_MS": "16.990",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10348345",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 2,
-                "ALLOC_MS": "27.111",
-                "TRAVERSE_MS": "6.336",
-                "COLLECT_MS": "18.127",
+                "ALLOC_MS": "3",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "6",
+                "COLLECT_CYCLES": "10507123",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 3,
-                "ALLOC_MS": "30.038",
-                "TRAVERSE_MS": "5.936",
-                "COLLECT_MS": "18.200",
+                "ALLOC_MS": "3",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "3",
+                "COLLECT_CYCLES": "10917263",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 4,
-                "ALLOC_MS": "29.801",
-                "TRAVERSE_MS": "5.669",
-                "COLLECT_MS": "17.393",
+                "ALLOC_MS": "6",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11398966",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               }
             ]
-          }
-        ]
-      },
-      "cpp": {
-        "metrics": {
-          "ALLOC_MS": {
-            "samples": 15,
-            "median": 28.082,
-            "mean": 28.155,
-            "min": 26.83,
-            "max": 29.745,
-            "stdev": 1.003
           },
-          "TRAVERSE_MS": {
-            "samples": 15,
-            "median": 6.02,
-            "mean": 6.144,
-            "min": 5.328,
-            "max": 7.436,
-            "stdev": 0.665
-          },
-          "COLLECT_MS": {
-            "samples": 15,
-            "median": 18.223,
-            "mean": 17.955,
-            "min": 16.331,
-            "max": 20.168,
-            "stdev": 1.206
-          }
-        },
-        "round_samples": 15,
-        "checksums": [
-          499999500000
-        ],
-        "live_after": [
-          0
-        ],
-        "runs": [
           {
-            "repeat": 1,
-            "wall_seconds": 0.869,
+            "repeat": 8,
+            "wall_seconds": 0.107,
             "globals": {
               "TEST": "managed_object_allocation",
-              "IMPL": "cpp",
+              "IMPL": "nirqoba",
               "OBJECTS": "1000000",
               "WARMUP_ROUNDS": "2",
               "MEASURE_ROUNDS": "5"
@@ -476,52 +477,57 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "ALLOC_MS": "28.082",
-                "TRAVERSE_MS": "7.436",
-                "COLLECT_MS": "20.168",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11185942",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 1,
-                "ALLOC_MS": "28.459",
-                "TRAVERSE_MS": "5.339",
-                "COLLECT_MS": "16.621",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11369381",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 2,
-                "ALLOC_MS": "29.574",
-                "TRAVERSE_MS": "6.189",
-                "COLLECT_MS": "18.294",
+                "ALLOC_MS": "6",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11271128",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 3,
-                "ALLOC_MS": "29.384",
-                "TRAVERSE_MS": "6.203",
-                "COLLECT_MS": "18.725",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11416986",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 4,
-                "ALLOC_MS": "28.768",
-                "TRAVERSE_MS": "6.020",
-                "COLLECT_MS": "17.259",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11280476",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               }
             ]
           },
           {
-            "repeat": 2,
-            "wall_seconds": 0.359,
+            "repeat": 9,
+            "wall_seconds": 0.101,
             "globals": {
               "TEST": "managed_object_allocation",
-              "IMPL": "cpp",
+              "IMPL": "nirqoba",
               "OBJECTS": "1000000",
               "WARMUP_ROUNDS": "2",
               "MEASURE_ROUNDS": "5"
@@ -529,52 +535,57 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "ALLOC_MS": "27.742",
-                "TRAVERSE_MS": "5.988",
-                "COLLECT_MS": "16.433",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "6",
+                "COLLECT_CYCLES": "10541095",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 1,
-                "ALLOC_MS": "26.830",
-                "TRAVERSE_MS": "5.581",
-                "COLLECT_MS": "16.331",
+                "ALLOC_MS": "3",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10801698",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 2,
-                "ALLOC_MS": "27.314",
-                "TRAVERSE_MS": "5.508",
-                "COLLECT_MS": "17.362",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11082020",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 3,
-                "ALLOC_MS": "27.311",
-                "TRAVERSE_MS": "5.328",
-                "COLLECT_MS": "16.581",
+                "ALLOC_MS": "3",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11053772",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 4,
-                "ALLOC_MS": "26.968",
-                "TRAVERSE_MS": "6.471",
-                "COLLECT_MS": "18.582",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "1",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11101652",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               }
             ]
           },
           {
-            "repeat": 3,
-            "wall_seconds": 0.371,
+            "repeat": 10,
+            "wall_seconds": 0.09,
             "globals": {
               "TEST": "managed_object_allocation",
-              "IMPL": "cpp",
+              "IMPL": "nirqoba",
               "OBJECTS": "1000000",
               "WARMUP_ROUNDS": "2",
               "MEASURE_ROUNDS": "5"
@@ -582,89 +593,57 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "ALLOC_MS": "26.881",
-                "TRAVERSE_MS": "5.984",
-                "COLLECT_MS": "17.365",
+                "ALLOC_MS": "3",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10419419",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 1,
-                "ALLOC_MS": "27.698",
-                "TRAVERSE_MS": "6.831",
-                "COLLECT_MS": "19.299",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10559988",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 2,
-                "ALLOC_MS": "28.486",
-                "TRAVERSE_MS": "5.673",
-                "COLLECT_MS": "18.223",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10296678",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 3,
-                "ALLOC_MS": "29.085",
-                "TRAVERSE_MS": "6.194",
-                "COLLECT_MS": "19.442",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "1",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10569678",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 4,
-                "ALLOC_MS": "29.745",
-                "TRAVERSE_MS": "7.413",
-                "COLLECT_MS": "18.636",
+                "ALLOC_MS": "3",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "3",
+                "COLLECT_CYCLES": "10143965",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               }
             ]
-          }
-        ]
-      },
-      "rust": {
-        "metrics": {
-          "ALLOC_MS": {
-            "samples": 15,
-            "median": 36.34,
-            "mean": 36.814,
-            "min": 30.041,
-            "max": 51.192,
-            "stdev": 6.581
           },
-          "TRAVERSE_MS": {
-            "samples": 15,
-            "median": 6.096,
-            "mean": 6.181,
-            "min": 5.393,
-            "max": 7.338,
-            "stdev": 0.541
-          },
-          "COLLECT_MS": {
-            "samples": 15,
-            "median": 20.835,
-            "mean": 20.62,
-            "min": 17.402,
-            "max": 24.335,
-            "stdev": 2.068
-          }
-        },
-        "round_samples": 15,
-        "checksums": [
-          499999500000
-        ],
-        "live_after": [
-          0
-        ],
-        "runs": [
           {
-            "repeat": 1,
-            "wall_seconds": 0.459,
+            "repeat": 11,
+            "wall_seconds": 0.091,
             "globals": {
               "TEST": "managed_object_allocation",
-              "IMPL": "rust",
+              "IMPL": "nirqoba",
               "OBJECTS": "1000000",
               "WARMUP_ROUNDS": "2",
               "MEASURE_ROUNDS": "5"
@@ -672,52 +651,57 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "ALLOC_MS": "32.119",
-                "TRAVERSE_MS": "5.633",
-                "COLLECT_MS": "17.402",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10305169",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 1,
-                "ALLOC_MS": "30.661",
-                "TRAVERSE_MS": "5.690",
-                "COLLECT_MS": "17.611",
+                "ALLOC_MS": "3",
+                "TRAVERSE_MS": "1",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10649535",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 2,
-                "ALLOC_MS": "30.041",
-                "TRAVERSE_MS": "5.494",
-                "COLLECT_MS": "18.395",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "1",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10425141",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 3,
-                "ALLOC_MS": "30.642",
-                "TRAVERSE_MS": "5.393",
-                "COLLECT_MS": "18.918",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "1",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10936539",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 4,
-                "ALLOC_MS": "30.531",
-                "TRAVERSE_MS": "6.074",
-                "COLLECT_MS": "19.736",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11157713",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               }
             ]
           },
           {
-            "repeat": 2,
-            "wall_seconds": 0.471,
+            "repeat": 12,
+            "wall_seconds": 0.105,
             "globals": {
               "TEST": "managed_object_allocation",
-              "IMPL": "rust",
+              "IMPL": "nirqoba",
               "OBJECTS": "1000000",
               "WARMUP_ROUNDS": "2",
               "MEASURE_ROUNDS": "5"
@@ -725,52 +709,57 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "ALLOC_MS": "38.042",
-                "TRAVERSE_MS": "6.296",
-                "COLLECT_MS": "20.835",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12047712",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 1,
-                "ALLOC_MS": "37.515",
-                "TRAVERSE_MS": "6.363",
-                "COLLECT_MS": "20.998",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11972265",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 2,
-                "ALLOC_MS": "37.089",
-                "TRAVERSE_MS": "6.327",
-                "COLLECT_MS": "21.889",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "12422662",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 3,
-                "ALLOC_MS": "36.214",
-                "TRAVERSE_MS": "6.759",
-                "COLLECT_MS": "22.298",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12270619",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 4,
-                "ALLOC_MS": "39.680",
-                "TRAVERSE_MS": "6.574",
-                "COLLECT_MS": "21.967",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11188115",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               }
             ]
           },
           {
-            "repeat": 3,
-            "wall_seconds": 0.524,
+            "repeat": 13,
+            "wall_seconds": 0.112,
             "globals": {
               "TEST": "managed_object_allocation",
-              "IMPL": "rust",
+              "IMPL": "nirqoba",
               "OBJECTS": "1000000",
               "WARMUP_ROUNDS": "2",
               "MEASURE_ROUNDS": "5"
@@ -778,89 +767,57 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "ALLOC_MS": "51.192",
-                "TRAVERSE_MS": "6.813",
-                "COLLECT_MS": "23.588",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12184311",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 1,
-                "ALLOC_MS": "50.636",
-                "TRAVERSE_MS": "7.338",
-                "COLLECT_MS": "24.335",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11992839",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 2,
-                "ALLOC_MS": "38.226",
-                "TRAVERSE_MS": "6.043",
-                "COLLECT_MS": "21.654",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12125632",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 3,
-                "ALLOC_MS": "36.340",
-                "TRAVERSE_MS": "6.096",
-                "COLLECT_MS": "20.341",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12133940",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 4,
-                "ALLOC_MS": "33.289",
-                "TRAVERSE_MS": "5.827",
-                "COLLECT_MS": "19.337",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11783592",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0"
               }
             ]
-          }
-        ]
-      },
-      "java": {
-        "metrics": {
-          "ALLOC_MS": {
-            "samples": 15,
-            "median": 2.96,
-            "mean": 3.187,
-            "min": 2.527,
-            "max": 4.86,
-            "stdev": 0.714
           },
-          "TRAVERSE_MS": {
-            "samples": 15,
-            "median": 2.075,
-            "mean": 2.211,
-            "min": 1.971,
-            "max": 2.877,
-            "stdev": 0.299
-          },
-          "COLLECT_MS": {
-            "samples": 15,
-            "median": 6.976,
-            "mean": 6.991,
-            "min": 6.165,
-            "max": 7.804,
-            "stdev": 0.419
-          }
-        },
-        "round_samples": 15,
-        "checksums": [
-          499999500000
-        ],
-        "live_after": [
-          -1
-        ],
-        "runs": [
           {
-            "repeat": 1,
-            "wall_seconds": 0.248,
+            "repeat": 14,
+            "wall_seconds": 0.098,
             "globals": {
               "TEST": "managed_object_allocation",
-              "IMPL": "java",
+              "IMPL": "nirqoba",
               "OBJECTS": "1000000",
               "WARMUP_ROUNDS": "2",
               "MEASURE_ROUNDS": "5"
@@ -868,52 +825,57 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "ALLOC_MS": "4.860",
-                "TRAVERSE_MS": "2.075",
-                "COLLECT_MS": "6.165",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11322909",
                 "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "-1"
+                "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 1,
-                "ALLOC_MS": "2.957",
-                "TRAVERSE_MS": "2.877",
-                "COLLECT_MS": "7.120",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "1",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11085641",
                 "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "-1"
+                "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 2,
-                "ALLOC_MS": "2.621",
-                "TRAVERSE_MS": "2.013",
-                "COLLECT_MS": "6.823",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11100601",
                 "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "-1"
+                "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 3,
-                "ALLOC_MS": "3.131",
-                "TRAVERSE_MS": "2.084",
-                "COLLECT_MS": "6.889",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11226835",
                 "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "-1"
+                "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 4,
-                "ALLOC_MS": "2.762",
-                "TRAVERSE_MS": "1.977",
-                "COLLECT_MS": "7.011",
+                "ALLOC_MS": "5",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11094089",
                 "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "-1"
+                "LIVE_AFTER": "0"
               }
             ]
           },
           {
-            "repeat": 2,
-            "wall_seconds": 0.199,
+            "repeat": 15,
+            "wall_seconds": 0.091,
             "globals": {
               "TEST": "managed_object_allocation",
-              "IMPL": "java",
+              "IMPL": "nirqoba",
               "OBJECTS": "1000000",
               "WARMUP_ROUNDS": "2",
               "MEASURE_ROUNDS": "5"
@@ -921,96 +883,48 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "ALLOC_MS": "4.543",
-                "TRAVERSE_MS": "2.202",
-                "COLLECT_MS": "6.736",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10563731",
                 "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "-1"
+                "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 1,
-                "ALLOC_MS": "2.960",
-                "TRAVERSE_MS": "2.226",
-                "COLLECT_MS": "7.600",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "1",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10351502",
                 "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "-1"
+                "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 2,
-                "ALLOC_MS": "2.612",
-                "TRAVERSE_MS": "2.492",
-                "COLLECT_MS": "7.328",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10141208",
                 "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "-1"
+                "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 3,
-                "ALLOC_MS": "2.527",
-                "TRAVERSE_MS": "1.978",
-                "COLLECT_MS": "7.212",
+                "ALLOC_MS": "3",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10664113",
                 "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "-1"
+                "LIVE_AFTER": "0"
               },
               {
                 "ROUND": 4,
-                "ALLOC_MS": "3.015",
-                "TRAVERSE_MS": "2.025",
-                "COLLECT_MS": "6.789",
+                "ALLOC_MS": "4",
+                "TRAVERSE_MS": "2",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10256655",
                 "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "-1"
-              }
-            ]
-          },
-          {
-            "repeat": 3,
-            "wall_seconds": 0.2,
-            "globals": {
-              "TEST": "managed_object_allocation",
-              "IMPL": "java",
-              "OBJECTS": "1000000",
-              "WARMUP_ROUNDS": "2",
-              "MEASURE_ROUNDS": "5"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "ALLOC_MS": "3.584",
-                "TRAVERSE_MS": "1.971",
-                "COLLECT_MS": "6.364",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "-1"
-              },
-              {
-                "ROUND": 1,
-                "ALLOC_MS": "2.746",
-                "TRAVERSE_MS": "2.034",
-                "COLLECT_MS": "7.144",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "-1"
-              },
-              {
-                "ROUND": 2,
-                "ALLOC_MS": "2.610",
-                "TRAVERSE_MS": "2.784",
-                "COLLECT_MS": "6.976",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "-1"
-              },
-              {
-                "ROUND": 3,
-                "ALLOC_MS": "3.822",
-                "TRAVERSE_MS": "2.005",
-                "COLLECT_MS": "6.904",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "-1"
-              },
-              {
-                "ROUND": 4,
-                "ALLOC_MS": "3.059",
-                "TRAVERSE_MS": "2.429",
-                "COLLECT_MS": "7.804",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "-1"
+                "LIVE_AFTER": "0"
               }
             ]
           }
@@ -1021,31 +935,31 @@
       "nirqoba": {
         "metrics": {
           "COLLECT_MS": {
-            "samples": 15,
-            "median": 43.0,
-            "mean": 48.933,
-            "min": 41.0,
-            "max": 68.0,
-            "stdev": 10.368
+            "samples": 75,
+            "median": 27.0,
+            "mean": 27.333,
+            "min": 26.0,
+            "max": 29.0,
+            "stdev": 0.664
           },
           "BUILD_MS": {
-            "samples": 3,
-            "median": 197.0,
-            "mean": 207.333,
-            "min": 180.0,
-            "max": 245.0,
-            "stdev": 33.71
+            "samples": 15,
+            "median": 20.0,
+            "mean": 20.267,
+            "min": 17.0,
+            "max": 22.0,
+            "stdev": 1.335
           },
           "TRAVERSE_MS": {
-            "samples": 3,
-            "median": 6.0,
-            "mean": 6.0,
-            "min": 6.0,
+            "samples": 15,
+            "median": 5.0,
+            "mean": 5.067,
+            "min": 4.0,
             "max": 6.0,
-            "stdev": 0.0
+            "stdev": 0.594
           }
         },
-        "round_samples": 15,
+        "round_samples": 75,
         "checksums": [
           2199022206976
         ],
@@ -1055,7 +969,7 @@
         "runs": [
           {
             "repeat": 1,
-            "wall_seconds": 2.008,
+            "wall_seconds": 1.316,
             "globals": {
               "TEST": "mark_and_sweep",
               "IMPL": "nirqoba",
@@ -1063,7 +977,7 @@
               "WARMUP_BATCHES": "3",
               "COLLECT_BATCH": "5",
               "MEASURE_ROUNDS": "5",
-              "BUILD_MS": "197",
+              "BUILD_MS": "21",
               "TRAVERSE_MS": "6",
               "CHECKSUM": "2199022206976",
               "ROOT_VALUE": "1"
@@ -1071,31 +985,31 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "COLLECT_MS": "43",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 1,
-                "COLLECT_MS": "42",
+                "COLLECT_MS": "28",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 2,
-                "COLLECT_MS": "41",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 3,
-                "COLLECT_MS": "42",
+                "COLLECT_MS": "26",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 4,
-                "COLLECT_MS": "43",
+                "COLLECT_MS": "28",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               }
@@ -1103,7 +1017,7 @@
           },
           {
             "repeat": 2,
-            "wall_seconds": 1.987,
+            "wall_seconds": 1.23,
             "globals": {
               "TEST": "mark_and_sweep",
               "IMPL": "nirqoba",
@@ -1111,39 +1025,39 @@
               "WARMUP_BATCHES": "3",
               "COLLECT_BATCH": "5",
               "MEASURE_ROUNDS": "5",
-              "BUILD_MS": "180",
-              "TRAVERSE_MS": "6",
+              "BUILD_MS": "20",
+              "TRAVERSE_MS": "5",
               "CHECKSUM": "2199022206976",
               "ROOT_VALUE": "1"
             },
             "rounds": [
               {
                 "ROUND": 0,
-                "COLLECT_MS": "43",
+                "COLLECT_MS": "29",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 1,
-                "COLLECT_MS": "41",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 2,
-                "COLLECT_MS": "41",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 3,
-                "COLLECT_MS": "41",
+                "COLLECT_MS": "28",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 4,
-                "COLLECT_MS": "48",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               }
@@ -1151,7 +1065,7 @@
           },
           {
             "repeat": 3,
-            "wall_seconds": 2.828,
+            "wall_seconds": 1.187,
             "globals": {
               "TEST": "mark_and_sweep",
               "IMPL": "nirqoba",
@@ -1159,7 +1073,55 @@
               "WARMUP_BATCHES": "3",
               "COLLECT_BATCH": "5",
               "MEASURE_ROUNDS": "5",
-              "BUILD_MS": "245",
+              "BUILD_MS": "20",
+              "TRAVERSE_MS": "4",
+              "CHECKSUM": "2199022206976",
+              "ROOT_VALUE": "1"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "COLLECT_MS": "27",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              },
+              {
+                "ROUND": 1,
+                "COLLECT_MS": "28",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              },
+              {
+                "ROUND": 2,
+                "COLLECT_MS": "28",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              },
+              {
+                "ROUND": 3,
+                "COLLECT_MS": "28",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              },
+              {
+                "ROUND": 4,
+                "COLLECT_MS": "26",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              }
+            ]
+          },
+          {
+            "repeat": 4,
+            "wall_seconds": 1.193,
+            "globals": {
+              "TEST": "mark_and_sweep",
+              "IMPL": "nirqoba",
+              "OBJECTS": "2097151",
+              "WARMUP_BATCHES": "3",
+              "COLLECT_BATCH": "5",
+              "MEASURE_ROUNDS": "5",
+              "BUILD_MS": "21",
               "TRAVERSE_MS": "6",
               "CHECKSUM": "2199022206976",
               "ROOT_VALUE": "1"
@@ -1167,743 +1129,559 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "COLLECT_MS": "66",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 1,
-                "COLLECT_MS": "67",
+                "COLLECT_MS": "28",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 2,
-                "COLLECT_MS": "68",
+                "COLLECT_MS": "29",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 3,
-                "COLLECT_MS": "57",
+                "COLLECT_MS": "28",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 4,
-                "COLLECT_MS": "51",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              }
-            ]
-          }
-        ]
-      },
-      "c": {
-        "metrics": {
-          "COLLECT_MS": {
-            "samples": 15,
-            "median": 35.004,
-            "mean": 35.36,
-            "min": 32.232,
-            "max": 39.564,
-            "stdev": 2.199
-          },
-          "BUILD_MS": {
-            "samples": 3,
-            "median": 26.06,
-            "mean": 25.879,
-            "min": 24.158,
-            "max": 27.418,
-            "stdev": 1.638
-          },
-          "TRAVERSE_MS": {
-            "samples": 3,
-            "median": 13.924,
-            "mean": 13.395,
-            "min": 12.281,
-            "max": 13.98,
-            "stdev": 0.965
-          }
-        },
-        "round_samples": 15,
-        "checksums": [
-          2199022206976
-        ],
-        "live_after": [
-          2097151
-        ],
-        "runs": [
-          {
-            "repeat": 1,
-            "wall_seconds": 2.346,
-            "globals": {
-              "TEST": "mark_and_sweep",
-              "IMPL": "c",
-              "OBJECTS": "2097151",
-              "WARMUP_BATCHES": "3",
-              "COLLECT_BATCH": "5",
-              "MEASURE_ROUNDS": "5",
-              "BUILD_MS": "27.418",
-              "TRAVERSE_MS": "13.924",
-              "CHECKSUM": "2199022206976"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "COLLECT_MS": "38.568",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              },
-              {
-                "ROUND": 1,
-                "COLLECT_MS": "33.936",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              },
-              {
-                "ROUND": 2,
-                "COLLECT_MS": "35.461",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              },
-              {
-                "ROUND": 3,
-                "COLLECT_MS": "33.594",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              },
-              {
-                "ROUND": 4,
-                "COLLECT_MS": "32.690",
+                "COLLECT_MS": "26",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               }
             ]
           },
           {
-            "repeat": 2,
-            "wall_seconds": 1.429,
+            "repeat": 5,
+            "wall_seconds": 1.178,
             "globals": {
               "TEST": "mark_and_sweep",
-              "IMPL": "c",
+              "IMPL": "nirqoba",
               "OBJECTS": "2097151",
               "WARMUP_BATCHES": "3",
               "COLLECT_BATCH": "5",
               "MEASURE_ROUNDS": "5",
-              "BUILD_MS": "24.158",
-              "TRAVERSE_MS": "12.281",
-              "CHECKSUM": "2199022206976"
+              "BUILD_MS": "18",
+              "TRAVERSE_MS": "5",
+              "CHECKSUM": "2199022206976",
+              "ROOT_VALUE": "1"
             },
             "rounds": [
               {
                 "ROUND": 0,
-                "COLLECT_MS": "32.232",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 1,
-                "COLLECT_MS": "34.661",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 2,
-                "COLLECT_MS": "36.082",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 3,
-                "COLLECT_MS": "33.275",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 4,
-                "COLLECT_MS": "35.004",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               }
             ]
           },
           {
-            "repeat": 3,
-            "wall_seconds": 1.527,
+            "repeat": 6,
+            "wall_seconds": 1.178,
             "globals": {
               "TEST": "mark_and_sweep",
-              "IMPL": "c",
+              "IMPL": "nirqoba",
               "OBJECTS": "2097151",
               "WARMUP_BATCHES": "3",
               "COLLECT_BATCH": "5",
               "MEASURE_ROUNDS": "5",
-              "BUILD_MS": "26.060",
-              "TRAVERSE_MS": "13.980",
-              "CHECKSUM": "2199022206976"
+              "BUILD_MS": "21",
+              "TRAVERSE_MS": "5",
+              "CHECKSUM": "2199022206976",
+              "ROOT_VALUE": "1"
             },
             "rounds": [
               {
                 "ROUND": 0,
-                "COLLECT_MS": "38.559",
+                "COLLECT_MS": "26",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 1,
-                "COLLECT_MS": "35.676",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 2,
-                "COLLECT_MS": "34.605",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 3,
-                "COLLECT_MS": "36.494",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 4,
-                "COLLECT_MS": "39.564",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              }
-            ]
-          }
-        ]
-      },
-      "cpp": {
-        "metrics": {
-          "COLLECT_MS": {
-            "samples": 15,
-            "median": 38.02,
-            "mean": 39.907,
-            "min": 31.294,
-            "max": 54.489,
-            "stdev": 7.856
-          },
-          "BUILD_MS": {
-            "samples": 3,
-            "median": 31.562,
-            "mean": 30.376,
-            "min": 25.451,
-            "max": 34.114,
-            "stdev": 4.452
-          },
-          "TRAVERSE_MS": {
-            "samples": 3,
-            "median": 15.657,
-            "mean": 17.565,
-            "min": 12.534,
-            "max": 24.505,
-            "stdev": 6.209
-          }
-        },
-        "round_samples": 15,
-        "checksums": [
-          2199022206976
-        ],
-        "live_after": [
-          2097151
-        ],
-        "runs": [
-          {
-            "repeat": 1,
-            "wall_seconds": 3.058,
-            "globals": {
-              "TEST": "mark_and_sweep",
-              "IMPL": "cpp",
-              "OBJECTS": "2097151",
-              "WARMUP_BATCHES": "3",
-              "COLLECT_BATCH": "5",
-              "MEASURE_ROUNDS": "5",
-              "BUILD_MS": "31.562",
-              "TRAVERSE_MS": "15.657",
-              "CHECKSUM": "2199022206976"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "COLLECT_MS": "54.103",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              },
-              {
-                "ROUND": 1,
-                "COLLECT_MS": "54.489",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              },
-              {
-                "ROUND": 2,
-                "COLLECT_MS": "51.595",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              },
-              {
-                "ROUND": 3,
-                "COLLECT_MS": "43.126",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              },
-              {
-                "ROUND": 4,
-                "COLLECT_MS": "42.308",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               }
             ]
           },
           {
-            "repeat": 2,
-            "wall_seconds": 1.573,
+            "repeat": 7,
+            "wall_seconds": 1.183,
             "globals": {
               "TEST": "mark_and_sweep",
-              "IMPL": "cpp",
+              "IMPL": "nirqoba",
               "OBJECTS": "2097151",
               "WARMUP_BATCHES": "3",
               "COLLECT_BATCH": "5",
               "MEASURE_ROUNDS": "5",
-              "BUILD_MS": "34.114",
-              "TRAVERSE_MS": "24.505",
-              "CHECKSUM": "2199022206976"
+              "BUILD_MS": "22",
+              "TRAVERSE_MS": "5",
+              "CHECKSUM": "2199022206976",
+              "ROOT_VALUE": "1"
             },
             "rounds": [
               {
                 "ROUND": 0,
-                "COLLECT_MS": "35.917",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 1,
-                "COLLECT_MS": "32.707",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 2,
-                "COLLECT_MS": "32.292",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 3,
-                "COLLECT_MS": "34.503",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 4,
-                "COLLECT_MS": "31.294",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               }
             ]
           },
           {
-            "repeat": 3,
-            "wall_seconds": 1.472,
+            "repeat": 8,
+            "wall_seconds": 1.176,
             "globals": {
               "TEST": "mark_and_sweep",
-              "IMPL": "cpp",
+              "IMPL": "nirqoba",
               "OBJECTS": "2097151",
               "WARMUP_BATCHES": "3",
               "COLLECT_BATCH": "5",
               "MEASURE_ROUNDS": "5",
-              "BUILD_MS": "25.451",
-              "TRAVERSE_MS": "12.534",
-              "CHECKSUM": "2199022206976"
+              "BUILD_MS": "21",
+              "TRAVERSE_MS": "5",
+              "CHECKSUM": "2199022206976",
+              "ROOT_VALUE": "1"
             },
             "rounds": [
               {
                 "ROUND": 0,
-                "COLLECT_MS": "32.967",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 1,
-                "COLLECT_MS": "38.873",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 2,
-                "COLLECT_MS": "36.035",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 3,
-                "COLLECT_MS": "38.020",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 4,
-                "COLLECT_MS": "40.373",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              }
-            ]
-          }
-        ]
-      },
-      "rust": {
-        "metrics": {
-          "COLLECT_MS": {
-            "samples": 15,
-            "median": 36.675,
-            "mean": 38.701,
-            "min": 33.796,
-            "max": 58.776,
-            "stdev": 6.461
-          },
-          "BUILD_MS": {
-            "samples": 3,
-            "median": 22.643,
-            "mean": 23.076,
-            "min": 22.259,
-            "max": 24.326,
-            "stdev": 1.099
-          },
-          "TRAVERSE_MS": {
-            "samples": 3,
-            "median": 7.346,
-            "mean": 7.312,
-            "min": 7.232,
-            "max": 7.358,
-            "stdev": 0.07
-          }
-        },
-        "round_samples": 15,
-        "checksums": [
-          2199022206976
-        ],
-        "live_after": [
-          2097151
-        ],
-        "runs": [
-          {
-            "repeat": 1,
-            "wall_seconds": 2.704,
-            "globals": {
-              "TEST": "mark_and_sweep",
-              "IMPL": "rust",
-              "OBJECTS": "2097151",
-              "WARMUP_BATCHES": "3",
-              "COLLECT_BATCH": "5",
-              "MEASURE_ROUNDS": "5",
-              "BUILD_MS": "24.326",
-              "TRAVERSE_MS": "7.346",
-              "CHECKSUM": "2199022206976"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "COLLECT_MS": "33.796",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              },
-              {
-                "ROUND": 1,
-                "COLLECT_MS": "35.452",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              },
-              {
-                "ROUND": 2,
-                "COLLECT_MS": "35.889",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              },
-              {
-                "ROUND": 3,
-                "COLLECT_MS": "36.675",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              },
-              {
-                "ROUND": 4,
-                "COLLECT_MS": "34.900",
+                "COLLECT_MS": "28",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               }
             ]
           },
           {
-            "repeat": 2,
-            "wall_seconds": 1.538,
+            "repeat": 9,
+            "wall_seconds": 1.177,
             "globals": {
               "TEST": "mark_and_sweep",
-              "IMPL": "rust",
+              "IMPL": "nirqoba",
               "OBJECTS": "2097151",
               "WARMUP_BATCHES": "3",
               "COLLECT_BATCH": "5",
               "MEASURE_ROUNDS": "5",
-              "BUILD_MS": "22.643",
-              "TRAVERSE_MS": "7.232",
-              "CHECKSUM": "2199022206976"
+              "BUILD_MS": "21",
+              "TRAVERSE_MS": "5",
+              "CHECKSUM": "2199022206976",
+              "ROOT_VALUE": "1"
             },
             "rounds": [
               {
                 "ROUND": 0,
-                "COLLECT_MS": "36.369",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 1,
-                "COLLECT_MS": "35.612",
+                "COLLECT_MS": "28",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 2,
-                "COLLECT_MS": "38.705",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 3,
-                "COLLECT_MS": "37.712",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 4,
-                "COLLECT_MS": "37.059",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               }
             ]
           },
           {
-            "repeat": 3,
-            "wall_seconds": 1.703,
+            "repeat": 10,
+            "wall_seconds": 1.193,
             "globals": {
               "TEST": "mark_and_sweep",
-              "IMPL": "rust",
+              "IMPL": "nirqoba",
               "OBJECTS": "2097151",
               "WARMUP_BATCHES": "3",
               "COLLECT_BATCH": "5",
               "MEASURE_ROUNDS": "5",
-              "BUILD_MS": "22.259",
-              "TRAVERSE_MS": "7.358",
-              "CHECKSUM": "2199022206976"
+              "BUILD_MS": "20",
+              "TRAVERSE_MS": "5",
+              "CHECKSUM": "2199022206976",
+              "ROOT_VALUE": "1"
             },
             "rounds": [
               {
                 "ROUND": 0,
-                "COLLECT_MS": "36.003",
+                "COLLECT_MS": "28",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 1,
-                "COLLECT_MS": "36.960",
+                "COLLECT_MS": "28",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 2,
-                "COLLECT_MS": "38.358",
+                "COLLECT_MS": "28",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 3,
-                "COLLECT_MS": "48.253",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 4,
-                "COLLECT_MS": "58.776",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              }
-            ]
-          }
-        ]
-      },
-      "java": {
-        "metrics": {
-          "COLLECT_MS": {
-            "samples": 15,
-            "median": 79.435,
-            "mean": 83.61,
-            "min": 65.952,
-            "max": 107.8,
-            "stdev": 11.571
-          },
-          "BUILD_MS": {
-            "samples": 3,
-            "median": 26.164,
-            "mean": 23.713,
-            "min": 13.643,
-            "max": 31.332,
-            "stdev": 9.096
-          },
-          "TRAVERSE_MS": {
-            "samples": 3,
-            "median": 6.735,
-            "mean": 7.44,
-            "min": 5.82,
-            "max": 9.764,
-            "stdev": 2.064
-          }
-        },
-        "round_samples": 15,
-        "checksums": [
-          2199022206976
-        ],
-        "live_after": [
-          2097151
-        ],
-        "runs": [
-          {
-            "repeat": 1,
-            "wall_seconds": 3.576,
-            "globals": {
-              "TEST": "mark_and_sweep",
-              "IMPL": "java",
-              "OBJECTS": "2097151",
-              "WARMUP_BATCHES": "3",
-              "COLLECT_BATCH": "5",
-              "MEASURE_ROUNDS": "5",
-              "BUILD_MS": "31.332",
-              "TRAVERSE_MS": "6.735",
-              "CHECKSUM": "2199022206976"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "COLLECT_MS": "86.127",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              },
-              {
-                "ROUND": 1,
-                "COLLECT_MS": "77.844",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              },
-              {
-                "ROUND": 2,
-                "COLLECT_MS": "76.720",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              },
-              {
-                "ROUND": 3,
-                "COLLECT_MS": "65.952",
-                "LIVE_AFTER": "2097151",
-                "COLLECTIONS_DELTA": "5"
-              },
-              {
-                "ROUND": 4,
-                "COLLECT_MS": "105.197",
+                "COLLECT_MS": "28",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               }
             ]
           },
           {
-            "repeat": 2,
-            "wall_seconds": 3.219,
+            "repeat": 11,
+            "wall_seconds": 1.183,
             "globals": {
               "TEST": "mark_and_sweep",
-              "IMPL": "java",
+              "IMPL": "nirqoba",
               "OBJECTS": "2097151",
               "WARMUP_BATCHES": "3",
               "COLLECT_BATCH": "5",
               "MEASURE_ROUNDS": "5",
-              "BUILD_MS": "13.643",
-              "TRAVERSE_MS": "5.820",
-              "CHECKSUM": "2199022206976"
+              "BUILD_MS": "20",
+              "TRAVERSE_MS": "5",
+              "CHECKSUM": "2199022206976",
+              "ROOT_VALUE": "1"
             },
             "rounds": [
               {
                 "ROUND": 0,
-                "COLLECT_MS": "86.833",
+                "COLLECT_MS": "28",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 1,
-                "COLLECT_MS": "79.435",
+                "COLLECT_MS": "26",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 2,
-                "COLLECT_MS": "73.327",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 3,
-                "COLLECT_MS": "74.927",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 4,
-                "COLLECT_MS": "93.672",
+                "COLLECT_MS": "28",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               }
             ]
           },
           {
-            "repeat": 3,
-            "wall_seconds": 3.768,
+            "repeat": 12,
+            "wall_seconds": 1.182,
             "globals": {
               "TEST": "mark_and_sweep",
-              "IMPL": "java",
+              "IMPL": "nirqoba",
               "OBJECTS": "2097151",
               "WARMUP_BATCHES": "3",
               "COLLECT_BATCH": "5",
               "MEASURE_ROUNDS": "5",
-              "BUILD_MS": "26.164",
-              "TRAVERSE_MS": "9.764",
-              "CHECKSUM": "2199022206976"
+              "BUILD_MS": "17",
+              "TRAVERSE_MS": "5",
+              "CHECKSUM": "2199022206976",
+              "ROOT_VALUE": "1"
             },
             "rounds": [
               {
                 "ROUND": 0,
-                "COLLECT_MS": "86.366",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 1,
-                "COLLECT_MS": "78.350",
+                "COLLECT_MS": "28",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 2,
-                "COLLECT_MS": "75.185",
+                "COLLECT_MS": "28",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 3,
-                "COLLECT_MS": "86.416",
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               },
               {
                 "ROUND": 4,
-                "COLLECT_MS": "107.800",
+                "COLLECT_MS": "27",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              }
+            ]
+          },
+          {
+            "repeat": 13,
+            "wall_seconds": 1.208,
+            "globals": {
+              "TEST": "mark_and_sweep",
+              "IMPL": "nirqoba",
+              "OBJECTS": "2097151",
+              "WARMUP_BATCHES": "3",
+              "COLLECT_BATCH": "5",
+              "MEASURE_ROUNDS": "5",
+              "BUILD_MS": "20",
+              "TRAVERSE_MS": "4",
+              "CHECKSUM": "2199022206976",
+              "ROOT_VALUE": "1"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "COLLECT_MS": "28",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              },
+              {
+                "ROUND": 1,
+                "COLLECT_MS": "29",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              },
+              {
+                "ROUND": 2,
+                "COLLECT_MS": "27",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              },
+              {
+                "ROUND": 3,
+                "COLLECT_MS": "28",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              },
+              {
+                "ROUND": 4,
+                "COLLECT_MS": "28",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              }
+            ]
+          },
+          {
+            "repeat": 14,
+            "wall_seconds": 1.191,
+            "globals": {
+              "TEST": "mark_and_sweep",
+              "IMPL": "nirqoba",
+              "OBJECTS": "2097151",
+              "WARMUP_BATCHES": "3",
+              "COLLECT_BATCH": "5",
+              "MEASURE_ROUNDS": "5",
+              "BUILD_MS": "20",
+              "TRAVERSE_MS": "5",
+              "CHECKSUM": "2199022206976",
+              "ROOT_VALUE": "1"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "COLLECT_MS": "28",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              },
+              {
+                "ROUND": 1,
+                "COLLECT_MS": "27",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              },
+              {
+                "ROUND": 2,
+                "COLLECT_MS": "28",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              },
+              {
+                "ROUND": 3,
+                "COLLECT_MS": "28",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              },
+              {
+                "ROUND": 4,
+                "COLLECT_MS": "27",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              }
+            ]
+          },
+          {
+            "repeat": 15,
+            "wall_seconds": 1.182,
+            "globals": {
+              "TEST": "mark_and_sweep",
+              "IMPL": "nirqoba",
+              "OBJECTS": "2097151",
+              "WARMUP_BATCHES": "3",
+              "COLLECT_BATCH": "5",
+              "MEASURE_ROUNDS": "5",
+              "BUILD_MS": "22",
+              "TRAVERSE_MS": "6",
+              "CHECKSUM": "2199022206976",
+              "ROOT_VALUE": "1"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "COLLECT_MS": "27",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              },
+              {
+                "ROUND": 1,
+                "COLLECT_MS": "27",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              },
+              {
+                "ROUND": 2,
+                "COLLECT_MS": "27",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              },
+              {
+                "ROUND": 3,
+                "COLLECT_MS": "27",
+                "LIVE_AFTER": "2097151",
+                "COLLECTIONS_DELTA": "5"
+              },
+              {
+                "ROUND": 4,
+                "COLLECT_MS": "27",
                 "LIVE_AFTER": "2097151",
                 "COLLECTIONS_DELTA": "5"
               }
@@ -1916,23 +1694,23 @@
       "nirqoba": {
         "metrics": {
           "BUILD_MS": {
-            "samples": 15,
-            "median": 63.0,
-            "mean": 62.2,
-            "min": 53.0,
-            "max": 70.0,
-            "stdev": 5.557
+            "samples": 75,
+            "median": 4.0,
+            "mean": 4.227,
+            "min": 3.0,
+            "max": 7.0,
+            "stdev": 0.669
           },
           "COLLECT_MS": {
-            "samples": 15,
-            "median": 0.0,
-            "mean": 0.133,
-            "min": 0.0,
-            "max": 1.0,
-            "stdev": 0.352
+            "samples": 75,
+            "median": 5.0,
+            "mean": 4.613,
+            "min": 3.0,
+            "max": 7.0,
+            "stdev": 0.733
           }
         },
-        "round_samples": 15,
+        "round_samples": 75,
         "checksums": [
           499999500000
         ],
@@ -1942,7 +1720,7 @@
         "runs": [
           {
             "repeat": 1,
-            "wall_seconds": 0.459,
+            "wall_seconds": 0.161,
             "globals": {
               "TEST": "cyclic_graph_reclamation",
               "IMPL": "nirqoba",
@@ -1953,242 +1731,48 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "BUILD_MS": "55",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1191743",
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10590623",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0",
                 "CYCLES_CLEARED": "500000"
               },
               {
                 "ROUND": 1,
-                "BUILD_MS": "55",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1022696",
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10056095",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0",
                 "CYCLES_CLEARED": "500000"
               },
               {
                 "ROUND": 2,
-                "BUILD_MS": "53",
-                "COLLECT_MS": "1",
-                "COLLECT_CYCLES": "1128896",
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10562338",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0",
                 "CYCLES_CLEARED": "500000"
               },
               {
                 "ROUND": 3,
-                "BUILD_MS": "57",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1027597",
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10174416",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0",
                 "CYCLES_CLEARED": "500000"
               },
               {
                 "ROUND": 4,
-                "BUILD_MS": "58",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1619851",
+                "BUILD_MS": "4",
+                "COLLECT_MS": "6",
+                "COLLECT_CYCLES": "14870631",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0",
                 "CYCLES_CLEARED": "500000"
-              }
-            ]
-          },
-          {
-            "repeat": 2,
-            "wall_seconds": 0.51,
-            "globals": {
-              "TEST": "cyclic_graph_reclamation",
-              "IMPL": "nirqoba",
-              "OBJECTS": "1000000",
-              "WARMUP_ROUNDS": "2",
-              "MEASURE_ROUNDS": "5"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "BUILD_MS": "70",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1635435",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0",
-                "CYCLES_CLEARED": "500000"
-              },
-              {
-                "ROUND": 1,
-                "BUILD_MS": "69",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1236794",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0",
-                "CYCLES_CLEARED": "500000"
-              },
-              {
-                "ROUND": 2,
-                "BUILD_MS": "70",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1304760",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0",
-                "CYCLES_CLEARED": "500000"
-              },
-              {
-                "ROUND": 3,
-                "BUILD_MS": "65",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1144165",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0",
-                "CYCLES_CLEARED": "500000"
-              },
-              {
-                "ROUND": 4,
-                "BUILD_MS": "66",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1141109",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0",
-                "CYCLES_CLEARED": "500000"
-              }
-            ]
-          },
-          {
-            "repeat": 3,
-            "wall_seconds": 0.477,
-            "globals": {
-              "TEST": "cyclic_graph_reclamation",
-              "IMPL": "nirqoba",
-              "OBJECTS": "1000000",
-              "WARMUP_ROUNDS": "2",
-              "MEASURE_ROUNDS": "5"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "BUILD_MS": "64",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1213204",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0",
-                "CYCLES_CLEARED": "500000"
-              },
-              {
-                "ROUND": 1,
-                "BUILD_MS": "63",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1162743",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0",
-                "CYCLES_CLEARED": "500000"
-              },
-              {
-                "ROUND": 2,
-                "BUILD_MS": "63",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1137419",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0",
-                "CYCLES_CLEARED": "500000"
-              },
-              {
-                "ROUND": 3,
-                "BUILD_MS": "64",
-                "COLLECT_MS": "1",
-                "COLLECT_CYCLES": "1194887",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0",
-                "CYCLES_CLEARED": "500000"
-              },
-              {
-                "ROUND": 4,
-                "BUILD_MS": "61",
-                "COLLECT_MS": "0",
-                "COLLECT_CYCLES": "1130202",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0",
-                "CYCLES_CLEARED": "500000"
-              }
-            ]
-          }
-        ]
-      },
-      "c": {
-        "metrics": {
-          "BUILD_MS": {
-            "samples": 15,
-            "median": 6.281,
-            "mean": 6.357,
-            "min": 5.73,
-            "max": 7.924,
-            "stdev": 0.518
-          },
-          "COLLECT_MS": {
-            "samples": 15,
-            "median": 5.676,
-            "mean": 5.964,
-            "min": 4.781,
-            "max": 8.155,
-            "stdev": 0.993
-          }
-        },
-        "round_samples": 15,
-        "checksums": [
-          499999500000
-        ],
-        "live_after": [
-          0
-        ],
-        "runs": [
-          {
-            "repeat": 1,
-            "wall_seconds": 0.693,
-            "globals": {
-              "TEST": "cyclic_graph_reclamation",
-              "IMPL": "c",
-              "OBJECTS": "1000000",
-              "WARMUP_ROUNDS": "2",
-              "MEASURE_ROUNDS": "5",
-              "FINAL_CHECKSUM": "499999500000"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "BUILD_MS": "7.924",
-                "COLLECT_MS": "8.155",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 1,
-                "BUILD_MS": "6.281",
-                "COLLECT_MS": "6.423",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 2,
-                "BUILD_MS": "6.189",
-                "COLLECT_MS": "5.124",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 3,
-                "BUILD_MS": "6.552",
-                "COLLECT_MS": "5.288",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 4,
-                "BUILD_MS": "6.140",
-                "COLLECT_MS": "7.710",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
               }
             ]
           },
@@ -2197,486 +1781,7 @@
             "wall_seconds": 0.128,
             "globals": {
               "TEST": "cyclic_graph_reclamation",
-              "IMPL": "c",
-              "OBJECTS": "1000000",
-              "WARMUP_ROUNDS": "2",
-              "MEASURE_ROUNDS": "5",
-              "FINAL_CHECKSUM": "499999500000"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "BUILD_MS": "5.948",
-                "COLLECT_MS": "6.141",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 1,
-                "BUILD_MS": "6.674",
-                "COLLECT_MS": "6.350",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 2,
-                "BUILD_MS": "6.296",
-                "COLLECT_MS": "5.676",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 3,
-                "BUILD_MS": "6.137",
-                "COLLECT_MS": "5.134",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 4,
-                "BUILD_MS": "6.257",
-                "COLLECT_MS": "5.881",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              }
-            ]
-          },
-          {
-            "repeat": 3,
-            "wall_seconds": 0.114,
-            "globals": {
-              "TEST": "cyclic_graph_reclamation",
-              "IMPL": "c",
-              "OBJECTS": "1000000",
-              "WARMUP_ROUNDS": "2",
-              "MEASURE_ROUNDS": "5",
-              "FINAL_CHECKSUM": "499999500000"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "BUILD_MS": "5.762",
-                "COLLECT_MS": "5.307",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 1,
-                "BUILD_MS": "6.298",
-                "COLLECT_MS": "5.584",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 2,
-                "BUILD_MS": "6.587",
-                "COLLECT_MS": "6.859",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 3,
-                "BUILD_MS": "5.730",
-                "COLLECT_MS": "4.781",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 4,
-                "BUILD_MS": "6.585",
-                "COLLECT_MS": "5.044",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              }
-            ]
-          }
-        ]
-      },
-      "cpp": {
-        "metrics": {
-          "BUILD_MS": {
-            "samples": 15,
-            "median": 6.414,
-            "mean": 6.474,
-            "min": 5.561,
-            "max": 8.117,
-            "stdev": 0.667
-          },
-          "COLLECT_MS": {
-            "samples": 15,
-            "median": 6.562,
-            "mean": 6.813,
-            "min": 5.433,
-            "max": 9.522,
-            "stdev": 1.177
-          }
-        },
-        "round_samples": 15,
-        "checksums": [
-          499999500000
-        ],
-        "live_after": [
-          0
-        ],
-        "runs": [
-          {
-            "repeat": 1,
-            "wall_seconds": 0.663,
-            "globals": {
-              "TEST": "cyclic_graph_reclamation",
-              "IMPL": "cpp",
-              "OBJECTS": "1000000",
-              "WARMUP_ROUNDS": "2",
-              "MEASURE_ROUNDS": "5",
-              "FINAL_CHECKSUM": "499999500000"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "BUILD_MS": "6.500",
-                "COLLECT_MS": "6.002",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 1,
-                "BUILD_MS": "5.561",
-                "COLLECT_MS": "5.794",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 2,
-                "BUILD_MS": "6.738",
-                "COLLECT_MS": "6.014",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 3,
-                "BUILD_MS": "6.482",
-                "COLLECT_MS": "6.694",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 4,
-                "BUILD_MS": "5.828",
-                "COLLECT_MS": "7.920",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              }
-            ]
-          },
-          {
-            "repeat": 2,
-            "wall_seconds": 0.122,
-            "globals": {
-              "TEST": "cyclic_graph_reclamation",
-              "IMPL": "cpp",
-              "OBJECTS": "1000000",
-              "WARMUP_ROUNDS": "2",
-              "MEASURE_ROUNDS": "5",
-              "FINAL_CHECKSUM": "499999500000"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "BUILD_MS": "7.072",
-                "COLLECT_MS": "6.329",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 1,
-                "BUILD_MS": "6.067",
-                "COLLECT_MS": "6.097",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 2,
-                "BUILD_MS": "7.160",
-                "COLLECT_MS": "7.686",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 3,
-                "BUILD_MS": "6.414",
-                "COLLECT_MS": "6.799",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 4,
-                "BUILD_MS": "6.207",
-                "COLLECT_MS": "6.846",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              }
-            ]
-          },
-          {
-            "repeat": 3,
-            "wall_seconds": 0.124,
-            "globals": {
-              "TEST": "cyclic_graph_reclamation",
-              "IMPL": "cpp",
-              "OBJECTS": "1000000",
-              "WARMUP_ROUNDS": "2",
-              "MEASURE_ROUNDS": "5",
-              "FINAL_CHECKSUM": "499999500000"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "BUILD_MS": "5.852",
-                "COLLECT_MS": "6.562",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 1,
-                "BUILD_MS": "8.117",
-                "COLLECT_MS": "5.722",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 2,
-                "BUILD_MS": "7.035",
-                "COLLECT_MS": "5.433",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 3,
-                "BUILD_MS": "5.872",
-                "COLLECT_MS": "8.768",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 4,
-                "BUILD_MS": "6.202",
-                "COLLECT_MS": "9.522",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              }
-            ]
-          }
-        ]
-      },
-      "rust": {
-        "metrics": {
-          "BUILD_MS": {
-            "samples": 15,
-            "median": 6.145,
-            "mean": 6.303,
-            "min": 5.319,
-            "max": 8.954,
-            "stdev": 0.943
-          },
-          "COLLECT_MS": {
-            "samples": 15,
-            "median": 5.719,
-            "mean": 5.795,
-            "min": 5.073,
-            "max": 7.536,
-            "stdev": 0.625
-          }
-        },
-        "round_samples": 15,
-        "checksums": [
-          499999500000
-        ],
-        "live_after": [
-          0
-        ],
-        "runs": [
-          {
-            "repeat": 1,
-            "wall_seconds": 1.033,
-            "globals": {
-              "TEST": "cyclic_graph_reclamation",
-              "IMPL": "rust",
-              "OBJECTS": "1000000",
-              "WARMUP_ROUNDS": "2",
-              "MEASURE_ROUNDS": "5",
-              "FINAL_CHECKSUM": "499999500000"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "BUILD_MS": "8.954",
-                "COLLECT_MS": "7.536",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 1,
-                "BUILD_MS": "6.949",
-                "COLLECT_MS": "5.807",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 2,
-                "BUILD_MS": "6.203",
-                "COLLECT_MS": "5.703",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 3,
-                "BUILD_MS": "6.036",
-                "COLLECT_MS": "6.410",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 4,
-                "BUILD_MS": "7.232",
-                "COLLECT_MS": "6.513",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              }
-            ]
-          },
-          {
-            "repeat": 2,
-            "wall_seconds": 0.127,
-            "globals": {
-              "TEST": "cyclic_graph_reclamation",
-              "IMPL": "rust",
-              "OBJECTS": "1000000",
-              "WARMUP_ROUNDS": "2",
-              "MEASURE_ROUNDS": "5",
-              "FINAL_CHECKSUM": "499999500000"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "BUILD_MS": "6.393",
-                "COLLECT_MS": "5.496",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 1,
-                "BUILD_MS": "6.783",
-                "COLLECT_MS": "5.719",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 2,
-                "BUILD_MS": "6.145",
-                "COLLECT_MS": "5.749",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 3,
-                "BUILD_MS": "5.481",
-                "COLLECT_MS": "5.729",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 4,
-                "BUILD_MS": "5.785",
-                "COLLECT_MS": "5.449",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              }
-            ]
-          },
-          {
-            "repeat": 3,
-            "wall_seconds": 0.113,
-            "globals": {
-              "TEST": "cyclic_graph_reclamation",
-              "IMPL": "rust",
-              "OBJECTS": "1000000",
-              "WARMUP_ROUNDS": "2",
-              "MEASURE_ROUNDS": "5",
-              "FINAL_CHECKSUM": "499999500000"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "BUILD_MS": "5.319",
-                "COLLECT_MS": "5.880",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 1,
-                "BUILD_MS": "5.636",
-                "COLLECT_MS": "5.239",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 2,
-                "BUILD_MS": "5.651",
-                "COLLECT_MS": "5.277",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 3,
-                "BUILD_MS": "5.343",
-                "COLLECT_MS": "5.344",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              },
-              {
-                "ROUND": 4,
-                "BUILD_MS": "6.628",
-                "COLLECT_MS": "5.073",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0"
-              }
-            ]
-          }
-        ]
-      },
-      "java": {
-        "metrics": {
-          "BUILD_MS": {
-            "samples": 15,
-            "median": 6.513,
-            "mean": 6.601,
-            "min": 6.229,
-            "max": 7.358,
-            "stdev": 0.377
-          },
-          "COLLECT_MS": {
-            "samples": 15,
-            "median": 45.813,
-            "mean": 46.926,
-            "min": 43.792,
-            "max": 53.833,
-            "stdev": 3.193
-          }
-        },
-        "round_samples": 15,
-        "checksums": [
-          499999500000
-        ],
-        "live_after": [
-          0
-        ],
-        "runs": [
-          {
-            "repeat": 1,
-            "wall_seconds": 0.588,
-            "globals": {
-              "TEST": "cyclic_graph_reclamation",
-              "IMPL": "java",
+              "IMPL": "nirqoba",
               "OBJECTS": "1000000",
               "WARMUP_ROUNDS": "2",
               "MEASURE_ROUNDS": "5"
@@ -2684,93 +1789,45 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "BUILD_MS": "7.073",
-                "COLLECT_MS": "49.730",
+                "BUILD_MS": "5",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11251532",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0",
                 "CYCLES_CLEARED": "500000"
               },
               {
                 "ROUND": 1,
-                "BUILD_MS": "7.332",
-                "COLLECT_MS": "53.833",
+                "BUILD_MS": "5",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11165543",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0",
                 "CYCLES_CLEARED": "500000"
               },
               {
                 "ROUND": 2,
-                "BUILD_MS": "7.358",
-                "COLLECT_MS": "49.523",
+                "BUILD_MS": "5",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11407974",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0",
                 "CYCLES_CLEARED": "500000"
               },
               {
                 "ROUND": 3,
-                "BUILD_MS": "6.701",
-                "COLLECT_MS": "47.172",
+                "BUILD_MS": "5",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11655467",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0",
                 "CYCLES_CLEARED": "500000"
               },
               {
                 "ROUND": 4,
-                "BUILD_MS": "6.513",
-                "COLLECT_MS": "53.044",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0",
-                "CYCLES_CLEARED": "500000"
-              }
-            ]
-          },
-          {
-            "repeat": 2,
-            "wall_seconds": 0.496,
-            "globals": {
-              "TEST": "cyclic_graph_reclamation",
-              "IMPL": "java",
-              "OBJECTS": "1000000",
-              "WARMUP_ROUNDS": "2",
-              "MEASURE_ROUNDS": "5"
-            },
-            "rounds": [
-              {
-                "ROUND": 0,
-                "BUILD_MS": "6.374",
-                "COLLECT_MS": "45.813",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0",
-                "CYCLES_CLEARED": "500000"
-              },
-              {
-                "ROUND": 1,
-                "BUILD_MS": "6.303",
-                "COLLECT_MS": "44.138",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0",
-                "CYCLES_CLEARED": "500000"
-              },
-              {
-                "ROUND": 2,
-                "BUILD_MS": "6.257",
-                "COLLECT_MS": "43.792",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0",
-                "CYCLES_CLEARED": "500000"
-              },
-              {
-                "ROUND": 3,
-                "BUILD_MS": "6.280",
-                "COLLECT_MS": "43.986",
-                "CHECKSUM": "499999500000",
-                "LIVE_AFTER": "0",
-                "CYCLES_CLEARED": "500000"
-              },
-              {
-                "ROUND": 4,
-                "BUILD_MS": "6.315",
-                "COLLECT_MS": "46.256",
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12210919",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0",
                 "CYCLES_CLEARED": "500000"
@@ -2779,10 +1836,10 @@
           },
           {
             "repeat": 3,
-            "wall_seconds": 0.49,
+            "wall_seconds": 0.078,
             "globals": {
               "TEST": "cyclic_graph_reclamation",
-              "IMPL": "java",
+              "IMPL": "nirqoba",
               "OBJECTS": "1000000",
               "WARMUP_ROUNDS": "2",
               "MEASURE_ROUNDS": "5"
@@ -2790,40 +1847,741 @@
             "rounds": [
               {
                 "ROUND": 0,
-                "BUILD_MS": "6.618",
-                "COLLECT_MS": "45.430",
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10221004",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0",
                 "CYCLES_CLEARED": "500000"
               },
               {
                 "ROUND": 1,
-                "BUILD_MS": "6.229",
-                "COLLECT_MS": "45.924",
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10258690",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0",
                 "CYCLES_CLEARED": "500000"
               },
               {
                 "ROUND": 2,
-                "BUILD_MS": "6.541",
-                "COLLECT_MS": "45.535",
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10114742",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0",
                 "CYCLES_CLEARED": "500000"
               },
               {
                 "ROUND": 3,
-                "BUILD_MS": "6.729",
-                "COLLECT_MS": "44.057",
+                "BUILD_MS": "3",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10429382",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0",
                 "CYCLES_CLEARED": "500000"
               },
               {
                 "ROUND": 4,
-                "BUILD_MS": "6.391",
-                "COLLECT_MS": "45.658",
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10143540",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              }
+            ]
+          },
+          {
+            "repeat": 4,
+            "wall_seconds": 0.088,
+            "globals": {
+              "TEST": "cyclic_graph_reclamation",
+              "IMPL": "nirqoba",
+              "OBJECTS": "1000000",
+              "WARMUP_ROUNDS": "2",
+              "MEASURE_ROUNDS": "5"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "BUILD_MS": "5",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12261795",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 1,
+                "BUILD_MS": "5",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11664628",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 2,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "6",
+                "COLLECT_CYCLES": "11781533",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 3,
+                "BUILD_MS": "5",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11511590",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 4,
+                "BUILD_MS": "5",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "13283345",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              }
+            ]
+          },
+          {
+            "repeat": 5,
+            "wall_seconds": 0.083,
+            "globals": {
+              "TEST": "cyclic_graph_reclamation",
+              "IMPL": "nirqoba",
+              "OBJECTS": "1000000",
+              "WARMUP_ROUNDS": "2",
+              "MEASURE_ROUNDS": "5"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "BUILD_MS": "5",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10802852",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 1,
+                "BUILD_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12296711",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 2,
+                "BUILD_MS": "5",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11967271",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 3,
+                "BUILD_MS": "5",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11952861",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 4,
+                "BUILD_MS": "5",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12283100",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              }
+            ]
+          },
+          {
+            "repeat": 6,
+            "wall_seconds": 0.083,
+            "globals": {
+              "TEST": "cyclic_graph_reclamation",
+              "IMPL": "nirqoba",
+              "OBJECTS": "1000000",
+              "WARMUP_ROUNDS": "2",
+              "MEASURE_ROUNDS": "5"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10902157",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 1,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12171311",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 2,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10282795",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 3,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12720115",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 4,
+                "BUILD_MS": "5",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "12184340",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              }
+            ]
+          },
+          {
+            "repeat": 7,
+            "wall_seconds": 0.079,
+            "globals": {
+              "TEST": "cyclic_graph_reclamation",
+              "IMPL": "nirqoba",
+              "OBJECTS": "1000000",
+              "WARMUP_ROUNDS": "2",
+              "MEASURE_ROUNDS": "5"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "BUILD_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10372298",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 1,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10246605",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 2,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11723155",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 3,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "3",
+                "COLLECT_CYCLES": "10133233",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 4,
+                "BUILD_MS": "5",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11514502",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              }
+            ]
+          },
+          {
+            "repeat": 8,
+            "wall_seconds": 0.085,
+            "globals": {
+              "TEST": "cyclic_graph_reclamation",
+              "IMPL": "nirqoba",
+              "OBJECTS": "1000000",
+              "WARMUP_ROUNDS": "2",
+              "MEASURE_ROUNDS": "5"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10290832",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 1,
+                "BUILD_MS": "3",
+                "COLLECT_MS": "6",
+                "COLLECT_CYCLES": "12391434",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 2,
+                "BUILD_MS": "6",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12272180",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 3,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "6",
+                "COLLECT_CYCLES": "12600736",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 4,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "12138313",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              }
+            ]
+          },
+          {
+            "repeat": 9,
+            "wall_seconds": 0.084,
+            "globals": {
+              "TEST": "cyclic_graph_reclamation",
+              "IMPL": "nirqoba",
+              "OBJECTS": "1000000",
+              "WARMUP_ROUNDS": "2",
+              "MEASURE_ROUNDS": "5"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11255920",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 1,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11568342",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 2,
+                "BUILD_MS": "5",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11345348",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 3,
+                "BUILD_MS": "5",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11636883",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 4,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "13002278",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              }
+            ]
+          },
+          {
+            "repeat": 10,
+            "wall_seconds": 0.079,
+            "globals": {
+              "TEST": "cyclic_graph_reclamation",
+              "IMPL": "nirqoba",
+              "OBJECTS": "1000000",
+              "WARMUP_ROUNDS": "2",
+              "MEASURE_ROUNDS": "5"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11030051",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 1,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11036220",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 2,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10274802",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 3,
+                "BUILD_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10391814",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 4,
+                "BUILD_MS": "3",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10521948",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              }
+            ]
+          },
+          {
+            "repeat": 11,
+            "wall_seconds": 0.08,
+            "globals": {
+              "TEST": "cyclic_graph_reclamation",
+              "IMPL": "nirqoba",
+              "OBJECTS": "1000000",
+              "WARMUP_ROUNDS": "2",
+              "MEASURE_ROUNDS": "5"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10325859",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 1,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10449072",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 2,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10345195",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 3,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10497585",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 4,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10467560",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              }
+            ]
+          },
+          {
+            "repeat": 12,
+            "wall_seconds": 0.081,
+            "globals": {
+              "TEST": "cyclic_graph_reclamation",
+              "IMPL": "nirqoba",
+              "OBJECTS": "1000000",
+              "WARMUP_ROUNDS": "2",
+              "MEASURE_ROUNDS": "5"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "BUILD_MS": "5",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11545036",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 1,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10666126",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 2,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10679552",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 3,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10880998",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 4,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11158554",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              }
+            ]
+          },
+          {
+            "repeat": 13,
+            "wall_seconds": 0.079,
+            "globals": {
+              "TEST": "cyclic_graph_reclamation",
+              "IMPL": "nirqoba",
+              "OBJECTS": "1000000",
+              "WARMUP_ROUNDS": "2",
+              "MEASURE_ROUNDS": "5"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10862179",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 1,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11097719",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 2,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10873842",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 3,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "10992644",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 4,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10849113",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              }
+            ]
+          },
+          {
+            "repeat": 14,
+            "wall_seconds": 0.09,
+            "globals": {
+              "TEST": "cyclic_graph_reclamation",
+              "IMPL": "nirqoba",
+              "OBJECTS": "1000000",
+              "WARMUP_ROUNDS": "2",
+              "MEASURE_ROUNDS": "5"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10173729",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 1,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10244260",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 2,
+                "BUILD_MS": "7",
+                "COLLECT_MS": "7",
+                "COLLECT_CYCLES": "16263448",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 3,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "6",
+                "COLLECT_CYCLES": "14221506",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 4,
+                "BUILD_MS": "5",
+                "COLLECT_MS": "6",
+                "COLLECT_CYCLES": "12487731",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              }
+            ]
+          },
+          {
+            "repeat": 15,
+            "wall_seconds": 0.081,
+            "globals": {
+              "TEST": "cyclic_graph_reclamation",
+              "IMPL": "nirqoba",
+              "OBJECTS": "1000000",
+              "WARMUP_ROUNDS": "2",
+              "MEASURE_ROUNDS": "5"
+            },
+            "rounds": [
+              {
+                "ROUND": 0,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "10195542",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 1,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "6",
+                "COLLECT_CYCLES": "13447768",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 2,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11071078",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 3,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "4",
+                "COLLECT_CYCLES": "11006040",
+                "CHECKSUM": "499999500000",
+                "LIVE_AFTER": "0",
+                "CYCLES_CLEARED": "500000"
+              },
+              {
+                "ROUND": 4,
+                "BUILD_MS": "4",
+                "COLLECT_MS": "5",
+                "COLLECT_CYCLES": "11037619",
                 "CHECKSUM": "499999500000",
                 "LIVE_AFTER": "0",
                 "CYCLES_CLEARED": "500000"
@@ -2845,7 +2603,7 @@
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.474,
+      "wall_seconds": 0.177,
       "timeout_seconds": 600,
       "validation_problems": [],
       "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_nirqoba_run1.txt"
@@ -2860,7 +2618,7 @@
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.558,
+      "wall_seconds": 0.146,
       "timeout_seconds": 600,
       "validation_problems": [],
       "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_nirqoba_run2.txt"
@@ -2875,7 +2633,7 @@
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.459,
+      "wall_seconds": 0.096,
       "timeout_seconds": 600,
       "validation_problems": [],
       "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_nirqoba_run3.txt"
@@ -2883,200 +2641,182 @@
     {
       "test": "01",
       "test_name": "managed_object_allocation",
-      "impl": "c",
-      "repeat": 1,
+      "impl": "nirqoba",
+      "repeat": 4,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_c.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.698,
+      "wall_seconds": 0.098,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_c_run1.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_nirqoba_run4.txt"
     },
     {
       "test": "01",
       "test_name": "managed_object_allocation",
-      "impl": "c",
-      "repeat": 2,
+      "impl": "nirqoba",
+      "repeat": 5,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_c.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.384,
+      "wall_seconds": 0.109,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_c_run2.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_nirqoba_run5.txt"
     },
     {
       "test": "01",
       "test_name": "managed_object_allocation",
-      "impl": "c",
-      "repeat": 3,
+      "impl": "nirqoba",
+      "repeat": 6,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_c.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.366,
+      "wall_seconds": 0.105,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_c_run3.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_nirqoba_run6.txt"
     },
     {
       "test": "01",
       "test_name": "managed_object_allocation",
-      "impl": "cpp",
-      "repeat": 1,
+      "impl": "nirqoba",
+      "repeat": 7,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_cpp.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.869,
+      "wall_seconds": 0.093,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_cpp_run1.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_nirqoba_run7.txt"
     },
     {
       "test": "01",
       "test_name": "managed_object_allocation",
-      "impl": "cpp",
-      "repeat": 2,
+      "impl": "nirqoba",
+      "repeat": 8,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_cpp.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.359,
+      "wall_seconds": 0.107,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_cpp_run2.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_nirqoba_run8.txt"
     },
     {
       "test": "01",
       "test_name": "managed_object_allocation",
-      "impl": "cpp",
-      "repeat": 3,
+      "impl": "nirqoba",
+      "repeat": 9,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_cpp.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.371,
+      "wall_seconds": 0.101,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_cpp_run3.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_nirqoba_run9.txt"
     },
     {
       "test": "01",
       "test_name": "managed_object_allocation",
-      "impl": "rust",
-      "repeat": 1,
+      "impl": "nirqoba",
+      "repeat": 10,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_rust.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.459,
+      "wall_seconds": 0.09,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_rust_run1.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_nirqoba_run10.txt"
     },
     {
       "test": "01",
       "test_name": "managed_object_allocation",
-      "impl": "rust",
-      "repeat": 2,
+      "impl": "nirqoba",
+      "repeat": 11,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_rust.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.471,
+      "wall_seconds": 0.091,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_rust_run2.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_nirqoba_run11.txt"
     },
     {
       "test": "01",
       "test_name": "managed_object_allocation",
-      "impl": "rust",
-      "repeat": 3,
+      "impl": "nirqoba",
+      "repeat": 12,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_rust.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.524,
+      "wall_seconds": 0.105,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_rust_run3.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_nirqoba_run12.txt"
     },
     {
       "test": "01",
       "test_name": "managed_object_allocation",
-      "impl": "java",
-      "repeat": 1,
+      "impl": "nirqoba",
+      "repeat": 13,
       "command": [
-        "D:\\Victim of space issue\\.gradle\\jdks\\eclipse_adoptium-17-amd64-windows.2\\bin\\java.exe",
-        "-Xms2g",
-        "-Xmx2g",
-        "-XX:+UseSerialGC",
-        "-cp",
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\java_classes",
-        "Benchmark01Allocation"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.248,
+      "wall_seconds": 0.112,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_java_run1.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_nirqoba_run13.txt"
     },
     {
       "test": "01",
       "test_name": "managed_object_allocation",
-      "impl": "java",
-      "repeat": 2,
+      "impl": "nirqoba",
+      "repeat": 14,
       "command": [
-        "D:\\Victim of space issue\\.gradle\\jdks\\eclipse_adoptium-17-amd64-windows.2\\bin\\java.exe",
-        "-Xms2g",
-        "-Xmx2g",
-        "-XX:+UseSerialGC",
-        "-cp",
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\java_classes",
-        "Benchmark01Allocation"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.199,
+      "wall_seconds": 0.098,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_java_run2.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_nirqoba_run14.txt"
     },
     {
       "test": "01",
       "test_name": "managed_object_allocation",
-      "impl": "java",
-      "repeat": 3,
+      "impl": "nirqoba",
+      "repeat": 15,
       "command": [
-        "D:\\Victim of space issue\\.gradle\\jdks\\eclipse_adoptium-17-amd64-windows.2\\bin\\java.exe",
-        "-Xms2g",
-        "-Xmx2g",
-        "-XX:+UseSerialGC",
-        "-cp",
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\java_classes",
-        "Benchmark01Allocation"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\01_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.2,
+      "wall_seconds": 0.091,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_java_run3.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\01_nirqoba_run15.txt"
     },
     {
       "test": "02",
@@ -3088,7 +2828,7 @@
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 2.008,
+      "wall_seconds": 1.316,
       "timeout_seconds": 600,
       "validation_problems": [],
       "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_nirqoba_run1.txt"
@@ -3103,7 +2843,7 @@
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 1.987,
+      "wall_seconds": 1.23,
       "timeout_seconds": 600,
       "validation_problems": [],
       "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_nirqoba_run2.txt"
@@ -3118,7 +2858,7 @@
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 2.828,
+      "wall_seconds": 1.187,
       "timeout_seconds": 600,
       "validation_problems": [],
       "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_nirqoba_run3.txt"
@@ -3126,200 +2866,182 @@
     {
       "test": "02",
       "test_name": "mark_and_sweep",
-      "impl": "c",
-      "repeat": 1,
+      "impl": "nirqoba",
+      "repeat": 4,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_c.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 2.346,
+      "wall_seconds": 1.193,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_c_run1.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_nirqoba_run4.txt"
     },
     {
       "test": "02",
       "test_name": "mark_and_sweep",
-      "impl": "c",
-      "repeat": 2,
+      "impl": "nirqoba",
+      "repeat": 5,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_c.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 1.429,
+      "wall_seconds": 1.178,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_c_run2.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_nirqoba_run5.txt"
     },
     {
       "test": "02",
       "test_name": "mark_and_sweep",
-      "impl": "c",
-      "repeat": 3,
+      "impl": "nirqoba",
+      "repeat": 6,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_c.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 1.527,
+      "wall_seconds": 1.178,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_c_run3.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_nirqoba_run6.txt"
     },
     {
       "test": "02",
       "test_name": "mark_and_sweep",
-      "impl": "cpp",
-      "repeat": 1,
+      "impl": "nirqoba",
+      "repeat": 7,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_cpp.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 3.058,
+      "wall_seconds": 1.183,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_cpp_run1.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_nirqoba_run7.txt"
     },
     {
       "test": "02",
       "test_name": "mark_and_sweep",
-      "impl": "cpp",
-      "repeat": 2,
+      "impl": "nirqoba",
+      "repeat": 8,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_cpp.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 1.573,
+      "wall_seconds": 1.176,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_cpp_run2.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_nirqoba_run8.txt"
     },
     {
       "test": "02",
       "test_name": "mark_and_sweep",
-      "impl": "cpp",
-      "repeat": 3,
+      "impl": "nirqoba",
+      "repeat": 9,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_cpp.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 1.472,
+      "wall_seconds": 1.177,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_cpp_run3.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_nirqoba_run9.txt"
     },
     {
       "test": "02",
       "test_name": "mark_and_sweep",
-      "impl": "rust",
-      "repeat": 1,
+      "impl": "nirqoba",
+      "repeat": 10,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_rust.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 2.704,
+      "wall_seconds": 1.193,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_rust_run1.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_nirqoba_run10.txt"
     },
     {
       "test": "02",
       "test_name": "mark_and_sweep",
-      "impl": "rust",
-      "repeat": 2,
+      "impl": "nirqoba",
+      "repeat": 11,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_rust.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 1.538,
+      "wall_seconds": 1.183,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_rust_run2.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_nirqoba_run11.txt"
     },
     {
       "test": "02",
       "test_name": "mark_and_sweep",
-      "impl": "rust",
-      "repeat": 3,
+      "impl": "nirqoba",
+      "repeat": 12,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_rust.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 1.703,
+      "wall_seconds": 1.182,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_rust_run3.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_nirqoba_run12.txt"
     },
     {
       "test": "02",
       "test_name": "mark_and_sweep",
-      "impl": "java",
-      "repeat": 1,
+      "impl": "nirqoba",
+      "repeat": 13,
       "command": [
-        "D:\\Victim of space issue\\.gradle\\jdks\\eclipse_adoptium-17-amd64-windows.2\\bin\\java.exe",
-        "-Xms2g",
-        "-Xmx2g",
-        "-XX:+UseSerialGC",
-        "-cp",
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\java_classes",
-        "Benchmark02MarkSweep"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 3.576,
+      "wall_seconds": 1.208,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_java_run1.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_nirqoba_run13.txt"
     },
     {
       "test": "02",
       "test_name": "mark_and_sweep",
-      "impl": "java",
-      "repeat": 2,
+      "impl": "nirqoba",
+      "repeat": 14,
       "command": [
-        "D:\\Victim of space issue\\.gradle\\jdks\\eclipse_adoptium-17-amd64-windows.2\\bin\\java.exe",
-        "-Xms2g",
-        "-Xmx2g",
-        "-XX:+UseSerialGC",
-        "-cp",
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\java_classes",
-        "Benchmark02MarkSweep"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 3.219,
+      "wall_seconds": 1.191,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_java_run2.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_nirqoba_run14.txt"
     },
     {
       "test": "02",
       "test_name": "mark_and_sweep",
-      "impl": "java",
-      "repeat": 3,
+      "impl": "nirqoba",
+      "repeat": 15,
       "command": [
-        "D:\\Victim of space issue\\.gradle\\jdks\\eclipse_adoptium-17-amd64-windows.2\\bin\\java.exe",
-        "-Xms2g",
-        "-Xmx2g",
-        "-XX:+UseSerialGC",
-        "-cp",
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\java_classes",
-        "Benchmark02MarkSweep"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\02_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 3.768,
+      "wall_seconds": 1.182,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_java_run3.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\02_nirqoba_run15.txt"
     },
     {
       "test": "03",
@@ -3331,7 +3053,7 @@
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.459,
+      "wall_seconds": 0.161,
       "timeout_seconds": 600,
       "validation_problems": [],
       "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_nirqoba_run1.txt"
@@ -3346,7 +3068,7 @@
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.51,
+      "wall_seconds": 0.128,
       "timeout_seconds": 600,
       "validation_problems": [],
       "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_nirqoba_run2.txt"
@@ -3361,7 +3083,7 @@
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.477,
+      "wall_seconds": 0.078,
       "timeout_seconds": 600,
       "validation_problems": [],
       "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_nirqoba_run3.txt"
@@ -3369,215 +3091,193 @@
     {
       "test": "03",
       "test_name": "cyclic_graph_reclamation",
-      "impl": "c",
-      "repeat": 1,
+      "impl": "nirqoba",
+      "repeat": 4,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_c.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.693,
+      "wall_seconds": 0.088,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_c_run1.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_nirqoba_run4.txt"
     },
     {
       "test": "03",
       "test_name": "cyclic_graph_reclamation",
-      "impl": "c",
-      "repeat": 2,
+      "impl": "nirqoba",
+      "repeat": 5,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_c.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.128,
+      "wall_seconds": 0.083,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_c_run2.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_nirqoba_run5.txt"
     },
     {
       "test": "03",
       "test_name": "cyclic_graph_reclamation",
-      "impl": "c",
-      "repeat": 3,
+      "impl": "nirqoba",
+      "repeat": 6,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_c.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.114,
+      "wall_seconds": 0.083,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_c_run3.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_nirqoba_run6.txt"
     },
     {
       "test": "03",
       "test_name": "cyclic_graph_reclamation",
-      "impl": "cpp",
-      "repeat": 1,
+      "impl": "nirqoba",
+      "repeat": 7,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_cpp.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.663,
+      "wall_seconds": 0.079,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_cpp_run1.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_nirqoba_run7.txt"
     },
     {
       "test": "03",
       "test_name": "cyclic_graph_reclamation",
-      "impl": "cpp",
-      "repeat": 2,
+      "impl": "nirqoba",
+      "repeat": 8,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_cpp.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.122,
+      "wall_seconds": 0.085,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_cpp_run2.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_nirqoba_run8.txt"
     },
     {
       "test": "03",
       "test_name": "cyclic_graph_reclamation",
-      "impl": "cpp",
-      "repeat": 3,
+      "impl": "nirqoba",
+      "repeat": 9,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_cpp.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.124,
+      "wall_seconds": 0.084,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_cpp_run3.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_nirqoba_run9.txt"
     },
     {
       "test": "03",
       "test_name": "cyclic_graph_reclamation",
-      "impl": "rust",
-      "repeat": 1,
+      "impl": "nirqoba",
+      "repeat": 10,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_rust.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 1.033,
+      "wall_seconds": 0.079,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_rust_run1.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_nirqoba_run10.txt"
     },
     {
       "test": "03",
       "test_name": "cyclic_graph_reclamation",
-      "impl": "rust",
-      "repeat": 2,
+      "impl": "nirqoba",
+      "repeat": 11,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_rust.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.127,
+      "wall_seconds": 0.08,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_rust_run2.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_nirqoba_run11.txt"
     },
     {
       "test": "03",
       "test_name": "cyclic_graph_reclamation",
-      "impl": "rust",
-      "repeat": 3,
+      "impl": "nirqoba",
+      "repeat": 12,
       "command": [
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_rust.exe"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.113,
+      "wall_seconds": 0.081,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_rust_run3.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_nirqoba_run12.txt"
     },
     {
       "test": "03",
       "test_name": "cyclic_graph_reclamation",
-      "impl": "java",
-      "repeat": 1,
+      "impl": "nirqoba",
+      "repeat": 13,
       "command": [
-        "D:\\Victim of space issue\\.gradle\\jdks\\eclipse_adoptium-17-amd64-windows.2\\bin\\java.exe",
-        "-Xms2g",
-        "-Xmx2g",
-        "-XX:+UseSerialGC",
-        "-cp",
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\java_classes",
-        "Benchmark03Cycles"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.588,
+      "wall_seconds": 0.079,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_java_run1.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_nirqoba_run13.txt"
     },
     {
       "test": "03",
       "test_name": "cyclic_graph_reclamation",
-      "impl": "java",
-      "repeat": 2,
+      "impl": "nirqoba",
+      "repeat": 14,
       "command": [
-        "D:\\Victim of space issue\\.gradle\\jdks\\eclipse_adoptium-17-amd64-windows.2\\bin\\java.exe",
-        "-Xms2g",
-        "-Xmx2g",
-        "-XX:+UseSerialGC",
-        "-cp",
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\java_classes",
-        "Benchmark03Cycles"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.496,
+      "wall_seconds": 0.09,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_java_run2.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_nirqoba_run14.txt"
     },
     {
       "test": "03",
       "test_name": "cyclic_graph_reclamation",
-      "impl": "java",
-      "repeat": 3,
+      "impl": "nirqoba",
+      "repeat": 15,
       "command": [
-        "D:\\Victim of space issue\\.gradle\\jdks\\eclipse_adoptium-17-amd64-windows.2\\bin\\java.exe",
-        "-Xms2g",
-        "-Xmx2g",
-        "-XX:+UseSerialGC",
-        "-cp",
-        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\java_classes",
-        "Benchmark03Cycles"
+        "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\bin\\03_nirqoba.exe"
       ],
       "status": "passed",
       "returncode": 0,
-      "wall_seconds": 0.49,
+      "wall_seconds": 0.081,
       "timeout_seconds": 600,
       "validation_problems": [],
-      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_java_run3.txt"
+      "raw_log": "D:\\Actual Project Files\\Project Nirqoba\\benchmarks\\stress_test_2\\results\\raw\\03_nirqoba_run15.txt"
     }
   ],
   "configuration": {
-    "repeats": 3,
+    "repeats": 15,
     "tests": [
       "01",
       "02",
       "03"
     ],
     "implementations": [
-      "nirqoba",
-      "c",
-      "cpp",
-      "rust",
-      "java"
+      "nirqoba"
     ],
     "run_timeout_seconds": 600
   }
