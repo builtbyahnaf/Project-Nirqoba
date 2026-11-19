@@ -819,10 +819,9 @@ std::array<std::atomic<const nrq_object_layout*>, kMaxLayoutIds> layout_by_id{};
 std::atomic<uint32_t> layout_id_count{0};
 std::unordered_map<const nrq_object_layout*, uint32_t> layout_id_pool;
 
-const nrq_object_layout* layout_from_id(uint32_t id) {
-  if (id == 0 || id > layout_id_count.load(std::memory_order_acquire))
-    return nullptr;
-  return layout_by_id[id - 1].load(std::memory_order_relaxed);
+inline const nrq_object_layout* layout_from_id(uint32_t id) {
+  if (id == 0 || id > kMaxLayoutIds) return nullptr;
+  return layout_by_id[id - 1].load(std::memory_order_acquire);
 }
 
 const nrq_object_layout* object_layout(const ObjectRef& ref) {
@@ -2548,19 +2547,29 @@ void trace_children(const ObjectRef& object, nrq_gc_visit_fn visit,
 
 void enqueue_object_locked(const ObjectRef& object, MarkContext& context) {
   if (!object.valid()) return;
-  // One read of the state word answers both flag questions. It is read before
-  // the page-local birth test because an already-marked object is the common
-  // case, and the mark store only happens once the object is entering the
-  // worklist.
-  const uint32_t state = object_state(object);
-  if (object_marked(object)) return;
-  // Objects born during this cycle are retained by the sweep's birth test.
-  // Marking them would add a survivor count this cycle cannot attribute to the
-  // snapshot. The epoch comes from the context, so the hot path never loads the
-  // shared cycle state.
+  GcPage& page = *object.page;
+  // On a minor pass a page with zero young objects cannot contain a candidate.
+  // On a major pass checking page.young_objects avoids touching object.header
+  // during enqueue when the page holds only promoted objects.
+  if (context.young_only && page.young_objects == 0) return;
+  if (!page.mark_bits)
+    nrq_runtime_fatal("GC object has no page mark bitmap");
+  const size_t index = mark_bit_index(object);
+  const size_t word_idx = index / 64;
+  if (word_idx >= page.mark_words)
+    nrq_runtime_fatal("GC object mark bit is outside its page");
+  uint64_t& word = page.mark_bits[word_idx];
+  const uint64_t bit = uint64_t{1} << (index % 64);
+  if ((word & bit) != 0) return;
   if (object_born_in_cycle(object, context.epoch)) return;
-  if (context.young_only && (state & kYoungBit) == 0) return;
-  set_object_marked(object, true);
+  bool young = false;
+  if (page.young_objects != 0) {
+    young = object_young(object);
+    if (context.young_only && !young) return;
+  }
+  word |= bit;
+  ++page.marked_objects;
+  if (young) ++page.marked_young_objects;
   context.worklist.push(object);
 }
 
