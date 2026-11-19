@@ -22,6 +22,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/IPO/GlobalDCE.h"
+#include "llvm/Transforms/IPO/HotColdSplitting.h"
 #include "llvm/Transforms/Scalar/ADCE.h"
 #include "llvm/Transforms/Scalar/DeadStoreElimination.h"
 
@@ -328,6 +329,14 @@ bool optimize_llvm_module(llvm::Module& module,
   llvm::PassBuilder pass_builder(&target_machine,
                                  pipeline_tuning_for(options.ipo),
                                  pgo_options_for(options));
+  if ((level == OptimizationLevel::O2 || level == OptimizationLevel::O3) &&
+      options.ipo != IpoMode::Minimal) {
+    pass_builder.registerPipelineEarlySimplificationEPCallback(
+        [](llvm::ModulePassManager& mpm, llvm::OptimizationLevel,
+           llvm::ThinOrFullLTOPhase) {
+          mpm.addPass(llvm::HotColdSplittingPass());
+        });
+  }
   llvm::LoopAnalysisManager loop_analyses;
   llvm::FunctionAnalysisManager function_analyses;
   llvm::CGSCCAnalysisManager cgscc_analyses;
