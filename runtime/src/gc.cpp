@@ -292,6 +292,22 @@ struct GcPage {
   // a recycled page shell are dirty and set the cursor to `capacity`, which makes
   // the next allocation pay the fill again rather than expose stale bytes.
   size_t zero_cursor = 0;
+  // Storage published as a contiguous run whose object-start bits are not
+  // written yet. The counters for those objects are already applied when the
+  // run is recorded, so the only thing left is discovery: the bits
+  // `find_object_locked` tests to decide whether an address is an object start.
+  // A page that nothing reaches - a graph that has been dropped, which is what
+  // collecting a dead object graph looks like - therefore never reads its
+  // payload at all, and a page that marking does reach pays one walk the first
+  // time a reference resolves into it.
+  struct PendingStartRun {
+    uint32_t begin = 0;
+    uint32_t end = 0;
+  };
+  static constexpr size_t kMaxPendingStartRuns = 8;
+  std::array<PendingStartRun, kMaxPendingStartRuns> pending_starts{};
+  uint8_t pending_start_count = 0;
+  bool starts_pending = false;
   // Reclaimed runs this page could not record because its run list was full.
   // Counted per page so a workload can show whether the bound is costing space
   // rather than leaving that to inference.
@@ -302,6 +318,11 @@ struct GcPage {
 inline size_t page_header_bytes(const GcPage& page) {
   return page_header_bytes(page.kind);
 }
+
+// Writes the start bits of a page's recorded runs. Defined next to the
+// statistics it does not touch, because a page that nothing reaches must never
+// run it: collecting a dropped graph then costs no object traffic at all.
+void materialize_page_starts_locked(GcPage& page);
 
 // Small pages are discoverable from their own start bitmap, so their objects
 // never touch the global index. Only pages without start metadata (large-object
@@ -1321,6 +1342,11 @@ struct MutatorState {
   uint8_t* tlab_slab_end = nullptr;
   uint8_t* ext_slab_end = nullptr;
   size_t tlab_accounted_pending_bytes = 0;
+  // Young flag of the first object in the current publication window. A window
+  // is kept to one page and closed at every page switch, so this describes every
+  // object the window's counters include; a change in the global generational
+  // mode during the window falls back to the exact per-object walk.
+  uint8_t window_young = 0;
   std::vector<NrqGcPendingRange> deferred_ranges;
   uint64_t tlab_generation = 0;
   const nrq_object_layout* h0_layout = nullptr;
@@ -1428,6 +1454,8 @@ ObjectRef find_object_locked(void* object);
 // same decisive miss find_object_locked reports.
 ObjectRef find_child_in_page_locked(void* object, const GcPage* page) {
   if (!page || !page->object_starts) return find_object_locked(object);
+  if (page->starts_pending)
+    materialize_page_starts_locked(*const_cast<GcPage*>(page));
   const auto* address = static_cast<const unsigned char*>(object);
   if (address < page->storage) return find_object_locked(object);
   const size_t payload_offset = static_cast<size_t>(address - page->storage);
@@ -1443,6 +1471,9 @@ ObjectRef find_object_locked(void* object) {
   if (!object) return ObjectRef{};
   GcPage* page = page_directory.find(object);
   if (page && page->object_starts) {
+    // Publication recorded the run but not its start bits. The first reference
+    // into the page writes them here, so a page nothing reaches is never walked.
+    if (page->starts_pending) materialize_page_starts_locked(*page);
     const auto* address = static_cast<const unsigned char*>(object);
     if (address >= page->storage) {
       const size_t payload_offset = static_cast<size_t>(address - page->storage);
@@ -1495,7 +1526,9 @@ template <typename Visit>
 void for_each_live_object_locked(Visit&& visit) {
   for (auto& entry : gc_pages) {
     GcPage* page = entry.get();
-    if (!page || page_uses_index(page) || page->object_start_words == 0) continue;
+    if (!page) continue;
+    if (page->starts_pending) materialize_page_starts_locked(*page);
+    if (page_uses_index(page) || page->object_start_words == 0) continue;
     for (size_t word = 0; word < page->object_start_words; ++word) {
       uint64_t bits = page->object_starts[word];
       while (bits != 0) {
@@ -2363,6 +2396,125 @@ void publish_one_range_locked(const NrqGcPendingRange& range,
   live_heap_bytes = saturated_add(live_heap_bytes, range_bytes);
 }
 
+// The single page every open range belongs to, or null when they disagree. A
+// publication window is closed at each page switch, so a disagreement means the
+// window cannot be applied from its counters and the exact walk has to run.
+GcPage* window_page_of(MutatorState& mutator) {
+  if (!mutator.fast) return nullptr;
+  NrqGcFastTls& fast = *mutator.fast;
+  GcPage* page = nullptr;
+  bool conflict = false;
+  auto consider = [&](const NrqGcPendingRange& range) {
+    if (!range.page) return;
+    GcPage* const candidate = static_cast<GcPage*>(range.page);
+    if (!page)
+      page = candidate;
+    else if (page != candidate)
+      conflict = true;
+  };
+  for (const NrqGcPendingRange& range : mutator.deferred_ranges) consider(range);
+  for (uint32_t index = 0; index < fast.pending_range_count; ++index)
+    consider(fast.pending_ranges[index]);
+  return conflict ? nullptr : page;
+}
+
+// Records the window's ranges as runs on the page. A contiguous run that is
+// published again in a later window merges into the same entry, so a slab costs
+// one entry however many refills it took.
+void record_window_runs_locked(GcPage& page, MutatorState& mutator) {
+  NrqGcFastTls& fast = *mutator.fast;
+  auto append = [&](const NrqGcPendingRange& range) {
+    if (!range.begin || !range.end || range.end <= range.begin) return;
+    const size_t begin = static_cast<size_t>(range.begin - page.storage);
+    const size_t end = static_cast<size_t>(range.end - page.storage);
+    if (begin >= end || end > page.capacity) return;
+    if (page.pending_start_count != 0) {
+      GcPage::PendingStartRun& last =
+          page.pending_starts[page.pending_start_count - 1];
+      if (last.end == begin) {
+        last.end = static_cast<uint32_t>(end);
+        return;
+      }
+    }
+    if (page.pending_start_count >= GcPage::kMaxPendingStartRuns) return;
+    page.pending_starts[page.pending_start_count++] =
+        GcPage::PendingStartRun{static_cast<uint32_t>(begin),
+                                static_cast<uint32_t>(end)};
+  };
+  for (const NrqGcPendingRange& range : mutator.deferred_ranges) append(range);
+  for (uint32_t index = 0; index < fast.pending_range_count; ++index)
+    append(fast.pending_ranges[index]);
+  page.starts_pending = page.pending_start_count != 0;
+}
+
+// Applies a whole window to its page from the counters the allocator already
+// kept. Every object the ranges describe is counted exactly once, and the
+// statistics stay exact without a query having to walk anything.
+void apply_window_locked(GcPage& page, size_t objects, size_t bytes,
+                         bool young) {
+  if (page.live_objects > SIZE_MAX - objects)
+    nrq_runtime_fatal("GC page live-object count overflow");
+  page.live_objects += objects;
+  if (page.live_payload_bytes > SIZE_MAX - bytes)
+    nrq_runtime_fatal("GC page live-byte count overflow");
+  page.live_payload_bytes += bytes;
+  if (young) {
+    if (page.young_objects > SIZE_MAX - objects)
+      nrq_runtime_fatal("GC page young-object count overflow");
+    page.young_objects += objects;
+  } else if (objects != 0) {
+    old_object_count.fetch_add(objects, std::memory_order_relaxed);
+  }
+  statistics.allocated_bytes = saturated_add(statistics.allocated_bytes, bytes);
+  statistics.live_objects = saturated_add(statistics.live_objects, objects);
+  live_heap_bytes = saturated_add(live_heap_bytes, bytes);
+}
+
+// Writes the start bits for every run a page recorded. The spans come from the
+// headers the objects already carry, so a page whose runs interleave payload
+// sizes materialises exactly the way the eager publication walk did. The page's
+// counters are already final; this only restores discovery. Idempotent.
+void materialize_page_starts_locked(GcPage& page) {
+  if (!page.starts_pending) return;
+  const size_t header_bytes = page_header_bytes(page.kind);
+  const bool is_h0 = page.kind == PageKind::Headerless;
+  const bool is_compact = page.kind == PageKind::Compact;
+  uint32_t cached_layout_id = 0;
+  size_t cached_payload_bytes = 0;
+  for (uint8_t index = 0; index < page.pending_start_count; ++index) {
+    const GcPage::PendingStartRun run = page.pending_starts[index];
+    if (run.end <= run.begin || run.end > page.capacity) continue;
+    for (unsigned char* cursor = page.storage + run.begin;
+         cursor < page.storage + run.end;) {
+      const ObjectRef object{cursor, &page};
+      size_t payload_bytes = 0;
+      if (is_compact) {
+        const auto* header = reinterpret_cast<const uint32_t*>(cursor);
+        const uint32_t layout_id = header[1];
+        if (layout_id != 0 && layout_id == cached_layout_id) {
+          payload_bytes = cached_payload_bytes;
+        } else {
+          payload_bytes = object_payload_bytes(object);
+          if (layout_id != 0) {
+            cached_layout_id = layout_id;
+            cached_payload_bytes = payload_bytes;
+          }
+        }
+      } else {
+        payload_bytes = object_payload_bytes(object);
+      }
+      const size_t span = is_h0 ? page.slot_bytes
+                                : object_span_bytes(header_bytes, payload_bytes);
+      if (span == 0 || cursor + span > page.storage + run.end)
+        nrq_runtime_fatal("GC pending range has an invalid span");
+      mark_object_start(page, static_cast<size_t>(cursor - page.storage));
+      cursor += span;
+    }
+  }
+  page.pending_start_count = 0;
+  page.starts_pending = false;
+}
+
 void publish_tlab_locked(MutatorState& mutator) {
   if (!mutator.fast) return;
   const bool track_timing = tlab_diag.enabled.load(std::memory_order_relaxed);
@@ -2375,15 +2527,38 @@ void publish_tlab_locked(MutatorState& mutator) {
       collection_phase.load(std::memory_order_acquire) != CollectionPhase::Idle;
   const uint64_t next_epoch =
       collection_active ? next_cycle_epoch.load(std::memory_order_relaxed) : 0;
-  for (const NrqGcPendingRange& range : mutator.deferred_ranges) {
-    publish_one_range_locked(range, collection_active, next_epoch);
+  // A window is closed at every page switch (see install_tlab), so its ranges
+  // all describe the page its counters were spent on, and the mutator's own
+  // counters give that page's object count and payload bytes without reading an
+  // object. What is left is discovery, and that is recorded as runs and written
+  // only when something actually resolves into the page.
+  GcPage* window_page = window_page_of(mutator);
+  const size_t window_objects = fast.pending_count;
+  const size_t window_bytes = fast.pending_bytes;
+  const bool young_now =
+      generational_collection_enabled.load(std::memory_order_relaxed);
+  const bool defer_window =
+      !collection_active && window_page != nullptr && window_objects != 0 &&
+      window_page->object_starts != nullptr &&
+      !page_uses_index(window_page) &&
+      (mutator.window_young != 0) == young_now &&
+      static_cast<size_t>(window_page->pending_start_count) +
+              mutator.deferred_ranges.size() + fast.pending_range_count <=
+          GcPage::kMaxPendingStartRuns;
+  if (defer_window) {
+    record_window_runs_locked(*window_page, mutator);
+    apply_window_locked(*window_page, window_objects, window_bytes, young_now);
+  } else {
+    for (const NrqGcPendingRange& range : mutator.deferred_ranges) {
+      publish_one_range_locked(range, collection_active, next_epoch);
+    }
+    for (uint32_t range_index = 0; range_index < fast.pending_range_count;
+         ++range_index) {
+      publish_one_range_locked(fast.pending_ranges[range_index],
+                               collection_active, next_epoch);
+    }
   }
   mutator.deferred_ranges.clear();
-  const uint32_t range_count = fast.pending_range_count;
-  for (uint32_t range_index = 0; range_index < range_count; ++range_index) {
-    publish_one_range_locked(fast.pending_ranges[range_index],
-                             collection_active, next_epoch);
-  }
   if (tlab_diag.enabled.load(std::memory_order_relaxed)) {
     tlab_diag.published_tlab_objects.fetch_add(
         fast.pending_count, std::memory_order_relaxed);
@@ -3216,6 +3391,11 @@ bool sweep_chunk_locked(size_t budget_bytes) {
         page->young_objects = 0;
         page->live_payload_bytes = 0;
         page->born_this_cycle = 0;
+        // The counters were applied at publication, so the payload bytes above
+        // are exact even though no object was read; the recorded runs describe
+        // storage that is now free and must not outlive it.
+        page->pending_start_count = 0;
+        page->starts_pending = false;
         clear_page_marks(*page);
         clear_page_remembered(*page);
         if (page->object_starts && page->object_start_words != 0) {
@@ -3792,8 +3972,25 @@ void release_tlab_tail_locked(MutatorState& mutator) {
   mutator.h0_slot = 0;
 }
 
+// Closes the open publication window when the allocator moves to another page.
+// A window that spanned two pages could not be applied from its counters without
+// guessing which page each object went to, so the switch is where the window
+// ends. Callers may or may not hold the collector lock.
+void flush_window_for_page_switch(MutatorState& mutator, GcPage* page) {
+  if (!mutator.fast || !page) return;
+  GcPage* const open = window_page_of(mutator);
+  if (!open || open == page) return;
+  if (heap_lock_held_by_this_thread) {
+    publish_tlab_locked(mutator);
+    return;
+  }
+  HeapLockGuard lock(gc_mutex);
+  publish_tlab_locked(mutator);
+}
+
 void install_tlab(MutatorState& mutator, GcPage* page, size_t offset, size_t span) {
   sync_inline_unflushed(mutator);
+  flush_window_for_page_switch(mutator, page);
   NrqGcFastTls& fast = *mutator.fast;
   const bool is_ext = page->kind == PageKind::Extended;
   uint8_t*& cursor_ref = is_ext ? fast.ext_cursor : fast.tlab_cursor;
@@ -4374,6 +4571,8 @@ void reset_page_gc_metadata_locked(GcPage& page) {
   // would make every future sweep skip the page as unwalkable.
   page.use_object_index = false;
   page.retired = false;
+  page.pending_start_count = 0;
+  page.starts_pending = false;
   if (!page.grown_bitmaps && page.mark_words != 0) {
     std::memset(page.inline_bitmaps.data(), 0,
                 4 * page.mark_words * sizeof(uint64_t));
@@ -5616,6 +5815,12 @@ NrqGcPendingRange* note_pending_range(MutatorState& mutator, GcPage* page,
   range.page = page;
   range.begin = header_storage;
   range.end = header_storage + span;
+  // The first object of a window names the window's generation. Publication
+  // compares this against the global flag and falls back to the exact walk when
+  // the mode changed underneath it, so the flag can never disagree with the
+  // objects the counters describe.
+  if (fast.pending_count == 0)
+    mutator.window_young = object_young(ObjectRef{header_storage, page}) ? 1 : 0;
   return &range;
 }
 
@@ -5630,6 +5835,7 @@ NrqGcPendingRange* note_pending_range(MutatorState& mutator, GcPage* page,
 void install_h0_tlab(MutatorState& mutator, GcPage* page, size_t offset,
                      size_t span, const nrq_object_layout* layout,
                      size_t slot) {
+  flush_window_for_page_switch(mutator, page);
   NrqGcFastTls& fast = *mutator.fast;
   clear_h0_fast_path(fast);
   fast.h0_page = page;
