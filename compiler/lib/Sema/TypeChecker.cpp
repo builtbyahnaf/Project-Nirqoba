@@ -4411,16 +4411,25 @@ Type TypeChecker::check_call(CallExpr& call) {
           element.kind() == Expr::Kind::Name
               ? symbols_.lookup(static_cast<const NameExpr&>(element).name())
               : nullptr;
-      if (source && source->owns_allocation && !source->moved) {
-        if (symbols_.has_live_borrow(source->allocation_id))
-          diagnostics_.error(diag::kTypeMismatch, element.location(),
-                             "cannot move an owner while an array view is live");
-        else {
-          element.set_transfers_ownership();
-          symbols_.mark_allocation_moved(source->allocation_id);
-        }
+      if (source && source->type != array_type.element_type()) source = nullptr;
+      if (source && source->borrowed) {
+        diagnostics_.error(diag::kTypeMismatch, element.location(),
+                           "borrowed text cannot be moved into an owned array element");
+      } else if (source && source->moved) {
+        diagnostics_.error(diag::kTypeMismatch, element.location(),
+                           "value was already moved");
+      } else if (!source && element.ownership() != ValueOwnership::Owned) {
+        // A live name of owned-text type already owns its buffer; only a value
+        // with no owner in scope has to prove it is an owned one.
+        diagnostics_.error(diag::kTypeMismatch, element.location(),
+                           "an owned array element requires an owned value");
       } else {
+        // Ownership travels with the expression, so lowering emits a Move rather
+        // than a copy and the verifier can reject a later use of the moved name.
+        element.set_ownership(ValueOwnership::Owned);
         element.set_transfers_ownership();
+        if (source && source->allocation_id != 0)
+          symbols_.mark_allocation_moved(source->allocation_id);
       }
     }
     return Type::int_type();
