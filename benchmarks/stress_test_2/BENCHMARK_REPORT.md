@@ -40,9 +40,9 @@
 | C++ | 27.820 ± 3.378 [26.072–40.122] | 5.480 ± 0.416 [5.224–6.799] | 17.343 ± 2.487 [15.175–25.429] |
 | Rust | 28.425 ± 1.090 [27.572–31.576] | 5.491 ± 0.612 [5.205–7.631] | 17.126 ± 1.217 [15.968–21.261] |
 | Java | 2.396 ± 0.652 [2.237–4.409] | 1.738 ± 0.197 [1.668–2.307] | 5.655 ± 0.259 [5.319–6.053] |
-| **Nirqoba 0.625** | **4.000 ± 0.535 [3.000–5.000]** | **2.000 ± 1.000 [1.000–4.000]** | **0.0995 ms (99.5 µs)†** |
+| **Nirqoba 0.625** | **4.000 ± 0.535 [3.000–5.000]** | **2.000 ± 1.000 [1.000–4.000]** | **0.0995 ms (99.5 µs)*** |
 
-†Collection measured at **0.0995 ms** median (99.5 µs, mean 108.7 µs, min 86.4 µs, max 209.3 µs, stdev 30.4 µs, 15 samples) using cycle-calibrated `run_subms.py` (separate harness, `--repeats 3 --skip-compile`); main harness reported 0 ms (values {0,1,2}). `COLLECT_CYCLES` median 247,999. Calibration: 498,279,941 cycles / 200 ms = 2,491,399.71 cycles/ms. Raw outputs validated (checksum 499,999,500,000, live_after 0).
+*Collection measured at **0.0995 ms** median (99.5 µs, mean 108.7 µs, min 86.4 µs, max 209.3 µs, stdev 30.4 µs, 15 samples) using cycle-calibrated `run_subms.py` (separate harness, `--repeats 3 --skip-compile`); main harness reported 0 ms (values {0,1,2}). `COLLECT_CYCLES` median 247,999. Calibration: 498,279,941 cycles / 200 ms = 2,491,399.71 cycles/ms. Raw outputs validated (checksum 499,999,500,000, live_after 0).
 
 #### Test 02 — Mark and sweep (2,097,151 live nodes)
 
@@ -64,9 +64,9 @@
 | C++ | 5.377 ± 0.898 [4.793–7.391] | 5.271 ± 0.998 [4.464–7.205] |
 | Rust | 5.291 ± 0.895 [4.494–7.006] | 6.002 ± 1.243 [4.444–7.365] |
 | Java | 5.801 ± 0.350 [5.261–6.581] | 49.459 ± 2.413 [40.487–50.685] |
-| **Nirqoba 0.625** | **4.000 ± 0.900 [3.000–6.000]** | **0.0783 ms (78.3 µs)†** |
+| **Nirqoba 0.625** | **4.000 ± 0.900 [3.000–6.000]** | **0.0783 ms (78.3 µs)*** |
 
-†Collection measured at **0.0783 ms** median (78.3 µs, mean 79.6 µs, min 54.7 µs, max 118.7 µs, stdev 17.7 µs, 15 samples) using cycle-calibrated `run_subms.py` (separate harness, `--repeats 3 --skip-compile`); main harness reported 0 ms (values {0,1}). `COLLECT_CYCLES` median 195,039. Calibration: 498,279,941 cycles / 200 ms = 2,491,399.71 cycles/ms. Raw outputs validated (checksum 499,999,500,000, live_after 0, cycles_cleared 500,000).
+*Collection measured at **0.0783 ms** median (78.3 µs, mean 79.6 µs, min 54.7 µs, max 118.7 µs, stdev 17.7 µs, 15 samples) using cycle-calibrated `run_subms.py` (separate harness, `--repeats 3 --skip-compile`); main harness reported 0 ms (values {0,1}). `COLLECT_CYCLES` median 195,039. Calibration: 498,279,941 cycles / 200 ms = 2,491,399.71 cycles/ms. Raw outputs validated (checksum 499,999,500,000, live_after 0, cycles_cleared 500,000).
 
 ### 0.3 Relative comparison — 0.625-beta vs 0.621-beta full suite (Nirqoba medians)
 
@@ -74,14 +74,14 @@
 |---|---:|---:|---:|
 | 01 Allocation | 5 ms | **4 ms** | **1.25× faster** |
 | 01 Traversal | 2 ms | **2 ms** | ~same |
-| 01 Collection | 6 ms | **0.0995 ms**† | **60.3× faster** |
+| 01 Collection | 6 ms | **0.0995 ms*** | **60.3× faster** |
 | 02 Build | 27 ms | **20 ms** | **1.35× faster** |
 | 02 Traversal | 5 ms | **4 ms** | **1.25× faster** |
 | 02 Collection | 34 ms | **27 ms** | **1.26× faster** |
 | 03 Build | 6 ms | **4 ms** | **1.5× faster** |
-| 03 Collection | 6 ms | **0.0783 ms**† | **76.6× faster** |
+| 03 Collection | 6 ms | **0.0783 ms*** | **76.6× faster** |
 
-†01/03 collection from cycle-calibrated `run_subms.py` (separate harness, 15 samples each).
+*01/03 collection from cycle-calibrated `run_subms.py` (separate harness, 15 samples each).
 
 ### 0.4 Relative comparison — 0.625-beta vs C, C++, Rust, Java (this run)
 
@@ -91,14 +91,14 @@ Nirqoba median ÷ baseline median (<1.0 = Nirqoba faster). Baselines from this s
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | 01 Allocation | 4.0 | 28.096 | 27.820 | 28.425 | 2.396 | **0.14×** | **0.14×** | **0.14×** | **1.67×** |
 | 01 Traversal | 2.0 | 5.801 | 5.480 | 5.491 | 1.738 | **0.34×** | **0.36×** | **0.36×** | **1.15×** |
-| 01 Collection | 0.0995† | 17.526 | 17.343 | 17.126 | 5.655 | **0.006×** | **0.006×** | **0.006×** | **0.018×** |
+| 01 Collection | 0.0995* | 17.526 | 17.343 | 17.126 | 5.655 | **0.006×** | **0.006×** | **0.006×** | **0.018×** |
 | 02 Build | 20.0 | 24.570 | 24.566 | 24.071 | 14.047 | **0.81×** | **0.81×** | **0.83×** | **1.42×** |
 | 02 Traversal | 4.0 | 12.106 | 12.803 | 6.992 | 5.129 | **0.33×** | **0.31×** | **0.57×** | **0.78×** |
 | 02 Collection | 27.0 | 33.010 | 32.097 | 35.840 | 57.847 | **0.82×** | **0.84×** | **0.75×** | **0.47×** |
 | 03 Build | 4.0 | 5.074 | 5.377 | 5.291 | 5.801 | **0.79×** | **0.74×** | **0.76×** | **0.69×** |
-| 03 Collection | 0.0783† | 5.836 | 5.271 | 6.002 | 49.459 | **0.013×** | **0.015×** | **0.013×** | **0.002×** |
+| 03 Collection | 0.0783* | 5.836 | 5.271 | 6.002 | 49.459 | **0.013×** | **0.015×** | **0.013×** | **0.002×** |
 
-†01/03 collection from cycle-calibrated `run_subms.py` (separate harness).
+*01/03 collection from cycle-calibrated `run_subms.py` (separate harness).
 
 **Notes:** 0.4 uses baselines from this same run (fresh compile/execute), which differ from reused-binary baselines in older sections.
 
@@ -186,10 +186,10 @@ The 0.617-beta compiler delivers **significant improvements in traversal and col
 | C++ | 28.082 ± 1.621 [26.444-31.851]* | 6.020 ± 0.912 [5.406-8.697]* | 18.223 ± 0.735 [16.531-18.977]* |
 | Rust | 36.340 ± 0.720 [29.208-31.678]* | 6.096 ± 0.457 [5.342-6.577]* | 20.835 ± 0.801 [16.672-19.131]* |
 | Java | 2.960 ± 0.569 [2.278-4.148]* | 2.075 ± 0.360 [1.737-2.963]* | 6.976 ± 0.596 [6.049-8.256]* |
-| **Nirqoba 0.617** | **58.0 ± 8.0 [52-68]** | **3.0 ± 0.5 [3-4]** | **0.385 ms (385 µs)†** |
+| **Nirqoba 0.617** | **58.0 ± 8.0 [52-68]** | **3.0 ± 0.5 [3-4]** | **0.385 ms (385 µs)*** |
 
 *Values from the previous 0.111 run for C/C++/Rust/Java (same binaries reused). Nirqoba rebuilt with 0.617.  
-†Collection measured at **0.385 ms** median (385.2 µs, mean 394.9 µs, min 343.6 µs, max 491.3 µs, 25 samples) using cycle-calibrated timing in `run_subms.py` (a separate harness from `run_benchmark.py`); main harness reported 0–2 ms (median 0 ms). Raw outputs validated as correct (checksums and live counts matched).
+*Collection measured at **0.385 ms** median (385.2 µs, mean 394.9 µs, min 343.6 µs, max 491.3 µs, 25 samples) using cycle-calibrated timing in `run_subms.py` (a separate harness from `run_benchmark.py`); main harness reported 0–2 ms (median 0 ms). Raw outputs validated as correct (checksums and live counts matched).
 
 #### Test 02 — Mark and sweep (2,097,151 live nodes)
 
@@ -211,10 +211,10 @@ The 0.617-beta compiler delivers **significant improvements in traversal and col
 | C++ | 6.414 ± 0.939 [5.057-8.051]* | 6.562 ± 1.086 [4.845-9.026]* |
 | Rust | 6.145 ± 0.781 [5.015-7.348]* | 5.719 ± 1.220 [4.751-8.216]* |
 | Java | 6.513 ± 1.698 [6.947-13.030]* | 45.813 ± 7.747 [55.497-84.553]* |
-| **Nirqoba 0.617** | **63.0 ± 12.0 [52-76]** | **0.407 ms (407 µs)†** |
+| **Nirqoba 0.617** | **63.0 ± 12.0 [52-76]** | **0.407 ms (407 µs)*** |
 
 *Values from the previous 0.111 run for C/C++/Rust/Java (same binaries reused). Nirqoba rebuilt with 0.617.  
-†Collection measured at **0.407 ms** median (407.1 µs, mean 394.3 µs, min 347.1 µs, max 460.7 µs, 25 samples) using cycle-calibrated timing in `run_subms.py` (a separate harness from `run_benchmark.py`); main harness reported 0–2 ms (median 1 ms). Raw outputs validated as correct (checksums, live counts, and cycles-cleared matched).
+*Collection measured at **0.407 ms** median (407.1 µs, mean 394.3 µs, min 347.1 µs, max 460.7 µs, 25 samples) using cycle-calibrated timing in `run_subms.py` (a separate harness from `run_benchmark.py`); main harness reported 0–2 ms (median 1 ms). Raw outputs validated as correct (checksums, live counts, and cycles-cleared matched).
 
 ### 0.3 Relative comparison — 0.617-beta vs 0.587-beta vs 0.415-beta vs 0.301-beta vs 0.260-beta vs 0.228-beta vs 0.111-beta vs 0.105-beta
 
@@ -229,7 +229,7 @@ The 0.617-beta compiler delivers **significant improvements in traversal and col
 | 03 Build | 803 ms | 441 ms | 227 ms | 102 ms | 81 ms | 64 ms | 52 ms | **63 ms** | 1.2× slower | **12.7×** |
 | 03 Collection | 201 ms | 75 ms | 42 ms | 25 ms | 28 ms | 20 ms | 15 ms | **0.407 ms** | **36.9×** | **494×** |
 
-†Test 01/03 collection times are sub-millisecond values measured with cycle-calibrated `run_subms.py` (separate harness, 25 samples each), not the 1 ms-granularity `run_benchmark.py` timer.
+*Test 01/03 collection times are sub-millisecond values measured with cycle-calibrated `run_subms.py` (separate harness, 25 samples each), not the 1 ms-granularity `run_benchmark.py` timer.
 
 ### 0.4 Relative comparison — 0.617-beta vs C, C++, Rust, Java
 
@@ -246,7 +246,7 @@ The table below divides Nirqoba 0.617-beta's median by each language's median. A
 | 03 Build | 63.0 | 6.3 | 6.4 | 6.1 | 6.5 | **10.0×** | **9.8×** | **10.2×** | **9.7×** |
 | 03 Collection | 0.407 | 5.7 | 6.6 | 5.7 | 45.8 | **0.07×** | **0.06×** | **0.07×** | **0.01×** |
 
-†Test 01/03 collection times are sub-millisecond values measured with cycle-calibrated `run_subms.py` (separate harness, 25 samples each), not the 1 ms-granularity `run_benchmark.py` timer.
+*Test 01/03 collection times are sub-millisecond values measured with cycle-calibrated `run_subms.py` (separate harness, 25 samples each), not the 1 ms-granularity `run_benchmark.py` timer.
 
 **Key observations:**
 - **Traversal faster than C/C++**: Test 01 (0.5× C), Test 02 (0.4× C) — now significantly faster than native
