@@ -249,6 +249,14 @@ static void validate_struct_field_contracts(const std::vector<Parameter>& fields
                             "' needs an ownership qualifier: declare it 'owned', "
                             "'borrow' or 'borrow mut'");
     }
+    if (field.type.is_dynamic_array()) {
+      // The array destructor is registered for a binding or a parameter, not for
+      // an aggregate's field, so a buffer stored here would never be released.
+      diagnostics.error(diag::kTypeMismatch, field.location,
+                        "field '" + field.name +
+                            "' cannot hold a dynamic_array: aggregate field "
+                            "destruction is not implemented yet");
+    }
     if (!field.resource_domain.empty() &&
         (!field.type.is_pointer() || field.borrowed ||
          !field.type.is_owned_pointer())) {
@@ -338,6 +346,7 @@ static std::string cleanup_for_owned_expression(const Expr& expression,
 static bool is_owned_element_type(const Type& type) {
   if (type.is_owned_string()) return true;
   if (type.is_soa()) return true;
+  if (type.is_dynamic_array()) return true;
   if (type.is_owned_array()) return is_owned_element_type(type.element_type());
   return false;
 }
@@ -927,7 +936,8 @@ void TypeChecker::check_function(FunctionDecl& function) {
                       ? BindingKind::Let : BindingKind::Var,
                   parameter.location};
     if (parameter.type.is_pointer() || parameter.type.is_owned_array() ||
-        contains_owned_array(parameter.type) || parameter.type.is_array_view()) {
+        contains_owned_array(parameter.type) || parameter.type.is_array_view() ||
+        parameter.type.is_dynamic_array()) {
       symbol.allocation_id = next_allocation_id_++;
       symbol.borrowed = parameter.borrowed || parameter.type.is_array_view();
       symbol.mutable_borrow = parameter.mutable_borrow;
@@ -1163,10 +1173,11 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
   }
   // An owned string is not pointer-shaped in the type system, but it owns a
   // buffer exactly like one, so it has to reach the cleanup bookkeeping below.
-  // A dynamic array reaches it the same way; the destructor is not installed
-  // yet, and an empty array owns no buffer, so the binding cannot leak.
+  // A dynamic array reaches it the same way: the binding releases the buffer it
+  // owns once, at this scope's exit.
   if (binding_type.is_pointer() || binding_type.is_owned_array() ||
-      contains_owned_array(binding_type) || binding_type.is_owned_string()) {
+      contains_owned_array(binding_type) || binding_type.is_owned_string() ||
+      binding_type.is_dynamic_array()) {
     symbol.owns_allocation = expression_creates_owned_pointer(declaration.initializer());
     if (declaration.initializer().kind() == Expr::Kind::Unary &&
         static_cast<const UnaryExpr&>(declaration.initializer()).op() ==
@@ -1189,6 +1200,13 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
       }
     }
     if (contains_owned_array(binding_type) &&
+        declaration.initializer().ownership() == ValueOwnership::Owned) {
+      symbol.owns_allocation = true;
+      symbol.cleanup_callee = cleanup_for_type(binding_type);
+    }
+    // A dynamic array value is created empty or moved in; either way the binding
+    // is the container's owner, so it installs the array destructor.
+    if (binding_type.is_dynamic_array() &&
         declaration.initializer().ownership() == ValueOwnership::Owned) {
       symbol.owns_allocation = true;
       symbol.cleanup_callee = cleanup_for_type(binding_type);
@@ -1275,7 +1293,8 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
       const auto& source_name = static_cast<const NameExpr&>(declaration.initializer());
       const Symbol* source = symbols_.lookup(source_name.name());
       if (source && (source->type.is_pointer() || source->type.is_owned_array() ||
-                     contains_owned_array(source->type))) {
+                     contains_owned_array(source->type) ||
+                     source->type.is_dynamic_array())) {
         symbol.allocation_id = source->allocation_id;
         if (source->borrowed) {
           if (!source->borrow_targets.empty()) {
@@ -2420,7 +2439,7 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
   consume_field_move(const_cast<Expr&>(assignment.value()), target_type);
   if (assignment.is_simple_name() && symbol && symbol->is_mutable() &&
       (target_type.is_pointer() || target_type.is_owned_array() ||
-       contains_owned_array(target_type))) {
+       contains_owned_array(target_type) || target_type.is_dynamic_array())) {
     uint64_t allocation_id = 0;
     const Symbol* source = nullptr;
     const Symbol* borrow_origin = nullptr;
@@ -2441,7 +2460,8 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       source = symbols_.lookup(source_name.name());
       if (source && !source->moved &&
           (source->type.is_pointer() || source->type.is_owned_array() ||
-           contains_owned_array(source->type)))
+           contains_owned_array(source->type) ||
+           source->type.is_dynamic_array()))
         allocation_id = source->allocation_id;
     }
     if (symbol->owns_allocation && !symbol->moved &&
@@ -2477,6 +2497,11 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                          (signature->return_type.is_pointer() ||
                           signature->return_type.is_owned_array() ||
                           contains_owned_array(signature->return_type)));
+      // A fresh dynamic array is an owned value in its own right, whichever
+      // producer built it, so rebinding the variable installs its destructor.
+      if (target_type.is_dynamic_array() &&
+          assignment.value().ownership() == ValueOwnership::Owned)
+        owns_allocation = true;
       shared_allocation = call.callee() == "memory.shared_allocate" ||
                           call.callee() == "memory.shared_retain" ||
                           (signature && signature->returns_shared);
@@ -2491,10 +2516,20 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                              ? cleanup_for_type(signature->return_type)
                              : std::string{};
       if (owns_allocation && cleanup_callee.empty())
-        cleanup_callee = contains_owned_array(target_type)
-                             ? "aggregate.owned_drop"
-                             : target_type.is_owned_array() ? "array.owned_release"
-                                                            : "memory.deallocate";
+        cleanup_callee = target_type.is_dynamic_array()
+                             ? cleanup_for_type(target_type)
+                             : contains_owned_array(target_type)
+                                   ? "aggregate.owned_drop"
+                                   : target_type.is_owned_array()
+                                         ? "array.owned_release"
+                                         : "memory.deallocate";
+    } else if (target_type.is_dynamic_array() &&
+               assignment.value().ownership() == ValueOwnership::Owned &&
+               // A live owner on the right is a move, not a second owner: let the
+               // transfer branch below mark it moved so it cannot free twice.
+               !(source && source->owns_allocation && !source->moved)) {
+      owns_allocation = true;
+      cleanup_callee = cleanup_for_type(target_type);
     } else if (contains_owned_array(target_type) &&
                assignment.value().ownership() == ValueOwnership::Owned) {
       owns_allocation = true;
@@ -3701,6 +3736,15 @@ Type TypeChecker::check_array_literal(ArrayLiteralExpr& expr) {
                        "borrowed array views cannot be embedded in arrays");
     return Type::error();
   }
+  if (elem_type.is_dynamic_array()) {
+    // An array of arrays copies each header into the storage and never releases
+    // the element buffers, so the element kind stays closed until element
+    // destruction exists.
+    diagnostics_.error(diag::kTypeMismatch, expr.location(),
+                       "a dynamic_array cannot be embedded in an array: element "
+                       "destruction is not implemented yet");
+    return Type::error();
+  }
   if (contains_owned_array(elem_type)) {
     for (const ExprPtr& element : elements) {
       Expr& value = const_cast<Expr&>(*element);
@@ -3739,6 +3783,13 @@ Type TypeChecker::check_tuple_literal(TupleLiteralExpr& expr) {
     if (has_untracked_pointer_ownership(t, elem->ownership()))
       diagnostics_.error(diag::kTypeMismatch, elem->location(),
                          "owned, shared, and borrowed pointers cannot be embedded in tuples");
+    if (t.is_dynamic_array()) {
+      // A tuple is a flat value with no element teardown; carrying a header here
+      // would leave the buffer to whoever still holds the original binding.
+      diagnostics_.error(diag::kTypeMismatch, elem->location(),
+                         "a dynamic_array cannot be embedded in a tuple: element "
+                         "destruction is not implemented yet");
+    }
     if (contains_owned_array(t)) {
       Expr& value = const_cast<Expr&>(*elem);
       consume_field_move(value, t);

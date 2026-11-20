@@ -4625,6 +4625,20 @@ class FunctionTranslator {
           return true;
         }
 
+        // A dynamic array's destructor releases the buffer the container owns,
+        // not the three-word value itself, so the runtime receives field 0.
+        if (op.callee == "nrq_array_free" && args.size() == 1 &&
+            op.arguments[0].type.is_dynamic_array()) {
+          mlir::Value buffer = builder_.create<mlir::LLVM::ExtractValueOp>(
+              loc, args[0], builder_.getDenseI64ArrayAttr({0})).getResult();
+          auto release = ensure_runtime_fn(
+              module_, builder_, "nrq_array_free",
+              mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
+          builder_.create<mlir::LLVM::CallOp>(loc, release,
+                                              mlir::ValueRange{buffer});
+          return true;
+        }
+
         if (op.callee == "aggregate.owned_drop" && args.size() == 1) {
           llvm::SmallVector<int64_t, 8> path;
           drop_aggregate_fields(op.arguments[0].type, args[0], path, loc);
@@ -6020,8 +6034,13 @@ static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
   // `string[] args` is an ordinary dynamic array value, while the runtime
   // descriptor is {length, items}. Marshalling it here is what keeps the
   // language value one representation: length is a field read and indexing walks
-  // the item block. The buffer is owned by the process, never by the program, so
-  // the entry parameter carries no cleanup.
+  // the item block.
+  //
+  // The table of pointers is copied into a buffer from the array allocator
+  // because the language owns every array it hands to user code: releasing
+  // `args` - at main's exit, or in a callee it was passed to - has to return
+  // exactly the storage the language allocated. The argument strings stay where
+  // the CRT put them; only the table is copied.
   if (!user_main.parameters().empty() &&
       user_main.parameters().front().type.is_dynamic_array()) {
     mlir::Type i64 = builder.getI64Type();
@@ -6041,6 +6060,36 @@ static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
         mlir::ValueRange{zero_index, one_index}).getResult();
     mlir::Value items = builder.create<mlir::LLVM::LoadOp>(
         loc, ptr, items_pointer).getResult();
+
+    mlir::Value empty_length = builder.create<mlir::LLVM::ConstantOp>(
+        loc, i64, builder.getI64IntegerAttr(0)).getResult();
+    mlir::Value element_bytes = builder.create<mlir::LLVM::ConstantOp>(
+        loc, i64, builder.getI64IntegerAttr(8)).getResult();
+    auto create = ensure_runtime_fn(module, builder, "nrq_array_create", ptr,
+                                    {i64, i64, i64});
+    mlir::Value buffer = builder.create<mlir::LLVM::CallOp>(
+        loc, create,
+        mlir::ValueRange{length, element_bytes, element_bytes}).getResult();
+
+    // An argument-less program has nothing to copy, and the empty array's buffer
+    // is null, so the copy is skipped rather than handed two null pointers. The
+    // branch keeps the empty case out of the memory intrinsic entirely.
+    mlir::Value no_arguments = builder.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::eq, length, empty_length).getResult();
+    mlir::Block* copy_block = wrapper.addBlock();
+    mlir::Block* arguments_ready = wrapper.addBlock();
+    builder.create<mlir::LLVM::CondBrOp>(loc, no_arguments, arguments_ready,
+                                        copy_block);
+    builder.setInsertionPointToStart(copy_block);
+    mlir::Value byte_count = builder.create<mlir::LLVM::MulOp>(
+        loc, length, element_bytes).getResult();
+    auto copy = ensure_runtime_fn(module, builder, "memcpy", ptr,
+                                  {ptr, ptr, i64});
+    builder.create<mlir::LLVM::CallOp>(
+        loc, copy, mlir::ValueRange{buffer, items, byte_count});
+    builder.create<mlir::LLVM::BrOp>(loc, arguments_ready);
+    builder.setInsertionPointToStart(arguments_ready);
+
     mlir::Type array_type = tir_type_to_mlir(
         user_main.parameters().front().type, ctx, builder);
     if (!array_type) {
@@ -6051,7 +6100,7 @@ static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
     mlir::Value value = builder.create<mlir::LLVM::UndefOp>(
         loc, array_type).getResult();
     value = builder.create<mlir::LLVM::InsertValueOp>(
-        loc, value, items, builder.getDenseI64ArrayAttr({0})).getResult();
+        loc, value, buffer, builder.getDenseI64ArrayAttr({0})).getResult();
     value = builder.create<mlir::LLVM::InsertValueOp>(
         loc, value, length, builder.getDenseI64ArrayAttr({1})).getResult();
     value = builder.create<mlir::LLVM::InsertValueOp>(

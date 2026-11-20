@@ -201,7 +201,8 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
         ? ValueOwnership::Borrowed
         : ((parameter.type.is_pointer() || parameter.type.is_owned_array() ||
             contains_owned_array(parameter.type) ||
-            parameter.type.is_owned_string())
+            parameter.type.is_owned_string() ||
+            parameter.type.is_dynamic_array())
                                        ? ValueOwnership::Owned
                                        : ValueOwnership::Trivial);
     tir::Value param_val = function_ir->allocate_value(parameter.type, ownership);
@@ -238,13 +239,18 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
     scopes_.back().emplace(parameter.name, slot);
     if ((parameter.type.is_pointer() || parameter.type.is_owned_array() ||
          contains_owned_array(parameter.type) ||
-         parameter.type.is_owned_string()) &&
+         parameter.type.is_owned_string() ||
+         parameter.type.is_dynamic_array()) &&
         !parameter.borrowed) {
       DeferredCall cleanup;
+      // A dynamic array parameter owns its buffer, so the callee releases it at
+      // its own scope exit. The release takes the container value; the lowering
+      // hands the runtime the buffer field, which is the only part it owns.
       cleanup.callee = parameter.shared ? "memory.shared_release"
           : parameter.type.is_owned_array() ? "array.owned_release"
           : contains_owned_array(parameter.type) ? "aggregate.owned_drop"
           : parameter.type.is_owned_string() ? "file.free_text"
+          : parameter.type.is_dynamic_array() ? "nrq_array_free"
           : !parameter.resource_domain.empty()
                 ? cleanup_for_resource_domain(parameter.resource_domain)
                 : "memory.deallocate";

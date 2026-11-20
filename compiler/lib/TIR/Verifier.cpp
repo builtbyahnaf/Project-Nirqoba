@@ -197,6 +197,9 @@ std::string allocation_storage_name(AllocationStorage storage) {
 bool release_matches_type(const std::string& callee, const Type& type) {
   if (!type.is_valid()) return true;
   if (callee == "array.owned_release") return type.is_owned_array();
+  // The container owns a buffer but is not a pointer itself, so its release
+  // takes the dynamic array value and frees one of its fields.
+  if (callee == "nrq_array_free") return type.is_dynamic_array();
   if (callee == "soa.owned_release") return type.is_soa();
   if (callee == "aggregate.owned_drop") return is_aggregate_type(type);
   // Resource domains and shared/managed pointer kinds live in Sema and in the

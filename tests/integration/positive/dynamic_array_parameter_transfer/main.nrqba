@@ -1,0 +1,19 @@
+// The callee owns the array it is given: the caller's automatic cleanup stands
+// down when the value is moved into the call, and the callee releases the buffer
+// at its own scope exit. With capacity 0 the buffer is the empty representation,
+// so the runtime proof is the live count staying at zero on both sides, and the
+// structural proof is the single @nrq_array_free in the emitted module: main
+// nulls its own slot before the call instead of releasing it.
+int function consume(dynamic_array<int> values) {
+    print(values.length);
+    print(values.capacity);
+    return 0;
+}
+
+int function main() {
+    var values: dynamic_array<int> = memory.dynamic_array<int>();
+    print(memory.array_live_count());
+    consume(values);
+    print(memory.array_live_count());
+    return 0;
+}
