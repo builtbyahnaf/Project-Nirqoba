@@ -1,0 +1,7 @@
+// The grown header is written back into the binding's storage, and the
+// destructor at scope exit reads that storage. A temporary has neither, so it
+// cannot be grown.
+int function main() {
+    memory.array_append(memory.dynamic_array<int>(), 1);
+    return 0;
+}

@@ -1,0 +1,5 @@
+{
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": "'memory.array_append' expects a 'int' element, found 'string'"
+}

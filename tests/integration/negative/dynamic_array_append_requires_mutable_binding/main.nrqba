@@ -1,0 +1,7 @@
+// Growth writes a new header back into the binding, so the binding has to be
+// mutable. A read-only array cannot be grown even though its buffer is owned.
+int function main() {
+    let values: dynamic_array<int> = memory.dynamic_array<int>();
+    memory.array_append(values, 1);
+    return 0;
+}

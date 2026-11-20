@@ -1,0 +1,7 @@
+// The element is stored as the array's element type, so the value must match it
+// exactly: there is no widening or element conversion at the store.
+int function main() {
+    var values: dynamic_array<int> = memory.dynamic_array<int>();
+    memory.array_append(values, "text");
+    return 0;
+}

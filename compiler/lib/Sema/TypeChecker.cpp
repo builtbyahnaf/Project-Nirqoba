@@ -4350,6 +4350,61 @@ Type TypeChecker::check_call(CallExpr& call) {
     return Type::int_type();
   }
 
+  // Growth. The element is stored through the array's own buffer, so this is a
+  // mutation of one binding rather than a value operation: the first argument
+  // names the binding whose storage receives the grown header, and the builtin
+  // evaluates to the new length. A method form would have to recover the same
+  // binding from a receiver value, which is exactly what the name states.
+  if (call.callee() == "memory.array_append") {
+    for (const ExprPtr& argument : call.arguments())
+      check_expression(const_cast<Expr&>(*argument));
+    if (call.arguments().size() != 2) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.array_append' takes an array binding and one element");
+      return Type::error();
+    }
+    const Type array_type = call.arguments()[0]->type();
+    const Type value_type = call.arguments()[1]->type();
+    if (!array_type.is_dynamic_array()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'memory.array_append' needs a dynamic array to grow, found '" +
+                             array_type.to_string() + "'");
+      return Type::error();
+    }
+    if (call.arguments()[0]->kind() != Expr::Kind::Name) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'memory.array_append' writes the grown header back into a "
+                         "binding, so its first argument must be a variable name");
+      return Type::error();
+    }
+    const std::string& array_name =
+        static_cast<const NameExpr&>(*call.arguments()[0]).name();
+    if (const Symbol* symbol = symbols_.lookup(array_name)) {
+      if (!symbol->is_mutable()) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "cannot append to '" + array_name +
+                               "': the binding is not mutable");
+      } else if (symbol->borrowed) {
+        // Growth replaces the buffer, which a borrower still points at.
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "cannot append to borrowed array '" + array_name +
+                               "': growth would replace the buffer the borrower holds");
+      } else if (symbols_.has_live_borrow(symbol->allocation_id)) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "cannot grow '" + array_name +
+                               "' while an array view of it is live");
+      }
+    }
+    if (value_type.is_valid() && value_type != array_type.element_type()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
+                         "'memory.array_append' expects a '" +
+                             array_type.element_type().to_string() +
+                             "' element, found '" + value_type.to_string() + "'");
+      return Type::error();
+    }
+    return Type::int_type();
+  }
+
   if ((call.callee() == "memory.array_view" ||
        call.callee() == "memory.array_view_mut") &&
       call.has_generic_argument()) {
