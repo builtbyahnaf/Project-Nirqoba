@@ -152,6 +152,55 @@ class Type {
   TypeKind kind() const { return kind_; }
 
   bool is_valid() const { return kind_ != TypeKind::Error; }
+
+  // Physical footprint of a value of this type, and the alignment it needs.
+  // Both answer 0 for a type whose layout is not fixed (aggregates with fields,
+  // tuples), so a caller that needs a size cannot silently act on a guess: the
+  // dynamic array initializer, for instance, must refuse to emit
+  // nrq_array_create with a zero element size rather than allocate nothing.
+  //
+  // dynamic_array<T> is {ptr buffer, i64 length, i64 capacity}, so its size is
+  // three words regardless of T; T only decides the element size passed to the
+  // allocator, which is why element_type() is queried separately.
+  std::uint32_t byte_size() const {
+    switch (kind_) {
+      case TypeKind::Bool:
+      case TypeKind::I8:
+      case TypeKind::U8:
+      case TypeKind::Char:
+        return 1;
+      case TypeKind::I16:
+      case TypeKind::U16:
+        return 2;
+      case TypeKind::I32:
+      case TypeKind::U32:
+      case TypeKind::F32:
+        return 4;
+      // The integer default is 64-bit, which is what the type mangler already
+      // records (`int` prints as DA_i64 inside an array element).
+      case TypeKind::Int:
+      case TypeKind::I64:
+      case TypeKind::U64:
+      case TypeKind::F64:
+      case TypeKind::String:
+      case TypeKind::OwnedString:
+      case TypeKind::Pointer:
+      case TypeKind::OwnedPointer:
+      case TypeKind::SharedPointer:
+      case TypeKind::ManagedPointer:
+        return 8;
+      case TypeKind::DynamicArray:
+        return 24;
+      default:
+        return 0;
+    }
+  }
+
+  std::uint8_t alignment() const {
+    const std::uint32_t size = byte_size();
+    if (size == 0) return 0;
+    return static_cast<std::uint8_t>(size < 8 ? size : 8);
+  }
   bool is_void() const { return kind_ == TypeKind::Void; }
   bool is_bool() const { return kind_ == TypeKind::Bool; }
   // An owned string is a string at every use site: it can be read, indexed,
