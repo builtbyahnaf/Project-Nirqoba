@@ -1,0 +1,14 @@
+int function main() {
+    var index = 0;
+    var total = 0;
+    // Every iteration owns the text it reads and releases it at the end of the
+    // loop body. If the destructor never ran, the live count below would be 3000.
+    while (index < 3000) {
+        let text = file.read_text_owned("tests/integration/positive/file_read_owned_loop/data.txt");
+        total = total + text.length;
+        index = index + 1;
+    }
+    print(total);
+    print(file.text_live_count());
+    return 0;
+}

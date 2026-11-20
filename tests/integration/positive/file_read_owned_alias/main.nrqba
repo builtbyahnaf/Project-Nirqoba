@@ -1,0 +1,12 @@
+int function main() {
+    // Borrowed text keeps its old contract: the buffer is owned by the runtime,
+    // so a second binding is a free alias of the same pointer, not a move.
+    let borrowed = file.read_text("tests/integration/positive/file_read_owned_alias/data.txt");
+    let alias = borrowed;
+    // Owned text is tracked separately; the two never share a release path.
+    let owned = file.read_text_owned("tests/integration/positive/file_read_owned_alias/data.txt");
+    print(alias.length);
+    print(owned.length);
+    print(file.text_live_count());
+    return 0;
+}
