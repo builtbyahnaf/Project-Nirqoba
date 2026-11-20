@@ -182,6 +182,11 @@ static string cleanup_for_type(const Type& type) {
   if (type.is_owned_string()) return "file.free_text";
   if (type.is_soa()) return "soa.owned_release";
   if (type.is_owned_array()) return "array.owned_release";
+  // A dynamic array owns one growable buffer, released back to the array
+  // allocator it came from. The mapping declares the type's place in the owned
+  // family; no path installs it yet, because a binding of this type is still
+  // rejected, so no dynamic array value can reach a cleanup registration.
+  if (type.is_dynamic_array()) return "nrq_array_free";
   if (type.is_owned_pointer()) {
     const std::string& domain = type.resource_domain();
     if (domain == "file") return "file.close";
@@ -3215,6 +3220,11 @@ Type TypeChecker::check_expression(Expr& expr) {
       } else if (type.is_managed_pointer()) {
         expr.set_ownership(ValueOwnership::GcManaged);
       } else if (type.is_owned_array()) {
+        expr.set_ownership(ValueOwnership::Owned);
+      } else if (type.is_dynamic_array()) {
+        // A dynamic array owns its element buffer exactly like an owned array;
+        // only the growth path differs. Classifying the value as owned is what
+        // lets a move recognize it later, when the destructor is installed.
         expr.set_ownership(ValueOwnership::Owned);
       } else if (contains_owned_array(type)) {
         if (expr.kind() == Expr::Kind::Call || expr.kind() == Expr::Kind::StructInit ||

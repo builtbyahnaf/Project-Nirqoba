@@ -87,8 +87,13 @@ bool ownership_compatible_with_type(const Type& type, ValueOwnership ownership) 
       // An owned string is pointer-shaped at runtime (mangled `ptr`), so carrying
       // Owned ownership for it is representable; a borrowed `string` is not, and
       // the distinction is what keeps `Owned` from leaking into ordinary text.
+      // A dynamic array is an aggregate that owns one element buffer, so the same
+      // category applies: the value is destroyed once, at its lexical scope exit.
+      // Naming it explicitly keeps the rule readable even though is_aggregate_type
+      // already covers the kind.
       return type.is_pointer() || type.is_owned_array() ||
-             type.is_owned_string() || type.is_soa() || is_aggregate_type(type);
+             type.is_dynamic_array() || type.is_owned_string() ||
+             type.is_soa() || is_aggregate_type(type);
     case ValueOwnership::Manual:
       return type.is_pointer();
     case ValueOwnership::Borrowed:
