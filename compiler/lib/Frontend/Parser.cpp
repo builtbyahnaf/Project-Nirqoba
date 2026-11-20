@@ -506,6 +506,22 @@ Type Parser::parse_type_annotation() {
     Type managed_type = parse_type_annotation();
     expect(TokenKind::Greater, "after the managed type");
     base_type = Type::managed_pointer_type(managed_type);
+  } else if (check(TokenKind::Identifier) && peek().text == "dynamic_array" &&
+             peek(1).kind == TokenKind::Less) {
+    const Token open_token = advance();
+    advance();
+    Type element_type = parse_type_annotation();
+    expect(TokenKind::Greater, "after the dynamic array element type");
+    // The barrier this phase establishes: element teardown does not exist yet, so
+    // a container of owned elements would leak every element at scope exit. The
+    // rule is stated here, where the element type is still in hand.
+    if (element_type.is_owned_string() || element_type.is_owned_array() ||
+        element_type.is_soa()) {
+      error_at(open_token, kUnknownType,
+               "dynamic arrays cannot hold owned elements yet; the element "
+               "teardown loop is not implemented");
+    }
+    base_type = Type::dynamic_array_type(element_type);
   } else if (check(TokenKind::Identifier) && peek().text == "owned_array" &&
              peek(1).kind == TokenKind::Less) {
     advance();
