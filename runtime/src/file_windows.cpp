@@ -7,11 +7,14 @@
 
 #include "nirqoba/runtime/file.h"
 
+#include "nirqoba/runtime/allocator.h"
+
 #include "runtime_buffers.h"
 #include "runtime_shutdown.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -125,6 +128,77 @@ const char* nrq_file_read_text(const char* path) {
     buffer[total_read] = '\0';
     CloseHandle(h);
     return buffer;
+}
+
+namespace {
+
+std::atomic<uint64_t> live_owned_texts{0};
+
+// Reads the file into a deterministic allocation of exactly the requested size.
+// A failure path still returns an owned empty string, because the language-level
+// destructor always runs and must always have something valid to release.
+char* empty_owned_text() {
+    char* buffer = static_cast<char*>(nrq_memory_allocate(1, 1));
+    if (!buffer) return nullptr;
+    buffer[0] = '\0';
+    live_owned_texts.fetch_add(1, std::memory_order_relaxed);
+    return buffer;
+}
+
+char* read_owned_text(const char* path) {
+    if (!path || path[0] == '\0') return empty_owned_text();
+
+    HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return empty_owned_text();
+
+    LARGE_INTEGER file_size;
+    if (!GetFileSizeEx(h, &file_size) || file_size.QuadPart < 0) {
+        CloseHandle(h);
+        return empty_owned_text();
+    }
+    const size_t bytes_to_read = static_cast<size_t>(file_size.QuadPart);
+    if (bytes_to_read == 0) {
+        CloseHandle(h);
+        return empty_owned_text();
+    }
+
+    char* buffer = static_cast<char*>(nrq_memory_allocate(bytes_to_read + 1, 1));
+    if (!buffer) {
+        CloseHandle(h);
+        return nullptr;
+    }
+    live_owned_texts.fetch_add(1, std::memory_order_relaxed);
+    buffer[bytes_to_read] = '\0';
+
+    DWORD total_read = 0;
+    while (total_read < bytes_to_read) {
+        DWORD chunk = 0;
+        const DWORD to_read = static_cast<DWORD>(bytes_to_read - total_read);
+        if (!ReadFile(h, buffer + total_read, to_read, &chunk, nullptr) || chunk == 0) {
+            break;
+        }
+        total_read += chunk;
+    }
+    buffer[total_read] = '\0';
+    CloseHandle(h);
+    return buffer;
+}
+
+}  // namespace
+
+char* nrq_file_read_text_owned(const char* path) {
+    return read_owned_text(path);
+}
+
+void nrq_file_text_release(char* text) {
+    if (!text) return;
+    nrq_memory_deallocate_checked(text);
+    live_owned_texts.fetch_sub(1, std::memory_order_relaxed);
+}
+
+int32_t nrq_file_text_live_count(void) {
+    return static_cast<int32_t>(live_owned_texts.load(std::memory_order_relaxed));
 }
 
 int32_t nrq_file_write_text(const char* path, const char* text) {
