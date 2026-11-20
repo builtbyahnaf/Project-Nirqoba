@@ -76,3 +76,9 @@ already covers the fast path, and roughly 6 ms of the 20 ms is the fresh-page ze
 64 MB the tree occupies at ~11 GB/s. Further build gains therefore require cutting
 per-node instructions rather than tuning the allocator, which is the direction recorded for the
 next round.
+
+The first-touch figure was measured after this report (cold 10.87 ms against warm 5.10 ms for a
+64 MiB slab of 32-byte slots, 3 runs), and it confirms that the zeroing is a property of the
+footprint rather than a removable `memset`. The two candidate directions, the size of each, and
+the reason the zeroing is not separately actionable are recorded in
+[`test-02-build-direction.md`](test-02-build-direction.md).
