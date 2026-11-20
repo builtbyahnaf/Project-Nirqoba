@@ -1,0 +1,12 @@
+// The buffer belongs to the callee after the call, so the caller's name is dead.
+int function consume(string_owned text) {
+    print(text.length);
+    return 0;
+}
+
+int function main() {
+    let owned = file.read_text_owned("tests/integration/negative/owned_string_use_after_move/data.txt");
+    consume(owned);
+    print(owned.length);
+    return 0;
+}

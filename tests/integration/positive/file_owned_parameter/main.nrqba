@@ -1,0 +1,13 @@
+// The callee owns the buffer it is given, so the caller must not free it and the
+// callee must free it exactly once at its own scope exit.
+int function consume(string_owned text) {
+    print(text.length);
+    return 0;
+}
+
+int function main() {
+    let owned = file.read_text_owned("tests/integration/positive/file_owned_parameter/data.txt");
+    consume(owned);
+    print(file.text_live_count());
+    return 0;
+}
