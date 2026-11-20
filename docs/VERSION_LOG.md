@@ -12,6 +12,45 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.629-beta
+
+### Summary of Changes (since `0.625-beta`)
+
+Owned text became a type the language can write, and the recursive element
+destruction contract was written down before the code that will implement it.
+Release label `+0.004` (`0.625-beta` -> `0.629-beta`) per the three-upgrade rule.
+
+#### `string_owned`
+
+- The kind is distinct from `string` but shares its representation: it mangles as
+  `ptr`, so it has the same ABI and reads, measures and prints like text, while the
+  checker can attach a destructor to it and the TIR verifier can accept `Owned`
+  ownership for it. A borrowed `string` still cannot carry `Owned`.
+- `file.read_text_owned` returns `string_owned` and its cleanup is
+  `file.free_text`, so a lexical scope releases the buffer without the programmer
+  naming it. `nrq_file_text_live_count` makes the release assertable: three
+  thousand reads in a loop leave zero live buffers.
+- `string_owned` is spelled in source as a type keyword, so a binding, field,
+  parameter or return type can name it.
+- Binding an owned string to a borrowed `string` is rejected (`NRQ3015`), which is
+  what keeps the two kinds from sharing a release path they do not have.
+
+#### Recursive element destruction contract
+
+- `ownership-representation.md` states the rules the container work will be held
+  to: iterate the active element count rather than capacity, drop elements in
+  reverse initialization order, and drop every element before releasing the
+  container's backing buffer.
+
+#### Known gap
+
+- An owned value passed to an owning parameter is not destroyed by the callee:
+  only `let` and assignment declarations carry a cleanup in TIR, and no parameter
+  cleanup is emitted. The parameter symbol carries the right ownership, but the
+  transfer is not yet observable, so no test claims it.
+
+---
+
 ## Version 0.625-beta
 
 ### Summary of Changes (since `0.621-beta`)
