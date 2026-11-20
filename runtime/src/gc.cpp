@@ -81,6 +81,7 @@ struct GcPage;
 struct GcRegion {
   unsigned char* base = nullptr;
   size_t capacity = kGcRegionBytes;
+  size_t region_index = SIZE_MAX;
   uint8_t next_slot = 0;
   uint8_t active_pages = 0;
   bool is_survivor = false;
@@ -4129,8 +4130,10 @@ GcRegion* acquire_region_locked(bool survivor) {
   }
   GcRegion* raw = region.get();
   try {
+    raw->region_index = gc_regions.size();
     gc_regions.push_back(std::move(region));
   } catch (...) {
+    raw->region_index = SIZE_MAX;
     try {
       recycled_regions.push_back(std::move(region));
     } catch (...) {
@@ -4144,6 +4147,7 @@ void recycle_region_locked(std::unique_ptr<GcRegion> region) {
   if (!region) return;
   if (active_alloc_region == region.get()) active_alloc_region = nullptr;
   if (active_survivor_region == region.get()) active_survivor_region = nullptr;
+  region->region_index = SIZE_MAX;
   region->next_slot = 0;
   region->active_pages = 0;
   region->is_survivor = false;
@@ -4172,6 +4176,39 @@ void recycle_region_locked(std::unique_ptr<GcRegion> region) {
     }
   }
 #endif
+}
+
+void remove_gc_region_locked(GcRegion* region) {
+  if (!region || region->region_index >= gc_regions.size()) return;
+  const size_t idx = region->region_index;
+  std::unique_ptr<GcRegion> owned = std::move(gc_regions[idx]);
+  if (idx + 1 != gc_regions.size()) {
+    gc_regions[idx] = std::move(gc_regions.back());
+    gc_regions[idx]->region_index = idx;
+  }
+  gc_regions.pop_back();
+  owned->region_index = SIZE_MAX;
+  recycle_region_locked(std::move(owned));
+  region_telemetry.bulk_reclaimed_regions =
+      saturated_add(region_telemetry.bulk_reclaimed_regions, 1);
+}
+
+unsigned char* carve_region_page_locked(bool survivor, GcRegion*& out_region,
+                                        uint8_t& out_slot, bool& out_zeroed) {
+  out_region = nullptr;
+  out_slot = 0;
+  out_zeroed = false;
+  GcRegion*& active = survivor ? active_survivor_region : active_alloc_region;
+  if (!active || active->next_slot >= kPagesPerRegion) {
+    active = acquire_region_locked(survivor);
+    if (!active) return nullptr;
+  }
+  const uint8_t slot = active->next_slot++;
+  ++active->active_pages;
+  out_region = active;
+  out_slot = slot;
+  out_zeroed = !active->recycled_dirty;
+  return active->base + static_cast<size_t>(slot) * kGcPageBytes;
 }
 
 PageRun* find_page_run(unsigned char* storage) {
@@ -4359,15 +4396,117 @@ void reset_page_gc_metadata_locked(GcPage& page) {
   }
 }
 
-std::unique_ptr<GcPage> acquire_page(size_t capacity, PageKind kind) {
+void release_page_backing_locked(GcPage& page) {
+  if (page.region) {
+    GcRegion* reg = page.region;
+    const uint8_t slot = page.region_slot;
+    if (slot < kPagesPerRegion && reg->pages[slot] == &page)
+      reg->pages[slot] = nullptr;
+    if (reg->active_pages > 0) --reg->active_pages;
+    page.region = nullptr;
+    page.region_slot = 0;
+    page.storage = nullptr;
+    if (reg->active_pages == 0 && reg->next_slot > 0) {
+      remove_gc_region_locked(reg);
+    }
+    return;
+  }
+  release_page_storage(page.storage, page.capacity);
+  page.storage = nullptr;
+}
+
+std::unique_ptr<GcPage> acquire_page(size_t capacity, PageKind kind,
+                                     bool survivor = false) {
+  const bool ordinary = capacity == kGcPageBytes;
+  if (ordinary) {
+    GcRegion* region = nullptr;
+    uint8_t slot = 0;
+    bool storage_is_zero = false;
+    unsigned char* storage =
+        carve_region_page_locked(survivor, region, slot, storage_is_zero);
+    if (!storage) return nullptr;
+    if constexpr (nirq::runtime_debug_enabled) {
+      if ((reinterpret_cast<uintptr_t>(storage) & (kGcPageBytes - 1)) != 0)
+        nrq_runtime_fatal("GC region page is not 64 KiB aligned");
+      if (storage_is_zero) {
+        const size_t step = capacity / 8 > sizeof(uint64_t) ? capacity / 8
+                                                            : sizeof(uint64_t);
+        for (size_t at = 0; at + sizeof(uint64_t) <= capacity; at += step) {
+          uint64_t word = 0;
+          std::memcpy(&word, storage + at, sizeof(word));
+          if (word != 0) nrq_runtime_fatal("fresh GC region page was not zero");
+        }
+      }
+    }
+    std::unique_ptr<GcPage> page;
+    bool reused_shell = false;
+    for (auto entry = recycled_pages.rbegin(); entry != recycled_pages.rend();
+         ++entry) {
+      if ((*entry)->capacity != capacity) continue;
+      page = std::move(*entry);
+      if (&*entry != &recycled_pages.back()) {
+        *entry = std::move(recycled_pages.back());
+      }
+      recycled_pages.pop_back();
+      reused_shell = true;
+      break;
+    }
+    if (page) {
+      if constexpr (nirq::runtime_debug_enabled) {
+        if (page->retired || page->free_span_count != 0 || page->used != 0 ||
+            page->live_objects != 0 || page->use_object_index ||
+            page->max_free_span != 0 || page->marked_objects != 0 ||
+            page->remembered_objects != 0) {
+          nrq_runtime_fatal("recycled GC page carried stale metadata");
+        }
+      }
+      page->storage = storage;
+      page->region = region;
+      page->region_slot = slot;
+      page->zero_cursor = storage_is_zero ? 0 : capacity;
+      page->kind = page->object_starts ? kind : PageKind::Fallback;
+      page->slot_bytes = 0;
+      page->slot_capacity = 0;
+      page->uniform_layout = nullptr;
+      region->pages[slot] = page.get();
+      recycled_page_reuse_count = saturated_add(recycled_page_reuse_count, 1);
+      return page;
+    }
+    try {
+      page = std::make_unique<GcPage>();
+      page->storage = storage;
+      page->capacity = capacity;
+      page->region = region;
+      page->region_slot = slot;
+      page->zero_cursor = storage_is_zero ? 0 : capacity;
+      const size_t slots = capacity / kObjectStartAlignment;
+      const size_t mark_words = (slots + 63) / 64;
+      std::memset(page->inline_bitmaps.data(), 0,
+                  4 * mark_words * sizeof(uint64_t));
+      page->mark_bits = page->inline_bitmaps.data();
+      page->remembered_bits = page->mark_bits + mark_words;
+      page->born_bits = page->remembered_bits + mark_words;
+      page->object_starts = page->born_bits + mark_words;
+      page->object_start_words = mark_words;
+      page->mark_words = mark_words;
+      page->remembered_words = mark_words;
+      page->born_words = mark_words;
+      page->kind = kind;
+      region->pages[slot] = page.get();
+      if (!storage_is_zero && !reused_shell)
+        recycled_page_reuse_count = saturated_add(recycled_page_reuse_count, 1);
+      return page;
+    } catch (...) {
+      if (region->active_pages > 0) --region->active_pages;
+      if (region->active_pages == 0 && region->next_slot > 0)
+        remove_gc_region_locked(region);
+      return nullptr;
+    }
+  }
+
   for (auto entry = recycled_pages.rbegin(); entry != recycled_pages.rend();
        ++entry) {
-    // The pooled storage can only serve the page size it was committed for: an
-    // ordinary page is carved on a kGcPageBytes boundary and recoverable by
-    // masking, while a large page is neither. Handing a large page to an
-    // ordinary request made the page directory reject it, and the allocation
-    // failed instead of falling through to fresh storage.
-    if ((*entry)->capacity != capacity) continue;
+    if ((*entry)->capacity != capacity || !(*entry)->storage) continue;
     std::unique_ptr<GcPage> page = std::move(*entry);
     if (&*entry != &recycled_pages.back()) {
       *entry = std::move(recycled_pages.back());
@@ -4394,9 +4533,6 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity, PageKind kind) {
   bool storage_is_zero = false;
   unsigned char* storage = commit_page_storage(capacity, storage_is_zero);
   if (!storage) return nullptr;
-  // The zero-fill skip rests on committed storage reading as zero. That premise
-  // is checked here, on every fresh page, instead of being trusted: the pages the
-  // allocator hands out are the ones it will later refuse to zero.
   if constexpr (nirq::runtime_debug_enabled) {
     if (storage_is_zero) {
       const size_t step = capacity / 8 > sizeof(uint64_t) ? capacity / 8
@@ -4413,11 +4549,6 @@ std::unique_ptr<GcPage> acquire_page(size_t capacity, PageKind kind) {
     page->storage = storage;
     page->capacity = capacity;
     page->zero_cursor = storage_is_zero ? 0 : capacity;
-    // An ordinary page is carved on a kGcPageBytes boundary inside a reserved run,
-    // so its base is recoverable from any address inside it by masking off the low
-    // bits. Large-object pages are larger than that and are not, which is why the
-    // page directory keys ordinary pages by address and large ones by exact object.
-    // The premise is asserted where the page is made, not assumed where it is used.
     if constexpr (nirq::runtime_debug_enabled) {
       if (capacity <= kGcPageBytes &&
           (reinterpret_cast<uintptr_t>(storage) & (kGcPageBytes - 1)) != 0)
@@ -4469,6 +4600,19 @@ void recycle_page(std::unique_ptr<GcPage> page) {
     page->free_span_bytes = 0;
   }
   set_page_max_free_span_locked(*page, 0, 0);
+  if (page->region != nullptr) {
+    release_page_backing_locked(*page);
+    if (recycled_pages.size() >= kMaxRecycledPages) return;
+    page->retired = false;
+    page->free_span_count = 0;
+    page->free_span_bytes = 0;
+    reset_page_gc_metadata_locked(*page);
+    try {
+      recycled_pages.push_back(std::move(page));
+    } catch (...) {
+    }
+    return;
+  }
   if (recycled_pages.size() >= kMaxRecycledPages ||
       page->capacity < kGcPageBytes ||
       page->capacity > kMaxRecycledPageBytes) {
@@ -5139,7 +5283,7 @@ GcPage* create_headerless_page_locked(const nrq_object_layout* layout,
   try {
     gc_pages.push_back(std::move(new_page));
   } catch (...) {
-    release_page_storage(page->storage, page->capacity);
+    release_page_backing_locked(*page);
     return nullptr;
   }
   if (!page_directory.insert(page)) {
@@ -5240,7 +5384,7 @@ void* allocate_locked(size_t bytes, size_t element_size, size_t elements,
     try {
       gc_pages.push_back(std::move(new_page));
     } catch (...) {
-      if (new_page) release_page_storage(new_page->storage, new_page->capacity);
+      if (new_page) release_page_backing_locked(*new_page);
       return nullptr;
     }
     // A page larger than the directory's page size is never found by masking an
@@ -5361,7 +5505,7 @@ bool reserve_tlab_locked(MutatorState& mutator, size_t minimum_span,
     try {
       gc_pages.push_back(std::move(new_page));
     } catch (...) {
-      if (new_page) release_page_storage(new_page->storage, new_page->capacity);
+      if (new_page) release_page_backing_locked(*new_page);
       return false;
     }
     // A page larger than the directory's page size is never found by masking an
