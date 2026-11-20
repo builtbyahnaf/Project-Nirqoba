@@ -326,6 +326,17 @@ static std::string cleanup_for_owned_expression(const Expr& expression,
 // Explicit memory releases are both ordinary memory, not opaque resource
 // handles. Manual storage keeps its own release spelling but participates in
 // indexing, borrowing and return checks exactly like explicit owned storage.
+// Owned values that are not pointer-shaped need their own call-transfer rule,
+// because the pointer rule below never sees them. This is the set that can also
+// be a container element, so a container of any of these kinds transfers the same
+// way text does today.
+static bool is_owned_element_type(const Type& type) {
+  if (type.is_owned_string()) return true;
+  if (type.is_soa()) return true;
+  if (type.is_owned_array()) return is_owned_element_type(type.element_type());
+  return false;
+}
+
 static bool is_plain_memory_cleanup(const std::string& callee) {
   return callee == "memory.deallocate" || callee == "memory.manual_release" ||
          callee == "file.free_text";
@@ -5754,7 +5765,7 @@ Type TypeChecker::check_call(CallExpr& call) {
     // callee, which releases it at its own scope exit. The caller's automatic
     // cleanup must therefore stand down, which is what the transfer flag tells
     // lowering.
-    if (sig.parameter_types[i].is_owned_string()) {
+    if (is_owned_element_type(sig.parameter_types[i])) {
       const Expr& argument = *call.arguments()[i];
       const Symbol* source = argument.kind() == Expr::Kind::Name
                                  ? find_root_symbol(argument, symbols_)
