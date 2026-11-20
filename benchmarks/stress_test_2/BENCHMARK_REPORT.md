@@ -7,16 +7,16 @@
 
 ---
 
-## 0. Latest Run — Nirqoba 0.621-beta (2026-11-20, full suite)
+## 0. Latest Run — Nirqoba 0.625-beta (2026-11-20, full suite)
 
-**Compiler:** `nirqoba compiler version 0.621-beta (Phase 9)`, LLVM/MLIR 23.1.4, RelWithDebInfo  
+**Compiler:** `nirqoba compiler version 0.625-beta (Phase 9)`, LLVM/MLIR 23.1.4, RelWithDebInfo  
 **Host:** DESKTOP-VO51V7J, Windows 11 Pro 10.0.26300, Intel Core i5-1235U (12 logical), 15.7 GiB RAM  
 **Command:** `python run_benchmark.py --repeats 3` (all tests, all implementations)  
 **Artifact:** `benchmark_results.json` — `valid: true`, all 45 benchmark processes passed validation (generated 2026-11-20T01:09:44+06:00, git `6bdff96`, dirty).
 
-### 0.1 Executive summary (0.621-beta, full suite)
+### 0.1 Executive summary (0.625-beta, full suite)
 
-Compared to 0.617-beta (section 0b), Nirqoba 0.621-beta is **not mostly the same — major allocation/build gains with a significant regression on 01/03 collection fast paths**:
+Compared to 0.617-beta (section 0b), Nirqoba 0.625-beta is **not mostly the same — major allocation/build gains with a significant regression on 01/03 collection fast paths**:
 
 - **Managed allocation** (Test 01): **5.0 ms** for 1M nodes (vs 58.0 ms in 0.617 — **~11.6× faster**)
 - **Chain traversal** (Test 01): **2.0 ms** (vs 3.0 ms — **~1.5× faster**)
@@ -29,7 +29,7 @@ Compared to 0.617-beta (section 0b), Nirqoba 0.621-beta is **not mostly the same
 
 Net: dramatic construction/allocation improvements and better 02 collection/traversal, but 01/03 reclamations regressed from sub-millisecond to ~6 ms. All checksums, live counts, and cycles-cleared validated.
 
-### 0.2 Results — 0.621-beta (median ± stdev [min–max], 3 repeats × 5 rounds = 15 samples/phase unless noted)
+### 0.2 Results — 0.625-beta (median ± stdev [min–max], 3 repeats × 5 rounds = 15 samples/phase unless noted)
 
 #### Test 01 — Managed-object allocation (1,000,000 nodes)
 
@@ -39,7 +39,7 @@ Net: dramatic construction/allocation improvements and better 02 collection/trav
 | C++ | 54.607 ± 8.770 [46.972–72.963] | 10.113 ± 1.373 [7.952–12.947] | 33.146 ± 3.917 [25.504–40.102] |
 | Rust | 71.029 ± 22.836 [46.889–128.973] | 10.194 ± 2.417 [7.690–17.109] | 42.308 ± 8.319 [28.077–57.037] |
 | Java | 4.439 ± 1.264 [3.313–7.368] | 3.003 ± 0.651 [2.572–4.491] | 11.217 ± 1.134 [9.592–13.725] |
-| **Nirqoba 0.621** | **5.000 ± 0.724 [4.000–7.000]** | **2.000 ± 0.640 [2.000–4.000]** | **6.000 ± 0.941 [5.000–8.000]** |
+| **Nirqoba 0.625** | **5.000 ± 0.724 [4.000–7.000]** | **2.000 ± 0.640 [2.000–4.000]** | **6.000 ± 0.941 [5.000–8.000]** |
 
 #### Test 02 — Mark and sweep (2,097,151 live nodes)
 
@@ -49,7 +49,7 @@ Net: dramatic construction/allocation improvements and better 02 collection/trav
 | C++ | 29.078 ± 0.281 [28.732–29.289] | 13.780 ± 0.548 [13.634–14.648] | 36.769 ± 1.846 [34.224–40.941] |
 | Rust | 27.007 ± 2.339 [24.575–29.251] | 8.542 ± 0.628 [7.459–8.551] | 39.154 ± 1.504 [37.142–42.249] |
 | Java | 16.171 ± 8.969 [16.036–31.638] | 7.172 ± 1.268 [5.167–7.514] | 76.540 ± 8.273 [71.315–98.609] |
-| **Nirqoba 0.621** | **27.000 ± 6.658 [23.000–36.000]** | **5.000 ± 2.309 [5.000–9.000]** | **34.000 ± 9.501 [32.000–60.000]** |
+| **Nirqoba 0.625** | **27.000 ± 6.658 [23.000–36.000]** | **5.000 ± 2.309 [5.000–9.000]** | **34.000 ± 9.501 [32.000–60.000]** |
 
 *Build/traversal: 3 samples (one per process); collection: 15 samples.*
 
@@ -61,11 +61,11 @@ Net: dramatic construction/allocation improvements and better 02 collection/trav
 | C++ | 6.039 ± 1.552 [5.019–9.886] | 6.058 ± 1.253 [4.773–9.025] |
 | Rust | 5.614 ± 0.888 [4.585–6.990] | 5.589 ± 1.402 [4.538–8.559] |
 | Java | 7.294 ± 0.848 [5.993–8.833] | 53.992 ± 5.086 [44.693–60.005] |
-| **Nirqoba 0.621** | **6.000 ± 0.834 [4.000–7.000]** | **6.000 ± 0.724 [5.000–7.000]** |
+| **Nirqoba 0.625** | **6.000 ± 0.834 [4.000–7.000]** | **6.000 ± 0.724 [5.000–7.000]** |
 
-### 0.3 Relative comparison — 0.621-beta vs 0.617-beta (Nirqoba medians)
+### 0.3 Relative comparison — 0.625-beta vs 0.617-beta (Nirqoba medians)
 
-| Phase | 0.617-beta | 0.621-beta | 0.617→0.621 |
+| Phase | 0.617-beta | 0.625-beta | 0.617→0.625 |
 |---|---:|---:|---:|
 | 01 Allocation | 58 ms | **5 ms** | **11.6× faster** |
 | 01 Traversal | 3 ms | **2 ms** | **1.5× faster** |
@@ -76,9 +76,9 @@ Net: dramatic construction/allocation improvements and better 02 collection/trav
 | 03 Build | 63 ms | **6 ms** | **10.5× faster** |
 | 03 Collection | 0.407 ms* | **6 ms** | **14.7× slower** |
 
-\*0.617 01/03 collection measured with cycle-calibrated `run_subms.py` (separate harness; see section 0b/Appendix C). 0.621 `COLLECT_CYCLES` medians 14,511,486 (01) and 13,913,254 (03).
+\*0.617 01/03 collection measured with cycle-calibrated `run_subms.py` (separate harness; see section 0b/Appendix C). 0.625 `COLLECT_CYCLES` medians 14,511,486 (01) and 13,913,254 (03).
 
-### 0.4 Relative comparison — 0.621-beta vs C, C++, Rust, Java (this run)
+### 0.4 Relative comparison — 0.625-beta vs C, C++, Rust, Java (this run)
 
 Nirqoba median ÷ baseline median (<1.0 = Nirqoba faster). Baselines from this same run.
 
@@ -95,9 +95,9 @@ Nirqoba median ÷ baseline median (<1.0 = Nirqoba faster). Baselines from this s
 
 **Notes:** 0.4 uses baselines from this same run (fresh compile/execute), which differ from reused-binary baselines in section 0b.
 
-### 0.5 Conclusion (0.621-beta, full suite)
+### 0.5 Conclusion (0.625-beta, full suite)
 
-0.621-beta delivers a **major profile shift**: allocation/build dropped sharply (01 alloc 58→5 ms, 02 build 197→27 ms, 03 build 63→6 ms) and 02 collection/traversal improved, but 01/03 collections regressed from ~0.39/0.41 ms to ~6 ms. **Significantly better on construction paths, significantly worse on the prior sub-ms 01/03 reclamations**; all correctness checks passed.
+0.625-beta delivers a **major profile shift**: allocation/build dropped sharply (01 alloc 58→5 ms, 02 build 197→27 ms, 03 build 63→6 ms) and 02 collection/traversal improved, but 01/03 collections regressed from ~0.39/0.41 ms to ~6 ms. **Significantly better on construction paths, significantly worse on the prior sub-ms 01/03 reclamations**; all correctness checks passed.
 
 ---
 

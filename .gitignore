@@ -19,7 +19,7 @@ project_context/OHR_ROADMAP.md
 .cloud-attachments/*
 .pytest_cache/*
 
-build/
+build/*
 
 toolchain/*
 !toolchain/versions.lock.json
