@@ -200,7 +200,8 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
         : parameter.type.is_array_view()
         ? ValueOwnership::Borrowed
         : ((parameter.type.is_pointer() || parameter.type.is_owned_array() ||
-            contains_owned_array(parameter.type))
+            contains_owned_array(parameter.type) ||
+            parameter.type.is_owned_string())
                                        ? ValueOwnership::Owned
                                        : ValueOwnership::Trivial);
     tir::Value param_val = function_ir->allocate_value(parameter.type, ownership);
@@ -236,12 +237,14 @@ void TirBuilder::lower_function(const FunctionDecl& function, const string& symb
 
     scopes_.back().emplace(parameter.name, slot);
     if ((parameter.type.is_pointer() || parameter.type.is_owned_array() ||
-         contains_owned_array(parameter.type)) &&
+         contains_owned_array(parameter.type) ||
+         parameter.type.is_owned_string()) &&
         !parameter.borrowed) {
       DeferredCall cleanup;
       cleanup.callee = parameter.shared ? "memory.shared_release"
           : parameter.type.is_owned_array() ? "array.owned_release"
           : contains_owned_array(parameter.type) ? "aggregate.owned_drop"
+          : parameter.type.is_owned_string() ? "file.free_text"
           : !parameter.resource_domain.empty()
                 ? cleanup_for_resource_domain(parameter.resource_domain)
                 : "memory.deallocate";
@@ -1408,7 +1411,28 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       lowering_release_argument_ = release_call;
       for (const auto& argument : call.arguments()) {
         TransferContextGuard guard(transfer_context_, tir::TransferKind::Argument);
-        arg_vals.push_back(lower_expression(*argument, function));
+        const tir::Value value = lower_expression(*argument, function);
+        // A transferred owner belongs to the callee now: its cleanup runs there,
+        // so this scope's automatic cleanup for that slot must stand down or the
+        // buffer is released twice.
+        if (argument->transfers_ownership() &&
+            argument->kind() == Expr::Kind::Name) {
+          const tir::Value slot = lookup_slot(
+              static_cast<const NameExpr&>(*argument).name());
+          if (slot.is_valid()) {
+            for (auto& scope : deferred_expressions_)
+              for (auto& pending : scope)
+                if (pending.automatic && pending.active &&
+                    pending.owner_slot.is_valid() &&
+                    pending.owner_slot.id == slot.id)
+                  pending.active = false;
+            if (current_function_ != nullptr)
+              if (tir::DestructionObligation* obligation =
+                      current_function_->pending_obligation_for_owner(slot))
+                obligation->discharged = true;
+          }
+        }
+        arg_vals.push_back(value);
       }
       lowering_release_argument_ = previous_release_argument;
 
