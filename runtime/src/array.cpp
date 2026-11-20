@@ -12,6 +12,7 @@
 #include <mutex>
 
 #include "nirqoba/runtime/allocator.h"
+#include "nirqoba/runtime/fatal.h"
 
 namespace {
 
@@ -48,6 +49,37 @@ void* nrq_array_create(size_t capacity, size_t element_size, size_t align) {
     if (!buffer) return nullptr;
     live_array_buffers.fetch_add(1, std::memory_order_relaxed);
     return buffer;
+}
+
+void* nrq_array_reallocate(void* old_ptr, size_t old_capacity,
+                           size_t new_capacity, size_t element_size,
+                           size_t align) {
+    // A zero element size means the caller has no layout to grow into; the
+    // compiler rejects such an element type long before this point.
+    if (element_size == 0)
+        nrq_runtime_fatal("dynamic array growth needs a fixed element size");
+    if (new_capacity <= old_capacity) return old_ptr;
+    if (new_capacity > std::numeric_limits<size_t>::max() / element_size)
+        nrq_runtime_fatal("dynamic array capacity exceeds the address space");
+
+    if (old_ptr == nullptr) {
+        // First growth: the empty representation carries no allocator domain, so
+        // the array allocator is the one to start in.
+        const size_t alignment = align == 0 ? element_size : align;
+        void* allocator = array_allocator_handle();
+        void* buffer = nrq_memory_allocate_array_from(allocator, new_capacity,
+                                                     element_size, alignment);
+        if (!buffer) nrq_runtime_fatal("dynamic array allocation failed");
+        live_array_buffers.fetch_add(1, std::memory_order_relaxed);
+        return buffer;
+    }
+
+    // The registry knows the owning allocator, the old byte count and the
+    // alignment, so the grown block stays in this domain and keeps its
+    // alignment. The old block is untouched when the request fails.
+    void* grown = nrq_memory_reallocate(old_ptr, new_capacity * element_size);
+    if (!grown) nrq_runtime_fatal("dynamic array growth failed");
+    return grown;
 }
 
 void nrq_array_free(void* buffer) {

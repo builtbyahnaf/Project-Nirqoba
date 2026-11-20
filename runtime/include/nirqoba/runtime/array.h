@@ -28,6 +28,20 @@ extern "C" {
 // so no caller can observe a partial allocation.
 void* nrq_array_create(size_t capacity, size_t element_size, size_t align);
 
+// Grows `old_ptr` to `new_capacity` slots of `element_size` bytes each and
+// returns the buffer to use; the whole old buffer is copied, so the elements
+// already stored survive the move. A null `old_ptr` is the empty representation,
+// so the first growth is the first allocation; a request that does not extend
+// the capacity returns `old_ptr` unchanged.
+//
+// The allocator domain belongs to the buffer, not to the call, so a growth stays
+// in the array allocator and keeps the alignment recorded when the buffer was
+// created. A growth that cannot be satisfied is fatal: the language has no error
+// channel on this path, and carrying on with the old capacity would silently
+// drop the element the caller is about to store.
+void* nrq_array_reallocate(void* old_ptr, size_t old_capacity,
+                           size_t new_capacity, size_t element_size, size_t align);
+
 // Releases a buffer from nrq_array_create. Null is a no-op, matching the empty
 // representation.
 void nrq_array_free(void* buffer);
