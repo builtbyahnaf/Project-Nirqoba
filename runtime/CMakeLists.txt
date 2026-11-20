@@ -51,6 +51,7 @@ set(NIRQOBA_RUNTIME_SOURCES
   src/runtime_abi.cpp
   src/math.cpp
   src/file_windows.cpp
+  src/array.cpp
   src/sync_windows.cpp
   # src/socket_windows.cpp is deliberately absent: the socket runtime belongs to
   # a later phase and is unlinked until that phase starts. The source and its
