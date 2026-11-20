@@ -84,8 +84,11 @@ bool ownership_compatible_with_type(const Type& type, ValueOwnership ownership) 
     case ValueOwnership::Trivial:
       return true;
     case ValueOwnership::Owned:
-      return type.is_pointer() || type.is_owned_array() || type.is_soa() ||
-             is_aggregate_type(type);
+      // An owned string is pointer-shaped at runtime (mangled `ptr`), so carrying
+      // Owned ownership for it is representable; a borrowed `string` is not, and
+      // the distinction is what keeps `Owned` from leaking into ordinary text.
+      return type.is_pointer() || type.is_owned_array() ||
+             type.is_owned_string() || type.is_soa() || is_aggregate_type(type);
     case ValueOwnership::Manual:
       return type.is_pointer();
     case ValueOwnership::Borrowed:

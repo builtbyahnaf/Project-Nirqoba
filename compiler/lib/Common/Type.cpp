@@ -183,6 +183,7 @@ string Type::to_string() const {
     case TypeKind::F64: return "f64";
     case TypeKind::Char: return "char";
     case TypeKind::String: return "string";
+    case TypeKind::OwnedString: return "string_owned";
     case TypeKind::Array:
       return element_type().to_string() + "[" + std::to_string(array_length()) + "]";
     case TypeKind::DynamicArray:
@@ -237,7 +238,8 @@ string Type::mangle() const {
     case TypeKind::U64: return "i64";
     case TypeKind::F32: return "f32";
     case TypeKind::F64: return "f64";
-    case TypeKind::String: return "ptr";
+    case TypeKind::String:
+    case TypeKind::OwnedString: return "ptr";
     case TypeKind::Array:
       return "A" + std::to_string(array_length()) + "_" + element_type().mangle();
     case TypeKind::DynamicArray:

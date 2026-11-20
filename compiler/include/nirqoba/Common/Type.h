@@ -83,6 +83,12 @@ enum class TypeKind {
   F64,
   Char,
   String,
+  // A string whose buffer the language owns and frees. It has the same runtime
+  // representation as `String` (one pointer, mangled `ptr`), which is why it is a
+  // distinct kind rather than a distinct ABI: the kind is what lets the checker
+  // attach a destructor and the verifier accept Owned ownership without granting
+  // either to a borrowed string.
+  OwnedString,
   Array,
   DynamicArray,
   OwnedArray,
@@ -128,6 +134,7 @@ class Type {
   static Type f64_type() { return Type(TypeKind::F64); }
   static Type char_type() { return Type(TypeKind::Char); }
   static Type string_type() { return Type(TypeKind::String); }
+  static Type owned_string_type() { return Type(TypeKind::OwnedString); }
 
   static Type array_type(Type element_type, std::size_t length);
   static Type dynamic_array_type(Type element_type);
@@ -147,7 +154,13 @@ class Type {
   bool is_valid() const { return kind_ != TypeKind::Error; }
   bool is_void() const { return kind_ == TypeKind::Void; }
   bool is_bool() const { return kind_ == TypeKind::Bool; }
-  bool is_string() const { return kind_ == TypeKind::String; }
+  // An owned string is a string at every use site: it can be read, indexed,
+  // compared and passed wherever text is expected. Only ownership and cleanup
+  // ask the more specific question below.
+  bool is_string() const {
+    return kind_ == TypeKind::String || kind_ == TypeKind::OwnedString;
+  }
+  bool is_owned_string() const { return kind_ == TypeKind::OwnedString; }
   bool is_char() const { return kind_ == TypeKind::Char; }
   bool is_f32() const { return kind_ == TypeKind::F32; }
   bool is_f64() const { return kind_ == TypeKind::F64; }
