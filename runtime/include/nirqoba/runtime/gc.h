@@ -540,20 +540,36 @@ struct nrq_gc_tlab_diag_facts nrq_gc_get_tlab_diag_facts(void);
 void nrq_gc_reset_tlab_diag_facts(void);
 
 // Region-based evacuating collector telemetry and configuration.
+// Region accounting. The object, byte and mark totals behind these counters are
+// derived from the page set by the collector's audit at the end of every cycle,
+// in both configurations, so a report between cycles describes the last audited
+// cycle rather than a number maintained incrementally.
+//
+// Reserved fields are exactly zero and always will be: evacuation was designed
+// and deliberately not built, because deferred region-backed allocation already
+// brought sweep time under a millisecond and copying put the headerless (H0) and
+// SoA representations at risk. They are kept so the struct's shape does not churn
+// and so the absence is visible rather than implied by a missing field.
 struct nrq_gc_region_stats {
   size_t region_bytes;
   size_t active_regions;
   size_t recycled_regions;
-  size_t survivor_regions;
-  size_t region_limit;
-  uint32_t trigger_percent;
-  uint32_t evacuation_threshold_percent;
-  uint64_t evacuated_regions;
-  uint64_t evacuated_objects;
-  uint64_t evacuated_bytes;
-  uint64_t bulk_reclaimed_regions;
-  uint64_t pinned_region_fallbacks;
+  size_t survivor_regions;              // reserved: survivor regions unused
+  size_t region_limit;                  // see nrq_gc_set_region_limit
+  uint32_t trigger_percent;             // see nrq_gc_set_trigger_percent
+  uint32_t evacuation_threshold_percent;  // reserved
+  uint64_t evacuated_regions;           // reserved
+  uint64_t evacuated_objects;           // reserved
+  uint64_t evacuated_bytes;             // reserved
+  uint64_t bulk_reclaimed_regions;      // regions recycled whole, in O(1)
+  uint64_t pinned_region_fallbacks;     // reserved
 };
+// Declares the region budget the pacemaker paces against. Zero (the default)
+// keeps the collector's original allocation-volume trigger.
+void nrq_gc_set_region_limit(size_t bytes);
+// Percentage of the budget that may be allocated before a cycle starts, clamped
+// to 1..100. Default 75.
+void nrq_gc_set_trigger_percent(uint32_t percent);
 struct nrq_gc_region_stats nrq_gc_get_region_stats(void);
 void nrq_gc_reset_region_stats(void);
 

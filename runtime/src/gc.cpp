@@ -85,7 +85,6 @@ struct GcRegion {
   uint8_t next_slot = 0;
   uint8_t active_pages = 0;
   bool is_survivor = false;
-  bool evacuation_candidate = false;
   bool recycled_dirty = false;
   bool has_unpublished = false;
   std::array<GcPage*, kPagesPerRegion> pages{};
@@ -1522,15 +1521,27 @@ std::vector<std::unique_ptr<GcPage>> gc_pages;
 // hold gc_mutex and are outside a sweep slice; objects detached into the sweep
 // list are not visited, which matches what the old single list reported while a
 // cycle was sweeping.
+// The only way a walk may read a page's start bits. Publication may have recorded
+// a window of objects as runs without writing their start bits, so a scan that
+// read the bitmap directly would travel a page whose live objects are invisible
+// to it - and an unseen live object is how a collector reclaims something still
+// in use. Every walk goes through here, so no new caller can forget. The sweep is
+// the one exception: it reads the page's counters, not its bits.
+const uint64_t* start_bits_for_scan_locked(GcPage& page) {
+  if (page.starts_pending) materialize_page_starts_locked(page);
+  if (page_uses_index(&page) || page.object_start_words == 0) return nullptr;
+  return page.object_starts;
+}
+
 template <typename Visit>
 void for_each_live_object_locked(Visit&& visit) {
   for (auto& entry : gc_pages) {
     GcPage* page = entry.get();
     if (!page) continue;
-    if (page->starts_pending) materialize_page_starts_locked(*page);
-    if (page_uses_index(page) || page->object_start_words == 0) continue;
+    const uint64_t* const start_bits = start_bits_for_scan_locked(*page);
+    if (!start_bits) continue;
     for (size_t word = 0; word < page->object_start_words; ++word) {
-      uint64_t bits = page->object_starts[word];
+      uint64_t bits = start_bits[word];
       while (bits != 0) {
         const unsigned index = static_cast<unsigned>(std::countr_zero(bits));
         bits &= bits - 1;
@@ -4226,8 +4237,16 @@ struct RegionTelemetry {
   uint64_t pinned_region_fallbacks = 0;
 };
 RegionTelemetry region_telemetry;
+// Phi's public knobs. Both are read by the pacemaker only; a budget of 0 means
+// "no budget", which is the behaviour every program had before Phi existed.
 std::atomic<size_t> gc_region_limit{0};
+// Percentage of the budget that may be allocated before a cycle starts, clamped
+// to 1..100 on the way in so a bad value cannot disable the accelerator or force
+// a collection on every allocation.
 std::atomic<uint32_t> gc_trigger_percent{75};
+// Set whenever a budget is declared. The safepoint poll reads this first so that
+// the common case - no budget - pays one load and one predictable branch.
+std::atomic<bool> pacemaker_budget_declared{false};
 std::atomic<uint32_t> gc_evacuation_threshold_percent{50};
 
 unsigned char* commit_region_storage_locked(bool& zeroed) {
@@ -4292,7 +4311,6 @@ GcRegion* acquire_region_locked(bool survivor) {
     region->next_slot = 0;
     region->active_pages = 0;
     region->is_survivor = survivor;
-    region->evacuation_candidate = false;
     region->has_unpublished = false;
     region->pages.fill(nullptr);
     region->pinned_objects = 0;
@@ -4348,7 +4366,6 @@ void recycle_region_locked(std::unique_ptr<GcRegion> region) {
   region->next_slot = 0;
   region->active_pages = 0;
   region->is_survivor = false;
-  region->evacuation_candidate = false;
   region->has_unpublished = false;
   region->pages.fill(nullptr);
   region->pinned_objects = 0;
@@ -5050,6 +5067,11 @@ void plan_next_cycle_locked() {
   }
   const size_t minors = minor_collections_since_major.load(std::memory_order_relaxed);
   bool major = false;
+  // A region budget is a bound, not a hint: once the live heap is at or past it,
+  // only a major cycle can bring it back down, because a minor cannot reclaim an
+  // old object that is no longer reachable.
+  const size_t region_budget = gc_region_limit.load(std::memory_order_relaxed);
+  if (region_budget != 0 && live_heap_bytes >= region_budget) major = true;
   if (minors >= kMaximumMinorInterval) {
     major = true;
   } else if (minors >= kMinimumMinorInterval) {
@@ -5091,8 +5113,44 @@ void begin_cycle(bool young_only) {
 // derives from. It runs at the end of a cycle, when marks must be gone and every
 // per-page count is final, and catches a missed reset before a recycled page can
 // carry stale state into the next cycle.
-void validate_page_metadata_locked() {
-  if constexpr (!nirq::runtime_debug_enabled) return;
+void audit_page_and_region_metadata_locked() {
+  // Region totals are derived, never maintained by hand. One pass over the page
+  // set recomputes them and checks the linkage they were derived from, so a page
+  // that was added or retired without its region hearing about it is caught here
+  // instead of silently biasing a pacemaker later. This runs in every
+  // configuration - a debug-only oracle would leave release builds unverified.
+  static std::vector<size_t> region_live;
+  static std::vector<size_t> region_bytes;
+  static std::vector<size_t> region_marked;
+  region_live.assign(gc_regions.size(), 0);
+  region_bytes.assign(gc_regions.size(), 0);
+  region_marked.assign(gc_regions.size(), 0);
+  for (const auto& entry : gc_pages) {
+    const GcPage* page = entry.get();
+    if (!page || !page->region) continue;
+    const GcRegion* region = page->region;
+    if (page->region_slot >= kPagesPerRegion)
+      nrq_runtime_fatal("GC page carries an out-of-range region slot");
+    if (region->region_index >= gc_regions.size() ||
+        gc_regions[region->region_index].get() != region)
+      nrq_runtime_fatal("GC page names a region that is not in the pool");
+    if (region->pages[page->region_slot] != page)
+      nrq_runtime_fatal("GC region slot does not name its page");
+    region_live[region->region_index] += page->live_objects;
+    region_bytes[region->region_index] += page->live_payload_bytes;
+    region_marked[region->region_index] += page->marked_objects;
+  }
+  for (size_t index = 0; index < gc_regions.size(); ++index) {
+    GcRegion* region = gc_regions[index].get();
+    if (!region) continue;
+    region->live_objects = region_live[index];
+    region->live_payload_bytes = region_bytes[index];
+    region->marked_objects = region_marked[index];
+    if (region->live_objects == 0 && region->live_payload_bytes != 0)
+      nrq_runtime_fatal("GC region retained bytes with no live objects");
+    if (region->marked_objects > region->live_objects)
+      nrq_runtime_fatal("GC region marked more objects than it holds");
+  }
   for (const auto& entry : gc_pages) {
     const GcPage* page = entry.get();
     if (!page) continue;
@@ -5124,7 +5182,7 @@ void validate_page_metadata_locked() {
 }
 
 void finish_cycle_locked(bool young_only) {
-  validate_page_metadata_locked();
+  audit_page_and_region_metadata_locked();
   statistics.collections = saturated_add(statistics.collections, 1);
   if (young_only) {
     minor_collections = saturated_add(minor_collections, 1);
@@ -5254,6 +5312,32 @@ void run_collection(bool young_only) {
   }
 }
 
+// Phi: the region-utilisation pacemaker. A program that declares a region budget
+// is asking the collector to start cycles from how much of that budget allocation
+// has consumed, instead of from a byte count that bears no relation to it. With no
+// budget set - the default - the threshold is SIZE_MAX and the decision is exactly
+// the one the collector made before, so nothing changes for existing programs.
+size_t region_pressure_threshold() {
+  const size_t limit = gc_region_limit.load(std::memory_order_relaxed);
+  if (limit == 0) return SIZE_MAX;
+  const uint32_t percent = std::clamp<uint32_t>(
+      gc_trigger_percent.load(std::memory_order_relaxed), 1u, 100u);
+  const size_t whole = limit / 100 * percent;
+  const size_t remainder = (limit % 100) * percent / 100;
+  return whole > SIZE_MAX - remainder ? SIZE_MAX : whole + remainder;
+}
+
+// The safepoint poll's threshold: whichever of the two policies asks for a cycle
+// first. Kept as a function of two relaxed atomic loads so a poll never has to
+// take the lock, and a poll that decides nothing is a load, a compare and a
+// predictable branch.
+size_t safepoint_poll_threshold() {
+  const size_t pressure = region_pressure_threshold();
+  const size_t volume =
+      allocation_accounting.collection_threshold.load(std::memory_order_relaxed);
+  return pressure < volume ? pressure : volume;
+}
+
 void maybe_collect_automatically() {
   if (collection_phase.load(std::memory_order_acquire) !=
       CollectionPhase::Idle)
@@ -5261,7 +5345,7 @@ void maybe_collect_automatically() {
   const bool should_collect = automatic_collection_enabled.load(
                                   std::memory_order_relaxed) &&
       allocation_accounting.bytes_since_collection.load(std::memory_order_relaxed) >=
-          allocation_accounting.collection_threshold.load(std::memory_order_relaxed);
+          safepoint_poll_threshold();
   if (!should_collect) return;
   const bool young_only =
       generational_collection_enabled.load(std::memory_order_relaxed) &&
@@ -7430,6 +7514,15 @@ uint64_t nrq_gc_root_frame_open(void* const* slots, size_t slot_count,
   if constexpr (nirq::runtime_debug_enabled) {
     validate_frame_descriptor(slots, slot_count, descriptor);
   }
+  // A safepoint poll, and a deliberately guarded one: nothing is computed unless a
+  // region budget has been declared, so a program that never uses the pacemaker
+  // pays a relaxed load and a predictable branch per frame rather than a second
+  // threshold calculation. It runs before this frame is published, so a collection
+  // can never observe half a frame.
+  if (pacemaker_budget_declared.load(std::memory_order_relaxed) &&
+      allocation_accounting.bytes_since_collection.load(
+          std::memory_order_relaxed) >= safepoint_poll_threshold())
+    maybe_collect_automatically();
   ShadowStack& stack = ensure_shadow_stack();
   if (stack.next_marker == UINT64_MAX)
     nrq_runtime_fatal("GC root frame marker space exhausted");
@@ -8491,6 +8584,18 @@ void nrq_gc_reset_tlab_diag_facts(void) {
   tlab_diag.reason_other.store(0, std::memory_order_relaxed);
   std::lock_guard<std::mutex> site_lock(tlab_diag.site_mutex);
   tlab_diag.site_count = 0;
+}
+
+void nrq_gc_set_region_limit(size_t bytes) {
+  // 0 means "no budget", which is the default and the behaviour of every program
+  // written before the pacemaker existed.
+  gc_region_limit.store(bytes, std::memory_order_relaxed);
+  pacemaker_budget_declared.store(bytes != 0, std::memory_order_relaxed);
+}
+
+void nrq_gc_set_trigger_percent(uint32_t percent) {
+  gc_trigger_percent.store(std::clamp<uint32_t>(percent, 1u, 100u),
+                           std::memory_order_relaxed);
 }
 
 struct nrq_gc_region_stats nrq_gc_get_region_stats(void) {
