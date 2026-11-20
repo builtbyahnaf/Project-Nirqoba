@@ -33,6 +33,7 @@ string_view token_kind_name(TokenKind kind) {
     case TokenKind::KwF64: return "f64";
     case TokenKind::KwAs: return "as";
     case TokenKind::KwString: return "string";
+    case TokenKind::KwStringOwned: return "string_owned";
     case TokenKind::KwBool: return "bool";
     case TokenKind::KwVoid: return "void";
     case TokenKind::KwTrue: return "true";
@@ -108,6 +109,7 @@ TokenKind keyword_kind(string_view text) {
       {"var", TokenKind::KwVar},           {"const", TokenKind::KwConst},
       {"return", TokenKind::KwReturn},     {"print", TokenKind::KwPrint},
       {"int", TokenKind::KwInt},           {"string", TokenKind::KwString},
+      {"string_owned", TokenKind::KwStringOwned},
       {"bool", TokenKind::KwBool},         {"void", TokenKind::KwVoid},
       {"true", TokenKind::KwTrue},         {"false", TokenKind::KwFalse},
       {"i8", TokenKind::KwI8},             {"i16", TokenKind::KwI16},

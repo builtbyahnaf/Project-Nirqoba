@@ -332,6 +332,7 @@ Type parse_type_name(string_view spelling) {
   if (spelling == "f64") return Type::f64_type();
   if (spelling == "char") return Type::char_type();
   if (spelling == "string") return Type::string_type();
+  if (spelling == "string_owned") return Type::owned_string_type();
   return Type::error();
 }
 

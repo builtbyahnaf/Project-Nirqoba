@@ -32,6 +32,9 @@ enum class TokenKind {
   KwPrint,
   KwInt,
   KwString,
+  // `string_owned`: text whose buffer the language owns and frees. A distinct
+  // keyword rather than a library type, because ownership is part of the type.
+  KwStringOwned,
   KwBool,
   KwVoid,
   KwTrue,

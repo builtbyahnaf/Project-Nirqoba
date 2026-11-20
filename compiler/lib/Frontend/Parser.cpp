@@ -31,6 +31,7 @@ bool is_type_keyword(TokenKind kind) {
     case TokenKind::KwF32:
     case TokenKind::KwF64:
     case TokenKind::KwString:
+    case TokenKind::KwStringOwned:
     case TokenKind::KwBool:
     case TokenKind::KwVoid:
       return true;
