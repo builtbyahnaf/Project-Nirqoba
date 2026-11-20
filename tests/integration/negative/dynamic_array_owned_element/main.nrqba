@@ -1,9 +1,0 @@
-// Owned elements need the teardown loop, which does not exist yet, so the type
-// itself must be refused rather than accepted and leaked at scope exit.
-int function take(dynamic_array<string_owned> texts) {
-    return 0;
-}
-
-int function main() {
-    return 0;
-}

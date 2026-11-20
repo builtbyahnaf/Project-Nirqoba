@@ -4306,6 +4306,16 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
   return Type::struct_type(expr.struct_name(), move(resolved_fields));
 }
 
+// An element kind whose values own storage has to be destroyed element by
+// element when the container dies, so a container may only hold kinds its
+// destructor can express. Owned strings are the one owning kind with an element
+// teardown today; the rest stay refused rather than accepted and leaked.
+static bool element_needs_teardown(const Type& type) {
+  return type.is_owned_string() || type.is_owned_pointer() ||
+         type.is_owned_array() || type.is_soa() || type.is_dynamic_array() ||
+         type.is_shared_pointer() || type.is_managed_pointer();
+}
+
 Type TypeChecker::check_call(CallExpr& call) {
   // The only way to obtain a dynamic array. It starts empty: capacity 0 is the
   // documented empty representation, so the value carries a null buffer and the
@@ -4325,11 +4335,11 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "'memory.dynamic_array<T>()' takes no arguments; an array "
                          "starts empty and grows through append");
     const Type element_type = resolve_aggregate_type(call.generic_argument());
-    if (element_type.is_owned_string() || element_type.is_owned_array() ||
-        element_type.is_soa()) {
+    if (!element_type.is_owned_string() && element_needs_teardown(element_type)) {
       diagnostics_.error(diag::kTypeMismatch, call.location(),
-                         "dynamic arrays cannot hold owned elements yet; the element "
-                         "teardown loop is not implemented");
+                         "dynamic arrays cannot hold '" + element_type.to_string() +
+                             "' elements yet; element teardown is implemented for "
+                             "owned strings only");
       return Type::error();
     }
     if (element_type.byte_size() == 0) {

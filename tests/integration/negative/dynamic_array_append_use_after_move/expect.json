@@ -1,0 +1,5 @@
+{
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": "error[NRQ3033]: use of 'text' after its allocation was deallocated"
+}

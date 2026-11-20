@@ -1,0 +1,8 @@
+// A dynamic array destroys its elements when it falls out of scope. Owned
+// strings have that teardown; a nested container would need its own recursive
+// loop, so the element kind stays refused instead of accepting and leaking the
+// inner buffers.
+int function main() {
+    var matrix = memory.dynamic_array<int[]>();
+    return 0;
+}

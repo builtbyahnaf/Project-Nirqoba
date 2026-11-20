@@ -1,0 +1,10 @@
+// Appending an owned string hands it to the array. The element is now the
+// array's, and the binding that supplied it no longer owns anything, so reading
+// it afterwards is a use-after-move rather than a second owner of one buffer.
+int function main() {
+    var texts = memory.dynamic_array<string_owned>();
+    var text: string_owned = file.read_text_owned("tests/integration/negative/dynamic_array_append_use_after_move/data.txt");
+    memory.array_append(texts, text);
+    print(text.length);
+    return 0;
+}

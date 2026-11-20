@@ -1,0 +1,5 @@
+{
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": "dynamic arrays cannot hold 'int[]' elements yet; element teardown is implemented for owned strings only"
+}
