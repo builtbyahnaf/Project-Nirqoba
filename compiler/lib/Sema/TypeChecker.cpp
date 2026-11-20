@@ -1158,6 +1158,14 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
   }
   // An owned string is not pointer-shaped in the type system, but it owns a
   // buffer exactly like one, so it has to reach the cleanup bookkeeping below.
+  // The type parses and resolves, but no value of it exists yet: the backing
+  // buffer, growth path and teardown are the next slice. Rejecting a binding here
+  // keeps the surface honest instead of accepting a declaration codegen cannot
+  // lower.
+  if (binding_type.is_dynamic_array()) {
+    diagnostics_.error(diag::kTypeMismatch, declaration.location(),
+                       "dynamic_array instantiation is not yet supported");
+  }
   if (binding_type.is_pointer() || binding_type.is_owned_array() ||
       contains_owned_array(binding_type) || binding_type.is_owned_string()) {
     symbol.owns_allocation = expression_creates_owned_pointer(declaration.initializer());
