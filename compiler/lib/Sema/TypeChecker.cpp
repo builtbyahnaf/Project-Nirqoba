@@ -5749,6 +5749,44 @@ Type TypeChecker::check_call(CallExpr& call) {
       }
       continue;
     }
+    // Owned text has no pointer shape in the type system, so it needs its own
+    // transfer rule: passing it to an owning parameter hands the buffer to the
+    // callee, which releases it at its own scope exit. The caller's automatic
+    // cleanup must therefore stand down, which is what the transfer flag tells
+    // lowering.
+    if (sig.parameter_types[i].is_owned_string()) {
+      const Expr& argument = *call.arguments()[i];
+      const Symbol* source = argument.kind() == Expr::Kind::Name
+                                 ? find_root_symbol(argument, symbols_)
+                                 : nullptr;
+      if (source && source->type != sig.parameter_types[i]) source = nullptr;
+      if (source && source->borrowed) {
+        diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                           "borrowed text cannot be transferred as an owned buffer");
+      } else if (source &&
+                 std::find(ownership_transfers.begin(), ownership_transfers.end(),
+                           source->allocation_id) != ownership_transfers.end()) {
+        diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                           "the same buffer cannot be transferred twice in one call");
+      } else if (source && source->moved) {
+        diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                           "value was already moved");
+      } else if (!source && argument.ownership() != ValueOwnership::Owned) {
+        // A live name of owned-text type already owns its buffer; only a value
+        // with no owner in scope has to prove it is an owned one.
+        diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                           "owning parameter requires an owned value");
+      } else {
+        // The value being handed over is an owned one from here on: ownership
+        // travels with the expression so lowering emits a Move rather than a
+        // borrow, and the verifier can reject a later use of the moved name.
+        const_cast<Expr&>(argument).set_ownership(ValueOwnership::Owned);
+        const_cast<Expr&>(argument).set_transfers_ownership();
+        if (source) ownership_transfers.push_back(source->allocation_id);
+      }
+      continue;
+    }
+
     if (!sig.parameter_types[i].is_pointer()) continue;
     const bool direct_address_of =
         call.arguments()[i]->kind() == Expr::Kind::Unary &&
