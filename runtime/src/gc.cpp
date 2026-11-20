@@ -61,7 +61,39 @@ namespace {
 
 constexpr size_t kGcPageShift = 16;
 constexpr size_t kGcPageBytes = size_t{1} << kGcPageShift;
+constexpr size_t kGcRegionShift = 21;
+constexpr size_t kGcRegionBytes = size_t{1} << kGcRegionShift;
+constexpr size_t kPagesPerRegion = kGcRegionBytes / kGcPageBytes;
 constexpr size_t kObjectStartAlignment = alignof(std::max_align_t);
+
+static_assert(kGcRegionBytes == (size_t{2} << 20),
+              "GC regions must be 2 MiB aligned blocks");
+static_assert((kGcRegionBytes & (kGcRegionBytes - 1)) == 0,
+              "GC region size must be a power of two");
+static_assert(kPagesPerRegion == 32,
+              "Each 2 MiB GC region must host 32 64-KiB pages");
+
+struct GcPage;
+
+// Fixed-size 2 MiB aligned region backing ordinary GC pages and TLAB slabs.
+// Regions enable O(1) bulk reclamation of dead or evacuated blocks and track
+// live/pinned density for survivor evacuation candidate selection.
+struct GcRegion {
+  unsigned char* base = nullptr;
+  size_t capacity = kGcRegionBytes;
+  uint8_t next_slot = 0;
+  uint8_t active_pages = 0;
+  bool is_survivor = false;
+  bool evacuation_candidate = false;
+  bool recycled_dirty = false;
+  bool has_unpublished = false;
+  std::array<GcPage*, kPagesPerRegion> pages{};
+  size_t pinned_objects = 0;
+  size_t live_objects = 0;
+  size_t live_payload_bytes = 0;
+  size_t marked_objects = 0;
+  size_t cycle_pinned_objects = 0;
+};
 
 // The representation every object on a page uses. A page is dedicated to one
 // representation so an object never has to describe its own header size: the
@@ -101,6 +133,10 @@ inline bool page_is_representable(PageKind kind) {
 struct GcPage {
   unsigned char* storage = nullptr;
   size_t capacity = 0;
+  // Owning 2 MiB region and 64 KiB slot index [0..31] for ordinary pages.
+  // Large pages (> kGcPageBytes) keep `region == nullptr`.
+  GcRegion* region = nullptr;
+  uint8_t region_slot = 0;
   // Representation metadata. A headerless page uses one fixed span
   // (`slot_bytes`) and one layout (`uniform_layout`) for every object, which is
   // what lets the object carry no header at all. Compact and extended pages
@@ -3955,6 +3991,188 @@ size_t retained_page_bytes = 0;
 // The largest page a run will carve. A single object can be far larger than a run,
 // and that case still needs the direct mapping.
 constexpr size_t kPageRunMaxCarveBytes = kPageRunBytes / 2;
+
+// ---------------------------------------------------------------------------
+// 2 MiB aligned GC Region Arena & Region Pool (Phase Sigma)
+// ---------------------------------------------------------------------------
+// Windows VirtualAlloc guarantees 64 KiB alignment, not 2 MiB alignment. Each
+// RegionArena reserves (kRegionsPerArena + 1) * 2 MiB and aligns its base up
+// to a 2 MiB boundary so every GcRegion base satisfies:
+//   (reinterpret_cast<uintptr_t>(region->base) & (kGcRegionBytes - 1)) == 0
+// Commit happens one 2 MiB region at a time; reclaimed regions stay warm in
+// `recycled_regions` up to `kMaxRecycledRegions` and decommit beyond that cap.
+constexpr size_t kRegionsPerArena = 8;
+constexpr size_t kRegionArenaReserveBytes =
+    (kRegionsPerArena + 1) * kGcRegionBytes;
+constexpr size_t kMaxRecycledRegions = 24;
+
+struct RegionArena {
+  unsigned char* raw_base = nullptr;
+  unsigned char* aligned_base = nullptr;
+  size_t next_region = 0;
+};
+
+std::deque<RegionArena> region_arenas;
+RegionArena* active_region_arena = nullptr;
+std::vector<std::unique_ptr<GcRegion>> gc_regions;
+std::vector<std::unique_ptr<GcRegion>> recycled_regions;
+std::vector<unsigned char*> decommitted_region_bases;
+GcRegion* active_alloc_region = nullptr;
+GcRegion* active_survivor_region = nullptr;
+
+struct RegionTelemetry {
+  uint64_t evacuated_regions = 0;
+  uint64_t evacuated_objects = 0;
+  uint64_t evacuated_bytes = 0;
+  uint64_t bulk_reclaimed_regions = 0;
+  uint64_t pinned_region_fallbacks = 0;
+};
+RegionTelemetry region_telemetry;
+std::atomic<size_t> gc_region_limit{0};
+std::atomic<uint32_t> gc_trigger_percent{75};
+std::atomic<uint32_t> gc_evacuation_threshold_percent{50};
+
+unsigned char* commit_region_storage_locked(bool& zeroed) {
+  zeroed = false;
+  if (!decommitted_region_bases.empty()) {
+    unsigned char* base = decommitted_region_bases.back();
+#if defined(_WIN32)
+    if (!::VirtualAlloc(base, kGcRegionBytes, MEM_COMMIT, PAGE_READWRITE))
+      return nullptr;
+#endif
+    decommitted_region_bases.pop_back();
+    zeroed = true;
+    return base;
+  }
+  for (;;) {
+    if (!active_region_arena ||
+        active_region_arena->next_region >= kRegionsPerArena) {
+      try {
+        RegionArena arena;
+#if defined(_WIN32)
+        arena.raw_base = static_cast<unsigned char*>(::VirtualAlloc(
+            nullptr, kRegionArenaReserveBytes, MEM_RESERVE, PAGE_READWRITE));
+#else
+        arena.raw_base = static_cast<unsigned char*>(
+            std::malloc(kRegionArenaReserveBytes));
+#endif
+        if (!arena.raw_base) return nullptr;
+        const uintptr_t raw = reinterpret_cast<uintptr_t>(arena.raw_base);
+        const uintptr_t aligned =
+            (raw + kGcRegionBytes - 1) & ~(kGcRegionBytes - 1);
+        arena.aligned_base = reinterpret_cast<unsigned char*>(aligned);
+        arena.next_region = 0;
+        region_arenas.push_back(arena);
+      } catch (...) {
+        return nullptr;
+      }
+      active_region_arena = &region_arenas.back();
+    }
+    unsigned char* base = active_region_arena->aligned_base +
+                          active_region_arena->next_region * kGcRegionBytes;
+#if defined(_WIN32)
+    if (!::VirtualAlloc(base, kGcRegionBytes, MEM_COMMIT, PAGE_READWRITE)) {
+      active_region_arena->next_region = kRegionsPerArena;
+      active_region_arena = nullptr;
+      continue;
+    }
+    zeroed = true;
+#else
+    std::memset(base, 0, kGcRegionBytes);
+    zeroed = true;
+#endif
+    ++active_region_arena->next_region;
+    return base;
+  }
+}
+
+GcRegion* acquire_region_locked(bool survivor) {
+  std::unique_ptr<GcRegion> region;
+  if (!recycled_regions.empty()) {
+    region = std::move(recycled_regions.back());
+    recycled_regions.pop_back();
+    region->next_slot = 0;
+    region->active_pages = 0;
+    region->is_survivor = survivor;
+    region->evacuation_candidate = false;
+    region->has_unpublished = false;
+    region->pages.fill(nullptr);
+    region->pinned_objects = 0;
+    region->live_objects = 0;
+    region->live_payload_bytes = 0;
+    region->marked_objects = 0;
+    region->cycle_pinned_objects = 0;
+  } else {
+    bool zeroed = false;
+    unsigned char* base = commit_region_storage_locked(zeroed);
+    if (!base) return nullptr;
+    if constexpr (nirq::runtime_debug_enabled) {
+      if ((reinterpret_cast<uintptr_t>(base) & (kGcRegionBytes - 1)) != 0)
+        nrq_runtime_fatal("GC region base is not 2 MiB aligned");
+    }
+    try {
+      region = std::make_unique<GcRegion>();
+    } catch (...) {
+#if defined(_WIN32)
+      ::VirtualFree(base, kGcRegionBytes, MEM_DECOMMIT);
+#endif
+      try {
+        decommitted_region_bases.push_back(base);
+      } catch (...) {
+      }
+      return nullptr;
+    }
+    region->base = base;
+    region->capacity = kGcRegionBytes;
+    region->is_survivor = survivor;
+    region->recycled_dirty = !zeroed;
+  }
+  GcRegion* raw = region.get();
+  try {
+    gc_regions.push_back(std::move(region));
+  } catch (...) {
+    try {
+      recycled_regions.push_back(std::move(region));
+    } catch (...) {
+    }
+    return nullptr;
+  }
+  return raw;
+}
+
+void recycle_region_locked(std::unique_ptr<GcRegion> region) {
+  if (!region) return;
+  if (active_alloc_region == region.get()) active_alloc_region = nullptr;
+  if (active_survivor_region == region.get()) active_survivor_region = nullptr;
+  region->next_slot = 0;
+  region->active_pages = 0;
+  region->is_survivor = false;
+  region->evacuation_candidate = false;
+  region->has_unpublished = false;
+  region->pages.fill(nullptr);
+  region->pinned_objects = 0;
+  region->live_objects = 0;
+  region->live_payload_bytes = 0;
+  region->marked_objects = 0;
+  region->cycle_pinned_objects = 0;
+  if (recycled_regions.size() < kMaxRecycledRegions) {
+    region->recycled_dirty = true;
+    try {
+      recycled_regions.push_back(std::move(region));
+      return;
+    } catch (...) {
+    }
+  }
+  unsigned char* base = region->base;
+#if defined(_WIN32)
+  if (base && ::VirtualFree(base, kGcRegionBytes, MEM_DECOMMIT)) {
+    try {
+      decommitted_region_bases.push_back(base);
+    } catch (...) {
+    }
+  }
+#endif
+}
 
 PageRun* find_page_run(unsigned char* storage) {
   for (PageRun& run : page_runs) {
@@ -7923,6 +8141,34 @@ void nrq_gc_reset_tlab_diag_facts(void) {
   tlab_diag.reason_other.store(0, std::memory_order_relaxed);
   std::lock_guard<std::mutex> site_lock(tlab_diag.site_mutex);
   tlab_diag.site_count = 0;
+}
+
+struct nrq_gc_region_stats nrq_gc_get_region_stats(void) {
+  HeapLockGuard lock(gc_mutex);
+  nrq_gc_region_stats stats{};
+  stats.region_bytes = kGcRegionBytes;
+  stats.active_regions = gc_regions.size();
+  stats.recycled_regions = recycled_regions.size();
+  size_t survivors = 0;
+  for (const auto& region : gc_regions) {
+    if (region && region->is_survivor) ++survivors;
+  }
+  stats.survivor_regions = survivors;
+  stats.region_limit = gc_region_limit.load(std::memory_order_relaxed);
+  stats.trigger_percent = gc_trigger_percent.load(std::memory_order_relaxed);
+  stats.evacuation_threshold_percent =
+      gc_evacuation_threshold_percent.load(std::memory_order_relaxed);
+  stats.evacuated_regions = region_telemetry.evacuated_regions;
+  stats.evacuated_objects = region_telemetry.evacuated_objects;
+  stats.evacuated_bytes = region_telemetry.evacuated_bytes;
+  stats.bulk_reclaimed_regions = region_telemetry.bulk_reclaimed_regions;
+  stats.pinned_region_fallbacks = region_telemetry.pinned_region_fallbacks;
+  return stats;
+}
+
+void nrq_gc_reset_region_stats(void) {
+  HeapLockGuard lock(gc_mutex);
+  region_telemetry = RegionTelemetry{};
 }
 
 }  // extern "C"

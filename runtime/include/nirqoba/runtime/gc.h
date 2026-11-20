@@ -539,6 +539,24 @@ void nrq_gc_set_tlab_diag(int32_t enabled);
 struct nrq_gc_tlab_diag_facts nrq_gc_get_tlab_diag_facts(void);
 void nrq_gc_reset_tlab_diag_facts(void);
 
+// Region-based evacuating collector telemetry and configuration.
+struct nrq_gc_region_stats {
+  size_t region_bytes;
+  size_t active_regions;
+  size_t recycled_regions;
+  size_t survivor_regions;
+  size_t region_limit;
+  uint32_t trigger_percent;
+  uint32_t evacuation_threshold_percent;
+  uint64_t evacuated_regions;
+  uint64_t evacuated_objects;
+  uint64_t evacuated_bytes;
+  uint64_t bulk_reclaimed_regions;
+  uint64_t pinned_region_fallbacks;
+};
+struct nrq_gc_region_stats nrq_gc_get_region_stats(void);
+void nrq_gc_reset_region_stats(void);
+
 #ifdef __cplusplus
 }
 #endif
