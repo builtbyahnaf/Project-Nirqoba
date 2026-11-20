@@ -2017,6 +2017,17 @@ static bool has_cleanup_domain(const Expr& expr, const SymbolTable& symbols,
   return actual == expected;
 }
 
+// A container's length and capacity are properties, not fields: they describe
+// the value's own words and cannot be assigned. Naming the rule once keeps the
+// write and compound-write paths from disagreeing about what is read-only.
+static const MemberAccessExpr* read_only_array_property(const Expr& target) {
+  if (target.kind() != Expr::Kind::MemberAccess) return nullptr;
+  const auto& member = static_cast<const MemberAccessExpr&>(target);
+  if (member.member() != "length" && member.member() != "capacity")
+    return nullptr;
+  return member.base().type().is_dynamic_array() ? &member : nullptr;
+}
+
 void TypeChecker::check_assignment(AssignmentStmt& assignment) {
   if (assignment.is_simple_name()) {
     const Symbol* target = symbols_.lookup(assignment.name());
@@ -2032,6 +2043,17 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
              ? symbols_.lookup(assignment.name())->type : Type::error())
       : check_expression(const_cast<Expr&>(assignment.target()));
   checking_lvalue_ = was_checking_lvalue;
+
+  // The read-only property rule fires before the general assignment checks, so a
+  // write to `.length` or `.capacity` is reported as the mutation it is instead
+  // of a missing lvalue or a value/type mismatch.
+  if (const MemberAccessExpr* property =
+          read_only_array_property(assignment.target())) {
+    diagnostics_.error(diag::kImmutableAssignment, assignment.target().location(),
+                       "cannot mutate read-only array property '." +
+                           property->member() + "'");
+    return;
+  }
 
   // 17.1: a write through an explicitly immutable borrowed pointer or field
   // is a mutation of the borrowed owner, so only `borrow mut` contracts allow
@@ -2549,6 +2571,17 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
 void TypeChecker::check_compound_assignment(CompoundAssignmentStmt& assignment) {
   const Type value_type = check_expression(const_cast<Expr&>(assignment.value()));
   const Type target_type = check_expression(const_cast<Expr&>(assignment.target()));
+
+  // `arr.length += 1` is the same mutation as `arr.length = ...`, so it gets the
+  // same rule rather than falling through to a missing-lvalue failure in code
+  // generation.
+  if (const MemberAccessExpr* property =
+          read_only_array_property(assignment.target())) {
+    diagnostics_.error(diag::kImmutableAssignment, assignment.target().location(),
+                       "cannot mutate read-only array property '." +
+                           property->member() + "'");
+    return;
+  }
 
   string immutable_subject;
   bool immutable_is_field = false;
@@ -3955,6 +3988,12 @@ Type TypeChecker::check_member_access(MemberAccessExpr& expr) {
   if ((base_type.is_dynamic_array() || base_type.is_owned_array() ||
        base_type.is_array_view()) &&
       expr.member() == "length") {
+    return Type::int_type();
+  }
+
+  // A dynamic array's capacity is the number of slots its buffer can hold before
+  // it must grow. Both properties are 64-bit counts read from the value itself.
+  if (base_type.is_dynamic_array() && expr.member() == "capacity") {
     return Type::int_type();
   }
 

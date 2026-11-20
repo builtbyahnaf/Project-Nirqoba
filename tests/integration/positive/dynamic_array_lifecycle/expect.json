@@ -1,5 +1,5 @@
 {
   "mode": "build_and_run",
   "expect_exit": 0,
-  "expect_stdout": "0\n"
+  "expect_stdout": "0\n0\n0\n"
 }

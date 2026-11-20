@@ -1679,11 +1679,28 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       const Type result_type = expr.type().is_valid() ? expr.type() : Type::error();
       const int field_idx = mem.is_tuple_access() ? mem.tuple_index() : -1;
 
-      // `value.length` on a string or a dynamic array is a length query, not a
+      // A dynamic array's length and capacity are its second and third words, so
+      // the property read is a field extraction of the value the program
+      // already holds, never a runtime query.
+      if (base_val.type.is_dynamic_array() &&
+          (mem.member() == "length" || mem.member() == "capacity")) {
+        tir::Value result = function.allocate_value(result_type);
+        tir::Op extract;
+        extract.kind = tir::OpKind::AggregateExtract;
+        extract.location = mem.location();
+        extract.operand = base_val;
+        extract.field_index = mem.member() == "length" ? 1 : 2;
+        extract.string_value = mem.member();
+        extract.result = result;
+        function.add_operation(std::move(extract));
+        return result;
+      }
+
+      // `value.length` on a string or an owned array is a length query, not a
       // field of an aggregate.
       if (mem.member() == "length" &&
-          (base_val.type.is_string() || base_val.type.is_dynamic_array() ||
-           base_val.type.is_owned_array() || base_val.type.is_array_view())) {
+          (base_val.type.is_string() || base_val.type.is_owned_array() ||
+           base_val.type.is_array_view())) {
         tir::Value result = function.allocate_value(result_type);
         tir::Op length;
         length.kind = tir::OpKind::Length;

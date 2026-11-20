@@ -1,0 +1,7 @@
+// Length is the container's own count. Writing it would make the length and the
+// buffer disagree, so the property is read-only and the write is rejected.
+int function main() {
+    var values: dynamic_array<int> = memory.dynamic_array<int>();
+    values.length = 4;
+    return 0;
+}

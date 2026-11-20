@@ -1,0 +1,7 @@
+// Capacity is a growth decision the runtime makes, not a value a program may
+// write: a larger capacity without a larger buffer would be unaddressable.
+int function main() {
+    var values: dynamic_array<int> = memory.dynamic_array<int>();
+    values.capacity = 4;
+    return 0;
+}
