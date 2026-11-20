@@ -1,0 +1,10 @@
+// The frontend resolves `dynamic_array<T>`. The value ABI, growth path and
+// teardown arrive in the next slice, so this program only proves the type is
+// recognised where a type is written.
+int function total(dynamic_array<int> values) {
+    return 0;
+}
+
+int function main() {
+    return 0;
+}
