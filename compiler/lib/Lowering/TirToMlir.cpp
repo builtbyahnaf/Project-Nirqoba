@@ -1941,6 +1941,87 @@ class FunctionTranslator {
   }
 
   // Root registration is likewise a per-activation action: the same slot must
+  // The container's half of the element contract: a kind whose values own
+  // storage maps to the runtime call that releases one element, and an empty
+  // result means the element is trivial and the buffer alone is the allocation.
+  // Sema admits exactly the kinds with an entry here.
+  static std::string element_release_symbol(const Type& element_type) {
+    if (element_type.is_owned_string()) return "nrq_file_text_release";
+    return {};
+  }
+
+  static bool element_owns_storage(const Type& type) {
+    return type.is_owned_string() || type.is_owned_pointer() ||
+           type.is_owned_array() || type.is_soa() ||
+           type.is_dynamic_array() || type.is_shared_pointer() ||
+           type.is_managed_pointer();
+  }
+
+  // Destroys the owned elements of a container before its buffer is released.
+  //
+  // The loop runs backwards from `length`, not from `capacity`: the slots past
+  // the length were never written, so reading them would release garbage, and
+  // reverse order tears a partially filled buffer down from the most recently
+  // stored element. The counter lives in a slot because it is carried across the
+  // back edge, and the loop is emitted where the function already has a frame.
+  void emit_element_teardown_loop(mlir::Value buffer, mlir::Value length,
+                                  const Type& element_type,
+                                  mlir::Type element_mlir,
+                                  const std::string& release_symbol,
+                                  SourceLocation source_location,
+                                  mlir::Location loc) {
+    const mlir::Type i64 = builder_.getI64Type();
+    const mlir::Type ptr = llvm_ptr_type(ctx_);
+    auto constant = [&](int64_t value) {
+      return builder_
+          .create<mlir::LLVM::ConstantOp>(
+              loc, i64, builder_.getI64IntegerAttr(value))
+          .getResult();
+    };
+    mlir::Value counter = alloca_at_entry(i64, loc);
+    if (!counter) {
+      diag_.error("NRQ4005", source_location,
+                  "internal: element teardown needs a function entry block");
+      return;
+    }
+    builder_.create<mlir::LLVM::StoreOp>(loc, length, counter);
+
+    mlir::Block* head = func_op_.addBlock();
+    mlir::Block* body = func_op_.addBlock();
+    mlir::Block* done = func_op_.addBlock();
+    builder_.create<mlir::LLVM::BrOp>(loc, head);
+
+    builder_.setInsertionPointToStart(head);
+    mlir::Value stored = builder_.create<mlir::LLVM::LoadOp>(
+        loc, i64, counter).getResult();
+    mlir::Value remaining = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::ugt, stored, constant(0)).getResult();
+    builder_.create<mlir::LLVM::CondBrOp>(loc, remaining, body, done);
+
+    builder_.setInsertionPointToStart(body);
+    mlir::Value index = builder_.create<mlir::LLVM::SubOp>(
+        loc, stored, constant(1)).getResult();
+    builder_.create<mlir::LLVM::StoreOp>(loc, index, counter);
+    mlir::Value slot = builder_
+        .create<mlir::LLVM::GEPOp>(loc, ptr, element_mlir, buffer,
+                                   mlir::ValueRange{index})
+        .getResult();
+    auto element = builder_.create<mlir::LLVM::LoadOp>(loc, element_mlir, slot);
+    // The element sits at `index * stride`, so it is aligned whenever the buffer
+    // is, which the allocator guarantees.
+    const uint64_t element_alignment =
+        std::max<uint64_t>(1, element_type.alignment());
+    if (element_alignment > 1) element.setAlignment(element_alignment);
+    auto release = ensure_runtime_fn(
+        module_, builder_, release_symbol,
+        mlir::LLVM::LLVMVoidType::get(ctx_), {element_mlir});
+    builder_.create<mlir::LLVM::CallOp>(loc, release,
+                                        mlir::ValueRange{element.getResult()});
+    builder_.create<mlir::LLVM::BrOp>(loc, head);
+
+    builder_.setInsertionPointToStart(done);
+  }
+
   // Destroying an aggregate walks its physical fields in reverse declaration
   // order. The recursion carries a path of aggregate indices, so one extract per
   // leaf is enough; no per-traversal callable is built, which keeps destruction
@@ -4627,11 +4708,41 @@ class FunctionTranslator {
         }
 
         // A dynamic array's destructor releases the buffer the container owns,
-        // not the three-word value itself, so the runtime receives field 0.
+        // not the three-word value itself, so the runtime receives field 0. An
+        // element that owns storage is destroyed first, in reverse index order
+        // and only up to `length`, and the buffer is released afterwards.
         if (op.callee == "nrq_array_free" && args.size() == 1 &&
             op.arguments[0].type.is_dynamic_array()) {
+          const Type& element_type =
+              op.arguments[0].type.element_type();
           mlir::Value buffer = builder_.create<mlir::LLVM::ExtractValueOp>(
               loc, args[0], builder_.getDenseI64ArrayAttr({0})).getResult();
+          const std::string element_release =
+              element_release_symbol(element_type);
+          if (!element_release.empty()) {
+            mlir::Type element_mlir =
+                tir_type_to_mlir(element_type, ctx_, builder_);
+            if (!element_mlir) {
+              diag_.error("NRQ4005", op.location,
+                          "internal: element type '" +
+                              element_type.to_string() +
+                              "' has no lowering for array teardown");
+              return false;
+            }
+            mlir::Value length = builder_.create<mlir::LLVM::ExtractValueOp>(
+                loc, args[0], builder_.getDenseI64ArrayAttr({1})).getResult();
+            emit_element_teardown_loop(buffer, length, element_type,
+                                       element_mlir, element_release,
+                                       op.location, loc);
+          } else if (element_owns_storage(element_type)) {
+            // Sema admits only the kinds with a teardown, so reaching here means
+            // the two halves of the contract have drifted apart.
+            diag_.error("NRQ4005", op.location,
+                        "internal: no element teardown for dynamic array element "
+                        "type '" +
+                            element_type.to_string() + "'");
+            return false;
+          }
           auto release = ensure_runtime_fn(
               module_, builder_, "nrq_array_free",
               mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});

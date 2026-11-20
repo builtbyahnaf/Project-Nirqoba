@@ -1,0 +1,9 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 0,
+  "expect_stdout": "3\n8\n3\n1\n6\n5\n6\n0\n0\n",
+  "expect_ir_counts": {
+    "call void @nrq_file_text_release": 1,
+    "call void @nrq_array_free": 1
+  }
+}

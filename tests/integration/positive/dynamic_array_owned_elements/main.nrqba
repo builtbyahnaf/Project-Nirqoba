@@ -1,0 +1,28 @@
+// Recursive element destruction. The array grows to capacity 8 while holding 3
+// owned strings, so the teardown loop must stop at `length`: releasing slots up
+// to `capacity` would free three never-written slots of garbage. Each append
+// moves its string into the array, so the block's exit is the only owner left.
+//
+// The two live counts are the proof. Three texts are alive while the array holds
+// them and none afterwards, and the array's own buffer is released exactly once.
+int function main() {
+    {
+        var texts = memory.dynamic_array<string_owned>();
+        var first: string_owned = file.read_text_owned("tests/integration/positive/dynamic_array_owned_elements/a.txt");
+        var second: string_owned = file.read_text_owned("tests/integration/positive/dynamic_array_owned_elements/b.txt");
+        var third: string_owned = file.read_text_owned("tests/integration/positive/dynamic_array_owned_elements/c.txt");
+        memory.array_append(texts, first);
+        memory.array_append(texts, second);
+        memory.array_append(texts, third);
+        print(texts.length);
+        print(texts.capacity);
+        print(file.text_live_count());
+        print(memory.array_live_count());
+        print(texts[0].length);
+        print(texts[1].length);
+        print(texts[2].length);
+    }
+    print(file.text_live_count());
+    print(memory.array_live_count());
+    return 0;
+}
