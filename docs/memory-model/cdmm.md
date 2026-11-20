@@ -6,9 +6,13 @@ explicitly:
 | Strategy | Lifetime | Header per object | Reclaimed by |
 |---|---|---|---|
 | Ordinary owned | one allocation | allocator record (not in the object) | `memory.deallocate` / `secure_release` |
-| Arena | whole region | none | `arena_reset` / `arena_destroy` |
+| Arena (bulk zone) | the whole allocation block | none | `arena_reset` / `arena_destroy` |
 | Pool | one slot | none | `pool_release` / `pool_reset` |
 | Collector-managed | reachability | 0, 8, or 16 bytes (AOR H0/H8/H16) | collection |
+
+Terminology: an *arena* or *bulk zone* is the language-level allocator a program
+chooses with `memory.arena_allocator`; the word **region** is reserved for the
+collector's 2 MiB `GcRegion` storage and never names a deterministic allocator.
 
 Nothing selects a strategy automatically yet. Phase 6 added the other half of that
 connection: `nrq_cdmm_pool_create_layout` and `nrq_cdmm_arena_allocate_layout`
