@@ -5,7 +5,7 @@ under which you wish to use, copy, modify, distribute, or sub-license this softw
 --------------------------------------------------------------------------------
 OPTION 1: THE MIT LICENSE
 
-Copyright (c) 2026 [Your Name or Project Team]
+Copyright (c) 2026 Muhammad Tahmid Ahnaf
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
