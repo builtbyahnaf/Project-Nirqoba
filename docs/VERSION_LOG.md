@@ -12,6 +12,67 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.625-beta
+
+### Summary of Changes (since `0.621-beta`)
+
+Region accounting became auditable and the collector gained a pacemaker. Release
+label `+0.004` (`0.621-beta` -> `0.625-beta`) per the three-upgrade rule.
+
+#### Region-Utilisation Pacemaker (Phi)
+
+- `nrq_gc_set_region_limit` and `nrq_gc_set_trigger_percent` declare a region
+  budget and the fraction of it a program is willing to spend before a cycle
+  starts. With no budget (limit `0`, the default) the collector's previous
+  allocation-volume trigger decides exactly as before, so a program that never
+  calls the new setters sees no behavioural change.
+- A cycle that ends with the live heap at or past the budget is planned as a major
+  collection: a minor cannot reclaim old garbage, so it could not bring the heap
+  back under the bound.
+- `nrq_gc_root_frame_open` polls at a safepoint: one relaxed load and a compare,
+  with a cycle started only when the accounting says one is due. Allocation entry
+  points already poll, so a TLAB refill never polls from inside the heap lock.
+
+#### Region Accounting Audit, in Both Configurations
+
+- Every cycle now ends by deriving each `GcRegion`'s live object, payload byte and
+  mark totals from its own pages, then checking the linkage those totals came
+  from. A page naming a region outside the pool, a region slot that does not name
+  its page, an out-of-range slot, bytes with no live objects, or more marks than
+  objects are all fatal.
+- The audit was debug-only; a release build now runs it too, because a drift that
+  only appears in release is exactly the kind the audit exists to catch. Region
+  totals were previously reset and never incremented, so the audit is also what
+  makes them exact.
+
+#### The Start-Bitmap Hazard Is Closed by Construction
+
+- `start_bits_for_scan_locked` is the single way a scan reads a page's start
+  bitmap. It materialises deferred publication runs first, so no walk can travel a
+  page whose live objects are still recorded as runs — the failure mode that turns
+  a missed object into a reclaimed one. Reading the bitmap directly for a walk is
+  no longer the path of least resistance.
+
+#### Telemetry Honesty
+
+- `GcRegion::evacuation_candidate` was removed: it was assigned `false` in two
+  places and never read.
+- `survivor_regions`, `evacuation_threshold_percent`, `evacuated_regions`,
+  `evacuated_objects`, `evacuated_bytes` and `pinned_region_fallbacks` are
+  documented as reserved and always zero, so the published struct no longer
+  implies capabilities the runtime does not have.
+
+#### Evacuation (Tau) and Bulk Reclamation (Upsilon) Were Deliberately Not Built
+
+Deferred region-backed allocation already brought sweep time to well under a
+millisecond — the phase that motivated the region design was solved without
+moving a single object. Copying would have required forwarding that the headerless
+(H0) and SoA layouts cannot physically hold, plus reference rewriting across roots,
+shadow frames, remembered sets and the object index. Measured upside did not
+justify that risk, so the phases are closed rather than pending.
+
+---
+
 ## Version 0.621-beta
 
 ### Summary of Changes (since `0.617-beta`)
