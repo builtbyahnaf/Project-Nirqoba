@@ -28,6 +28,7 @@ tasks/*
 tasks/
 benchmarks/stress_test_4/artifacts/*
 out/
+.git-rewrite/
 
 
 __pycache__/

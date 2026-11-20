@@ -1,0 +1,177 @@
+// Phase Psi-1: the allocation lifetime classifier.
+//
+// The classifier answers one question per explicit allocation site: can the
+// pointer leave the activation that created it? Everything automated strategy
+// selection does afterwards depends on that answer, so these tests pin the
+// answer itself - including the reasons, because "escaping" without a reason
+// cannot be reviewed.
+
+#include "test_harness.h"
+
+#include <string>
+
+#include "nirqoba/Diagnostics/DiagnosticEngine.h"
+#include "nirqoba/Frontend/Lexer.h"
+#include "nirqoba/Frontend/Parser.h"
+#include "nirqoba/Frontend/SourceFile.h"
+#include "nirqoba/Sema/TypeChecker.h"
+#include "nirqoba/TIR/Builder.h"
+#include "nirqoba/TIR/LifetimeAnalysis.h"
+
+using namespace nirq;
+
+namespace {
+
+std::unique_ptr<tir::Module> build_tir(const std::string& code,
+                                       DiagnosticEngine& diag) {
+  SourceFile src("lifetime_analysis.nrqba", code);
+  Lexer lexer(src, diag);
+  Parser parser(lexer.tokenize(), diag);
+  auto program = parser.parse_program();
+  EXPECT_TRUE(program != nullptr);
+  TypeChecker checker(diag);
+  EXPECT_TRUE(checker.check(*program));
+  TirBuilder builder(diag);
+  return builder.lower(*program);
+}
+
+const tir::Function* find_function(const tir::Module& module,
+                                   const std::string& name) {
+  for (const auto& function : module.functions())
+    if (function->name() == name) return function.get();
+  return nullptr;
+}
+
+// The single allocation site of a function, or -1 when it has none.
+int allocation_result(const tir::Function& function) {
+  for (const tir::Op& op : function.operations())
+    if (tir::is_allocation_site(op)) return op.result.id;
+  return -1;
+}
+
+std::string describe(const tir::AllocationSite& site) {
+  return std::string(tir::lifetime_name(site.lifetime)) + "/" +
+         std::string(tir::escape_reason_name(site.reason));
+}
+
+}  // namespace
+
+TEST(LifetimeAnalysisTest, StorageUsedInsideOneFunctionIsBounded) {
+  DiagnosticEngine diag;
+  auto module = build_tir(
+      "int function main(int count) {\n"
+      "  var value = memory.allocate<int>(count * 8);\n"
+      "  value[0] = 7;\n"
+      "  return value[0];\n"
+      "}",
+      diag);
+  ASSERT_FALSE(diag.has_errors());
+  const tir::Function* function = find_function(*module, "main");
+  ASSERT_TRUE(function != nullptr);
+
+  const tir::LifetimeAnalysis analysis =
+      tir::LifetimeAnalysis::analyze(*function);
+  const int site_id = allocation_result(*function);
+  ASSERT_TRUE(site_id >= 0);
+  const tir::AllocationSite* site = analysis.site(site_id);
+  ASSERT_TRUE(site != nullptr);
+  ASSERT_EQ(describe(*site), std::string("bounded/none"));
+  ASSERT_FALSE(site->manually_released);
+  // The result, the binding slot, the values loaded back and the element
+  // pointer all name the same storage.
+  ASSERT_TRUE(site->aliases.size() >= 4);
+  ASSERT_TRUE(site->aliases.count(site_id) != 0);
+}
+
+TEST(LifetimeAnalysisTest, ReturningThePointerEscapes) {
+  DiagnosticEngine diag;
+  auto module = build_tir(
+      "int* function make(int count) {\n"
+      "  var value = memory.allocate<int>(count * 8);\n"
+      "  value[0] = 1;\n"
+      "  return value;\n"
+      "}\n"
+      "int function main() { return 0; }",
+      diag);
+  ASSERT_FALSE(diag.has_errors());
+  const tir::Function* function = find_function(*module, "make");
+  ASSERT_TRUE(function != nullptr);
+
+  const tir::LifetimeAnalysis analysis =
+      tir::LifetimeAnalysis::analyze(*function);
+  const tir::AllocationSite* site = analysis.site(allocation_result(*function));
+  ASSERT_TRUE(site != nullptr);
+  // The return moves the pointer first; the move does not hide the escape.
+  ASSERT_EQ(describe(*site), std::string("escaping/returned"));
+}
+
+TEST(LifetimeAnalysisTest, PassingThePointerToACalleeEscapes) {
+  DiagnosticEngine diag;
+  auto module = build_tir(
+      "void function sink(int* pointer) {\n"
+      "  print(pointer[0]);\n"
+      "  return;\n"
+      "}\n"
+      "int function main(int count) {\n"
+      "  var value = memory.allocate<int>(count * 8);\n"
+      "  value[0] = 2;\n"
+      "  sink(value);\n"
+      "  return 0;\n"
+      "}",
+      diag);
+  ASSERT_FALSE(diag.has_errors());
+  const tir::Function* function = find_function(*module, "main");
+  ASSERT_TRUE(function != nullptr);
+
+  const tir::LifetimeAnalysis analysis =
+      tir::LifetimeAnalysis::analyze(*function);
+  const tir::AllocationSite* site = analysis.site(allocation_result(*function));
+  ASSERT_TRUE(site != nullptr);
+  // Nothing in TIR promises the callee keeps no copy, so the storage may outlive
+  // the frame and the collector has to own it.
+  ASSERT_EQ(describe(*site), std::string("escaping/passed-to-callee"));
+}
+
+TEST(LifetimeAnalysisTest, AHandWrittenReleaseIsRecordedNotAnEscape) {
+  DiagnosticEngine diag;
+  auto module = build_tir(
+      "int function main(int count) {\n"
+      "  var value = memory.allocate<int>(count * 8);\n"
+      "  value[0] = 3;\n"
+      "  print(value[0]);\n"
+      "  memory.deallocate(value);\n"
+      "  return 0;\n"
+      "}",
+      diag);
+  ASSERT_FALSE(diag.has_errors());
+  const tir::Function* function = find_function(*module, "main");
+  ASSERT_TRUE(function != nullptr);
+
+  const tir::LifetimeAnalysis analysis =
+      tir::LifetimeAnalysis::analyze(*function);
+  const tir::AllocationSite* site = analysis.site(allocation_result(*function));
+  ASSERT_TRUE(site != nullptr);
+  ASSERT_EQ(describe(*site), std::string("bounded/none"));
+  ASSERT_TRUE(site->manually_released);
+}
+
+TEST(LifetimeAnalysisTest, ArenaPayloadsArePlainData) {
+  // Scalars and aggregates of scalars can live in arena storage: nothing has to
+  // be traced and nothing has to be destroyed.
+  ASSERT_TRUE(tir::is_arena_eligible_payload(Type::int_type()));
+  ASSERT_TRUE(tir::is_arena_eligible_payload(Type::u8_type()));
+  ASSERT_TRUE(tir::is_arena_eligible_payload(Type::f64_type()));
+  ASSERT_TRUE(tir::is_arena_eligible_payload(Type::array_type(Type::int_type(), 4)));
+  ASSERT_TRUE(tir::is_arena_eligible_payload(
+      Type::struct_type("Pair", {{"left", Type::int_type()},
+                                 {"right", Type::u64_type()}})));
+  // Storage with an owner or a collector reference cannot: an arena frees in
+  // bulk and the collector cannot trace arena memory.
+  ASSERT_FALSE(tir::is_arena_eligible_payload(Type::pointer_type(Type::int_type())));
+  ASSERT_FALSE(tir::is_arena_eligible_payload(Type::string_type()));
+  ASSERT_FALSE(tir::is_arena_eligible_payload(Type::owned_string_type()));
+  ASSERT_FALSE(tir::is_arena_eligible_payload(
+      Type::dynamic_array_type(Type::int_type())));
+  ASSERT_FALSE(tir::is_arena_eligible_payload(
+      Type::struct_type("Holder", {{"slot", Type::pointer_type(Type::int_type())}})));
+}
