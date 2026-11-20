@@ -1,0 +1,9 @@
+// An owned string has its own kind. Binding it to a borrowed `string` would give
+// the alias no release while the original still frees at scope exit, so the
+// checker must refuse the assignment outright.
+int function main() {
+    let owned = file.read_text_owned("tests/integration/negative/owned_string_to_borrowed_binding/data.txt");
+    let plain: string = owned;
+    print(plain);
+    return 0;
+}

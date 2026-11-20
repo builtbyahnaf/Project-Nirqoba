@@ -1,0 +1,9 @@
+// `string_owned` is now a type a program can write. The annotation is what makes
+// an owned buffer expressible as a field, parameter or return type later, and it
+// is what forces the value to be an owned one rather than any string.
+int function main() {
+    let text: string_owned = file.read_text_owned("tests/integration/positive/file_owned_annotation/data.txt");
+    print(text.length);
+    print(file.text_live_count());
+    return 0;
+}
