@@ -238,3 +238,42 @@ No source program changes meaning. The only observable change is that malformed
 TIR produced by a compiler bug is rejected with an ownership diagnostic instead
 of being lowered. Existing valid programs, including all GC programs, continue
 to compile and run.
+
+## Recursive element destruction (contract)
+
+A container that owns its elements owes each of them a drop before it gives up its
+own storage. The contract below is what the checker, the lowering and the runtime
+must agree on; it is stated before the code that implements it so the ordering
+rules have one home.
+
+**The container tracks its active element count, never its capacity.** A dynamic
+array's `length` is the number of live elements; `capacity` describes storage the
+allocator reserved and says nothing about which slots hold a value. Destruction
+iterates `length`, so slots past it are never read.
+
+**Elements are dropped in strictly reverse initialization order.** For an array
+that is offset `0 .. length-1`, the drop order is `length-1 .. 0`. Reverse order is
+not cosmetic: it is the order that makes a partially initialized container correct
+without a separate initialized bitmap, because the elements that exist are always a
+prefix, and a prefix is walked backwards from its last live element.
+
+**Element drops run before the backing buffer is released.** A drop may read the
+element's own payload, and an element's payload may live inside the container's
+buffer (an inline record) or outside it (owned storage). Releasing the buffer first
+would make the first case a use-after-free, so the order is fixed: drop each
+element, then release the container's storage exactly once.
+
+**A partially initialized container destroys only what exists.** If construction of
+element `k` fails or a `break` leaves the container half-built, the count is the
+number of elements that were fully initialized, and destruction walks that many.
+
+**Shared elements are released per element.** A container of shared references
+retains on copy and releases on destruction, once per element, in the same reverse
+order; it must not delegate that to a bulk free. This is why bulk containers that
+cannot run per-field reference-count cleanup continue to reject `shared` fields
+until this section is implemented for them.
+
+**Element drop is not re-entrant with container release.** No element drop may
+allocate from, or release storage of, the container being destroyed. The rule keeps
+the free-span bookkeeping of the backing buffer intact while elements are still
+being destroyed.
