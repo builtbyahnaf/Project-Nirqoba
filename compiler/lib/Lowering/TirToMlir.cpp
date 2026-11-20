@@ -1003,6 +1003,7 @@ static bool callee_is_collection_free(llvm::StringRef callee) {
       "memory.destroy_allocator", "memory.set_default_allocator",
       "memory.array_view", "memory.array_view_mut", "array.owned_release",
       "memory.dynamic_array", "memory.array_live_count",
+      "memory.array_append",
       "aggregate.owned_drop", "file.open", "file.close", "file.write",
       "file.read", "file.read_text", "file.read_text_owned",
       "file.free_text", "file.text_live_count", "file.write_text",
@@ -5929,6 +5930,118 @@ class FunctionTranslator {
                     "internal: dynamic indexing of non-dynamic array type '" +
                         op.lhs.type.to_string() + "'");
         return false;
+      }
+
+      case tir::OpKind::ArrayAppend: {
+        mlir::Value slot = get(op.lhs);
+        mlir::Value element = get(op.operand);
+        if (!slot || !element) return true;
+        const Type element_type = op.lhs.type.element_type();
+        const std::uint32_t element_size = element_type.byte_size();
+        if (element_size == 0) {
+          diag_.error("NRQ4005", op.location,
+                      "internal: element type '" + element_type.to_string() +
+                          "' has no fixed layout for a dynamic array");
+          return false;
+        }
+        mlir::Type array_type = tir_type_to_mlir(op.lhs.type, ctx_, builder_);
+        mlir::Type element_mlir =
+            tir_type_to_mlir(element_type, ctx_, builder_);
+        const mlir::Type i64 = builder_.getI64Type();
+        auto constant = [&](int64_t value) {
+          return builder_
+              .create<mlir::LLVM::ConstantOp>(
+                  loc, i64, builder_.getI64IntegerAttr(value))
+              .getResult();
+        };
+        auto field = [&](mlir::Value aggregate, int64_t index) {
+          return builder_
+              .create<mlir::LLVM::ExtractValueOp>(
+                  loc, aggregate, builder_.getDenseI64ArrayAttr({index}))
+              .getResult();
+        };
+
+        // The slot is the array's only storage. Every step reads the header it
+        // just wrote, so the value the destructor loads at scope exit is the one
+        // growth produced - the write-back is what makes the buffer reachable
+        // for the release.
+        mlir::Value header = builder_.create<mlir::LLVM::LoadOp>(
+            loc, array_type, slot).getResult();
+        mlir::Value length = field(header, 1);
+        mlir::Value capacity = field(header, 2);
+        mlir::Value full = builder_.create<mlir::LLVM::ICmpOp>(
+            loc, mlir::LLVM::ICmpPredicate::eq, length, capacity).getResult();
+        mlir::Block* grow_block = func_op_.addBlock();
+        mlir::Block* append_block = func_op_.addBlock();
+        builder_.create<mlir::LLVM::CondBrOp>(loc, full, grow_block,
+                                             append_block);
+
+        builder_.setInsertionPointToStart(grow_block);
+        mlir::Value data = field(header, 0);
+        // Growth policy: the first element starts at eight slots, and every
+        // later overflow doubles, so appending n elements costs O(log n)
+        // reallocations and the amortized cost per element stays constant.
+        mlir::Value empty = builder_.create<mlir::LLVM::ICmpOp>(
+            loc, mlir::LLVM::ICmpPredicate::eq, capacity, constant(0))
+                                .getResult();
+        mlir::Value doubled = builder_.create<mlir::LLVM::MulOp>(
+            loc, capacity, constant(2)).getResult();
+        mlir::Value new_capacity = builder_
+            .create<mlir::LLVM::SelectOp>(loc, empty, constant(8), doubled)
+            .getResult();
+        auto reallocate = ensure_runtime_fn(
+            module_, builder_, "nrq_array_reallocate", llvm_ptr_type(ctx_),
+            {llvm_ptr_type(ctx_), i64, i64, i64, i64});
+        mlir::Value grown =
+            builder_
+                .create<mlir::LLVM::CallOp>(
+                    loc, reallocate,
+                    mlir::ValueRange{data, capacity, new_capacity,
+                                     constant(static_cast<int64_t>(element_size)),
+                                     constant(static_cast<int64_t>(
+                                         std::max<std::uint64_t>(
+                                             1, element_type.alignment())))})
+                .getResult();
+        mlir::Value grown_header = builder_
+            .create<mlir::LLVM::InsertValueOp>(
+                loc, header, grown, builder_.getDenseI64ArrayAttr({0}))
+            .getResult();
+        grown_header = builder_
+            .create<mlir::LLVM::InsertValueOp>(
+                loc, grown_header, new_capacity,
+                builder_.getDenseI64ArrayAttr({2}))
+            .getResult();
+        builder_.create<mlir::LLVM::StoreOp>(loc, grown_header, slot);
+        builder_.create<mlir::LLVM::BrOp>(loc, append_block);
+
+        // Both paths converge here and take the header from the slot, so the
+        // element lands in the buffer the slot names whichever path ran.
+        builder_.setInsertionPointToStart(append_block);
+        mlir::Value stored = builder_.create<mlir::LLVM::LoadOp>(
+            loc, array_type, slot).getResult();
+        mlir::Value stored_data = field(stored, 0);
+        mlir::Value stored_length = field(stored, 1);
+        mlir::Value destination = builder_
+            .create<mlir::LLVM::GEPOp>(loc, llvm_ptr_type(ctx_), element_mlir,
+                                       stored_data,
+                                       mlir::ValueRange{stored_length})
+            .getResult();
+        auto element_store =
+            builder_.create<mlir::LLVM::StoreOp>(loc, element, destination);
+        // The element sits at `length * stride`, so it is aligned whenever the
+        // buffer is; the runtime allocated the buffer for that alignment.
+        const uint64_t element_alignment =
+            std::max<uint64_t>(1, element_type.alignment());
+        if (element_alignment > 1) element_store.setAlignment(element_alignment);
+        mlir::Value new_length = builder_.create<mlir::LLVM::AddOp>(
+            loc, stored_length, constant(1)).getResult();
+        mlir::Value updated = builder_
+            .create<mlir::LLVM::InsertValueOp>(
+                loc, stored, new_length, builder_.getDenseI64ArrayAttr({1}))
+            .getResult();
+        builder_.create<mlir::LLVM::StoreOp>(loc, updated, slot);
+        set(op.result, adapt_runtime_result(new_length, op.result.type, loc));
+        return true;
       }
     }
     return true;

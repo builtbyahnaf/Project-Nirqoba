@@ -1410,6 +1410,34 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         return tir::Value{};
       }
 
+      // `memory.array_append(values, element)` grows the array held in the
+      // binding's slot. The first argument names the binding, so it is not
+      // lowered as a value: the operation writes the grown header into that
+      // slot, which is the storage the destructor reads at scope exit.
+      if (call.callee() == "memory.array_append" &&
+          call.arguments().size() == 2 &&
+          call.arguments()[0]->kind() == Expr::Kind::Name) {
+        const tir::Value slot = lookup_slot(
+            static_cast<const NameExpr&>(*call.arguments()[0]).name());
+        if (!slot.is_valid() || !slot.type.is_dynamic_array()) {
+          diagnostics_.error(kUnresolvedSymbol, call.location(),
+                             "internal: append target has no dynamic array slot");
+          return tir::Value{};
+        }
+        const tir::Value element =
+            lower_expression(*call.arguments()[1], function);
+        tir::Value result = function.allocate_value(
+            call.type().is_valid() ? call.type() : Type::int_type());
+        tir::Op append;
+        append.kind = tir::OpKind::ArrayAppend;
+        append.location = call.location();
+        append.lhs = slot;
+        append.operand = element;
+        append.result = result;
+        function.add_operation(std::move(append));
+        return result;
+      }
+
       std::vector<tir::Value> arg_vals;
       const bool release_call = is_release_callee(
           call.has_resolved_symbol() ? call.resolved_symbol() : call.callee());

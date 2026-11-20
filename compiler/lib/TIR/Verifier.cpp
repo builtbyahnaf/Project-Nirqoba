@@ -706,6 +706,25 @@ bool verify_tir_module(const tir::Module& module, DiagnosticEngine& diagnostics)
         case tir::OpKind::DynamicIndex:
         case tir::OpKind::Unreachable:
           break;
+        case tir::OpKind::ArrayAppend: {
+          // The operation mutates the array in place, so the slot stays the
+          // owner: appending must not discharge an obligation.
+          if (!op.lhs.is_valid() || !op.lhs.type.is_dynamic_array()) {
+            diagnostics.error(kOwnership, op.location,
+                              "array append requires a dynamic array slot");
+            ok = false;
+          }
+          if (!op.operand.is_valid() ||
+              op.operand.type != op.lhs.type.element_type()) {
+            diagnostics.error(kOwnership, op.location,
+                              "array append element type " +
+                                  op.operand.type.mangle() +
+                                  " does not match the array's element type " +
+                                  op.lhs.type.element_type().mangle());
+            ok = false;
+          }
+          break;
+        }
         case tir::OpKind::Move: {
           if (!is_transferable_ownership(op.operand.ownership)) {
             diagnostics.error(kOwnership, op.location,

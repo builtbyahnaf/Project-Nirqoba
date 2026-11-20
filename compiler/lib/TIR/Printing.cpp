@@ -162,6 +162,10 @@ string print_tir(const tir::Module& module) {
           out << " " << value_name(op.lhs) << "[" << value_name(op.operand)
               << "] : " << op.result.type.mangle();
           break;
+        case tir::OpKind::ArrayAppend:
+          out << " " << value_name(op.lhs) << " <- " << value_name(op.operand)
+              << " : " << op.result.type.mangle();
+          break;
         case tir::OpKind::Move:
           out << " " << value_name(op.operand) << " -> " << value_name(op.result)
               << " kind=" << transfer_name(op.transfer_kind);

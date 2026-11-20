@@ -1,0 +1,22 @@
+// Growth lifecycle. Ten appends from an empty array take the buffer through
+// capacity 0 -> 8 -> 16, every element survives the reallocations, and the
+// destructor at the block's exit releases the grown buffer. That last part is
+// what proves the write-back: the block's cleanup reads the slot, so if append
+// had left the old {nullptr, 0, 0} there, the live count would still be 1 and
+// the buffer would be lost.
+int function main() {
+    {
+        var values = memory.dynamic_array<int>();
+        for (var index = 0; index < 10; index += 1) {
+            memory.array_append(values, index * 3);
+        }
+        print(values.length);
+        print(values.capacity);
+        print(memory.array_live_count());
+        for (var index = 0; index < values.length; index += 1) {
+            print(values[index]);
+        }
+    }
+    print(memory.array_live_count());
+    return 0;
+}

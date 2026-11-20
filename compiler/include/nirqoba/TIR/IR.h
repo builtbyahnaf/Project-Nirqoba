@@ -101,6 +101,10 @@ enum class OpKind {
   // Phase 5 sequence operations:
   Length,            // result = element count of operand (string or dynamic array)
   DynamicIndex,      // result = element lhs[operand] of a dynamic array
+  // Growth: append operand to the dynamic array held in slot lhs. The slot is
+  // part of the operation because the grown header has to be written back into
+  // the binding's storage; result = the new length.
+  ArrayAppend,
   // Phase 1 ownership operations. These carry ownership semantics in TIR and
   // lower to the same machine code as the operations they annotate.
   Move,              // result = tir.move operand; operand is no longer usable
