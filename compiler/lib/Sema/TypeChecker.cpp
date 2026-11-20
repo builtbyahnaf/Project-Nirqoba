@@ -179,6 +179,7 @@ static bool contains_array_view(const Type& type) {
 }
 
 static string cleanup_for_type(const Type& type) {
+  if (type.is_owned_string()) return "file.free_text";
   if (type.is_soa()) return "soa.owned_release";
   if (type.is_owned_array()) return "array.owned_release";
   if (type.is_owned_pointer()) {
@@ -293,6 +294,10 @@ static std::string cleanup_for_owner_producer(const std::string& callee,
   if (shared_return || callee == "memory.shared_allocate" ||
       callee == "memory.shared_retain") return "memory.shared_release";
   if (callee == "file.open") return "file.close";
+  // The owned reader hands its buffer to the language, so the value's destructor
+  // is the matching release; this is what makes a read inside a loop cost one
+  // buffer instead of one buffer per iteration.
+  if (callee == "file.read_text_owned") return "file.free_text";
   if (callee == "memory.map_file") return "memory.unmap_file";
   if (callee == "memory.secure_allocate") return "memory.secure_release";
   if (callee == "memory.manual_allocate") return "memory.manual_release";
@@ -322,7 +327,8 @@ static std::string cleanup_for_owned_expression(const Expr& expression,
 // handles. Manual storage keeps its own release spelling but participates in
 // indexing, borrowing and return checks exactly like explicit owned storage.
 static bool is_plain_memory_cleanup(const std::string& callee) {
-  return callee == "memory.deallocate" || callee == "memory.manual_release";
+  return callee == "memory.deallocate" || callee == "memory.manual_release" ||
+         callee == "file.free_text";
 }
 
 static std::string cleanup_for_borrow_domain(const std::string& domain) {
@@ -1139,8 +1145,10 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
     }
     symbol.field_borrows = std::move(borrows);
   }
+  // An owned string is not pointer-shaped in the type system, but it owns a
+  // buffer exactly like one, so it has to reach the cleanup bookkeeping below.
   if (binding_type.is_pointer() || binding_type.is_owned_array() ||
-      contains_owned_array(binding_type)) {
+      contains_owned_array(binding_type) || binding_type.is_owned_string()) {
     symbol.owns_allocation = expression_creates_owned_pointer(declaration.initializer());
     if (declaration.initializer().kind() == Expr::Kind::Unary &&
         static_cast<const UnaryExpr&>(declaration.initializer()).op() ==
@@ -5430,6 +5438,41 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "'file.read_text' path must be a 'string', not '" + path_type.to_string() + "'");
     }
     return Type::string_type();
+  }
+
+  if (call.callee() == "file.read_text_owned") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'file.read_text_owned' expects 1 argument (path: string), but " +
+                             to_string(call.arguments().size()) + " were given");
+      return Type::owned_string_type();
+    }
+    const Type path_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (path_type.is_valid() && !path_type.is_string()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'file.read_text_owned' path must be a 'string', not '" +
+                             path_type.to_string() + "'");
+    }
+    return Type::owned_string_type();
+  }
+
+  if (call.callee() == "file.free_text") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'file.free_text' expects 1 argument (text), but " +
+                             to_string(call.arguments().size()) + " were given");
+      return Type::int_type();
+    }
+    check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    return Type::int_type();
+  }
+
+  if (call.callee() == "file.text_live_count") {
+    if (!call.arguments().empty()) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'file.text_live_count' takes no arguments");
+    }
+    return Type::int_type();
   }
 
   if (call.callee() == "file.write_text" || call.callee() == "file.append_text") {

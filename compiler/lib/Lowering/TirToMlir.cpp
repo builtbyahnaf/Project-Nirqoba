@@ -256,7 +256,9 @@ static bool runtime_call_consumes_borrow_without_retaining(
       "nrq_print_bool",  "nrq_print_char",   "nrq_print_string",
       "nrq_print_cstr",  "file.read",        "file.write",
       "file.read_text",  "file.write_text",  "file.append_text",
-      "file.exists",     "file.close",       "socket.send",
+      "file.exists",     "file.close",       "file.read_text_owned",
+      "file.free_text",  "file.text_live_count",
+      "socket.send",
       "socket.receive",  "socket.close",     "mutex.lock",
       "mutex.unlock",    "mutex.destroy",
   };
@@ -995,7 +997,9 @@ static bool callee_is_collection_free(llvm::StringRef callee) {
       "memory.destroy_allocator", "memory.set_default_allocator",
       "memory.array_view", "memory.array_view_mut", "array.owned_release",
       "aggregate.owned_drop", "file.open", "file.close", "file.write",
-      "file.read", "file.read_text", "file.write_text", "file.append_text",
+      "file.read", "file.read_text", "file.read_text_owned",
+      "file.free_text", "file.text_live_count", "file.write_text",
+      "file.append_text",
       "file.exists", "socket.connect", "socket.close", "socket.send",
       "socket.receive", "system.exit",
   };
@@ -5328,6 +5332,18 @@ class FunctionTranslator {
           runtime_sym = "nrq_file_read_text";
           runtime_ret_ty = llvm_ptr_type(ctx_);
           runtime_arg_tys = {llvm_ptr_type(ctx_)};
+        } else if (callee == "file.read_text_owned") {
+          runtime_sym = "nrq_file_read_text_owned";
+          runtime_ret_ty = llvm_ptr_type(ctx_);
+          runtime_arg_tys = {llvm_ptr_type(ctx_)};
+        } else if (callee == "file.free_text") {
+          runtime_sym = "nrq_file_text_release";
+          runtime_ret_ty = builder_.getI32Type();
+          runtime_arg_tys = {llvm_ptr_type(ctx_)};
+        } else if (callee == "file.text_live_count") {
+          runtime_sym = "nrq_file_text_live_count";
+          runtime_ret_ty = builder_.getI32Type();
+          runtime_arg_tys = {};
         } else if (callee == "file.write_text") {
           runtime_sym = "nrq_file_write_text";
           runtime_ret_ty = builder_.getI32Type();
