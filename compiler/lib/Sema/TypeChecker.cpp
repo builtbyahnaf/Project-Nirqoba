@@ -1163,14 +1163,8 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
   }
   // An owned string is not pointer-shaped in the type system, but it owns a
   // buffer exactly like one, so it has to reach the cleanup bookkeeping below.
-  // The type parses and resolves, but no value of it exists yet: the backing
-  // buffer, growth path and teardown are the next slice. Rejecting a binding here
-  // keeps the surface honest instead of accepting a declaration codegen cannot
-  // lower.
-  if (binding_type.is_dynamic_array()) {
-    diagnostics_.error(diag::kTypeMismatch, declaration.location(),
-                       "dynamic_array instantiation is not yet supported");
-  }
+  // A dynamic array reaches it the same way; the destructor is not installed
+  // yet, and an empty array owns no buffer, so the binding cannot leak.
   if (binding_type.is_pointer() || binding_type.is_owned_array() ||
       contains_owned_array(binding_type) || binding_type.is_owned_string()) {
     symbol.owns_allocation = expression_creates_owned_pointer(declaration.initializer());
@@ -4223,6 +4217,49 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
 }
 
 Type TypeChecker::check_call(CallExpr& call) {
+  // The only way to obtain a dynamic array. It starts empty: capacity 0 is the
+  // documented empty representation, so the value carries a null buffer and the
+  // growth path (append) is what allocates later. The element type must have a
+  // fixed layout, because its size and alignment are handed to the allocator.
+  if (call.callee() == "memory.dynamic_array") {
+    if (!call.has_generic_argument()) {
+      diagnostics_.error(diag::kTypeMismatch, call.location(),
+                         "'memory.dynamic_array' requires an element type: write "
+                         "'memory.dynamic_array<T>()'");
+      return Type::error();
+    }
+    for (const ExprPtr& argument : call.arguments())
+      check_expression(const_cast<Expr&>(*argument));
+    if (!call.arguments().empty())
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.dynamic_array<T>()' takes no arguments; an array "
+                         "starts empty and grows through append");
+    const Type element_type = resolve_aggregate_type(call.generic_argument());
+    if (element_type.is_owned_string() || element_type.is_owned_array() ||
+        element_type.is_soa()) {
+      diagnostics_.error(diag::kTypeMismatch, call.location(),
+                         "dynamic arrays cannot hold owned elements yet; the element "
+                         "teardown loop is not implemented");
+      return Type::error();
+    }
+    if (element_type.byte_size() == 0) {
+      diagnostics_.error(diag::kTypeMismatch, call.location(),
+                         "dynamic array element type '" + element_type.to_string() +
+                             "' has no fixed layout");
+      return Type::error();
+    }
+    return Type::dynamic_array_type(element_type);
+  }
+
+  // Array buffers come from a dedicated allocator, so the live count is the only
+  // way a program can observe whether its arrays were released.
+  if (call.callee() == "memory.array_live_count") {
+    if (!call.arguments().empty())
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'memory.array_live_count' takes no arguments");
+    return Type::int_type();
+  }
+
   if ((call.callee() == "memory.array_view" ||
        call.callee() == "memory.array_view_mut") &&
       call.has_generic_argument()) {

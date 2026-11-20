@@ -42,8 +42,10 @@ uint64_t type_alignment(const Type& type) {
   // A container value is one pointer to its payload block, so it occupies and
   // aligns like a pointer, not like its element struct.
   if (type.is_soa()) return sizeof(void*);
+  // {buffer, length, capacity} is three pointer-aligned words.
+  if (type.is_dynamic_array()) return 8;
   if (type.is_pointer() || type.is_managed_pointer() || type.is_string() ||
-      type.is_dynamic_array() || type.is_owned_array() || type.is_array_view()) return 8;
+      type.is_owned_array() || type.is_array_view()) return 8;
   if (type.is_array()) return type_alignment(type.element_type());
   if (type.is_struct() || type.is_tuple()) {
     uint64_t alignment = 1;
@@ -117,8 +119,9 @@ uint64_t type_size(const Type& type) {
   // A container value is one pointer to its payload block, so it occupies and
   // aligns like a pointer, not like its element struct.
   if (type.is_soa()) return sizeof(void*);
-  if (type.is_pointer() || type.is_managed_pointer() || type.is_string() ||
-      type.is_dynamic_array()) return 8;
+  // One buffer pointer plus a length and a capacity, both 64-bit.
+  if (type.is_dynamic_array()) return 24;
+  if (type.is_pointer() || type.is_managed_pointer() || type.is_string()) return 8;
   if (type.is_owned_array() || type.is_array_view()) return 16;
   if (type.is_array()) return type.array_length() * type_size(type.element_type());
   if (type.is_struct() || type.is_tuple()) {

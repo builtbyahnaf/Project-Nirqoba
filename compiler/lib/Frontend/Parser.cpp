@@ -1378,6 +1378,7 @@ ExprPtr Parser::parse_primary() {
            peek(1).text == "reallocate" ||
            peek(1).text == "secure_allocate" ||
            peek(1).text == "shared_allocate" ||
+           peek(1).text == "dynamic_array" ||
            peek(1).text == "owned_array" ||
            peek(1).text == "owned_array_aligned" ||
            peek(1).text == "owned_soa" ||

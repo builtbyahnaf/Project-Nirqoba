@@ -59,9 +59,15 @@ static mlir::Type tir_type_to_mlir(const Type& type, mlir::MLIRContext* ctx,
     return mlir::LLVM::LLVMStructType::getLiteral(
         ctx, {mlir::LLVM::LLVMPointerType::get(ctx), builder.getI64Type()});
   }
-  // A dynamic array is a pointer to a runtime-owned descriptor; the runtime
-  // owns the element storage, so the compiler only ever handles the handle.
-  if (type.is_dynamic_array()) return mlir::LLVM::LLVMPointerType::get(ctx);
+  // A dynamic array is an inline three-word value: {buffer, length, capacity}.
+  // The buffer belongs to the runtime's array allocator, but the container does
+  // not: length and capacity are ordinary fields, which is what lets a property
+  // read be a field extraction instead of a runtime query.
+  if (type.is_dynamic_array()) {
+    return mlir::LLVM::LLVMStructType::getLiteral(
+        ctx, {mlir::LLVM::LLVMPointerType::get(ctx), builder.getI64Type(),
+              builder.getI64Type()});
+  }
   if (type.is_void()) return {};
   if (type.is_array()) {
     mlir::Type elem = tir_type_to_mlir(type.element_type(), ctx, builder);
@@ -996,6 +1002,7 @@ static bool callee_is_collection_free(llvm::StringRef callee) {
       "memory.use_allocator", "memory.reset_allocator",
       "memory.destroy_allocator", "memory.set_default_allocator",
       "memory.array_view", "memory.array_view_mut", "array.owned_release",
+      "memory.dynamic_array", "memory.array_live_count",
       "aggregate.owned_drop", "file.open", "file.close", "file.write",
       "file.read", "file.read_text", "file.read_text_owned",
       "file.free_text", "file.text_live_count", "file.write_text",
@@ -4319,6 +4326,53 @@ class FunctionTranslator {
           set(op.result, result);
           return true;
         }
+        // `memory.dynamic_array<T>()` creates the empty container. Capacity 0 is
+        // the documented empty representation, so the runtime returns a null
+        // buffer and the value is {nullptr, 0, 0}: a declaration costs no memory
+        // until the growth path runs.
+        if (op.callee == "memory.dynamic_array" && op.result.is_valid() &&
+            op.result.type.is_dynamic_array()) {
+          const Type element_type = op.result.type.element_type();
+          const std::uint32_t element_size = element_type.byte_size();
+          if (element_size == 0) {
+            diag_.error("NRQ4005", op.location,
+                        "internal: element type '" + element_type.to_string() +
+                            "' has no fixed layout for a dynamic array");
+            return false;
+          }
+          const mlir::Type i64 = builder_.getI64Type();
+          mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, i64, builder_.getI64IntegerAttr(0)).getResult();
+          mlir::Value element_bytes = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, i64,
+              builder_.getI64IntegerAttr(static_cast<int64_t>(element_size)))
+                                           .getResult();
+          mlir::Value element_alignment = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, i64,
+              builder_.getI64IntegerAttr(
+                  static_cast<int64_t>(element_type.alignment())))
+                                              .getResult();
+          auto create = ensure_runtime_fn(
+              module_, builder_, "nrq_array_create", llvm_ptr_type(ctx_),
+              {i64, i64, i64});
+          mlir::Value buffer = builder_.create<mlir::LLVM::CallOp>(
+              loc, create,
+              mlir::ValueRange{zero, element_bytes, element_alignment})
+                                   .getResult();
+          mlir::Type array_type =
+              tir_type_to_mlir(op.result.type, ctx_, builder_);
+          mlir::Value array = builder_.create<mlir::LLVM::UndefOp>(
+              loc, array_type).getResult();
+          array = builder_.create<mlir::LLVM::InsertValueOp>(
+              loc, array, buffer, builder_.getDenseI64ArrayAttr({0})).getResult();
+          array = builder_.create<mlir::LLVM::InsertValueOp>(
+              loc, array, zero, builder_.getDenseI64ArrayAttr({1})).getResult();
+          array = builder_.create<mlir::LLVM::InsertValueOp>(
+              loc, array, zero, builder_.getDenseI64ArrayAttr({2})).getResult();
+          set(op.result, array);
+          return true;
+        }
+
         if ((op.callee == "memory.owned_array" ||
              op.callee == "memory.owned_array_aligned") && op.result.is_valid() &&
             op.result.type.is_owned_array()) {
@@ -5344,6 +5398,10 @@ class FunctionTranslator {
           runtime_sym = "nrq_file_text_live_count";
           runtime_ret_ty = builder_.getI32Type();
           runtime_arg_tys = {};
+        } else if (callee == "memory.array_live_count") {
+          runtime_sym = "nrq_array_live_count";
+          runtime_ret_ty = builder_.getI32Type();
+          runtime_arg_tys = {};
         } else if (callee == "file.write_text") {
           runtime_sym = "nrq_file_write_text";
           runtime_ret_ty = builder_.getI32Type();
@@ -5793,10 +5851,11 @@ class FunctionTranslator {
         std::string runtime_sym;
         if (op.operand.type.is_string()) {
           runtime_sym = "nrq_strlen";
-        } else if (op.operand.type.is_dynamic_array()) {
-          runtime_sym = "nrq_args_length";
-        } else if (op.operand.type.is_owned_array() ||
+        } else if (op.operand.type.is_dynamic_array() ||
+                   op.operand.type.is_owned_array() ||
                    op.operand.type.is_array_view()) {
+          // Length is the container's second word, so reading it is a field
+          // extraction; only text still needs a runtime call.
           mlir::Value length = builder_.create<mlir::LLVM::ExtractValueOp>(
               loc, value, builder_.getDenseI64ArrayAttr({1})).getResult();
           set(op.result, adapt_runtime_result(length, op.result.type, loc));
@@ -5821,7 +5880,8 @@ class FunctionTranslator {
         mlir::Value index = get(op.operand);
         if (!array || !index) return true;
 
-        if (op.lhs.type.is_owned_array() || op.lhs.type.is_array_view()) {
+        if (op.lhs.type.is_dynamic_array() || op.lhs.type.is_owned_array() ||
+            op.lhs.type.is_array_view()) {
           const mlir::Type i64 = builder_.getI64Type();
           if (index.getType() != i64) {
             const unsigned bits = index.getType().getIntOrFloatBitWidth();
@@ -5850,38 +5910,11 @@ class FunctionTranslator {
           set(op.result, element.getResult());
           return true;
         }
-        if (!op.lhs.type.is_dynamic_array()) {
-          diag_.error("NRQ4005", op.location,
-                      "internal: dynamic indexing of non-dynamic array type '" +
-                          op.lhs.type.to_string() + "'");
-          return false;
-        }
 
-        // The runtime ABI takes a 64-bit index.
-        mlir::Type i64 = builder_.getI64Type();
-        if (index.getType() != i64) {
-          if (!mlir::isa<mlir::IntegerType>(index.getType())) {
-            diag_.error("NRQ4005", op.location,
-                        "internal: dynamic array index is not an integer");
-            return false;
-          }
-          const unsigned bits = index.getType().getIntOrFloatBitWidth();
-          if (bits < 64) {
-            index = op.operand.type.is_signed_integer()
-                        ? builder_.create<mlir::LLVM::SExtOp>(loc, i64, index).getResult()
-                        : builder_.create<mlir::LLVM::ZExtOp>(loc, i64, index).getResult();
-          } else {
-            index = builder_.create<mlir::LLVM::TruncOp>(loc, i64, index).getResult();
-          }
-        }
-
-        auto fn = ensure_runtime_fn(module_, builder_, "nrq_args_get",
-                                    llvm_ptr_type(ctx_),
-                                    {llvm_ptr_type(ctx_), i64});
-        mlir::Value element = builder_.create<mlir::LLVM::CallOp>(
-            loc, fn, mlir::ValueRange{array, index}).getResult();
-        set(op.result, element);
-        return true;
+        diag_.error("NRQ4005", op.location,
+                    "internal: dynamic indexing of non-dynamic array type '" +
+                        op.lhs.type.to_string() + "'");
+        return false;
       }
     }
     return true;
@@ -5983,6 +6016,48 @@ static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
   mlir::Value array = builder.create<mlir::LLVM::CallOp>(
       loc, args_build,
       mlir::ValueRange{entry->getArgument(0), entry->getArgument(1)}).getResult();
+
+  // `string[] args` is an ordinary dynamic array value, while the runtime
+  // descriptor is {length, items}. Marshalling it here is what keeps the
+  // language value one representation: length is a field read and indexing walks
+  // the item block. The buffer is owned by the process, never by the program, so
+  // the entry parameter carries no cleanup.
+  if (!user_main.parameters().empty() &&
+      user_main.parameters().front().type.is_dynamic_array()) {
+    mlir::Type i64 = builder.getI64Type();
+    mlir::Type descriptor_type =
+        mlir::LLVM::LLVMStructType::getLiteral(ctx, {i64, ptr});
+    mlir::Value zero_index = builder.create<mlir::LLVM::ConstantOp>(
+        loc, i32, builder.getI32IntegerAttr(0)).getResult();
+    mlir::Value length_pointer = builder.create<mlir::LLVM::GEPOp>(
+        loc, ptr, descriptor_type, array,
+        mlir::ValueRange{zero_index, zero_index}).getResult();
+    mlir::Value length = builder.create<mlir::LLVM::LoadOp>(
+        loc, i64, length_pointer).getResult();
+    mlir::Value one_index = builder.create<mlir::LLVM::ConstantOp>(
+        loc, i32, builder.getI32IntegerAttr(1)).getResult();
+    mlir::Value items_pointer = builder.create<mlir::LLVM::GEPOp>(
+        loc, ptr, descriptor_type, array,
+        mlir::ValueRange{zero_index, one_index}).getResult();
+    mlir::Value items = builder.create<mlir::LLVM::LoadOp>(
+        loc, ptr, items_pointer).getResult();
+    mlir::Type array_type = tir_type_to_mlir(
+        user_main.parameters().front().type, ctx, builder);
+    if (!array_type) {
+      diagnostics.error("NRQ4005", SourceLocation{},
+                        "internal: unsupported 'main' parameter type in entry wrapper");
+      return false;
+    }
+    mlir::Value value = builder.create<mlir::LLVM::UndefOp>(
+        loc, array_type).getResult();
+    value = builder.create<mlir::LLVM::InsertValueOp>(
+        loc, value, items, builder.getDenseI64ArrayAttr({0})).getResult();
+    value = builder.create<mlir::LLVM::InsertValueOp>(
+        loc, value, length, builder.getDenseI64ArrayAttr({1})).getResult();
+    value = builder.create<mlir::LLVM::InsertValueOp>(
+        loc, value, length, builder.getDenseI64ArrayAttr({2})).getResult();
+    array = value;
+  }
 
   // This wrapper is entered by the C runtime, so it is the outermost place a
   // managed program can start. Opening the region here is what lets the callee and

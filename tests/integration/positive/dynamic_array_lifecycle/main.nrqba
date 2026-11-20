@@ -1,0 +1,9 @@
+// The first dynamic array a program can build. It starts empty: capacity 0 is
+// the documented empty representation, so creation allocates nothing and the
+// value is {nullptr, 0, 0}. The live count is the observable proof that the
+// container's lifecycle starts and ends with nothing outstanding.
+int function main() {
+    var values: dynamic_array<int> = memory.dynamic_array<int>();
+    print(memory.array_live_count());
+    return 0;
+}
