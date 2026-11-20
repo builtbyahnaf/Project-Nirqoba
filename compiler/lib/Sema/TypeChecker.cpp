@@ -4402,6 +4402,27 @@ Type TypeChecker::check_call(CallExpr& call) {
                              "' element, found '" + value_type.to_string() + "'");
       return Type::error();
     }
+    // An owned element belongs to the array once it is stored: the operand is a
+    // move, so the binding that supplied it stops owning it, its cleanup stands
+    // down, and a later use is a use-after-move rather than a second owner.
+    if (array_type.element_type().is_owned_string()) {
+      Expr& element = const_cast<Expr&>(*call.arguments()[1]);
+      const Symbol* source =
+          element.kind() == Expr::Kind::Name
+              ? symbols_.lookup(static_cast<const NameExpr&>(element).name())
+              : nullptr;
+      if (source && source->owns_allocation && !source->moved) {
+        if (symbols_.has_live_borrow(source->allocation_id))
+          diagnostics_.error(diag::kTypeMismatch, element.location(),
+                             "cannot move an owner while an array view is live");
+        else {
+          element.set_transfers_ownership();
+          symbols_.mark_allocation_moved(source->allocation_id);
+        }
+      } else {
+        element.set_transfers_ownership();
+      }
+    }
     return Type::int_type();
   }
 

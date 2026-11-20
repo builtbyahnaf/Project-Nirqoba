@@ -1426,6 +1426,14 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         }
         const tir::Value element =
             lower_expression(*call.arguments()[1], function);
+        // An owned element belongs to the array now, so this scope's automatic
+        // cleanup for the source stands down: the array's destructor is what
+        // releases the element, element by element.
+        if (call.arguments()[1]->transfers_ownership() &&
+            call.arguments()[1]->kind() == Expr::Kind::Name)
+          suppress_automatic_cleanup(
+              lookup_slot(static_cast<const NameExpr&>(*call.arguments()[1])
+                              .name()));
         tir::Value result = function.allocate_value(
             call.type().is_valid() ? call.type() : Type::int_type());
         tir::Op append;
