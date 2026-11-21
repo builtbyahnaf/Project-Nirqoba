@@ -1,0 +1,12 @@
+// Ownership coming back across the boundary. `get_c_string` is a C function, so
+// the buffer it returns was allocated by C. The binding is an owner like any
+// other, but its destructor is the FFI deallocator: the runtime's text release
+// hands a pointer back to the deterministic allocator that issued it and would
+// abort on storage it never handed out.
+extern string_owned function get_c_string();
+
+int function main() {
+    var text: string_owned = get_c_string();
+    print(text);
+    return 0;
+}

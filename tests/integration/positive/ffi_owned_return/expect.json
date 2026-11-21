@@ -1,0 +1,14 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm-raw"],
+  "expect_ir_counts": {
+    "call ptr @get_c_string()": 1,
+    "declare void @nrq_ffi_free(ptr)": 1,
+    "call void @nrq_ffi_free(ptr": 1,
+    "call void @nrq_file_text_release(ptr": 0
+  },
+  "expect_stdout_index_order": [
+    "call ptr @get_c_string()",
+    "call void @nrq_ffi_free(ptr"
+  ]
+}
