@@ -12,6 +12,52 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.637-beta
+
+### Summary of Changes (since `0.633-beta`)
+
+Phase 9 opens with Phase 10.10: the compiler now reports the memory decisions it
+makes on its own, states the facts those decisions rest on to LLVM, and skips the
+allocations that cannot be observed. Release label `+0.004` (`0.633-beta` ->
+`0.637-beta`) per the three-upgrade rule.
+
+#### CDMM diagnostics
+
+- `--inspect-cdmm` reports every allocation site to stderr: its source location,
+the binding that holds it, the layout it allocates, the selected strategy
+(`stack`, `pool`, `arena`, `gc`) and the fact that selected it.
+- The decision is recorded during TIR translation, where the lifetime analysis and
+the choice are both in hand, and reported by the strategy audit pass, which is the
+single place an automated decision becomes visible. The carrier attribute is
+removed as it is printed, so the diagnostic never reaches the emitted program.
+- Rationales use the analysis vocabulary: `bounded to function`, `loop-scoped`,
+`promoted to the stack`, and the five escape reasons.
+
+#### LLVM optimization compatibility
+
+- Runtime allocator returns now carry `noalias` and an explicit alignment
+(`nrq_memory_allocate`, `nrq_memory_allocate_from`, `nrq_cdmm_arena_allocate`,
+`nrq_cdmm_pool_allocate`). A fresh allocation cannot overlap anything the caller
+can already name, and its base is a multiple of the payload's alignment.
+- The attributes are stated on the allocator declarations, which is where LLVM
+keeps a callee's return attributes: every call site inherits them.
+
+#### Dead-allocation elision
+
+- An allocation nothing reads, whose pointer stays in the activation and whose
+payload needs no destructor, is removed from the TIR before any strategy claims
+it: no allocator call, no arena, no release.
+- Elision reuses the evidence selection already computes (bounded lifetime, no
+local use, plain payload), and it removes the obligation along with the storage,
+so the function no longer claims a destruction it does not perform.
+
+#### Documentation
+
+- `docs/memory-model/cdmm.md` gains the reporting vocabulary, the elision rule
+and the attributes the optimizer is given.
+
+---
+
 ## Version 0.629-beta
 
 ### Summary of Changes (since `0.625-beta`)
