@@ -171,6 +171,10 @@ class TypeChecker {
   // the collector. Secure storage has no rooted allocation contract, so such
   // payloads cannot be released there.
   bool contains_managed_reference(const Type& type) const;
+  // True when any field of this aggregate was declared `shared` or `borrow`. Such
+  // a field carries a lifetime the type alone does not show, so an allocation
+  // whose payload holds one cannot be bulk-released.
+  bool contains_qualified_field(const Type& type) const;
   bool contains_managed_reference(
       const Type& type, std::unordered_set<std::string>& active) const;
   const std::vector<BorrowTarget>& aggregate_borrows_for(const Expr& expr) const;
