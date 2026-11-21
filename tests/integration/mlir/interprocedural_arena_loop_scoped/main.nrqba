@@ -1,0 +1,23 @@
+// The arena this call site asks for is scoped to the loop, not to the frame.
+//
+// The attribute on the create names the scope the lowering chose: `loop` means the
+// call sits in the loop's preheader and the destroy on its exit edges, `frame`
+// means the entry block and the return. Only the loop answer is acceptable here,
+// because every use of the returned storage is inside the body.
+int* function alloc_and_return() {
+    var node = memory.allocate<int>(8);
+    node[0] = 42;
+    return node;
+}
+
+int function main() {
+    print(1);
+    var i = 0;
+    while (i < 3) {
+        var n = alloc_and_return();
+        print(n[0]);
+        i = i + 1;
+    }
+    print(2);
+    return 0;
+}
