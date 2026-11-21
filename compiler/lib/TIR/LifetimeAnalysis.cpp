@@ -617,7 +617,8 @@ std::unordered_set<int> storage_alias_closure(const Function& function, int seed
 // own. Everything else - a binding, an element access, a read, a release - keeps
 // it where it is.
 bool storage_stays_in_frame(const Function& function,
-                            const std::unordered_set<int>& aliases) {
+                            const std::unordered_set<int>& aliases,
+                            const std::unordered_set<int>& arena_roots) {
   std::unordered_set<int> local_slots;
   for (const Op& op : function.operations())
     if (op.kind == OpKind::Alloca && op.result.is_valid())
@@ -641,8 +642,13 @@ bool storage_stays_in_frame(const Function& function,
     if (op.kind == OpKind::Store) {
       if (!op.operand.is_valid() || aliases.count(op.operand.id) == 0) continue;
       // Publishing the pointer into a slot this activation owns is the binding,
-      // not an escape. Any other destination can outlive the frame.
-      if (!op.lhs.is_valid() || local_slots.count(op.lhs.id) == 0) return false;
+      // not an escape. A field of the storage this activation returns is the same
+      // answer for a different reason: that storage is in this activation's arena,
+      // so a child published there is in the same chunk - the shape of a linked
+      // list built from the inside out. Any other destination can outlive both.
+      if (!op.lhs.is_valid()) return false;
+      if (local_slots.count(op.lhs.id) != 0) continue;
+      if (arena_roots.count(op.lhs.id) == 0) return false;
     }
   }
   return true;
@@ -655,7 +661,8 @@ bool storage_stays_in_frame(const Function& function,
 // sound: the callee fills the storage this activation is already returning, so
 // both belong to the arena this activation was given.
 bool storage_leaves_only_through_return(
-    const Function& function, const std::unordered_set<int>& aliases) {
+    const Function& function, const std::unordered_set<int>& aliases,
+    const std::unordered_set<int>& arena_roots) {
   std::unordered_set<int> local_slots;
   for (const Op& op : function.operations())
     if (op.kind == OpKind::Alloca && op.result.is_valid())
@@ -680,8 +687,12 @@ bool storage_leaves_only_through_return(
     }
     if (op.kind == OpKind::Store) {
       if (!op.operand.is_valid() || aliases.count(op.operand.id) == 0) continue;
-      // Binding it to a slot this activation owns is bookkeeping, not an escape.
-      if (!op.lhs.is_valid() || local_slots.count(op.lhs.id) == 0) return false;
+      // Binding it to a slot this activation owns is bookkeeping, not an escape,
+      // and neither is publishing it into the storage this activation returns:
+      // both live in the arena the chain shares.
+      if (!op.lhs.is_valid()) return false;
+      if (local_slots.count(op.lhs.id) != 0) continue;
+      if (arena_roots.count(op.lhs.id) == 0) return false;
     }
   }
   return returned;
@@ -737,6 +748,19 @@ CallSiteArenaPlan analyze_call_site_arenas(const Module& module) {
     // The same loop nesting the allocation classifier uses, so a call site and a
     // local allocation that sit together in one loop describe the same span.
     const LoopNesting nesting = LoopNesting::analyze(*function);
+    // The storage this activation's arena owns: everything it returns. A value
+    // published into a field of that storage is inside the same chunk, so a child
+    // stored into the node being built is bounded rather than escaping.
+    std::unordered_set<int> arena_roots;
+    {
+      const LifetimeAnalysis lifetimes = LifetimeAnalysis::analyze(*function);
+      for (const Op& op : function->operations()) {
+        if (!is_allocation_site(op)) continue;
+        const AllocationSite* site = lifetimes.site(op.result.id);
+        if (site == nullptr || site->reason != EscapeReason::Returned) continue;
+        arena_roots.insert(site->aliases.begin(), site->aliases.end());
+      }
+    }
 
     for (std::size_t index = 0; index < function->operations().size();
          ++index) {
@@ -759,19 +783,25 @@ CallSiteArenaPlan analyze_call_site_arenas(const Module& module) {
         // the handle can travel down it instead of a null.
         const std::unordered_set<int> aliases =
             storage_alias_closure(*function, op.result.id);
-        if (storage_leaves_only_through_return(*function, aliases))
+        if (storage_leaves_only_through_return(*function, aliases, arena_roots)) {
           forwarded[caller].insert(op.result.id);
-        else
+          // The callee still has a call site that does not bound the result, so
+          // its body keeps the null arm for whatever caller arrives without a
+          // handle.
+          state.any_escaping = true;
+          continue;
+        }
+        if (!storage_stays_in_frame(*function, aliases, arena_roots)) {
+          state.any_escaping = true;
           escaped[caller].emplace_back(op.result.id, op.callee);
-        // The callee still has a call site that does not bound the result, so its
-        // body keeps the null arm for whatever caller arrives without a handle.
-        state.any_escaping = true;
-        continue;
+          continue;
+        }
+        // The result is attached inside this activation's own returned storage,
+        // so it is bounded like any other local: the bounded path below decides
+        // its scope.
       }
 
-      const bool promotable =
-          !caller_chooses_allocator && op.callee != caller && arena_payload;
-      if (!promotable) {
+      if (!arena_payload || caller_chooses_allocator) {
         state.any_escaping = true;
         escaped[caller].emplace_back(op.result.id, op.callee);
         continue;
@@ -781,7 +811,7 @@ CallSiteArenaPlan analyze_call_site_arenas(const Module& module) {
       site.result = op.result.id;
       site.callee = op.callee;
       site.aliases = storage_alias_closure(*function, op.result.id);
-      if (!storage_stays_in_frame(*function, site.aliases)) {
+      if (!storage_stays_in_frame(*function, site.aliases, arena_roots)) {
         state.any_escaping = true;
         escaped[caller].emplace_back(site.result, site.callee);
         continue;
