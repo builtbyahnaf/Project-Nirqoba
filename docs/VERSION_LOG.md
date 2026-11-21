@@ -12,6 +12,64 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.640-beta
+
+### Summary of Changes (since `0.637-beta`)
+
+A pointer-bearing payload can live in an arena now, which is what a linked list or
+a tree is made of, and a promoted activation fills its caller's chunk instead of
+opening one of its own. Release label `+0.003` (`0.637-beta` -> `0.640-beta`) per
+the three-upgrade rule.
+
+#### Arena-eligible payloads
+
+- The payload rule moved into `nirq/common/Type.h` as `arena_eligible_payload`, so
+  one answer serves Sema, the allocation classifier and the call-site classifier.
+  A payload is eligible when its leaves are scalars and its pointers name other
+  eligible payloads; the expansion assumes the struct it is inside is eligible, so
+  `struct Node { int value; owned ptr Node next; }` is a node rather than a
+  recursion error.
+- Owned text, owned and dynamic containers, SoA columns, array views, shared
+  tokens, managed references and resource handles still keep a payload out of the
+  arena: each needs a release or a root that a chunk destroy cannot run.
+- Sema now accepts an explicit allocation of an arena-eligible payload even though
+  the block's release does not walk its fields, because for such a payload the
+  block *is* the whole answer. A payload with a real destructor is still refused
+  with `NRQ3015`, and so is one holding a `shared` or `borrow` field, which is a
+  lifetime the type alone does not show.
+
+#### Recursive structures
+
+- A pointer to a struct is now a valid function return type (`Node* function
+  build_list(int depth)`), so a recursive builder can hand its node back.
+- A `nullptr` in a named struct field initializer takes the field's type, so the
+  last node of a list can say where the list ends; owning a null is owning nothing.
+- A plain pointer's pointee is resolved for member access like an owned or shared
+  pointee, so `(*node).value` reads a full layout instead of an opaque struct.
+- A child stored into a field of the storage this activation returns is bounded,
+  not escaping: the parent is arena storage, so the child is in the same chunk.
+  That is what lets `build_list` attach its own recursion result.
+
+#### Caller-owned activation arenas
+
+- A callee that is promoted and has no escaping call site receives no null arm and
+  opens no chunk of its own: its returned storage and its arena-eligible locals
+  come from the handle the caller passed, and its calls to promoted callees forward
+  that same handle. One create and one destroy serve the whole recursive chain,
+  and the general allocator never appears.
+- A partially promoted callee keeps the null arm, keeps its own frame arena for
+  local work, and keeps the release that runs only when no handle arrived.
+
+#### Tests
+
+- `positive/arena_linked_list` builds a five-node list in one arena and asserts
+  one create, one destroy, one arena allocate and no general allocator traffic.
+- `cli/inspect_cdmm_linked_list` and `cli/inspect_cdmm_owned_string_payload` keep
+  the two halves of the decision visible: a node that is arena storage, and a
+  payload with owned text that stays with the collector.
+
+---
+
 ## Version 0.637-beta
 
 ### Summary of Changes (since `0.633-beta`)
