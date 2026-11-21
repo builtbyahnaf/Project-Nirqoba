@@ -363,6 +363,51 @@ LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function) {
     if (cyclic) record_escape(entry.second, EscapeReason::CyclicGraph);
   }
 
+  // Repeated work. A site runs once per call unless a back edge encloses it, and
+  // sites that allocate one layout can share a pool. Both facts come from the
+  // operation stream: labels plus branches that reach backwards mark loop bodies,
+  // and the payload type plus its byte count name a layout.
+  std::unordered_map<int, std::size_t> label_index;
+  std::unordered_map<int, std::uint64_t> integer_constants;
+  for (std::size_t index = 0; index < function.operations().size(); ++index) {
+    const Op& op = function.operations()[index];
+    if (op.kind == OpKind::Label) label_index.emplace(op.label_id, index);
+    if (op.kind == OpKind::ConstantInt && op.result.is_valid())
+      integer_constants.emplace(op.result.id,
+                                static_cast<std::uint64_t>(op.integer_value));
+  }
+  std::vector<std::pair<std::size_t, std::size_t>> loop_spans;
+  for (std::size_t index = 0; index < function.operations().size(); ++index) {
+    const Op& op = function.operations()[index];
+    if (op.kind != OpKind::Branch && op.kind != OpKind::BranchCond) continue;
+    for (int target : {op.label_id, op.true_label, op.false_label}) {
+      const auto found = label_index.find(target);
+      if (found == label_index.end() || found->second >= index) continue;
+      loop_spans.emplace_back(found->second, index);
+    }
+  }
+  auto under_back_edge = [&](std::size_t index) {
+    for (const auto& span : loop_spans)
+      if (index >= span.first && index <= span.second) return true;
+    return false;
+  };
+
+  std::unordered_map<int, std::size_t> operation_index;
+  std::unordered_map<std::string, std::size_t> layout_counts;
+  for (std::size_t index = 0; index < function.operations().size(); ++index) {
+    const Op& op = function.operations()[index];
+    if (!is_allocation_site(op)) continue;
+    operation_index.emplace(op.result.id, index);
+    const auto bytes = op.arguments.empty()
+                           ? integer_constants.end()
+                           : integer_constants.find(op.arguments[0].id);
+    std::string key = op.result.type.element_type().mangle();
+    key += bytes == integer_constants.end()
+               ? ":dynamic"
+               : ":" + std::to_string(bytes->second);
+    ++layout_counts[key];
+  }
+
   for (int id : allocation_results) {
     const int root = sets.find(id);
     AllocationSite site;
@@ -378,6 +423,40 @@ LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function) {
     const auto shared = members.find(root);
     if (shared != members.end()) site.aliases = shared->second;
     site.aliases.insert(id);
+
+    const Op* allocation = nullptr;
+    const auto position = operation_index.find(id);
+    if (position != operation_index.end()) {
+      allocation = &function.operations()[position->second];
+      site.in_loop = under_back_edge(position->second);
+    }
+    if (allocation != nullptr) {
+      site.layout_key = allocation->result.type.element_type().mangle();
+      if (!allocation->arguments.empty()) {
+        const auto bytes = integer_constants.find(allocation->arguments[0].id);
+        if (bytes != integer_constants.end()) {
+          site.constant_payload = true;
+          site.payload_bytes = bytes->second;
+          site.layout_key += ":" + std::to_string(bytes->second);
+        } else {
+          site.layout_key += ":dynamic";
+        }
+      }
+      const auto count = layout_counts.find(site.layout_key);
+      site.identical_sites = count == layout_counts.end() ? 1 : count->second;
+    }
+    // The pooling shape: storage that dies with its activation - the pool is
+    // destroyed on the way out - is plain enough to hold, is actually used, has
+    // a slot size the compiler knows, and is handed out repeatedly. Anything the
+    // stack or the arena descends on first keeps that cheaper answer; this flag
+    // only says the site is a candidate.
+    site.pool_eligible =
+        site.lifetime == AllocationLifetime::Bounded && site.used_locally &&
+        !site.manually_released && site.constant_payload &&
+        site.payload_bytes > 0 && allocation != nullptr &&
+        is_arena_eligible_payload(allocation->result.type.element_type()) &&
+        (site.in_loop || site.identical_sites >= kPoolSiteThreshold);
+
     analysis.sites_.emplace(id, std::move(site));
   }
   return analysis;

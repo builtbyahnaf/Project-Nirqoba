@@ -13,6 +13,8 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -46,10 +48,29 @@ enum class EscapeReason {
 std::string_view lifetime_name(AllocationLifetime lifetime);
 std::string_view escape_reason_name(EscapeReason reason);
 
+// How many sites of one layout make a group worth a shared pool. Four is the
+// point where the bookkeeping a pool costs (one create, one destroy, and a reset
+// per slot) is repaid by not asking the allocator four times.
+inline constexpr std::size_t kPoolSiteThreshold = 4;
+
 // What the analysis learned about one allocation site.
 struct AllocationSite {
   AllocationLifetime lifetime = AllocationLifetime::Escaping;
   EscapeReason reason = EscapeReason::None;
+  // The site sits inside a loop body, so it runs once per iteration.
+  bool in_loop = false;
+  // Sites in this function that allocate this exact layout (payload type and
+  // byte count), including this one.
+  std::size_t identical_sites = 0;
+  // A pool hands out fixed-size slots, so the site needs a byte count the
+  // compiler knows.
+  bool constant_payload = false;
+  std::uint64_t payload_bytes = 0;
+  // The layout group this site belongs to; sites in one group can share a pool.
+  std::string layout_key;
+  // Repeated, plain, locally used storage whose lifetime ends with the
+  // activation: the shape a bulk pool exists for.
+  bool pool_eligible = false;
   // The programmer released this storage by hand. Bulk release cannot replace
   // that call, so a rewrite must leave the site alone.
   bool manually_released = false;

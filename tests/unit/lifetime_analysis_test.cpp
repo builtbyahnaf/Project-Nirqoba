@@ -8,7 +8,9 @@
 
 #include "test_harness.h"
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 #include "nirqoba/Diagnostics/DiagnosticEngine.h"
 #include "nirqoba/Frontend/Lexer.h"
@@ -180,6 +182,112 @@ TEST(LifetimeAnalysisTest, StorageNobodyTouchesIsNotALocalWorkingSet) {
   ASSERT_EQ(describe(*site), std::string("bounded/none"));
   // Bounded, but never dereferenced: routing it would save nothing.
   ASSERT_FALSE(site->used_locally);
+}
+
+TEST(LifetimeAnalysisTest, ARepeatedSiteInsideALoopIsPoolEligible) {
+  DiagnosticEngine diag;
+  auto module = build_tir(
+      "int function main() {\n"
+      "  var total = 0;\n"
+      "  var index = 0;\n"
+      "  while (index < 3) {\n"
+      "    var value = memory.allocate<int>(8192);\n"
+      "    value[0] = index;\n"
+      "    total = total + value[0];\n"
+      "    index = index + 1;\n"
+      "  }\n"
+      "  return total;\n"
+      "}",
+      diag);
+  ASSERT_FALSE(diag.has_errors());
+  const tir::Function* function = find_function(*module, "main");
+  ASSERT_TRUE(function != nullptr);
+
+  const tir::LifetimeAnalysis analysis =
+      tir::LifetimeAnalysis::analyze(*function);
+  const tir::AllocationSite* site = analysis.site(allocation_result(*function));
+  ASSERT_TRUE(site != nullptr);
+  ASSERT_EQ(describe(*site), std::string("bounded/none"));
+  // One site, but it runs once per iteration: the pooling shape.
+  ASSERT_TRUE(site->in_loop);
+  ASSERT_TRUE(site->constant_payload);
+  ASSERT_EQ(site->payload_bytes, static_cast<std::uint64_t>(8192));
+  ASSERT_TRUE(site->pool_eligible);
+}
+
+TEST(LifetimeAnalysisTest, FlatSitesPoolOnlyFromTheThreshold) {
+  auto analyze_sites = [](int count) {
+    std::string code = "int function main() {\n  var total = 0;\n";
+    for (int index = 0; index < count; ++index) {
+      code += "  var slot" + std::to_string(index) +
+              " = memory.allocate<int>(8192);\n";
+      code += "  slot" + std::to_string(index) + "[0] = " +
+              std::to_string(index) + ";\n";
+      code += "  total = total + slot" + std::to_string(index) + "[0];\n";
+    }
+    code += "  return total;\n}\n";
+    DiagnosticEngine diag;
+    auto module = build_tir(code, diag);
+    EXPECT_FALSE(diag.has_errors());
+    const tir::Function* function = module ? find_function(*module, "main") : nullptr;
+    if (function == nullptr) return std::vector<tir::AllocationSite>{};
+    const tir::LifetimeAnalysis analysis =
+        tir::LifetimeAnalysis::analyze(*function);
+    std::vector<tir::AllocationSite> sites;
+    for (const tir::Op& op : function->operations())
+      if (tir::is_allocation_site(op)) sites.push_back(*analysis.site(op.result.id));
+    return sites;
+  };
+
+  // Below the threshold each site keeps the cheaper answer it already had.
+  const auto below = analyze_sites(3);
+  ASSERT_EQ(below.size(), static_cast<std::size_t>(3));
+  for (const tir::AllocationSite& site : below) {
+    ASSERT_FALSE(site.in_loop);
+    ASSERT_EQ(site.identical_sites, static_cast<std::size_t>(3));
+    ASSERT_FALSE(site.pool_eligible);
+  }
+
+  // At the threshold the group is worth one shared chunk.
+  const auto at_threshold = analyze_sites(static_cast<int>(tir::kPoolSiteThreshold));
+  ASSERT_EQ(at_threshold.size(), tir::kPoolSiteThreshold);
+  for (const tir::AllocationSite& site : at_threshold) {
+    ASSERT_EQ(site.identical_sites, tir::kPoolSiteThreshold);
+    ASSERT_TRUE(site.pool_eligible);
+  }
+}
+
+TEST(LifetimeAnalysisTest, EscapingRepeatsAreNotPoolEligible) {
+  DiagnosticEngine diag;
+  auto module = build_tir(
+      "void function sink(int* pointer) {\n"
+      "  print(pointer[0]);\n"
+      "  return;\n"
+      "}\n"
+      "int function main() {\n"
+      "  var index = 0;\n"
+      "  while (index < 3) {\n"
+      "    var value = memory.allocate<int>(8192);\n"
+      "    value[0] = index;\n"
+      "    sink(value);\n"
+      "    index = index + 1;\n"
+      "  }\n"
+      "  return 0;\n"
+      "}",
+      diag);
+  ASSERT_FALSE(diag.has_errors());
+  const tir::Function* function = find_function(*module, "main");
+  ASSERT_TRUE(function != nullptr);
+
+  const tir::LifetimeAnalysis analysis =
+      tir::LifetimeAnalysis::analyze(*function);
+  const tir::AllocationSite* site = analysis.site(allocation_result(*function));
+  ASSERT_TRUE(site != nullptr);
+  // Repeated and constant, but the pointer leaves: a pool the frame destroys
+  // would free storage that outlives the frame, so the site keeps the allocator.
+  ASSERT_TRUE(site->in_loop);
+  ASSERT_EQ(describe(*site), std::string("escaping/passed-to-callee"));
+  ASSERT_FALSE(site->pool_eligible);
 }
 
 TEST(LifetimeAnalysisTest, ArenaPayloadsArePlainData) {
