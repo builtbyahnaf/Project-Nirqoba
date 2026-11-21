@@ -222,6 +222,15 @@ unique_ptr<Program> Parser::parse_program() {
       synchronize();
       continue;
     }
+    // `Node* function build(...)` returns a pointer to a struct. The dispatch has
+    // to look through the stars to see the `function` that makes this a
+    // declaration, or a recursive builder could not be written at all.
+    auto pointer_return_type_ahead = [&]() {
+      if (!check(TokenKind::Identifier)) return false;
+      size_t look = 1;
+      while (peek(look).kind == TokenKind::Star) ++look;
+      return peek(look).kind == TokenKind::KwFunction;
+    };
     if ((check(TokenKind::Identifier) && peek().text == "shared" &&
          (is_type_keyword(peek(1).kind) || peek(1).kind == TokenKind::Identifier)) ||
         (check(TokenKind::Identifier) && peek().text == "borrow" &&
@@ -238,7 +247,7 @@ unique_ptr<Program> Parser::parse_program() {
          peek(1).kind == TokenKind::Less) ||
         is_type_keyword(peek().kind) ||
         (check(TokenKind::Identifier) &&
-         (peek(1).kind == TokenKind::KwFunction ||
+         (peek(1).kind == TokenKind::KwFunction || pointer_return_type_ahead() ||
           (peek().text == "managed" && peek(1).kind == TokenKind::Less)))) {
       seen_declaration = true;
       const size_t before = position_;
