@@ -1,0 +1,25 @@
+// Recursive handle forwarding.
+//
+// `build_list` returns fresh storage, so it gains a trailing arena handle as soon
+// as `main` bounds the result. Its own recursive call returns what the activation
+// returns: the storage that call fills is the storage this activation hands back,
+// so the call forwards the handle it was given instead of passing null. The whole
+// chain is one chunk, created once in `main` and released once on the way out.
+//
+// The parent node allocated before the recursion is not on every return path, so
+// its release stays: the release runs only when the handle was null, where the
+// general allocator really did hand the storage out. The arena frees it in bulk.
+int* function build_list(int depth) {
+    var node = memory.allocate<int>(8);
+    node[0] = depth;
+    if (depth > 0) {
+        return build_list(depth - 1);
+    }
+    return node;
+}
+
+int function main() {
+    var root = build_list(5);
+    print(root[0]);
+    return 0;
+}
