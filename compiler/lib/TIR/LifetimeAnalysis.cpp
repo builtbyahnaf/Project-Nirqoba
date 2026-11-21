@@ -709,6 +709,14 @@ CallSiteArenaPlan analyze_call_site_arenas(const Module& module) {
         kept.push_back(std::move(site));
     if (!kept.empty()) plan.call_sites.emplace(entry.first, std::move(kept));
   }
+  for (auto& entry : escaped) {
+    std::unordered_set<int> kept;
+    for (const auto& site : entry.second)
+      if (plan.promoted_callees.count(site.second) != 0)
+        kept.insert(site.first);
+    if (!kept.empty())
+      plan.escaping_call_results.emplace(entry.first, std::move(kept));
+  }
   return plan;
 }
 
