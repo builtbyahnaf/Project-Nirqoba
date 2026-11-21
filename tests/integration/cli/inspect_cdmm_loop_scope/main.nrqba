@@ -1,0 +1,17 @@
+// The report says where the arena lives, because that is the difference between
+// one arena for the frame and one per loop iteration.
+int* function alloc_and_return() {
+    var node = memory.allocate<int>(8);
+    node[0] = 42;
+    return node;
+}
+
+int function main() {
+    var i = 0;
+    while (i < 3) {
+        var n = alloc_and_return();
+        print(n[0]);
+        i = i + 1;
+    }
+    return 0;
+}
