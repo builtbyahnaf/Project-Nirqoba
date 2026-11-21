@@ -1,0 +1,29 @@
+// One callee, two call sites, two allocators.
+//
+// `alloc_and_return` hands fresh storage back to its caller. The first call site
+// keeps the result in `main`'s frame, so `main` creates an arena, passes the handle
+// and releases the chunk on the way out. The second call site gives the storage
+// away - `keep` takes ownership and releases it - so no arena can own it: that site
+// passes null and the same callee body falls back to the general allocator.
+//
+// The callee gained the trailing handle once, and both calls supply it. Neither
+// caller's decision erases the other's, which is the whole point of the nullable
+// argument.
+int* function alloc_and_return() {
+    var node = memory.allocate<int>(8);
+    node[0] = 42;
+    return node;
+}
+
+void function keep(int* pointer) {
+    print(pointer[0]);
+}
+
+int function main() {
+    var bounded = alloc_and_return();
+    print(bounded[0]);
+
+    var escaped = alloc_and_return();
+    keep(escaped);
+    return 0;
+}
