@@ -157,9 +157,21 @@ struct CallSiteArenaPlan {
   // the result value of each call. These are the sites the callee falls back to
   // the general allocator for.
   std::unordered_map<std::string, std::unordered_set<int>> escaping_call_results;
+  // Call sites that forward this activation's own arena handle down a direct
+  // recursive call instead of passing null, keyed by caller name. The handle is
+  // the one the caller was given, so the whole recursive chain fills one chunk
+  // and the outermost bounded caller releases it once.
+  std::unordered_map<std::string, std::unordered_set<int>> forwarded_call_results;
 
   bool promoted(const std::string& callee) const {
     return promoted_callees.count(callee) != 0;
+  }
+
+  // True when the call in `caller` (described by its result value) forwards the
+  // handle rather than passing null.
+  bool forwards(const std::string& caller, int result) const {
+    const auto found = forwarded_call_results.find(caller);
+    return found != forwarded_call_results.end() && found->second.count(result) != 0;
   }
 
   bool partial(const std::string& callee) const {
