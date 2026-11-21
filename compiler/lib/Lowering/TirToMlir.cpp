@@ -1601,7 +1601,10 @@ class FunctionTranslator {
                      bool needs_mutator_region,
                      std::unordered_map<int, StackAllocationLayout>
                          stack_allocations,
-                     std::vector<RegionSelection> regions)
+                     std::vector<RegionSelection> regions,
+                     int caller_arena_arg_index,
+                     std::unordered_set<int> arena_param_sites,
+                     std::unordered_map<int, std::size_t> arena_call_regions)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
         builder_(builder), ctx_(ctx), diag_(diag), fast_math_(fast_math),
         configuration_(configuration),
@@ -1609,6 +1612,9 @@ class FunctionTranslator {
         emit_abi_reference_(emit_abi_reference),
         stack_allocations_(std::move(stack_allocations)),
         regions_(std::move(regions)),
+        caller_arena_arg_index_(caller_arena_arg_index),
+        arena_param_sites_(std::move(arena_param_sites)),
+        arena_call_regions_(std::move(arena_call_regions)),
         gc_roots_(analyze_gc_root_plan(tir_fn, collections)),
         uses_gc_mutator_(needs_mutator_region),
         needs_gc_root_frame_(uses_gc_mutator_ && gc_roots_.needs_root_frame),
@@ -5313,6 +5319,24 @@ class FunctionTranslator {
                 loc, fn, mlir::ValueRange{allocator, bytes, alignment});
             mark_fresh_allocation(fn, alignment_bytes);
             result = call.getResult();
+          } else if (caller_arena_arg_index_ >= 0 &&
+                     arena_param_sites_.count(op.result.id) != 0) {
+            // The caller proved this storage never leaves its frame, so the arena
+            // it created is the right home: the callee fills it and the caller
+            // releases the whole chunk at once. The decision belongs to the call
+            // site, so this call carries no strategy attribute of its own.
+            auto arena_fn = ensure_runtime_fn(
+                module_, builder_, "nrq_cdmm_arena_allocate",
+                llvm_ptr_type(ctx_),
+                {llvm_ptr_type(ctx_), builder_.getI64Type(),
+                 builder_.getI64Type()});
+            mlir::Value handle = func_op_.getArgument(
+                static_cast<unsigned>(caller_arena_arg_index_));
+            auto call = builder_.create<mlir::LLVM::CallOp>(
+                loc, arena_fn, mlir::ValueRange{handle, bytes, alignment});
+            mark_fresh_allocation(arena_fn, alignment_bytes);
+            set(op.result, call.getResult());
+            return true;
           } else if (const auto region = region_of_site_.find(op.result.id);
                      region != region_of_site_.end()) {
             // Phase Psi: the lifetime classifier proved this pointer never leaves
@@ -6084,6 +6108,21 @@ class FunctionTranslator {
           return true;
         }
 
+        // The callee was promoted: it fills the storage it returns from the arena
+        // this activation created for the call site, so the handle travels as the
+        // trailing argument its signature gained.
+        if (op.result.is_valid()) {
+          const auto promoted = arena_call_regions_.find(op.result.id);
+          if (promoted != arena_call_regions_.end()) {
+            mlir::Value handle = region_handle(promoted->second, loc);
+            if (!handle) {
+              diag_.error("NRQ4005", op.location,
+                          "internal: promoted call site has no arena handle");
+              return false;
+            }
+            args.push_back(handle);
+          }
+        }
         if (op.result.is_valid()) {
           mlir::Type ret_ty = tir_type_to_mlir(op.result.type, ctx_, builder_);
           auto call_op = builder_.create<mlir::func::CallOp>(
@@ -6636,6 +6675,15 @@ class FunctionTranslator {
   };
   std::vector<RegionSlotState> region_slots_;
   std::unordered_map<int, std::size_t> region_of_site_;
+  // This activation's arena, when a caller created one for the storage this
+  // function returns: the trailing argument its signature gained.
+  int caller_arena_arg_index_ = -1;
+  // Allocation sites whose storage leaves through the return, so they are the
+  // ones a caller's arena can serve.
+  std::unordered_set<int> arena_param_sites_;
+  // Call sites served from this activation's arena, and the region publishing
+  // the handle they receive.
+  std::unordered_map<int, std::size_t> arena_call_regions_;
   std::unordered_map<int, std::size_t> region_of_value_;
   // Loop-scoped regions whose create belongs at the header label at this position
   // in the operation stream.
@@ -6701,6 +6749,9 @@ class FunctionTranslator {
 // classifier.
 struct HybridSelection {
   std::vector<RegionSelection> regions;
+  // Call sites whose result a promoted callee fills into this activation's arena,
+  // and the region that publishes the handle those calls receive.
+  std::unordered_map<int, std::size_t> arena_call_regions;
   // Every value naming a region-selected allocation. The Drop that would release
   // it must not expand into a call: the region releases the storage wholesale.
   std::unordered_set<int> region_aliases;
@@ -6741,15 +6792,36 @@ void drop_stack_claimed(
   selection.regions = std::move(kept);
 }
 
-HybridSelection select_hybrid_strategies(const tir::Function& function) {
+HybridSelection select_hybrid_strategies(
+    const tir::Function& function,
+    const std::vector<tir::BoundedCallResult>& promoted_calls) {
   HybridSelection selection;
-  const tir::LifetimeAnalysis lifetimes =
-      tir::LifetimeAnalysis::analyze(function);
-  if (lifetimes.empty()) return selection;
 
   for (const tir::Op& op : function.operations())
     if (op.kind == tir::OpKind::Call && op.callee == "memory.use_allocator")
       return selection;
+
+  // An arena this activation owns for storage a callee fills: one frame region per
+  // promoted call site, created at entry and destroyed on the way out, exactly
+  // like a region the function chose for itself. The call site is registered as a
+  // region member so the region survives its own audit, and its aliases suppress
+  // the release the binding would otherwise emit - the arena owns the storage now.
+  for (const tir::BoundedCallResult& site : promoted_calls) {
+    RegionSelection region;
+    region.pooled = false;
+    region.scope.loop = false;
+    region.alignment = 8;
+    region.sites.push_back(site.result);
+    region.aliases = site.aliases;
+    const std::size_t index = selection.regions.size();
+    selection.arena_call_regions.emplace(site.result, index);
+    selection.regions.push_back(std::move(region));
+    selection.region_aliases.insert(site.aliases.begin(), site.aliases.end());
+  }
+
+  const tir::LifetimeAnalysis lifetimes =
+      tir::LifetimeAnalysis::analyze(function);
+  if (lifetimes.empty()) return selection;
 
   // One region per scope and layout: sites that share a loop header and a layout
   // share one handle, and a site whose storage outlives its loop keeps the
@@ -7065,10 +7137,12 @@ static std::string_view escape_rationale(tir::EscapeReason reason) {
 std::vector<std::string> cdmm_report(
     const tir::Function& function,
     const std::unordered_map<int, StackAllocationLayout>& stack_allocations,
-    const HybridSelection& selection) {
+    const HybridSelection& selection,
+    bool promoted_callee) {
   std::vector<std::string> lines;
+  // A caller with no allocation sites of its own still reports the strategy it
+  // chose for a callee's storage, so an empty analysis is not an empty report.
   const tir::LifetimeAnalysis lifetimes = tir::LifetimeAnalysis::analyze(function);
-  if (lifetimes.empty()) return lines;
 
   // A variable is named where its pointer is stored, not where it is allocated.
   std::unordered_map<int, std::string> slot_names;
@@ -7100,7 +7174,12 @@ std::vector<std::string> cdmm_report(
 
     std::string_view strategy;
     std::string rationale;
-    if (stack_allocations.count(op.result.id) != 0) {
+    if (promoted_callee && site->reason == tir::EscapeReason::Returned) {
+      // The site escapes its own function, but every caller bounds it, so the
+      // storage lives in the caller's arena rather than on the general allocator.
+      strategy = "arena";
+      rationale = "bounded by every caller, filled into the caller's arena";
+    } else if (stack_allocations.count(op.result.id) != 0) {
       strategy = "stack";
       rationale = "bounded to function, promoted to the stack";
       if (site->loop_scoped) rationale += ", loop-scoped";
@@ -7129,6 +7208,30 @@ std::vector<std::string> cdmm_report(
     line += " -> " + std::string(strategy) + " (" + rationale + ")";
     lines.push_back(std::move(line));
   }
+
+  // A call whose callee fills the result into this frame's arena. The strategy is
+  // chosen here rather than in the callee, so the decision belongs in this
+  // report, and the callee is named because it is where the storage is written.
+  for (const auto& entry : selection.arena_call_regions) {
+    const tir::Op* call = nullptr;
+    for (const tir::Op& op : function.operations())
+      if (op.kind == tir::OpKind::Call && op.result.is_valid() &&
+          op.result.id == entry.first) {
+        call = &op;
+        break;
+      }
+    if (call == nullptr) continue;
+    const auto binding = binding_names.find(entry.first);
+    const std::string name =
+        binding != binding_names.end() ? binding->second : std::string("<temporary>");
+    std::string line = "cdmm: ";
+    line += call->location.is_valid() ? call->location.to_string()
+                                      : std::string("<unknown>");
+    line += " '" + name + "' " + call->result.type.to_string();
+    line += " -> arena (bounded to the caller's frame, filled by " +
+            call->callee + ")";
+    lines.push_back(std::move(line));
+  }
   return lines;
 }
 
@@ -7146,6 +7249,12 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
   builder.setInsertionPointToStart(module->getBody());
   const BorrowedEscapeSummary borrowed_summary =
       summarize_borrowed_parameters(tir_module);
+  // Call sites whose returned storage stays in the caller's frame, and the
+  // callees that can be served from it. The analysis is module-wide because a
+  // callee has one signature for every caller, so its answer cannot depend on the
+  // call site it is read at.
+  const tir::CallSiteArenaPlan arena_plan =
+      tir::analyze_call_site_arenas(tir_module);
   const CollectionSummary collections = summarize_collections(tir_module);
   const std::unordered_set<std::string> mutator_regions =
       summarize_mutator_regions(tir_module);
@@ -7180,6 +7289,11 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
       }
       param_types.push_back(pty);
     }
+    // A promoted callee takes one trailing argument: the arena its caller created
+    // for the storage it returns. It is part of the signature rather than a side
+    // channel because the callee has to read it as a value.
+    const bool promoted_callee = arena_plan.promoted(tir_fn->name());
+    if (promoted_callee) param_types.push_back(llvm_ptr_type(&context));
 
     mlir::FunctionType fn_type;
     if (ret_type) {
@@ -7290,7 +7404,20 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     // The copy keeps the verified module unchanged for later diagnostics.
     tir::Function lowered_fn = *tir_fn;
     elide_dead_allocations(lowered_fn);
-    HybridSelection selection = select_hybrid_strategies(lowered_fn);
+    std::vector<tir::BoundedCallResult> promoted_calls;
+    if (const auto sites = arena_plan.call_sites.find(tir_fn->name());
+        sites != arena_plan.call_sites.end())
+      promoted_calls = sites->second;
+    std::unordered_set<int> arena_param_sites;
+    if (promoted_callee) {
+      const tir::LifetimeAnalysis callee_lifetimes =
+          tir::LifetimeAnalysis::analyze(lowered_fn);
+      for (const auto& entry : callee_lifetimes.sites())
+        if (entry.second.reason == tir::EscapeReason::Returned)
+          arena_param_sites.insert(entry.first);
+    }
+    HybridSelection selection =
+        select_hybrid_strategies(lowered_fn, promoted_calls);
     // Both region kinds own the storage, so neither may also see a per-binding
     // release: the Drop keeps its record and lowers into the region's own path.
     std::unordered_set<int> suppressed = selection.region_aliases;
@@ -7307,13 +7434,16 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     // all fit its frame emits no region calls at all.
     drop_stack_claimed(selection, stack_allocations);
     if (inspect_cdmm)
-      for (std::string& line : cdmm_report(lowered_fn, stack_allocations, selection))
+      for (std::string& line :
+           cdmm_report(lowered_fn, stack_allocations, selection, promoted_callee))
         cdmm_lines.push_back(std::move(line));
     FunctionTranslator translator(
         *module, lowered_fn, borrowed_summary, collections, func_op, builder,
         &context, diagnostics, fast_math, configuration, string_literals,
         symbol == "main", mutator_regions.count(tir_fn->name()) != 0,
-        stack_allocations, std::move(selection.regions));
+        stack_allocations, std::move(selection.regions),
+        promoted_callee ? static_cast<int>(param_types.size()) - 1 : -1,
+        std::move(arena_param_sites), std::move(selection.arena_call_regions));
     if (!translator.translate()) return nullptr;
 
     builder.setInsertionPointAfter(func_op);
