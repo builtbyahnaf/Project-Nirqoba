@@ -1,0 +1,23 @@
+// Both allocator paths in one program, so one IR dump shows both declarations.
+//
+// `local` is bounded and computed-size, so it comes from the scratch arena.
+// `node` escapes through a return, so it comes from the general allocator.
+// Neither call site needs its own promise: the optimizer reads the alignment and
+// the absence of aliasing from the declaration the compiler emits, which is
+// where LLVM keeps a callee's return attributes.
+int* function allocate_node() {
+    var node = memory.allocate<int>(8);
+    node[0] = 7;
+    return node;
+}
+
+int function main() {
+    var count = 4;
+    var local = memory.allocate<int>(count * 8);
+    local[0] = 1;
+    print(local[0]);
+    var n = allocate_node();
+    print(n[0]);
+    memory.deallocate(n);
+    return 0;
+}
