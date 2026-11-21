@@ -159,3 +159,56 @@ non-power-of-two alignment, a destroyed handle, or a request the strategy cannot
 serve. No failure path aborts the process and no failure path leaves a partially
 recorded object behind. The handle value is freed on destroy, so a stale handle
 looks unknown rather than resolving to a new allocator.
+
+## Reading the automated decisions
+
+Phase Psi connected the missing half of this document: automated selection now
+routes an explicit allocation to the strategy its lifetime asks for. Storage that
+stays in its activation goes to a stack slot, a pool group or the scope's scratch
+arena; storage that escapes keeps the general allocator. Phase 9 makes those
+decisions reviewable and gives the optimizer the facts they rest on.
+
+### `--inspect-cdmm`
+
+```
+$ nirqoba build main.nrqba --inspect-cdmm
+cdmm: 1 allocation site(s) classified
+cdmm: main.nrqba:14:17 'value' int* -> arena (bounded to function)
+```
+
+One line per allocation site: where it is, the binding that holds it, the layout
+it allocates, the selected strategy (`stack`, `pool`, `arena`, `gc`) and the fact
+that selected it. The rationales use the analysis vocabulary: `bounded to
+function` with `, loop-scoped` when the storage dies with its loop, `promoted to
+the stack`, `repeated layout (N sites)` for a pool group, and the escape reasons
+(`escaping via return`, `escaping via callee`, `escaping into foreign storage`,
+`escaping inside an escaping object`, `escaping through a reference cycle`).
+
+The report is diagnostic only: it goes to stderr, the emitted program is identical
+with and without the flag, and the attribute that carries the decisions to the
+reporting pass is removed as it is printed.
+
+### Dead allocations are not allocated
+
+An allocation that nothing reads, whose pointer never leaves the activation and
+whose payload needs no destructor is storage nobody can observe. It is removed
+from the TIR before any strategy can claim it, so no allocator is called for it,
+no arena is created for it and no release follows it.
+
+This is the evidence selection already needs - bounded lifetime, no local use,
+plain payload - so it costs no new analysis. Allocating and then releasing it
+would have made the compiler do work whose only effect is to be undone.
+
+### What the optimizer is told
+
+`noalias` follows from freshness: a pointer the allocator just returned cannot
+overlap anything the program could already name. The alignment follows from the
+payload's layout. Both are stated on the allocator's declaration:
+
+```llvm
+declare noalias align 8 ptr @nrq_memory_allocate(i64, i64)
+declare noalias align 8 ptr @nrq_cdmm_arena_allocate(ptr, i64, i64)
+```
+
+A declaration is where LLVM keeps a callee's return attributes, so the facts reach
+every call site and stay in one place as the lowering changes.
