@@ -6213,10 +6213,23 @@ class FunctionTranslator {
         // caller, instead of the callee's storage decision being global.
         if (promoted_callees_.count(op.callee) != 0) {
           mlir::Value handle;
+          const bool forwarded = op.result.is_valid() &&
+                                 forwarded_call_results_.count(op.result.id) != 0;
           const auto promoted = op.result.is_valid()
                                     ? arena_call_regions_.find(op.result.id)
                                     : arena_call_regions_.end();
-          if (promoted != arena_call_regions_.end()) {
+          if (forwarded) {
+            // A direct recursive call that returns what this activation returns:
+            // hand it the handle this activation was given, so the whole chain
+            // fills one chunk and the outermost caller releases it once.
+            if (caller_arena_arg_index_ < 0) {
+              diag_.error("NRQ4005", op.location,
+                          "internal: forwarded call has no arena parameter");
+              return false;
+            }
+            handle = func_op_.getArgument(
+                static_cast<unsigned>(caller_arena_arg_index_));
+          } else if (promoted != arena_call_regions_.end()) {
             handle = region_handle(promoted->second, loc);
             if (!handle) {
               diag_.error("NRQ4005", op.location,
