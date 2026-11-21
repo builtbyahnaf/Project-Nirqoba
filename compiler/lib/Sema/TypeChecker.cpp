@@ -4272,6 +4272,13 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
                                field_name + "'");
       } else if (init_type.is_valid() &&
                  init_type != resolve_aggregate_type(field_def->type) &&
+                 // A null pointer literal fills a pointer field of any ownership:
+                 // a null owner owns nothing, so it needs no transfer and holds no
+                 // resource. Without this the last node of a list could not say
+                 // where the list ends.
+                 !(is_null_pointer_literal(*kv.second) &&
+                   (resolve_aggregate_type(field_def->type).is_pointer() ||
+                    resolve_aggregate_type(field_def->type).is_managed_pointer())) &&
                  !(resolve_aggregate_type(field_def->type).is_owned_pointer() &&
                    init_type.is_pointer() && !init_type.is_owned_pointer() &&
                    init_type.element_type() ==
@@ -4285,6 +4292,13 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
                            "' has type '" + resolve_aggregate_type(field_def->type).to_string() +
                                "', but was given '" + init_type.to_string() + "'");
       }
+      if (field_def && is_null_pointer_literal(*kv.second)) {
+        // The literal takes the field's type, so the aggregate it is packed into
+        // holds a pointer word where the layout expects one.
+        const Type field_type = resolve_aggregate_type(field_def->type);
+        if (field_type.is_pointer() || field_type.is_managed_pointer())
+          const_cast<Expr&>(*kv.second).set_type(field_type);
+      }
       if (field_def)
         consume_field_move(const_cast<Expr&>(*kv.second),
                            resolve_aggregate_type(field_def->type));
@@ -4294,17 +4308,21 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
                                "' must be initialized with a borrow");
       } else if (field_def &&
                  !field_def->borrowed &&
+                 !(is_null_pointer_literal(*kv.second) &&
+                   resolve_aggregate_type(field_def->type).is_pointer()) &&
                  has_untracked_pointer_ownership(field_def->type,
                                                  kv.second->ownership())) {
         diagnostics_.error(diag::kTypeMismatch, kv.second->location(),
                            "owned, shared, and borrowed pointers cannot be stored in aggregate fields");
       }
-      if (field_def && !field_def->borrowed)
+      if (field_def && !field_def->borrowed &&
+          !is_null_pointer_literal(*kv.second))
         check_resource_field_value(*field_def,
                                    resolve_aggregate_type(field_def->type),
                                    *kv.second, symbols_, diagnostics_);
       if (field_def) record_field_borrow(*field_def, *kv.second);
-      if (field_def && contains_owned_array(resolve_aggregate_type(field_def->type))) {
+      if (field_def && !is_null_pointer_literal(*kv.second) &&
+          contains_owned_array(resolve_aggregate_type(field_def->type))) {
         Expr& value = const_cast<Expr&>(*kv.second);
         const Symbol* source = value.kind() == Expr::Kind::Name
                                    ? find_root_symbol(value, symbols_) : nullptr;
