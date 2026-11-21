@@ -1941,6 +1941,9 @@ class FunctionTranslator {
   void emit_release_unless_arena(mlir::Value pointer, const Type& payload,
                                  mlir::Location loc) {
     if (caller_arena_arg_index_ < 0) return;
+    // No caller passes null, so there is no general-allocator arm to release:
+    // every path that reaches here leaves the storage to the caller's arena.
+    if (activation_handle_guaranteed_) return;
     const mlir::Type ptr = llvm_ptr_type(ctx_);
     mlir::Value coerced = pointer;
     if (!mlir::isa<mlir::LLVM::LLVMPointerType>(coerced.getType()))
