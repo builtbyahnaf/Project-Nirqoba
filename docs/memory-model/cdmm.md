@@ -367,3 +367,49 @@ declare noalias align 8 ptr @nrq_cdmm_arena_allocate(ptr, i64, i64)
 
 A declaration is where LLVM keeps a callee's return attributes, so the facts reach
 every call site and stay in one place as the lowering changes.
+
+### What may live in an arena
+
+An arena frees a chunk, so its payloads must be reclaimable by dropping the chunk
+and nothing else. That rules out anything with a release of its own — owned text,
+owned or dynamic containers, shared tokens, managed references, array views and
+resource handles (`file`, `socket`, `mutex`, `mapping`, `secure`) — and it does
+*not* rule out pointers:
+
+```
+struct Node { int value; owned ptr Node next; }
+```
+
+A node owns its child pointer, and the child is arena storage too, so the chunk
+that holds the list reclaims the list. The classifier therefore accepts a payload
+whose leaves are scalars and whose pointers name other eligible payloads, and it
+assumes the node it is expanding is eligible while it expands it: a struct that
+names itself is a linked list or a tree, not an error.
+
+The rule lives in `nirq/common/Type.h` (`arena_eligible_payload`) so Sema's
+allocation check, the allocation classifier and the call-site classifier all answer
+it the same way. Sema uses it to accept an explicit allocation of such a payload:
+releasing the block alone is the whole answer for it. A `shared` or `borrow` field
+is a lifetime the type does not show, so a struct holding one never qualifies.
+
+### A promoted activation lives in its caller's arena
+
+A callee that is promoted and whose every call site passes a handle opens no chunk
+of its own: its returned storage and every arena-eligible allocation it makes are
+filled from the handle it was given. That is what keeps a recursive builder to one
+arena per chain rather than one per activation:
+
+```llvm
+define internal ptr @build_list(i64 %0, ptr %1) {
+  %8 = call ptr @nrq_cdmm_arena_allocate(ptr %1, i64 16, i64 8)
+  ...
+  %17 = call ptr @build_list(i64 %15, ptr %1)
+  ret ptr %12
+}
+```
+
+Because no call site passes null, the body needs no general-allocator arm and no
+release of its own: the caller's destroy releases everything the activation and
+its callees put in the chunk. A callee that is only partially promoted keeps the
+null arm, keeps its own chunk for local work, and keeps the conditional release
+that runs only when no handle arrived.
