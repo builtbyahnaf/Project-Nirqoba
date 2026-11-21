@@ -668,6 +668,45 @@ bool storage_stays_in_frame(const Function& function,
   return true;
 }
 
+// True when the only way this storage leaves the frame is the return: no callee
+// receives it, the programmer wrote no release for it, and no store puts it where
+// the frame does not own it. That is the shape a direct recursive call has when
+// its result becomes the result of the function, and it is what makes forwarding
+// sound: the callee fills the storage this activation is already returning, so
+// both belong to the arena this activation was given.
+bool storage_leaves_only_through_return(
+    const Function& function, const std::unordered_set<int>& aliases) {
+  std::unordered_set<int> local_slots;
+  for (const Op& op : function.operations())
+    if (op.kind == OpKind::Alloca && op.result.is_valid())
+      local_slots.insert(op.result.id);
+
+  bool returned = false;
+  for (const Op& op : function.operations()) {
+    if (op.kind == OpKind::Return) {
+      if (op.operand.is_valid() && aliases.count(op.operand.id) != 0)
+        returned = true;
+      continue;
+    }
+    if (op.kind == OpKind::Call) {
+      // A callee may keep the pointer or free it. Either takes the storage out of
+      // the arena's control, so this is not a chain the handle may travel down.
+      for (const Value& argument : op.arguments)
+        if (argument.is_valid() && aliases.count(argument.id) != 0) return false;
+      if ((op.lhs.is_valid() && aliases.count(op.lhs.id) != 0) ||
+          (op.operand.is_valid() && aliases.count(op.operand.id) != 0))
+        return false;
+      continue;
+    }
+    if (op.kind == OpKind::Store) {
+      if (!op.operand.is_valid() || aliases.count(op.operand.id) == 0) continue;
+      // Binding it to a slot this activation owns is bookkeeping, not an escape.
+      if (!op.lhs.is_valid() || local_slots.count(op.lhs.id) == 0) return false;
+    }
+  }
+  return returned;
+}
+
 }  // namespace
 
 CallSiteArenaPlan analyze_call_site_arenas(const Module& module) {
