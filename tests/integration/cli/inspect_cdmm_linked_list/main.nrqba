@@ -1,0 +1,24 @@
+// The report has to say where each node of the list lives: the nodes a promoted
+// activation builds are arena storage, and the child attached inside one is
+// bounded to the same chunk.
+struct Node {
+    int value;
+    owned ptr Node next;
+}
+
+Node* function build_list(int depth) {
+    var node = memory.allocate<Node>(16);
+    if (depth > 0) {
+        var child = build_list(depth - 1);
+        *node = Node { value: depth, next: child };
+    } else {
+        *node = Node { value: depth, next: nullptr };
+    }
+    return node;
+}
+
+int function main() {
+    var root = build_list(5);
+    print((*root).value);
+    return 0;
+}
