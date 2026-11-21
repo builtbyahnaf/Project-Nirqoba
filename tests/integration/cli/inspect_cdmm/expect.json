@@ -1,0 +1,8 @@
+{
+  "mode": "build",
+  "args": ["--inspect-cdmm"],
+  "expect_stderr_contains": "'value' int* -> arena (bounded to function)",
+  "expect_ir_counts": {
+    "call ptr @nrq_cdmm_arena_allocate": 1
+  }
+}
