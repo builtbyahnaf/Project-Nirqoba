@@ -818,6 +818,114 @@ class ElideNestedMutatorRegionsPass
   }
 };
 
+// ---------------------------------------------------------------------------
+// Automated strategy selection: the scratch arena contract
+// ---------------------------------------------------------------------------
+//
+// Selection happens where the strategy is decided: at the allocation site in
+// TIR, where the lifetime classification is available and where a release can
+// still be turned into wholesale arena release. What is left for a module pass
+// is the part only the final body can answer.
+//
+// First, every arena-selected site must still have an arena. A site reads its
+// handle from a slot the entry block fills with `nrq_cdmm_arena_create`, so a
+// missing handle would be a null dereference at run time; this check turns a
+// lowering regression into a compile error instead. Second, an activation whose
+// selected sites did not survive optimization - the site sat in a branch SCCP
+// proved dead - keeps a create/destroy pair that now allocates for nobody. That
+// pair is removed, which is what actually saves the chunk.
+class HybridStrategySelectionPass
+    : public mlir::PassWrapper<HybridStrategySelectionPass,
+                               mlir::OperationPass<mlir::ModuleOp>> {
+ public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(HybridStrategySelectionPass)
+
+  llvm::StringRef getArgument() const final {
+    return "hybrid-strategy-selection";
+  }
+  llvm::StringRef getDescription() const final {
+    return "Enforce and clean up the scratch arenas automated strategy "
+           "selection chose";
+  }
+
+  void runOnOperation() override {
+    mlir::ModuleOp module = getOperation();
+    bool failed = false;
+    module.walk([&](mlir::LLVM::LLVMFuncOp function) {
+      if (function.isExternal()) return;
+      if (!check_and_clean(function)) failed = true;
+    });
+    if (failed) signalPassFailure();
+  }
+
+ private:
+  static bool names(mlir::Operation* op, llvm::StringRef symbol) {
+    if (!op) return false;
+    auto call = mlir::dyn_cast<mlir::LLVM::CallOp>(op);
+    if (!call) return false;
+    auto callee = call.getCallee();
+    return callee && *callee == symbol;
+  }
+
+  // The slot a selected site reads its handle from.
+  static mlir::Value arena_slot(mlir::Value arena) {
+    auto load = arena.getDefiningOp<mlir::LLVM::LoadOp>();
+    return load ? load.getAddr() : mlir::Value{};
+  }
+
+  static bool check_and_clean(mlir::LLVM::LLVMFuncOp function) {
+    llvm::SmallVector<mlir::LLVM::CallOp, 4> selected;
+    llvm::SmallVector<mlir::LLVM::CallOp, 4> creates;
+    llvm::SmallVector<mlir::LLVM::CallOp, 4> destroys;
+    function.walk([&](mlir::LLVM::CallOp call) {
+      if (call->hasAttr("nirqoba.hybrid_strategy"))
+        selected.push_back(call);
+      else if (names(call, "nrq_cdmm_arena_create"))
+        creates.push_back(call);
+      else if (names(call, "nrq_cdmm_arena_destroy"))
+        destroys.push_back(call);
+    });
+    if (creates.empty() && destroys.empty()) return true;
+
+    bool consistent = true;
+    for (mlir::LLVM::CallOp site : selected) {
+      const mlir::Value slot =
+          site.getNumOperands() == 0 ? mlir::Value{}
+                                     : arena_slot(site.getOperand(0));
+      bool filled = false;
+      if (slot) {
+        function.walk([&](mlir::LLVM::StoreOp store) {
+          if (filled || store.getAddr() != slot) return;
+          if (names(store.getValue().getDefiningOp(), "nrq_cdmm_arena_create"))
+            filled = true;
+        });
+      }
+      if (filled) continue;
+      site.emitError(
+          "arena-selected allocation has no scratch arena; hybrid strategy "
+          "selection and lowering disagree");
+      consistent = false;
+    }
+
+    // An activation with no selected site left keeps an arena nobody uses: the
+    // create call, the store that publishes its handle, and the destroys that
+    // read the handle back all go. The slot itself becomes dead storage and the
+    // following cleanup passes are free to drop it.
+    if (!selected.empty()) return consistent;
+    for (mlir::LLVM::CallOp create : creates) {
+      const mlir::Value handle = create.getResult();
+      llvm::SmallVector<mlir::Operation*, 4> publishers;
+      function.walk([&](mlir::LLVM::StoreOp store) {
+        if (store.getValue() == handle) publishers.push_back(store);
+      });
+      for (mlir::Operation* store : publishers) store->erase();
+      for (mlir::LLVM::CallOp destroy : destroys) destroy.erase();
+      create.erase();
+    }
+    return consistent;
+  }
+};
+
 // The canonicalizer folds constants, removes trivially dead operations whose
 // results are unused, and simplifies control flow. SCCP then propagates known
 // constants through SSA values, block arguments, and conditional control flow,
@@ -872,6 +980,12 @@ void build_lowering_pipeline(mlir::PassManager& pm, bool optimize) {
     // intact.
     add_cleanup_passes(pm);
   }
+
+  // Step 3b: Enforce the arena contract automated strategy selection established
+  // and drop the scratch arenas whose selected sites optimization removed. It
+  // runs at every optimization level, because the contract describes the emitted
+  // program rather than a pass run.
+  pm.addPass(std::make_unique<HybridStrategySelectionPass>());
 
   // Step 4: Expose tail calls. Like memory effects below, the marker describes
   // the program rather than a pass run, so it is added at every level: without

@@ -22,6 +22,8 @@ void register_dialects(mlir::DialectRegistry& registry);
 //   3. convert-func-to-llvm
 //   4. reconcile-unrealized-casts
 //   5. repeat the optimized cleanup on the LLVM dialect IR
+//   6. hybrid-strategy-selection: enforce and clean up the scratch arenas
+//      automated strategy selection chose
 //
 // The cleanup passes are semantics-preserving: they never erase an operation
 // that has not proven itself free of side effects, and they never destroy a
