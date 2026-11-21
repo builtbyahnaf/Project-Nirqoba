@@ -6,7 +6,8 @@
     "define internal ptr @alloc_and_return(ptr": 1,
     "call ptr @nrq_cdmm_arena_create": 1,
     "call ptr @nrq_cdmm_arena_allocate": 1,
+    "call ptr @nrq_memory_allocate": 1,
     "call i32 @nrq_cdmm_arena_destroy": 1,
-    "@nrq_memory_allocate": 0
+    "call ptr @alloc_and_return(ptr null)": 0
   }
 }
