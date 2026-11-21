@@ -1,5 +1,5 @@
 struct OwnedPayload {
-    owned ptr int data;
+    owned_array<int> items;
 }
 
 int function main() {
