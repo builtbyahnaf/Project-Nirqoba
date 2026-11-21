@@ -87,8 +87,11 @@ One foreign surface exists: `extern <type> function <name>(<params>);` declares 
 C symbol, and the declaration stops at the parameter list. The only implemented
 contract is ownership out of Nirqoba: passing an owned aggregate to a `ptr`
 parameter hands the buffer to C, discharges the caller's destruction obligation
-and marks the binding moved, so a later use is `NRQ3033`. Only the buffer field
-crosses the boundary; length and capacity stay behind.
+and marks the binding moved, so a later use is `NRQ3033`. The declaration chooses
+the ABI shape: a `ptr` parameter receives the buffer alone, while a
+`dynamic_array<T>` parameter destructures the header into
+`(pointer, length, capacity)` as three scalars. Any other aggregate parameter is
+rejected rather than given a layout C cannot know.
 
 Therefore the following contracts are **not supported**: borrowed foreign
 pointers, ownership transferred into Nirqoba, foreign allocations released by a
