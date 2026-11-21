@@ -199,6 +199,46 @@ This is the evidence selection already needs - bounded lifetime, no local use,
 plain payload - so it costs no new analysis. Allocating and then releasing it
 would have made the compiler do work whose only effect is to be undone.
 
+### Promotion across a call
+
+A function that allocates and returns the storage is, on its own, escaping: the
+pointer leaves its frame, so the intra-procedural classifier has no smaller answer
+than the general allocator. The caller is the one that can answer, so the
+classifier now asks it.
+
+For every call whose result the caller keeps in its own frame - no return, no
+callee receives it, no store into memory the frame does not own - the call site is
+marked *caller-bounded*. A callee is promoted only when **every** call to it in the
+module bounds the result, because its signature cannot mean two things:
+
+```llvm
+; promoted callee: the handle is the trailing argument
+define internal ptr @alloc_and_return(ptr %0) {
+  %2 = call ptr @nrq_cdmm_arena_allocate(ptr %0, i64 8, i64 8)
+  ret ptr %2
+}
+
+; caller: one arena for the frame, released on the way out
+define i64 @main() {
+  %2 = call ptr @nrq_cdmm_arena_create(i64 4096, i64 0)
+  %4 = call ptr @alloc_and_return(ptr %3)
+  %8 = call i32 @nrq_cdmm_arena_destroy(ptr %7)
+}
+```
+
+One escaped caller leaves the function on the general allocator for everyone, with
+its original signature. The caller's arena is created in its entry block and
+destroyed on its return edges, and the binding that holds the returned pointer no
+longer releases it: the arena owns the storage, so the release would be a second,
+wrong free.
+
+The report names both halves of the decision:
+
+```
+cdmm: main.nrqba:5:16 'node' int* -> arena (bounded by every caller, filled into the caller's arena)
+cdmm: main.nrqba:11:13 'n' int* -> arena (bounded to the caller's frame, filled by alloc_and_return)
+```
+
 ### What the optimizer is told
 
 `noalias` follows from freshness: a pointer the allocator just returned cannot
