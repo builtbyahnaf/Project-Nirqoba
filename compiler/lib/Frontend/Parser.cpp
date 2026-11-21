@@ -193,6 +193,21 @@ unique_ptr<Program> Parser::parse_program() {
       if (vis == Visibility::Public) advance();
     }
 
+    // `extern <type> function <name>(...);` declares a symbol that lives in the C
+    // object the program links against. It is a declaration, so it may appear
+    // wherever a function may and carries no body.
+    if (check(TokenKind::KwExtern)) {
+      seen_declaration = true;
+      const size_t before = position_;
+      unique_ptr<FunctionDecl> function = parse_function(vis, /*external=*/true);
+      if (function) {
+        program->functions().push_back(move(function));
+      } else if (position_ == before) {
+        advance();
+      }
+      continue;
+    }
+
     if (check(TokenKind::KwStruct)) {
       seen_declaration = true;
       unique_ptr<StructDecl> s = parse_struct(vis);
@@ -358,7 +373,8 @@ unique_ptr<StructDecl> Parser::parse_struct(Visibility visibility) {
   return make_unique<StructDecl>(name_tok.text, move(fields), struct_tok.location, visibility);
 }
 
-unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
+unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility, bool external) {
+  if (external) advance();  // 'extern'
   const Token& type_token = peek();
   bool returns_shared = false;
   bool returns_mutable_borrow = false;
@@ -452,6 +468,30 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility) {
       } while (match(TokenKind::Comma));
     }
     expect(TokenKind::RParen, "after the parameter list");
+  }
+
+  // A foreign declaration describes a C ABI and has no body: the symbol is
+  // resolved at link time, so the declaration ends at the parameter list.
+  if (external) {
+    if (!check(TokenKind::Semicolon)) {
+      error_at(peek(), diag::kExpectedToken,
+               "expected ';' after an extern declaration, found " +
+                   describe_token(peek()));
+      // Consume the body the declaration is not allowed to have, so one mistake
+      // does not turn into a cascade of errors reported from inside it.
+      if (check(TokenKind::LBrace)) {
+        parse_block();
+        return nullptr;
+      }
+      synchronize();
+      return nullptr;
+    }
+    advance();  // ';'
+    return make_unique<FunctionDecl>(
+        return_type, name_token.text, move(parameters), /*body=*/nullptr,
+        type_token.location.is_valid() ? type_token.location : name_token.location,
+        visibility, returns_shared, return_resource_domain,
+        return_borrow_parameter, returns_mutable_borrow, /*is_external=*/true);
   }
 
   if (!check(TokenKind::LBrace)) {

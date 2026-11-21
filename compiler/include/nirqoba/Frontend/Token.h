@@ -65,6 +65,9 @@ enum class TokenKind {
   KwStruct,
   KwModule,
   KwImport,
+  // `extern`: declares a symbol whose body lives in the C object the program is
+  // linked against. The declaration stops at the parameter list.
+  KwExtern,
   KwPublic,
   KwPrivate,
   KwProtected,

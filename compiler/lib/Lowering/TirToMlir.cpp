@@ -4589,6 +4589,60 @@ class FunctionTranslator {
           if (arg_val) args.push_back(arg_val);
         }
 
+        // A C symbol has no TIR signature to read, so the declaration emitted here
+        // is the ABI the call site agrees on. The ownership handoff is the one
+        // place the argument type and the parameter type differ: an owned
+        // aggregate is passed as its buffer pointer alone, because length and
+        // capacity are Nirqoba's bookkeeping and mean nothing to C. The caller's
+        // destruction obligation was already discharged in sema, so this is the
+        // only release the buffer gets.
+        if (op.external_call) {
+          std::vector<mlir::Type> abi_parameter_types;
+          abi_parameter_types.reserve(op.external_parameter_types.size());
+          llvm::SmallVector<mlir::Value> abi_args;
+          abi_args.reserve(args.size());
+          for (size_t index = 0; index < args.size(); ++index) {
+            const bool described = index < op.external_parameter_types.size();
+            mlir::Type target = described
+                ? tir_type_to_mlir(op.external_parameter_types[index], ctx_, builder_)
+                : mlir::Type{};
+            if (!target) target = args[index].getType();
+            abi_parameter_types.push_back(target);
+            mlir::Value value = args[index];
+            if (value.getType() != target) {
+              if (described && op.external_parameter_types[index].is_pointer() &&
+                  mlir::isa<mlir::LLVM::LLVMStructType>(value.getType())) {
+                // Field 0 is the buffer; the descriptor's length and capacity stay
+                // with Nirqoba.
+                value = builder_
+                            .create<mlir::LLVM::ExtractValueOp>(
+                                loc, value, builder_.getDenseI64ArrayAttr({0}))
+                            .getResult();
+              } else if (mlir::isa<mlir::IntegerType>(value.getType()) &&
+                         mlir::isa<mlir::IntegerType>(target)) {
+                const unsigned from = value.getType().getIntOrFloatBitWidth();
+                const unsigned to = target.getIntOrFloatBitWidth();
+                value = from < to
+                    ? builder_.create<mlir::LLVM::ZExtOp>(loc, target, value).getResult()
+                    : builder_.create<mlir::LLVM::TruncOp>(loc, target, value).getResult();
+              }
+            }
+            abi_args.push_back(value);
+          }
+          mlir::Type result_type = op.result.is_valid()
+              ? tir_type_to_mlir(op.result.type, ctx_, builder_)
+              : mlir::Type(mlir::LLVM::LLVMVoidType::get(ctx_));
+          auto foreign_fn = ensure_runtime_fn(module_, builder_, op.callee,
+                                              result_type, abi_parameter_types);
+          auto foreign_call = builder_.create<mlir::LLVM::CallOp>(
+              loc, foreign_fn, abi_args);
+          if (op.result.is_valid() && foreign_call->getNumResults() != 0) {
+            set(op.result, adapt_runtime_result(foreign_call.getResult(),
+                                                op.result.type, loc));
+          }
+          return true;
+        }
+
         // A container is one GC object whose payload is every column, packed in
         // physical field order. `describe_soa` is the only authority for that
         // geometry: the byte extent is count * element_bytes, and the element size

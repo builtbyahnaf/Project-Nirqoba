@@ -13,6 +13,7 @@ string_view token_kind_name(TokenKind kind) {
     case TokenKind::StringLiteral: return "string literal";
     case TokenKind::Identifier: return "identifier";
     case TokenKind::KwFunction: return "function";
+    case TokenKind::KwExtern: return "extern";
     case TokenKind::KwLet: return "let";
     case TokenKind::KwVar: return "var";
     case TokenKind::KwConst: return "const";
@@ -124,6 +125,7 @@ TokenKind keyword_kind(string_view text) {
       {"break", TokenKind::KwBreak},       {"continue", TokenKind::KwContinue},
       {"struct", TokenKind::KwStruct},     {"module", TokenKind::KwModule},
       {"import", TokenKind::KwImport},     {"public", TokenKind::KwPublic},
+      {"extern", TokenKind::KwExtern},
       {"private", TokenKind::KwPrivate},   {"protected", TokenKind::KwProtected},
       {"async", TokenKind::KwAsync},       {"await", TokenKind::KwAwait},
       {"fn", TokenKind::KwFn},

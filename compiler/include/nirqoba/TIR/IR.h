@@ -191,6 +191,13 @@ struct Op {
   int field_index = -1;           // GetElementPtr / AggregateExtract: field/element index
   std::vector<Value> aggregate_elements;  // AggregatePack: values to pack
 
+  // Call to a C symbol declared with `extern`. Such a callee has no TIR function
+  // to read a signature from, so the argument types the ABI agrees on travel with
+  // the operation. They differ from the argument types wherever an owned
+  // aggregate is handed over as a raw pointer.
+  bool external_call = false;
+  std::vector<Type> external_parameter_types;
+
   // Ownership metadata carried by Move/Borrow/Drop operations.
   TransferKind transfer_kind = TransferKind::Local;
   bool mutable_borrow = false;    // Borrow: exclusive access

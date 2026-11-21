@@ -239,11 +239,26 @@ class CallExpr : public Expr {
   const std::string& resolved_symbol() const { return resolved_symbol_; }
   bool has_resolved_symbol() const { return !resolved_symbol_.empty(); }
 
+  // Set when this call resolves to an `extern` declaration. The declared
+  // parameter types are the C ABI the call site has to be lowered to, which is
+  // not the types of the arguments: an owned aggregate handed to a pointer
+  // parameter becomes the buffer pointer alone.
+  void set_external_abi(std::vector<Type> parameter_types) {
+    external_call_ = true;
+    external_parameter_types_ = std::move(parameter_types);
+  }
+  bool is_external_call() const { return external_call_; }
+  const std::vector<Type>& external_parameter_types() const {
+    return external_parameter_types_;
+  }
+
  private:
   std::string callee_;
   std::vector<ExprPtr> arguments_;
   Type generic_argument_;
   std::string resolved_symbol_;
+  bool external_call_ = false;
+  std::vector<Type> external_parameter_types_;
 };
 
 // AddressOf and Dereference implement §8.2/§8.3 of the pointer specification:
@@ -644,14 +659,16 @@ class FunctionDecl {
                Visibility visibility = Visibility::Public, bool returns_shared = false,
                std::string return_resource_domain = {},
                std::string return_borrow_parameter = {},
-               bool returns_mutable_borrow = false)
+               bool returns_mutable_borrow = false,
+               bool is_external = false)
       : return_type_(return_type), name_(std::move(name)),
         parameters_(std::move(parameters)), body_(std::move(body)),
         location_(std::move(location)), visibility_(visibility),
         returns_shared_(returns_shared),
         return_resource_domain_(std::move(return_resource_domain)),
         return_borrow_parameter_(std::move(return_borrow_parameter)),
-        returns_mutable_borrow_(returns_mutable_borrow) {}
+        returns_mutable_borrow_(returns_mutable_borrow),
+        is_external_(is_external) {}
 
   Type return_type() const { return return_type_; }
   void set_return_type(Type type) { return_type_ = type; }
@@ -670,6 +687,12 @@ class FunctionDecl {
     return return_borrow_parameter_;
   }
   bool returns_mutable_borrow() const { return returns_mutable_borrow_; }
+  // An `extern` declaration names a symbol defined in the C object the program
+  // is linked against. It has no body: the declaration stops at the parameter
+  // list, so there is nothing for sema to check and nothing for lowering to
+  // emit. Its parameters describe a C ABI, not a Nirqoba scope.
+  bool is_external() const { return is_external_; }
+  bool has_body() const { return body_ != nullptr; }
 
  private:
   Type return_type_;
@@ -682,6 +705,7 @@ class FunctionDecl {
   std::string return_resource_domain_;
   std::string return_borrow_parameter_;
   bool returns_mutable_borrow_ = false;
+  bool is_external_ = false;
 };
 
 class Program {

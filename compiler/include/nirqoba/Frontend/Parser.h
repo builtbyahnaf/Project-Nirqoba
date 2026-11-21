@@ -36,7 +36,10 @@ class Parser {
   std::unique_ptr<ModuleDecl> parse_module();
   std::unique_ptr<ImportDecl> parse_import();
   std::unique_ptr<StructDecl> parse_struct(Visibility visibility = Visibility::Public);
-  std::unique_ptr<FunctionDecl> parse_function(Visibility visibility = Visibility::Public);
+  // `external`: the declaration names a C symbol, so it ends at `;` instead of
+  // opening a body.
+  std::unique_ptr<FunctionDecl> parse_function(Visibility visibility = Visibility::Public,
+                                               bool external = false);
   Type parse_type_annotation();
 
   // Statements.

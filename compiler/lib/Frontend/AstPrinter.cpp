@@ -59,7 +59,13 @@ class Printer {
       indent();
       out_ << "param " << parameter.name << " : " << parameter.type.to_string() << "\n";
     }
-    print_block(function.body());
+    // An extern declaration stops at the parameter list: the body is the C
+    // object's, not this translation unit's.
+    if (function.has_body()) print_block(function.body());
+    else {
+      indent();
+      out_ << "extern (no body)\n";
+    }
     --depth_;
   }
 

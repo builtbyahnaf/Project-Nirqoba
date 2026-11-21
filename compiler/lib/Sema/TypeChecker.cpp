@@ -533,6 +533,7 @@ bool TypeChecker::check(Program& program) {
     sig.return_resource_domain = function->return_resource_domain();
     sig.return_borrow_parameter = function->return_borrow_parameter();
     sig.returns_mutable_borrow = function->returns_mutable_borrow();
+    sig.is_external = function->is_external();
     for (const Parameter& param : function->parameters()) {
       sig.parameter_borrowed.push_back(param.borrowed);
       sig.parameter_mutable_borrow.push_back(param.mutable_borrow);
@@ -711,8 +712,9 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
       sig.returns_borrowed = !function->return_borrow_parameter().empty();
       sig.return_resource_domain = function->return_resource_domain();
       sig.return_borrow_parameter = function->return_borrow_parameter();
-      sig.returns_mutable_borrow = function->returns_mutable_borrow();
-      for (const Parameter& param : function->parameters()) {
+              sig.returns_mutable_borrow = function->returns_mutable_borrow();
+        sig.is_external = function->is_external();
+        for (const Parameter& param : function->parameters()) {
         sig.parameter_borrowed.push_back(param.borrowed);
         sig.parameter_mutable_borrow.push_back(param.mutable_borrow);
         sig.parameter_shared.push_back(param.shared);
@@ -865,6 +867,9 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
 }
 
 void TypeChecker::check_function(FunctionDecl& function) {
+  // A foreign declaration has no body. Its parameters are a C ABI, not a
+  // Nirqoba scope, so there is no scope to open and no cleanup to prove.
+  if (function.is_external()) return;
   symbols_.push_scope();
   current_return_type_ = function.return_type();
   current_return_shared_ = function.returns_shared();
@@ -4316,6 +4321,71 @@ static bool element_needs_teardown(const Type& type) {
          type.is_shared_pointer() || type.is_managed_pointer();
 }
 
+// A call to a C symbol. C has no destructor and no ownership table, so the only
+// contract it can honour is a handoff: when a raw pointer parameter receives an
+// owned aggregate, the buffer belongs to C from that point on. Nirqoba discharges
+// the destruction obligation by not emitting it, and the binding stops owning the
+// storage so a later use is a use-after-move rather than a second owner.
+Type TypeChecker::check_external_call(CallExpr& call,
+                                      const FunctionSignature& signature) {
+  call.set_external_abi(signature.parameter_types);
+  const size_t count = min(call.arguments().size(), signature.parameter_types.size());
+  for (size_t i = 0; i < count; ++i) {
+    Expr& argument = const_cast<Expr&>(*call.arguments()[i]);
+    const Type argument_type = check_expression(argument);
+    const Type& parameter_type = signature.parameter_types[i];
+    if (!argument_type.is_valid()) continue;
+
+    // The handoff. Only a pointer parameter can take the buffer, and only an
+    // aggregate owns one, so any other pairing falls through to the plain type
+    // check below.
+    const bool receives_buffer = parameter_type.is_pointer() &&
+                                 (argument_type.is_dynamic_array() ||
+                                  argument_type.is_owned_array() ||
+                                  contains_owned_array(argument_type));
+    if (receives_buffer) {
+      const Symbol* source = argument.kind() == Expr::Kind::Name
+                                 ? find_root_symbol(argument, symbols_)
+                                 : nullptr;
+      if (source && source->borrowed) {
+        diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                           "a borrowed value cannot be handed to C: the C side "
+                           "has no bound on how long it keeps the pointer");
+      } else if (source && source->moved) {
+        // The earlier use already reported the move; handing the same storage to
+        // C twice would be the double free this rule exists to prevent.
+        diagnostics_.error(diag::kUseAfterFree, argument.location(),
+                           "use of '" + source->name +
+                               "' after its allocation was handed to C");
+      } else if (source && symbols_.has_live_borrow(source->allocation_id)) {
+        diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                           "cannot hand '" + source->name +
+                               "' to C while an array view of it is live");
+      } else if (source && source->allocation_id != 0) {
+        // Ownership leaves Nirqoba with the pointer: the expression becomes an
+        // owned move so lowering passes the buffer and stands the caller's
+        // cleanup down, and the binding is marked moved so nothing reuses it.
+        argument.set_ownership(ValueOwnership::Owned);
+        argument.set_transfers_ownership();
+        symbols_.mark_allocation_moved(source->allocation_id);
+      } else {
+        diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                           "handing an aggregate to C requires a live tracked owner");
+      }
+      continue;
+    }
+
+    if (argument_type != parameter_type) {
+      diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                         "argument " + to_string(i + 1) + " of extern function '" +
+                             call.callee() + "' must be of type '" +
+                             parameter_type.to_string() + "', not '" +
+                             argument_type.to_string() + "'");
+    }
+  }
+  return signature.return_type;
+}
+
 Type TypeChecker::check_call(CallExpr& call) {
   // The only way to obtain a dynamic array. It starts empty: capacity 0 is the
   // documented empty representation, so the value carries a null buffer and the
@@ -5897,6 +5967,10 @@ Type TypeChecker::check_call(CallExpr& call) {
                            ", but " + to_string(call.arguments().size()) +
                            " were given");
   }
+
+  // A C symbol's contract is its declaration: there is no Nirqoba body to read
+  // ownership from, so its arguments follow the FFI handoff rule instead.
+  if (sig.is_external) return check_external_call(call, sig);
 
   const size_t count = min(call.arguments().size(), sig.parameter_types.size());
   vector<uint64_t> ownership_transfers;

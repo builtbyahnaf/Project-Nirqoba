@@ -55,6 +55,9 @@ struct FunctionSignature {
   // effects have replaced the conservative declaration-only summary.
   std::vector<uint8_t> parameter_effects;
   bool effects_known = false;
+  // An `extern` declaration: the symbol is a C function, so there is no body to
+  // read ownership from and the argument rules are the declared ABI's.
+  bool is_external = false;
 };
 
 // Lightweight catalog entry for a registered struct type.
@@ -104,6 +107,7 @@ class TypeChecker {
 
   Type check_expression(Expr& expr);
   Type check_call(CallExpr& call);
+  Type check_external_call(CallExpr& call, const FunctionSignature& signature);
   Type check_array_literal(ArrayLiteralExpr& expr);
   Type check_tuple_literal(TupleLiteralExpr& expr);
   Type check_index_expr(IndexExpr& expr);

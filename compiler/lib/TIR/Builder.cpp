@@ -142,6 +142,9 @@ unique_ptr<tir::Module> TirBuilder::lower(const Program& program) {
 void TirBuilder::lower_module(const string& symbol_prefix, const Program& program,
                               tir::Module& module) {
   for (const auto& function : program.functions()) {
+    // An extern declaration names a C symbol: there is no body to lower, and the
+    // ABI it must match is described at each call site.
+    if (function->is_external()) continue;
     // The entry point is emitted as `main` and must not be prefixed, otherwise
     // the MSVC CRT would not find it.
     const string symbol =
@@ -1505,6 +1508,10 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       op.callee = call.has_resolved_symbol() ? call.resolved_symbol() : call.callee();
       op.arguments = std::move(arg_vals);
       op.result = result;
+      if (call.is_external_call()) {
+        op.external_call = true;
+        op.external_parameter_types = call.external_parameter_types();
+      }
       function.add_operation(std::move(op));
       return result;
     }
