@@ -827,13 +827,14 @@ class ElideNestedMutatorRegionsPass
 // still be turned into wholesale arena release. What is left for a module pass
 // is the part only the final body can answer.
 //
-// First, every arena-selected site must still have an arena. A site reads its
-// handle from a slot the entry block fills with `nrq_cdmm_arena_create`, so a
-// missing handle would be a null dereference at run time; this check turns a
-// lowering regression into a compile error instead. Second, an activation whose
-// selected sites did not survive optimization - the site sat in a branch SCCP
-// proved dead - keeps a create/destroy pair that now allocates for nobody. That
-// pair is removed, which is what actually saves the chunk.
+// First, every selected site must still have its region. A site reads its handle
+// from a slot the entry block fills with `nrq_cdmm_arena_create` or
+// `nrq_cdmm_pool_create`, so a missing handle would be a null dereference at run
+// time; this check turns a lowering regression into a compile error instead.
+// Second, an activation whose selected sites did not survive optimization - the
+// site sat in a branch SCCP proved dead - keeps a create/destroy pair that now
+// allocates for nobody. That pair is removed, which is what actually saves the
+// chunk.
 class HybridStrategySelectionPass
     : public mlir::PassWrapper<HybridStrategySelectionPass,
                                mlir::OperationPass<mlir::ModuleOp>> {
@@ -880,9 +881,11 @@ class HybridStrategySelectionPass
     function.walk([&](mlir::LLVM::CallOp call) {
       if (call->hasAttr("nirqoba.hybrid_strategy"))
         selected.push_back(call);
-      else if (names(call, "nrq_cdmm_arena_create"))
+      else if (names(call, "nrq_cdmm_arena_create") ||
+               names(call, "nrq_cdmm_pool_create"))
         creates.push_back(call);
-      else if (names(call, "nrq_cdmm_arena_destroy"))
+      else if (names(call, "nrq_cdmm_arena_destroy") ||
+               names(call, "nrq_cdmm_pool_destroy"))
         destroys.push_back(call);
     });
     if (creates.empty() && destroys.empty()) return true;
@@ -896,14 +899,15 @@ class HybridStrategySelectionPass
       if (slot) {
         function.walk([&](mlir::LLVM::StoreOp store) {
           if (filled || store.getAddr() != slot) return;
-          if (names(store.getValue().getDefiningOp(), "nrq_cdmm_arena_create"))
+          if (names(store.getValue().getDefiningOp(), "nrq_cdmm_arena_create") ||
+              names(store.getValue().getDefiningOp(), "nrq_cdmm_pool_create"))
             filled = true;
         });
       }
       if (filled) continue;
       site.emitError(
-          "arena-selected allocation has no scratch arena; hybrid strategy "
-          "selection and lowering disagree");
+          "selected allocation has no region handle; hybrid strategy selection "
+          "and lowering disagree");
       consistent = false;
     }
 
