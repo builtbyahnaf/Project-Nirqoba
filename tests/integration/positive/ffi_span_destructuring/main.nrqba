@@ -1,0 +1,13 @@
+// FFI argument destructuring. The declaration asks for the container itself, so
+// the ABI is the three-word header rather than one opaque pointer: the callee
+// receives the buffer, the length and the capacity as separate scalars, which is
+// what lets C respect the bounds it is handed. The transfer still removes the
+// storage from Nirqoba, so no release is emitted on this side.
+extern void function consume_span(dynamic_array<int> values);
+
+int function main() {
+    var values: dynamic_array<int> = memory.dynamic_array<int>();
+    memory.array_append(values, 42);
+    consume_span(values);
+    return 0;
+}

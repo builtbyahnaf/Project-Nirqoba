@@ -1,0 +1,12 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm-raw"],
+  "expect_ir_counts": {
+    "declare void @consume_span(ptr, i64, i64)": 1,
+    "call void @consume_span(ptr": 1,
+    "call void @nrq_array_free": 0
+  },
+  "expect_ir_not_contains": [
+    "call void @consume_span({ ptr, i64, i64 }"
+  ]
+}

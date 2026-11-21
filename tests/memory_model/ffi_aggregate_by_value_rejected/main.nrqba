@@ -1,0 +1,11 @@
+// An aggregate reaches C in exactly two shapes: declared as the container, which
+// flattens it into pointer, length and capacity, or handed to a pointer, which
+// passes the buffer alone. A declaration that asks for some other aggregate by
+// value would need a struct layout the C side cannot know.
+extern void function consume(owned_array<int> values);
+
+int function main() {
+    var values = memory.owned_array<int>(4);
+    consume(values);
+    return 0;
+}
