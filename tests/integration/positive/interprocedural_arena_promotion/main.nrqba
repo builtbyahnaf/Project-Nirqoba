@@ -5,11 +5,11 @@
 // allocator. The caller is the one that knows the answer: `main` prints the value
 // and lets the binding die with the frame, so the storage never leaves it.
 //
-// Every call to the callee bounds the result, so every call passes a real handle
-// and the general-allocator arm of the callee's branch never runs. The branch is
-// still emitted, because the callee's body does not know which caller reached it
-// and one signature has to serve a caller that passes null too. `main` creates the
-// arena once, passes it, and releases the whole chunk on the way out.
+// Every call to the callee bounds the result, so every call passes a real handle.
+// Because no call site anywhere passes null, the callee is promoted without being
+// partial and its body needs no general-allocator arm at all: the handle is the
+// only home its storage has. `main` creates the arena once, passes it, and
+// releases the whole chunk on the way out.
 int* function alloc_and_return() {
     var node = memory.allocate<int>(8);
     node[0] = 42;
