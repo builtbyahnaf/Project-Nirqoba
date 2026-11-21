@@ -767,12 +767,30 @@ CallSiteArenaPlan analyze_call_site_arenas(const Module& module) {
 
       CalleeState& state = callees[op.callee];
       state.called = true;
-      // Recursion has no single caller's frame to bound, and an arena only holds
-      // plain data, so both are rejected here rather than at lowering.
-      const bool promotable =
-          !caller_chooses_allocator && op.callee != caller &&
+      // An arena holds plain data only, so a payload with an owner, a managed
+      // reference or a destructor is rejected here rather than at lowering.
+      const bool arena_payload =
           op.result.type.is_pointer() &&
           is_arena_eligible_payload(op.result.type.element_type());
+      if (arena_payload && !caller_chooses_allocator && op.callee == caller) {
+        // A direct self-call. Recursion has no other caller's frame to bound it,
+        // but it does have this activation's arena: when the storage it returns is
+        // the storage this function returns, the whole chain is one allocation and
+        // the handle can travel down it instead of a null.
+        const std::unordered_set<int> aliases =
+            storage_alias_closure(*function, op.result.id);
+        if (storage_leaves_only_through_return(*function, aliases))
+          forwarded[caller].insert(op.result.id);
+        else
+          escaped[caller].emplace_back(op.result.id, op.callee);
+        // The callee still has a call site that does not bound the result, so its
+        // body keeps the null arm for whatever caller arrives without a handle.
+        state.any_escaping = true;
+        continue;
+      }
+
+      const bool promotable =
+          !caller_chooses_allocator && op.callee != caller && arena_payload;
       if (!promotable) {
         state.any_escaping = true;
         escaped[caller].emplace_back(op.result.id, op.callee);
