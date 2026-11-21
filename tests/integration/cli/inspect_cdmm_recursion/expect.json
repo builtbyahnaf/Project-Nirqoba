@@ -1,0 +1,5 @@
+{
+  "mode": "build",
+  "args": ["--inspect-cdmm"],
+  "expect_stderr_contains": "-> arena (forwarded this activation's handle to build_list)"
+}
