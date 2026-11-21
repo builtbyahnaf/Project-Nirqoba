@@ -638,10 +638,18 @@ CallSiteArenaPlan analyze_call_site_arenas(const Module& module) {
 
   struct CalleeState {
     bool called = false;
-    bool all_bounded = true;
+    // At least one call site keeps the result in its own frame, so the callee is
+    // worth giving an arena handle to.
+    bool any_bounded = false;
+    // At least one call site lets the result out, so the same body must also be
+    // able to fill it from the general allocator.
+    bool any_escaping = false;
   };
   std::unordered_map<std::string, CalleeState> callees;
   std::unordered_map<std::string, std::vector<BoundedCallResult>> collected;
+  // Sites that stay off the arena, with the callee they call: that callee needs
+  // the fallback there, and the report names the decision at the call site.
+  std::unordered_map<std::string, std::vector<std::pair<int, std::string>>> escaped;
 
   for (const auto& function : module.functions()) {
     if (function == nullptr) continue;
@@ -667,7 +675,8 @@ CallSiteArenaPlan analyze_call_site_arenas(const Module& module) {
           op.result.type.is_pointer() &&
           is_arena_eligible_payload(op.result.type.element_type());
       if (!promotable) {
-        state.all_bounded = false;
+        state.any_escaping = true;
+        escaped[caller].emplace_back(op.result.id, op.callee);
         continue;
       }
 
@@ -676,19 +685,23 @@ CallSiteArenaPlan analyze_call_site_arenas(const Module& module) {
       site.callee = op.callee;
       site.aliases = storage_alias_closure(*function, op.result.id);
       if (!storage_stays_in_frame(*function, site.aliases)) {
-        state.all_bounded = false;
+        state.any_escaping = true;
+        escaped[caller].emplace_back(site.result, site.callee);
         continue;
       }
+      state.any_bounded = true;
       collected[caller].push_back(std::move(site));
     }
   }
 
-  for (const auto& entry : callees)
-    if (entry.second.called && entry.second.all_bounded)
-      plan.promoted_callees.insert(entry.first);
+  // One bounded call site is enough to give the callee a handle: the other callers
+  // do not have to agree any more, because they pass null and the callee checks.
+  for (const auto& entry : callees) {
+    if (!entry.second.called || !entry.second.any_bounded) continue;
+    plan.promoted_callees.insert(entry.first);
+    if (entry.second.any_escaping) plan.partially_promoted.insert(entry.first);
+  }
 
-  // Keep only the sites whose callee was promoted: a callee rejected because one
-  // caller let its storage out is not served from anyone's arena.
   for (auto& entry : collected) {
     std::vector<BoundedCallResult> kept;
     for (BoundedCallResult& site : entry.second)
