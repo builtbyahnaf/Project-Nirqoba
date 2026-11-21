@@ -191,6 +191,14 @@ struct Op {
   int field_index = -1;           // GetElementPtr / AggregateExtract: field/element index
   std::vector<Value> aggregate_elements;  // AggregatePack: values to pack
 
+  // AggregatePack: the managed fields of a packed aggregate, as declared field
+  // indices with the release each one needs. A struct owns its fields, so the
+  // aggregate owns the releases: whoever destroys it walks this list instead of
+  // releasing the aggregate as a single value. Empty means the payload has no
+  // field a destructor has to visit.
+  std::vector<int> release_fields;
+  std::vector<std::string> release_callees;
+
   // Call to a C symbol declared with `extern`. Such a callee has no TIR function
   // to read a signature from, so the argument types the ABI agrees on travel with
   // the operation. They differ from the argument types wherever an owned
