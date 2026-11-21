@@ -841,6 +841,11 @@ CallSiteArenaPlan analyze_call_site_arenas(const Module& module) {
     if (!kept.empty())
       plan.escaping_call_results.emplace(entry.first, std::move(kept));
   }
+  // Forwarding needs a handle to forward. A function with no bounded caller keeps
+  // the general allocator and its self-call keeps passing null.
+  for (auto& entry : forwarded)
+    if (plan.promoted_callees.count(entry.first) != 0)
+      plan.forwarded_call_results.emplace(entry.first, std::move(entry.second));
   return plan;
 }
 
