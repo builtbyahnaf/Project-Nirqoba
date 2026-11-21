@@ -123,24 +123,37 @@ struct BoundedCallResult {
   std::unordered_set<int> aliases;
 };
 
-// Which callees may be served from their caller's arena, and the call sites that
-// must supply it.
+// Which callees take their caller's arena for the storage they return, and the
+// call sites that supply it.
 //
-// Promotion is all-or-nothing per callee. A callee whose returned storage escapes
-// at one call site cannot take an arena there, and since its signature cannot mean
-// two different things at two call sites, it is promoted only when every call in
-// the module bounds the result. One escaped caller is enough to leave the
-// function on the general allocator for everyone.
+// One signature serves every call site, so a callee that returns fresh storage
+// always gains the trailing handle as long as a single caller bounds the result.
+// The handle is therefore nullable: a bounded caller passes the arena it created,
+// an escaping caller passes null, and the callee picks its allocator from the
+// handle at runtime. That is what lets one call site use the arena while another
+// keeps the general allocator, which is the case a per-function decision cannot
+// express.
 struct CallSiteArenaPlan {
   // Callees that take a trailing arena handle instead of allocating from the
   // general allocator for the storage they return.
   std::unordered_set<std::string> promoted_callees;
+  // Of those, the callees that also have a call site which does not bound the
+  // result: their body checks the handle rather than assuming one arrived.
+  std::unordered_set<std::string> partially_promoted;
   // Call sites per caller function: the ones whose handle the promoted callee
   // will read. Keyed by caller name because TIR values are per function.
   std::unordered_map<std::string, std::vector<BoundedCallResult>> call_sites;
+  // Call sites of promoted callees that pass a null handle, keyed by caller name:
+  // the result value of each call. These are the sites the callee falls back to
+  // the general allocator for.
+  std::unordered_map<std::string, std::unordered_set<int>> escaping_call_results;
 
   bool promoted(const std::string& callee) const {
     return promoted_callees.count(callee) != 0;
+  }
+
+  bool partial(const std::string& callee) const {
+    return partially_promoted.count(callee) != 0;
   }
 };
 
