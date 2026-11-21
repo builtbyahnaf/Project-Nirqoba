@@ -134,6 +134,147 @@ bool is_arena_eligible_payload(const Type& type) {
   return false;
 }
 
+// The narrowest loop that encloses a site and everything the site's storage is
+// read at. A region scoped to it is created on the loop's entry edge and
+// destroyed on its exits, so the storage is reclaimed once per loop instead of
+// once per activation.
+struct LoopScope {
+  bool scoped = false;
+  // Positions in the operation stream: the loop's header label and the back edge
+  // that closes it.
+  std::size_t begin = 0;
+  std::size_t end = 0;
+};
+
+// The loops of one function as spans of its operation stream, plus every position
+// a value is read at. Both answers are about the frame the code lives in, not
+// about one allocation, so the allocation classifier and the call-site classifier
+// ask the same object and cannot disagree about where a loop starts or ends.
+class LoopNesting {
+ public:
+  static LoopNesting analyze(const Function& function) {
+    LoopNesting nesting;
+    std::unordered_map<int, std::size_t> label_index;
+    for (std::size_t index = 0; index < function.operations().size(); ++index) {
+      const Op& op = function.operations()[index];
+      if (op.kind == OpKind::Label) label_index.emplace(op.label_id, index);
+    }
+    // A branch that reaches backwards closes a loop: the span runs from the
+    // header it targets to the branch itself.
+    for (std::size_t index = 0; index < function.operations().size(); ++index) {
+      const Op& op = function.operations()[index];
+      if (op.kind != OpKind::Branch && op.kind != OpKind::BranchCond) continue;
+      for (int target : {op.label_id, op.true_label, op.false_label}) {
+        const auto found = label_index.find(target);
+        if (found == label_index.end() || found->second >= index) continue;
+        nesting.spans_.emplace_back(found->second, index);
+      }
+    }
+    for (const auto& span : nesting.spans_)
+      nesting.enterable_.push_back(enterable(function, label_index, span));
+    // Every position a value is read at. A region may only be scoped to a loop
+    // when the storage never leaves it, so containment is checked against the
+    // uses of the whole family rather than against where the site happens to sit.
+    for (std::size_t index = 0; index < function.operations().size(); ++index) {
+      const Op& op = function.operations()[index];
+      auto note = [&](const Value& value) {
+        if (value.is_valid()) nesting.uses_[value.id].push_back(index);
+      };
+      note(op.operand);
+      note(op.lhs);
+      note(op.rhs);
+      for (const Value& argument : op.arguments) note(argument);
+      for (const Value& element : op.aggregate_elements) note(element);
+    }
+    return nesting;
+  }
+
+  // True when a back edge encloses this position: the site runs once per
+  // iteration rather than once per activation.
+  bool under_back_edge(std::size_t index) const {
+    for (const auto& span : spans_)
+      if (index >= span.first && index <= span.second) return true;
+    return false;
+  }
+
+  // The narrowest loop whose span contains `position` and every use of the
+  // storage named by `aliases`, or an unscoped answer when no loop does. A wider
+  // loop would hold the storage past its last use, and a loop the create cannot
+  // enter from exactly one edge cannot host a region at all.
+  LoopScope scope_of(std::size_t position,
+                     const std::unordered_set<int>& aliases) const {
+    LoopScope scope;
+    std::size_t width = 0;
+    for (std::size_t index = 0; index < spans_.size(); ++index) {
+      const auto& span = spans_[index];
+      if (position < span.first || position > span.second) continue;
+      if (!enterable_[index]) continue;
+      const std::size_t candidate = span.second - span.first;
+      if (scope.scoped && candidate >= width) continue;
+      bool contained = true;
+      for (int alias : aliases) {
+        const auto uses = uses_.find(alias);
+        if (uses == uses_.end()) continue;
+        for (std::size_t use : uses->second) {
+          if (use >= span.first && use <= span.second) continue;
+          contained = false;
+          break;
+        }
+        if (!contained) break;
+      }
+      if (!contained) continue;
+      scope.scoped = true;
+      scope.begin = span.first;
+      scope.end = span.second;
+      width = candidate;
+    }
+    return scope;
+  }
+
+ private:
+  // Where a loop-scoped region's create can run: on the edge into the header,
+  // which is the fall-through from the operation before it. The header therefore
+  // needs exactly one way in from outside the loop, and the operation before it
+  // must leave its block open for the create.
+  static bool enterable(
+      const Function& function,
+      const std::unordered_map<int, std::size_t>& label_index,
+      const std::pair<std::size_t, std::size_t>& span) {
+    if (span.first == 0 || span.first >= function.operations().size())
+      return false;
+    // The edge into the header is the operation before it: either a branch the
+    // front end wrote explicitly (that target must be this header) or the
+    // fall-through that leaves its block open for the create.
+    const Op& before = function.operations()[span.first - 1];
+    if (before.kind == OpKind::Branch) {
+      const auto target = label_index.find(before.label_id);
+      if (target == label_index.end() || target->second != span.first)
+        return false;
+    } else if (before.kind == OpKind::BranchCond ||
+               before.kind == OpKind::Return ||
+               before.kind == OpKind::Unreachable) {
+      return false;
+    }
+    for (std::size_t index = 0; index < function.operations().size(); ++index) {
+      if (index >= span.first && index <= span.second) continue;
+      // The sanctioned entry edge is the create's home, not a second way in.
+      if (index + 1 == span.first) continue;
+      const Op& op = function.operations()[index];
+      if (op.kind != OpKind::Branch && op.kind != OpKind::BranchCond) continue;
+      for (int target : {op.label_id, op.true_label, op.false_label}) {
+        const auto found = label_index.find(target);
+        if (found != label_index.end() && found->second == span.first)
+          return false;
+      }
+    }
+    return true;
+  }
+
+  std::vector<std::pair<std::size_t, std::size_t>> spans_;
+  std::vector<bool> enterable_;
+  std::unordered_map<int, std::vector<std::size_t>> uses_;
+};
+
 LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function) {
   LifetimeAnalysis analysis;
 
@@ -365,85 +506,15 @@ LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function) {
 
   // Repeated work. A site runs once per call unless a back edge encloses it, and
   // sites that allocate one layout can share a pool. Both facts come from the
-  // operation stream: labels plus branches that reach backwards mark loop bodies,
-  // and the payload type plus its byte count name a layout.
-  std::unordered_map<int, std::size_t> label_index;
+  // operation stream, and the payload type plus its byte count name a layout.
   std::unordered_map<int, std::uint64_t> integer_constants;
   for (std::size_t index = 0; index < function.operations().size(); ++index) {
     const Op& op = function.operations()[index];
-    if (op.kind == OpKind::Label) label_index.emplace(op.label_id, index);
     if (op.kind == OpKind::ConstantInt && op.result.is_valid())
       integer_constants.emplace(op.result.id,
                                 static_cast<std::uint64_t>(op.integer_value));
   }
-  std::vector<std::pair<std::size_t, std::size_t>> loop_spans;
-  for (std::size_t index = 0; index < function.operations().size(); ++index) {
-    const Op& op = function.operations()[index];
-    if (op.kind != OpKind::Branch && op.kind != OpKind::BranchCond) continue;
-    for (int target : {op.label_id, op.true_label, op.false_label}) {
-      const auto found = label_index.find(target);
-      if (found == label_index.end() || found->second >= index) continue;
-      loop_spans.emplace_back(found->second, index);
-    }
-  }
-  auto under_back_edge = [&](std::size_t index) {
-    for (const auto& span : loop_spans)
-      if (index >= span.first && index <= span.second) return true;
-    return false;
-  };
-  // Where a loop-scoped region's create can run: on the edge into the header,
-  // which is the fall-through from the operation before it. The header therefore
-  // needs exactly one way in from outside the loop, and the operation before it
-  // must leave its block open for the create.
-  auto loop_scope_enterable =
-      [&](const std::pair<std::size_t, std::size_t>& span) {
-        if (span.first == 0 || span.first >= function.operations().size())
-          return false;
-        // The edge into the header is the operation before it: either a branch
-        // the front end wrote explicitly (that target must be this header) or the
-        // fall-through that leaves its block open for the create.
-        const Op& before = function.operations()[span.first - 1];
-        if (before.kind == OpKind::Branch) {
-          const auto target = label_index.find(before.label_id);
-          if (target == label_index.end() || target->second != span.first)
-            return false;
-        } else if (before.kind == OpKind::BranchCond ||
-                   before.kind == OpKind::Return ||
-                   before.kind == OpKind::Unreachable) {
-          return false;
-        }
-        for (std::size_t index = 0; index < function.operations().size();
-             ++index) {
-          if (index >= span.first && index <= span.second) continue;
-          // The sanctioned entry edge is the create's home, not a second way in.
-          if (index + 1 == span.first) continue;
-          const Op& op = function.operations()[index];
-          if (op.kind != OpKind::Branch && op.kind != OpKind::BranchCond)
-            continue;
-          for (int target : {op.label_id, op.true_label, op.false_label}) {
-            const auto found = label_index.find(target);
-            if (found != label_index.end() && found->second == span.first)
-              return false;
-          }
-        }
-        return true;
-      };
-
-  // Every position a value is read at. A region may only be scoped to a loop when
-  // the storage never leaves it, so containment is checked against the uses of
-  // the whole family rather than against where the allocation happens to sit.
-  std::unordered_map<int, std::vector<std::size_t>> use_positions;
-  for (std::size_t index = 0; index < function.operations().size(); ++index) {
-    const Op& op = function.operations()[index];
-    auto note = [&](const Value& value) {
-      if (value.is_valid()) use_positions[value.id].push_back(index);
-    };
-    note(op.operand);
-    note(op.lhs);
-    note(op.rhs);
-    for (const Value& argument : op.arguments) note(argument);
-    for (const Value& element : op.aggregate_elements) note(element);
-  }
+  const LoopNesting nesting = LoopNesting::analyze(function);
 
   std::unordered_map<int, std::size_t> operation_index;
   std::unordered_map<std::string, std::size_t> layout_counts;
@@ -481,34 +552,14 @@ LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function) {
     const auto position = operation_index.find(id);
     if (position != operation_index.end()) {
       allocation = &function.operations()[position->second];
-      site.in_loop = under_back_edge(position->second);
+      site.in_loop = nesting.under_back_edge(position->second);
       // Loop scope: the narrowest loop whose span contains the site and every
       // use of its storage. A wider loop would hold the storage past its last
       // use, and no loop at all means the frame owns the region.
-      std::size_t width = 0;
-      for (const auto& span : loop_spans) {
-        const std::size_t here = position->second;
-        if (here < span.first || here > span.second) continue;
-        const std::size_t candidate = span.second - span.first;
-        if (site.loop_scoped && candidate >= width) continue;
-        if (!loop_scope_enterable(span)) continue;
-        bool contained = true;
-        for (int alias : site.aliases) {
-          const auto uses = use_positions.find(alias);
-          if (uses == use_positions.end()) continue;
-          for (std::size_t use : uses->second) {
-            if (use >= span.first && use <= span.second) continue;
-            contained = false;
-            break;
-          }
-          if (!contained) break;
-        }
-        if (!contained) continue;
-        site.loop_scoped = true;
-        site.scope_begin = span.first;
-        site.scope_end = span.second;
-        width = candidate;
-      }
+      const LoopScope scope = nesting.scope_of(position->second, site.aliases);
+      site.loop_scoped = scope.scoped;
+      site.scope_begin = scope.begin;
+      site.scope_end = scope.end;
     }
     if (allocation != nullptr) {
       site.layout_key = allocation->result.type.element_type().mangle();
