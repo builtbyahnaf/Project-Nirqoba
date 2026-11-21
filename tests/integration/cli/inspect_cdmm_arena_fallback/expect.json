@@ -1,0 +1,5 @@
+{
+  "mode": "build",
+  "args": ["--inspect-cdmm"],
+  "expect_stderr_contains": "'m' int* -> gc (escaping call site, null arena handle passed to alloc_and_return)"
+}
