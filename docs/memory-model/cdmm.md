@@ -272,3 +272,22 @@ arena is then created on that loop's entry edge and released on its exit edges, 
 a long-running loop's peak is one iteration's work rather than everything the frame
 ever allocated.
 
+```llvm
+  ; preheader: one arena for the whole loop
+  %5 = call ptr @nrq_cdmm_arena_create(i64 4096, i64 0)
+  store ptr %5, ptr %2, align 8
+  br label %6
+
+6:                                                ; loop header
+  %8 = icmp slt i64 %7, 3
+  br i1 %8, label %9, label %19
+
+9:                                                ; body: the callee fills it
+  %11 = call ptr @alloc_and_return(ptr %10)
+  br label %6
+
+19:                                               ; exit edge: release
+  %21 = call i32 @nrq_cdmm_arena_destroy(ptr %20)
+  br label %17
+```
+
