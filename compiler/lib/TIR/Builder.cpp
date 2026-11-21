@@ -742,6 +742,29 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       }
 
       scopes_.back().emplace(declaration.name(), slot);
+      // The binding owns the aggregate, and the aggregate owns its managed
+      // fields: destruction walks those fields rather than releasing the binding
+      // as one value, whose memory is the binding's own frame slot.
+      std::vector<std::pair<int, std::string>> field_releases;
+      if (const tir::Op* origin = defining_operation(function, initial);
+          origin != nullptr && origin->kind == tir::OpKind::AggregatePack &&
+          initial.ownership != ValueOwnership::ArenaBound) {
+        for (std::size_t i = 0; i < origin->release_fields.size() &&
+                                i < origin->release_callees.size();
+             ++i)
+          field_releases.emplace_back(origin->release_fields[i],
+                                      origin->release_callees[i]);
+      }
+      if (!field_releases.empty()) {
+        DeferredCall cleanup;
+        cleanup.callee = "aggregate.field_destroy";
+        cleanup.location = declaration.location();
+        cleanup.automatic = true;
+        cleanup.owner_slot = slot;
+        cleanup.field_releases = std::move(field_releases);
+        deferred_expressions_.back().push_back(std::move(cleanup));
+        return;
+      }
       // Arena-bound storage belongs to the arena; a per-binding release would
       // free inside the region or bypass its bulk lifetime. Sema suppresses the
       // cleanup, and this guard keeps a stale cleanup annotation from
