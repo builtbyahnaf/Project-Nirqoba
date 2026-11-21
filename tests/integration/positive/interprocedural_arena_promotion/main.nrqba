@@ -1,0 +1,22 @@
+// Call-site arena promotion.
+//
+// `alloc_and_return` hands fresh storage back to its caller, so on its own the
+// classifier would have to call it escaping and let it fall back to the general
+// allocator. The caller is the one that knows the answer: `main` prints the value
+// and lets the binding die with the frame, so the storage never leaves it.
+//
+// Every call to the callee bounds the result, which is what lets the callee's
+// signature gain the arena handle. `main` creates the arena once, passes it, and
+// releases the whole chunk on the way out; the callee fills it instead of calling
+// the general allocator.
+int* function alloc_and_return() {
+    var node = memory.allocate<int>(8);
+    node[0] = 42;
+    return node;
+}
+
+int function main() {
+    var n = alloc_and_return();
+    print(n[0]);
+    return 0;
+}
