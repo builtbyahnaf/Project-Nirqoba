@@ -486,3 +486,71 @@ TEST(LifetimeAnalysisTest, BoundedCallSiteOutsideALoopIsFrameScoped) {
   ASSERT_EQ(sites->second.size(), static_cast<std::size_t>(1));
   ASSERT_FALSE(sites->second[0].loop_scoped);
 }
+
+// Phase 9e: a direct recursive call forwards the activation's own handle.
+//
+// The self-call's storage is the storage the function returns, so the chain it
+// builds belongs to whichever arena the outermost caller created. Passing null
+// there would put every level on the general allocator; passing the handle this
+// activation was given keeps the whole chain in one chunk.
+TEST(LifetimeAnalysisTest, SelfRecursiveCallThatReturnsForwards) {
+  DiagnosticEngine diag;
+  auto module = build_tir(
+      "int* function build_list(int depth) {\n"
+      "  var node = memory.allocate<int>(8);\n"
+      "  node[0] = depth;\n"
+      "  if (depth > 0) {\n"
+      "    return build_list(depth - 1);\n"
+      "  }\n"
+      "  return node;\n"
+      "}\n"
+      "int function main() {\n"
+      "  var root = build_list(5);\n"
+      "  print(root[0]);\n"
+      "  return 0;\n"
+      "}",
+      diag);
+  ASSERT_FALSE(diag.has_errors());
+
+  const tir::CallSiteArenaPlan plan = tir::analyze_call_site_arenas(*module);
+  ASSERT_TRUE(plan.promoted("build_list"));
+  const auto forwarded = plan.forwarded_call_results.find("build_list");
+  ASSERT_TRUE(forwarded != plan.forwarded_call_results.end());
+  ASSERT_EQ(forwarded->second.size(), static_cast<std::size_t>(1));
+  ASSERT_TRUE(plan.forwards("build_list", *forwarded->second.begin()));
+  // A forwarding site is not an escaped one: it never asks for a null handle.
+  const auto escaped = plan.escaping_call_results.find("build_list");
+  ASSERT_TRUE(escaped == plan.escaping_call_results.end());
+}
+
+// Forwarding needs a handle to forward. With every caller letting the storage out
+// there is no arena, so the self-call keeps passing null and the signature stays
+// as it was.
+TEST(LifetimeAnalysisTest, SelfRecursiveForwardingNeedsAHandle) {
+  DiagnosticEngine diag;
+  auto module = build_tir(
+      "int* function build_list(int depth) {\n"
+      "  var node = memory.allocate<int>(8);\n"
+      "  node[0] = depth;\n"
+      "  if (depth > 0) {\n"
+      "    return build_list(depth - 1);\n"
+      "  }\n"
+      "  return node;\n"
+      "}\n"
+      "void function keep(int* pointer) {\n"
+      "  print(pointer[0]);\n"
+      "  return;\n"
+      "}\n"
+      "int function main() {\n"
+      "  var root = build_list(3);\n"
+      "  keep(root);\n"
+      "  return 0;\n"
+      "}",
+      diag);
+  ASSERT_FALSE(diag.has_errors());
+
+  const tir::CallSiteArenaPlan plan = tir::analyze_call_site_arenas(*module);
+  ASSERT_FALSE(plan.promoted("build_list"));
+  ASSERT_TRUE(plan.forwarded_call_results.empty());
+  ASSERT_TRUE(plan.escaping_call_results.empty());
+}
