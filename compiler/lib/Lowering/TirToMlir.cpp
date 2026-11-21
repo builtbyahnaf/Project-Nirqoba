@@ -6796,6 +6796,10 @@ class FunctionTranslator {
   // Callees in this module whose signature carries a trailing arena handle: every
   // call to one of them supplies that argument, whether it names an arena or not.
   std::unordered_set<std::string> promoted_callees_;
+  // Recursive call sites that forward this activation's own arena handle. They are
+  // the chain that fills one chunk: the outermost bounded caller created it, and
+  // each activation hands the same handle to the next.
+  std::unordered_set<int> forwarded_call_results_;
   std::unordered_map<int, std::size_t> region_of_value_;
   // Loop-scoped regions whose create belongs at the header label at this position
   // in the operation stream.
