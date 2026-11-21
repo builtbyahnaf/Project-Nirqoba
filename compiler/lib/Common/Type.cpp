@@ -1,5 +1,7 @@
 #include "nirqoba/Common/Type.h"
 
+#include <unordered_set>
+
 namespace nirq {
 
 bool is_owning_ownership(ValueOwnership ownership) {
@@ -45,6 +47,64 @@ std::string_view ownership_name(ValueOwnership ownership) {
   return "unknown";
 }
 using namespace std;
+
+namespace {
+
+bool arena_eligible_payload(const Type& type,
+                            std::unordered_set<std::string>& active) {
+  if (!type.is_valid()) return false;
+  // Scalar payloads have no ownership: nothing to trace, nothing to destroy.
+  if (type.is_integer() || type.is_float() || type.is_bool() || type.is_char())
+    return true;
+  if (type.is_array())
+    return type.array_length() > 0 &&
+           arena_eligible_payload(type.element_type(), active);
+  if (type.is_tuple()) {
+    const vector<Type>& elements = type.tuple_elements();
+    if (elements.empty()) return false;
+    for (const Type& element : elements)
+      if (!arena_eligible_payload(element, active)) return false;
+    return true;
+  }
+  if (type.is_struct()) {
+    // A struct that names itself through a pointer is the node in progress, and it
+    // is eligible exactly when the rest of it is: assume it while its own fields
+    // are visited instead of recursing forever. A named reference reached this way
+    // carries no field list of its own, so this check has to come first.
+    if (!active.insert(type.struct_name()).second) return true;
+    const vector<pair<string, Type>>& fields = type.struct_fields();
+    if (fields.empty()) {
+      active.erase(type.struct_name());
+      return false;
+    }
+    bool eligible = true;
+    for (const pair<string, Type>& field : fields)
+      if (!arena_eligible_payload(field.second, active)) {
+        eligible = false;
+        break;
+      }
+    active.erase(type.struct_name());
+    return eligible;
+  }
+  if (type.is_managed_pointer()) return false;
+  if (type.is_pointer()) {
+    // Only storage the compiler frees: a shared token is reference counted, and a
+    // resource handle names a runtime destructor, so neither may travel through a
+    // chunk that release does not walk.
+    if (type.is_shared_pointer() || type.is_resource_pointer()) return false;
+    return arena_eligible_payload(type.element_type(), active);
+  }
+  // Text, containers and array views all own or observe storage with a release or
+  // a lifetime of its own.
+  return false;
+}
+
+}  // namespace
+
+bool arena_eligible_payload(const Type& type) {
+  std::unordered_set<std::string> active;
+  return arena_eligible_payload(type, active);
+}
 
 namespace {
 static const vector<Type> kEmptyTypes;

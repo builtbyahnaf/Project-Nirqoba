@@ -310,4 +310,12 @@ struct TypeData {
 
 Type parse_type_name(std::string_view spelling);
 
+// True when storage of this type can live in an arena: every leaf is plain data
+// and every pointer names another payload of the same kind, so a bulk release
+// needs no destructor and no collector root. A recursive struct is eligible -
+// its own pointer fields are the reason a linked list or a tree can be built in
+// one chunk - while owned text, containers, shared and managed references and
+// resource handles all need a release an arena cannot describe.
+bool arena_eligible_payload(const Type& type);
+
 }  // namespace nirq
