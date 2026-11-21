@@ -1876,6 +1876,25 @@ bool TypeChecker::requires_deterministic_cleanup(
   return false;
 }
 
+bool TypeChecker::contains_qualified_field(const Type& type) const {
+  if (!type.is_valid()) return false;
+  if (type.is_array()) return contains_qualified_field(type.element_type());
+  if (type.is_tuple()) {
+    for (const Type& element : type.tuple_elements())
+      if (contains_qualified_field(element)) return true;
+    return false;
+  }
+  if (!type.is_struct()) return false;
+  const std::string& name = type.struct_name();
+  const StructInfo* info = find_struct(name);
+  if (info == nullptr) return false;
+  for (const Parameter& field : info->fields) {
+    if (field.shared || field.borrowed) return true;
+    if (contains_qualified_field(field.type)) return true;
+  }
+  return false;
+}
+
 bool TypeChecker::contains_managed_reference(const Type& type) const {
   std::unordered_set<std::string> active;
   return contains_managed_reference(type, active);
