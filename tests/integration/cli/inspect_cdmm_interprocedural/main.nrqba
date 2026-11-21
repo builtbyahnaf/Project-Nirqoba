@@ -1,0 +1,14 @@
+// The report has to name the strategy the caller chose for a callee's storage,
+// and the callee that fills it: that decision is not visible in either function's
+// own allocation sites.
+int* function alloc_and_return() {
+    var node = memory.allocate<int>(8);
+    node[0] = 42;
+    return node;
+}
+
+int function main() {
+    var n = alloc_and_return();
+    print(n[0]);
+    return 0;
+}
