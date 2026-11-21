@@ -1,0 +1,16 @@
+// A promoted call outside a loop keeps the frame's arena.
+//
+// Nothing here repeats, so there is no exit edge to reclaim at: the arena is
+// created in the entry block and released on the return. The scope attribute is
+// what keeps that visible next to the loop-scoped case.
+int* function alloc_and_return() {
+    var node = memory.allocate<int>(8);
+    node[0] = 42;
+    return node;
+}
+
+int function main() {
+    var n = alloc_and_return();
+    print(n[0]);
+    return 0;
+}
