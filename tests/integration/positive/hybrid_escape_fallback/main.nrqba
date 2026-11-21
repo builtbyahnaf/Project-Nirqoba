@@ -1,0 +1,18 @@
+// Automated strategy selection, escaping side.
+//
+// `make` returns its pointer, so the storage outlives the activation. An arena
+// is released with its frame and would hand the caller dangling memory, so the
+// classifier refuses the site and lowering keeps the general allocator.
+int* function make(int count) {
+    var value = memory.allocate<int>(count * 8);
+    value[0] = 21;
+    value[1] = 21;
+    return value;
+}
+
+int function main() {
+    var shared = make(2);
+    print(shared[0] + shared[1]);
+    memory.deallocate(shared);
+    return 0;
+}

@@ -1,0 +1,15 @@
+// A hand-written allocator hint stays authoritative.
+//
+// The site is bounded and could be arena-selected, but the programmer passed an
+// arena handle, which is the existing manual hint. Automated selection must not
+// replace a decision the source states: the allocation goes to that arena, and no
+// scratch arena is created for the frame.
+int function main() {
+    var arena = memory.arena_allocator(4096);
+    var count = 4;
+    var value = memory.allocate<int>(count * 8, arena);
+    value[0] = 9;
+    print(value[0]);
+    memory.destroy_allocator(arena);
+    return 0;
+}

@@ -1,0 +1,21 @@
+// Automated strategy selection, bounded side.
+//
+// The buffer never leaves `main`: no return, no callee, no external store. Its
+// payload is plain data, the programmer wrote no release, and the byte count is
+// computed rather than constant, so neither the stack promotion nor a hand
+// written allocator applies. Automated selection therefore puts it in the
+// activation's scratch arena, which is created at entry and destroyed on the way
+// out.
+//
+// The emitted IR is the proof: one `nrq_cdmm_arena_allocate`, one create, one
+// destroy, and no general-allocator call at all.
+int function main() {
+    var count = 4;
+    var value = memory.allocate<int>(count * 8);
+    value[0] = 10;
+    value[1] = 20;
+    value[2] = 30;
+    value[3] = 40;
+    print(value[0] + value[1] + value[2] + value[3]);
+    return 0;
+}
