@@ -344,15 +344,38 @@ TEST(LifetimeAnalysisTest, ArenaPayloadsArePlainData) {
   ASSERT_TRUE(tir::is_arena_eligible_payload(
       Type::struct_type("Pair", {{"left", Type::int_type()},
                                  {"right", Type::u64_type()}})));
-  // Storage with an owner or a collector reference cannot: an arena frees in
-  // bulk and the collector cannot trace arena memory.
-  ASSERT_FALSE(tir::is_arena_eligible_payload(Type::pointer_type(Type::int_type())));
+  // A pointer is a word, and a pointer to storage of the same kind is what a
+  // linked list or a tree is made of: the chunk owns every node, so bulk release
+  // is the whole answer. The pointee's shape is what decides.
+  ASSERT_TRUE(tir::is_arena_eligible_payload(Type::pointer_type(Type::int_type())));
+  ASSERT_TRUE(tir::is_arena_eligible_payload(
+      Type::struct_type("Holder", {{"slot", Type::pointer_type(Type::int_type())}})));
+  // `struct Node { int value; owned ptr Node next; }` as the type system stores
+  // it: the field names a struct that names itself, and the classifier has to
+  // assume the node in progress is eligible instead of recursing forever.
+  ASSERT_TRUE(tir::is_arena_eligible_payload(Type::struct_type(
+      "Node", {{"value", Type::int_type()},
+               {"next", Type::owned_pointer_type(Type::struct_type("Node"))}})));
+  // Storage with a release of its own cannot: an arena frees in bulk, so nothing
+  // here may need a destructor or a collector root.
   ASSERT_FALSE(tir::is_arena_eligible_payload(Type::string_type()));
   ASSERT_FALSE(tir::is_arena_eligible_payload(Type::owned_string_type()));
   ASSERT_FALSE(tir::is_arena_eligible_payload(
       Type::dynamic_array_type(Type::int_type())));
   ASSERT_FALSE(tir::is_arena_eligible_payload(
-      Type::struct_type("Holder", {{"slot", Type::pointer_type(Type::int_type())}})));
+      Type::owned_array_type(Type::int_type())));
+  ASSERT_FALSE(tir::is_arena_eligible_payload(
+      Type::shared_pointer_type(Type::int_type())));
+  ASSERT_FALSE(tir::is_arena_eligible_payload(
+      Type::managed_pointer_type(Type::int_type())));
+  ASSERT_FALSE(tir::is_arena_eligible_payload(Type::struct_type(
+      "Text", {{"name", Type::owned_string_type()}})));
+  ASSERT_FALSE(tir::is_arena_eligible_payload(Type::struct_type(
+      "Handle", {{"file", Type::owned_pointer_type(Type::u8_type(), "file")}})));
+  ASSERT_FALSE(tir::is_arena_eligible_payload(Type::struct_type(
+      "Nodes", {{"items", Type::dynamic_array_type(Type::int_type())}})));
+  ASSERT_FALSE(tir::is_arena_eligible_payload(Type::struct_type(
+      "Nodes", {{"next", Type::shared_pointer_type(Type::int_type())}})));
 }
 
 // Phase 9c: one callee, two kinds of call site.
