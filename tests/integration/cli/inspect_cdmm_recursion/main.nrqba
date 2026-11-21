@@ -1,0 +1,17 @@
+// The report has to name the forwarding site, because that is the difference
+// between a chain that shares the caller's arena and one that calls the general
+// allocator at every level.
+int* function build_list(int depth) {
+    var node = memory.allocate<int>(8);
+    node[0] = depth;
+    if (depth > 0) {
+        return build_list(depth - 1);
+    }
+    return node;
+}
+
+int function main() {
+    var root = build_list(5);
+    print(root[0]);
+    return 0;
+}
