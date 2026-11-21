@@ -1,0 +1,10 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm-raw"],
+  "expect_ir_contains": [
+    "declare noalias align 8 ptr @nrq_memory_allocate",
+    "declare noalias align 8 ptr @nrq_cdmm_arena_allocate",
+    "call ptr @nrq_cdmm_arena_allocate",
+    "call ptr @nrq_memory_allocate"
+  ]
+}
