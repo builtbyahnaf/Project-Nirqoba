@@ -1,0 +1,25 @@
+// Every exit edge owns a destroy.
+//
+// The loop leaves in two ways: the condition turns false, or `break` jumps out.
+// A loop-scoped arena is released on each of them, so the create runs once on the
+// way in and exactly one destroy runs on whatever path leaves. Missing either edge
+// would leak the whole chunk.
+int* function alloc_and_return() {
+    var node = memory.allocate<int>(8);
+    node[0] = 42;
+    return node;
+}
+
+int function main() {
+    var i = 0;
+    while (i < 10) {
+        var n = alloc_and_return();
+        print(n[0]);
+        if (i == 1) {
+            break;
+        }
+        i = i + 1;
+    }
+    print(7);
+    return 0;
+}
