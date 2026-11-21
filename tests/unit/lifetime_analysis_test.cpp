@@ -354,3 +354,46 @@ TEST(LifetimeAnalysisTest, ArenaPayloadsArePlainData) {
   ASSERT_FALSE(tir::is_arena_eligible_payload(
       Type::struct_type("Holder", {{"slot", Type::pointer_type(Type::int_type())}})));
 }
+
+// Phase 9c: one callee, two kinds of call site.
+//
+// The bounded caller keeps the arena it created; the escaping caller passes null
+// and the callee falls back. The plan therefore has to record both sides of the
+// same callee, and neither caller's decision may erase the other's.
+TEST(LifetimeAnalysisTest, BoundedAndEscapingCallSitesShareOnePromotedCallee) {
+  DiagnosticEngine diag;
+  auto module = build_tir(
+      "int* function alloc_and_return() {\n"
+      "  var node = memory.allocate<int>(8);\n"
+      "  node[0] = 42;\n"
+      "  return node;\n"
+      "}\n"
+      "void function keep(int* pointer) {\n"
+      "  print(pointer[0]);\n"
+      "  return;\n"
+      "}\n"
+      "int function main() {\n"
+      "  var bounded = alloc_and_return();\n"
+      "  print(bounded[0]);\n"
+      "  var escaped = alloc_and_return();\n"
+      "  keep(escaped);\n"
+      "  return 0;\n"
+      "}",
+      diag);
+  ASSERT_FALSE(diag.has_errors());
+
+  const tir::CallSiteArenaPlan plan = tir::analyze_call_site_arenas(*module);
+  // One bounded site is enough: the callee gains the handle even though the other
+  // site lets the storage out, and it is only partially promoted.
+  ASSERT_TRUE(plan.promoted("alloc_and_return"));
+  ASSERT_TRUE(plan.partial("alloc_and_return"));
+  const auto sites = plan.call_sites.find("main");
+  ASSERT_TRUE(sites != plan.call_sites.end());
+  ASSERT_EQ(sites->second.size(), static_cast<std::size_t>(1));
+  ASSERT_EQ(sites->second[0].callee, std::string("alloc_and_return"));
+  // The escaped site is recorded so the report can name the null handle it passes.
+  const auto escaped = plan.escaping_call_results.find("main");
+  ASSERT_TRUE(escaped != plan.escaping_call_results.end());
+  ASSERT_EQ(escaped->second.size(), static_cast<std::size_t>(1));
+  ASSERT_TRUE(escaped->second.count(sites->second[0].result) == 0);
+}
