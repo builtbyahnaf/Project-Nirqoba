@@ -1,0 +1,22 @@
+// The callee's line has to say that its allocator is a runtime choice.
+//
+// It cannot say which caller reached it - a bounded one passes an arena, an
+// escaping one passes null - so the line states both branches and the check
+// between them. The call-site lines name the half each caller took.
+int* function alloc_and_return() {
+    var node = memory.allocate<int>(8);
+    node[0] = 42;
+    return node;
+}
+
+void function keep(int* pointer) {
+    print(pointer[0]);
+}
+
+int function main() {
+    var n = alloc_and_return();
+    print(n[0]);
+    var m = alloc_and_return();
+    keep(m);
+    return 0;
+}
