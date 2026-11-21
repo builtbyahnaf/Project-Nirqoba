@@ -7198,7 +7198,9 @@ std::vector<std::string> cdmm_report(
     const tir::Function& function,
     const std::unordered_map<int, StackAllocationLayout>& stack_allocations,
     const HybridSelection& selection,
-    bool promoted_callee) {
+    bool promoted_callee,
+    bool partially_promoted,
+    const std::unordered_set<int>& escaping_call_results) {
   std::vector<std::string> lines;
   // A caller with no allocation sites of its own still reports the strategy it
   // chose for a callee's storage, so an empty analysis is not an empty report.
@@ -7235,10 +7237,15 @@ std::vector<std::string> cdmm_report(
     std::string_view strategy;
     std::string rationale;
     if (promoted_callee && site->reason == tir::EscapeReason::Returned) {
-      // The site escapes its own function, but every caller bounds it, so the
-      // storage lives in the caller's arena rather than on the general allocator.
+      // The site escapes its own function, so its home belongs to the call site:
+      // the caller's arena when the caller passed one, the general allocator when
+      // it passed null. Both branches exist in this body.
       strategy = "arena";
-      rationale = "bounded by every caller, filled into the caller's arena";
+      rationale = partially_promoted
+                      ? "returned to bounded and escaping callers, arena handle "
+                        "checked at runtime"
+                      : "returned to bounded callers, arena handle checked at "
+                        "runtime";
     } else if (stack_allocations.count(op.result.id) != 0) {
       strategy = "stack";
       rationale = "bounded to function, promoted to the stack";
@@ -7290,6 +7297,24 @@ std::vector<std::string> cdmm_report(
     line += " '" + name + "' " + call->result.type.to_string();
     line += " -> arena (bounded to the caller's frame, filled by " +
             call->callee + ")";
+    lines.push_back(std::move(line));
+  }
+
+  // A call site of a promoted callee that passes null. Lowering the storage to the
+  // general allocator happens inside the callee, so the call site is the only
+  // place this decision is visible: the callee's own lines describe both branches.
+  for (const tir::Op& op : function.operations()) {
+    if (op.kind != tir::OpKind::Call || !op.result.is_valid()) continue;
+    if (escaping_call_results.count(op.result.id) == 0) continue;
+    const auto binding = binding_names.find(op.result.id);
+    const std::string name =
+        binding != binding_names.end() ? binding->second : std::string("<temporary>");
+    std::string line = "cdmm: ";
+    line += op.location.is_valid() ? op.location.to_string()
+                                   : std::string("<unknown>");
+    line += " '" + name + "' " + op.result.type.to_string();
+    line += " -> gc (escaping call site, null arena handle passed to " + op.callee +
+            ")";
     lines.push_back(std::move(line));
   }
   return lines;
@@ -7493,9 +7518,15 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     // claims leaves the selection here, which is why a function whose allocations
     // all fit its frame emits no region calls at all.
     drop_stack_claimed(selection, stack_allocations);
+    std::unordered_set<int> escaping_call_results;
+    if (const auto sites = arena_plan.escaping_call_results.find(tir_fn->name());
+        sites != arena_plan.escaping_call_results.end())
+      escaping_call_results = sites->second;
     if (inspect_cdmm)
-      for (std::string& line :
-           cdmm_report(lowered_fn, stack_allocations, selection, promoted_callee))
+      for (std::string& line : cdmm_report(lowered_fn, stack_allocations, selection,
+                                           promoted_callee,
+                                           arena_plan.partial(tir_fn->name()),
+                                           escaping_call_results))
         cdmm_lines.push_back(std::move(line));
     FunctionTranslator translator(
         *module, lowered_fn, borrowed_summary, collections, func_op, builder,
