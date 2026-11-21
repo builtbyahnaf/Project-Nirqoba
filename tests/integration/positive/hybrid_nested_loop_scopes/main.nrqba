@@ -1,0 +1,27 @@
+// Lexical scoping, nested loops.
+//
+// `outer_value` is allocated and read inside the outer loop but never inside the
+// inner one, so the outer loop is its narrowest scope. `value` belongs to the
+// inner loop. Each region is created on its own loop's entry edge and destroyed
+// on its own loop's exit edge, which means the inner region dies once per outer
+// iteration and the outer one dies when the outer loop finishes.
+int function main() {
+    var total = 0;
+    var outer = 0;
+    var count = 8192;
+    while (outer < 2) {
+        var outer_value = memory.allocate<int>(count);
+        outer_value[0] = outer;
+        total = total + outer_value[0];
+        var index = 0;
+        while (index < 3) {
+            var value = memory.allocate<int>(count);
+            value[0] = index;
+            total = total + value[0];
+            index = index + 1;
+        }
+        outer = outer + 1;
+    }
+    print(total);
+    return 0;
+}

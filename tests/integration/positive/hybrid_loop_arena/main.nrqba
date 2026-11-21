@@ -1,0 +1,27 @@
+// Lexical scoping, loop shape: the flat loop test.
+//
+// The site is bounded (nothing leaves the activation) and plain, but its byte
+// count is a variable, so no pool can own a fixed slot and the stack cannot
+// measure it. Psi-2 would have prepared one arena for the whole frame and held
+// every iteration's block until the function returned. Here the arena is created
+// on the edge into the loop and destroyed on the edge out of it, so the loop's
+// storage dies with the loop.
+//
+// The `if` before the loop is deliberate: it makes the loop's preheader a block
+// of its own, so the create cannot be mistaken for entry-block prologue code.
+int function main() {
+    var total = 0;
+    var index = 0;
+    var count = 8192;
+    if (total == 0) {
+        print(0);
+    }
+    while (index < 4) {
+        var value = memory.allocate<int>(count);
+        value[0] = index;
+        total = total + value[0];
+        index = index + 1;
+    }
+    print(total);
+    return 0;
+}

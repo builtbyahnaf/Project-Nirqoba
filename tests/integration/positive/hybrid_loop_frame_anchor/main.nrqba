@@ -1,0 +1,22 @@
+// Lexical scoping, both answers in one body.
+//
+// `kept` is allocated before the loop and read after it, so its uses span blocks
+// and no loop encloses them: it keeps the frame's arena and dies at return. The
+// loop's own site never escapes the loop, so it gets an arena of its own that is
+// created on the loop's entry edge and destroyed on its exit edge. Two scopes,
+// two regions, two create/destroy pairs.
+int function main() {
+    var total = 0;
+    var index = 0;
+    var count = 8192;
+    var kept = memory.allocate<int>(count);
+    kept[0] = 7;
+    while (index < 3) {
+        var value = memory.allocate<int>(count);
+        value[0] = index;
+        total = total + value[0];
+        index = index + 1;
+    }
+    print(total + kept[0]);
+    return 0;
+}

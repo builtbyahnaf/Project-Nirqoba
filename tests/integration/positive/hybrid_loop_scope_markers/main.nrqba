@@ -1,0 +1,21 @@
+// Lexical scoping, as the compiler records it.
+//
+// The lowered module names the scope on every region it creates, so the decision
+// is visible to the pass that audits it and to anyone reading the IR. This body
+// has both: `kept` is read after the loop and keeps the frame's arena, `value`
+// never leaves the loop and gets an arena created on the loop's entry edge.
+int function main() {
+    var total = 0;
+    var index = 0;
+    var count = 8192;
+    var kept = memory.allocate<int>(count);
+    kept[0] = 7;
+    while (index < 3) {
+        var value = memory.allocate<int>(count);
+        value[0] = index;
+        total = total + value[0];
+        index = index + 1;
+    }
+    print(total + kept[0]);
+    return 0;
+}

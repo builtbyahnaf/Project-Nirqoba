@@ -1,0 +1,4 @@
+{
+  "mode": "build",
+  "args": ["--emit=mlir"]
+}
