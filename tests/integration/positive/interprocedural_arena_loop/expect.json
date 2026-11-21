@@ -1,0 +1,12 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 0,
+  "expect_stdout": "1\n42\n42\n42\n2\n",
+  "expect_ir_counts": {
+    "call ptr @nrq_cdmm_arena_create": 1,
+    "call i32 @nrq_cdmm_arena_destroy": 1,
+    "call ptr @alloc_and_return(ptr %": 1,
+    "call ptr @alloc_and_return(ptr null)": 0,
+    "call ptr @nrq_memory_allocate": 1
+  }
+}
