@@ -397,3 +397,32 @@ TEST(LifetimeAnalysisTest, BoundedAndEscapingCallSitesShareOnePromotedCallee) {
   ASSERT_EQ(escaped->second.size(), static_cast<std::size_t>(1));
   ASSERT_TRUE(escaped->second.count(sites->second[0].result) == 0);
 }
+
+// With no bounded caller at all there is no handle to pass, so the signature stays
+// as it was: a callee only gains a nullable argument when some call site supplies
+// one, and nothing here does.
+TEST(LifetimeAnalysisTest, EscapingOnlyCallerLeavesTheSignatureAlone) {
+  DiagnosticEngine diag;
+  auto module = build_tir(
+      "int* function alloc_and_return() {\n"
+      "  var node = memory.allocate<int>(8);\n"
+      "  node[0] = 42;\n"
+      "  return node;\n"
+      "}\n"
+      "int* function pass_through() {\n"
+      "  return alloc_and_return();\n"
+      "}\n"
+      "int function main() {\n"
+      "  var m = pass_through();\n"
+      "  print(m[0]);\n"
+      "  return 0;\n"
+      "}",
+      diag);
+  ASSERT_FALSE(diag.has_errors());
+
+  const tir::CallSiteArenaPlan plan = tir::analyze_call_site_arenas(*module);
+  ASSERT_FALSE(plan.promoted("alloc_and_return"));
+  ASSERT_FALSE(plan.partial("alloc_and_return"));
+  ASSERT_TRUE(plan.call_sites.empty());
+  ASSERT_TRUE(plan.escaping_call_results.empty());
+}
