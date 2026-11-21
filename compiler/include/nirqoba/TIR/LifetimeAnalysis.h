@@ -110,6 +110,44 @@ class LifetimeAnalysis {
   std::unordered_map<int, AllocationSite> sites_;
 };
 
+// A call whose returned storage the caller keeps in its own frame, with every
+// value that names that storage in the caller.
+struct BoundedCallResult {
+  // The call's result value: the pointer the callee returned.
+  int result = -1;
+  // The callee that filled it.
+  std::string callee;
+  // Every value in the caller that names the same storage: the result, the slot
+  // it is stored into, the values loaded back out of that slot and the addresses
+  // derived from any of them. A Drop or an explicit release is recognised by it.
+  std::unordered_set<int> aliases;
+};
+
+// Which callees may be served from their caller's arena, and the call sites that
+// must supply it.
+//
+// Promotion is all-or-nothing per callee. A callee whose returned storage escapes
+// at one call site cannot take an arena there, and since its signature cannot mean
+// two different things at two call sites, it is promoted only when every call in
+// the module bounds the result. One escaped caller is enough to leave the
+// function on the general allocator for everyone.
+struct CallSiteArenaPlan {
+  // Callees that take a trailing arena handle instead of allocating from the
+  // general allocator for the storage they return.
+  std::unordered_set<std::string> promoted_callees;
+  // Call sites per caller function: the ones whose handle the promoted callee
+  // will read. Keyed by caller name because TIR values are per function.
+  std::unordered_map<std::string, std::vector<BoundedCallResult>> call_sites;
+
+  bool promoted(const std::string& callee) const {
+    return promoted_callees.count(callee) != 0;
+  }
+};
+
+// Classifies the call sites of this module whose returned storage stays in the
+// caller's frame, and decides which callees can be served from it.
+CallSiteArenaPlan analyze_call_site_arenas(const Module& module);
+
 // True when an allocation of this payload is explicit storage the front end
 // hands to the programmer: `memory.allocate<T>`.
 bool is_allocation_site(const Op& op);

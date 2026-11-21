@@ -547,6 +547,158 @@ const AllocationSite* LifetimeAnalysis::site(int allocation_result) const {
   return found == sites_.end() ? nullptr : &found->second;
 }
 
+namespace {
+
+// Every value in `function` that names the same storage as `seed`: the pointer,
+// the slot that receives it, the values read back out of that slot and the
+// addresses derived from any of them. A release is recognised by this set, which
+// is why a binding slot joins it: the release reads the pointer back out of the
+// slot, and that read is a different value number from the pointer itself.
+std::unordered_set<int> storage_alias_closure(const Function& function, int seed) {
+  std::unordered_set<int> aliases{seed};
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (const Op& op : function.operations()) {
+      // A store publishes the pointer into a slot; the slot then names the same
+      // storage for every later read.
+      if (op.kind == OpKind::Store && op.lhs.is_valid() && op.operand.is_valid() &&
+          aliases.count(op.operand.id) != 0 && aliases.count(op.lhs.id) == 0) {
+        aliases.insert(op.lhs.id);
+        changed = true;
+      }
+      if (!op.result.is_valid() || aliases.count(op.result.id) != 0) continue;
+      bool derived = (op.operand.is_valid() && aliases.count(op.operand.id) != 0) ||
+                     (op.lhs.is_valid() && aliases.count(op.lhs.id) != 0) ||
+                     (op.rhs.is_valid() && aliases.count(op.rhs.id) != 0);
+      for (const Value& argument : op.arguments)
+        derived = derived || (argument.is_valid() && aliases.count(argument.id) != 0);
+      if (!derived) continue;
+      aliases.insert(op.result.id);
+      changed = true;
+    }
+  }
+  return aliases;
+}
+
+// True when nothing in `function` lets the storage out: no return hands it back,
+// no call receives it, and no store writes it into memory this activation does not
+// own. Everything else - a binding, an element access, a read, a release - keeps
+// it where it is.
+bool storage_stays_in_frame(const Function& function,
+                            const std::unordered_set<int>& aliases) {
+  std::unordered_set<int> local_slots;
+  for (const Op& op : function.operations())
+    if (op.kind == OpKind::Alloca && op.result.is_valid())
+      local_slots.insert(op.result.id);
+
+  for (const Op& op : function.operations()) {
+    if (op.kind == OpKind::Return) {
+      if (op.operand.is_valid() && aliases.count(op.operand.id) != 0) return false;
+      continue;
+    }
+    if (op.kind == OpKind::Call) {
+      // A callee that receives the pointer may keep it; nothing here can prove it
+      // does not.
+      for (const Value& argument : op.arguments)
+        if (argument.is_valid() && aliases.count(argument.id) != 0) return false;
+      if ((op.lhs.is_valid() && aliases.count(op.lhs.id) != 0) ||
+          (op.operand.is_valid() && aliases.count(op.operand.id) != 0))
+        return false;
+      continue;
+    }
+    if (op.kind == OpKind::Store) {
+      if (!op.operand.is_valid() || aliases.count(op.operand.id) == 0) continue;
+      // Publishing the pointer into a slot this activation owns is the binding,
+      // not an escape. Any other destination can outlive the frame.
+      if (!op.lhs.is_valid() || local_slots.count(op.lhs.id) == 0) return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+CallSiteArenaPlan analyze_call_site_arenas(const Module& module) {
+  CallSiteArenaPlan plan;
+
+  // A function that hands fresh storage back to its caller: at least one
+  // allocation site whose first escaping rule is the return.
+  std::unordered_set<std::string> returns_storage;
+  for (const auto& function : module.functions()) {
+    if (function == nullptr || function->name() == "main") continue;
+    const LifetimeAnalysis analysis = LifetimeAnalysis::analyze(*function);
+    for (const auto& entry : analysis.sites()) {
+      if (entry.second.reason != EscapeReason::Returned) continue;
+      returns_storage.insert(function->name());
+      break;
+    }
+  }
+  if (returns_storage.empty()) return plan;
+
+  struct CalleeState {
+    bool called = false;
+    bool all_bounded = true;
+  };
+  std::unordered_map<std::string, CalleeState> callees;
+  std::unordered_map<std::string, std::vector<BoundedCallResult>> collected;
+
+  for (const auto& function : module.functions()) {
+    if (function == nullptr) continue;
+    const std::string& caller = function->name();
+    // A caller that named its own allocator has already decided where its storage
+    // comes from; an arena this pass invented would override that decision.
+    bool caller_chooses_allocator = false;
+    for (const Op& op : function->operations())
+      if (op.kind == OpKind::Call && op.callee == "memory.use_allocator")
+        caller_chooses_allocator = true;
+
+    for (const Op& op : function->operations()) {
+      if (op.kind != OpKind::Call || op.external_call) continue;
+      if (!op.result.is_valid()) continue;
+      if (returns_storage.count(op.callee) == 0) continue;
+
+      CalleeState& state = callees[op.callee];
+      state.called = true;
+      // Recursion has no single caller's frame to bound, and an arena only holds
+      // plain data, so both are rejected here rather than at lowering.
+      const bool promotable =
+          !caller_chooses_allocator && op.callee != caller &&
+          op.result.type.is_pointer() &&
+          is_arena_eligible_payload(op.result.type.element_type());
+      if (!promotable) {
+        state.all_bounded = false;
+        continue;
+      }
+
+      BoundedCallResult site;
+      site.result = op.result.id;
+      site.callee = op.callee;
+      site.aliases = storage_alias_closure(*function, op.result.id);
+      if (!storage_stays_in_frame(*function, site.aliases)) {
+        state.all_bounded = false;
+        continue;
+      }
+      collected[caller].push_back(std::move(site));
+    }
+  }
+
+  for (const auto& entry : callees)
+    if (entry.second.called && entry.second.all_bounded)
+      plan.promoted_callees.insert(entry.first);
+
+  // Keep only the sites whose callee was promoted: a callee rejected because one
+  // caller let its storage out is not served from anyone's arena.
+  for (auto& entry : collected) {
+    std::vector<BoundedCallResult> kept;
+    for (BoundedCallResult& site : entry.second)
+      if (plan.promoted_callees.count(site.callee) != 0)
+        kept.push_back(std::move(site));
+    if (!kept.empty()) plan.call_sites.emplace(entry.first, std::move(kept));
+  }
+  return plan;
+}
+
 }  // namespace tir
 
 }  // namespace nirq
