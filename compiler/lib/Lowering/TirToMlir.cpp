@@ -7258,7 +7258,8 @@ std::vector<std::string> cdmm_report(
     const HybridSelection& selection,
     bool promoted_callee,
     bool partially_promoted,
-    const std::unordered_set<int>& escaping_call_results) {
+    const std::unordered_set<int>& escaping_call_results,
+    const std::unordered_set<int>& forwarded_call_results) {
   std::vector<std::string> lines;
   // A caller with no allocation sites of its own still reports the strategy it
   // chose for a callee's storage, so an empty analysis is not an empty report.
@@ -7367,7 +7368,8 @@ std::vector<std::string> cdmm_report(
   // place this decision is visible: the callee's own lines describe both branches.
   for (const tir::Op& op : function.operations()) {
     if (op.kind != tir::OpKind::Call || !op.result.is_valid()) continue;
-    if (escaping_call_results.count(op.result.id) == 0) continue;
+    const bool forwarded = forwarded_call_results.count(op.result.id) != 0;
+    if (!forwarded && escaping_call_results.count(op.result.id) == 0) continue;
     const auto binding = binding_names.find(op.result.id);
     const std::string name =
         binding != binding_names.end() ? binding->second : std::string("<temporary>");
@@ -7375,8 +7377,15 @@ std::vector<std::string> cdmm_report(
     line += op.location.is_valid() ? op.location.to_string()
                                    : std::string("<unknown>");
     line += " '" + name + "' " + op.result.type.to_string();
-    line += " -> gc (escaping call site, null arena handle passed to " + op.callee +
-            ")";
+    if (forwarded) {
+      // The chain fills this activation's arena, so the site names the handle it
+      // handed down rather than claiming the general allocator.
+      line += " -> arena (forwarded this activation's handle to " + op.callee +
+              ")";
+    } else {
+      line += " -> gc (escaping call site, null arena handle passed to " +
+              op.callee + ")";
+    }
     lines.push_back(std::move(line));
   }
   return lines;
@@ -7588,11 +7597,16 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     if (const auto sites = arena_plan.escaping_call_results.find(tir_fn->name());
         sites != arena_plan.escaping_call_results.end())
       escaping_call_results = sites->second;
+    std::unordered_set<int> forwarded_call_results;
+    if (const auto sites = arena_plan.forwarded_call_results.find(tir_fn->name());
+        sites != arena_plan.forwarded_call_results.end())
+      forwarded_call_results = sites->second;
     if (inspect_cdmm)
       for (std::string& line : cdmm_report(lowered_fn, stack_allocations, selection,
                                            promoted_callee,
                                            arena_plan.partial(tir_fn->name()),
-                                           escaping_call_results))
+                                           escaping_call_results,
+                                           forwarded_call_results))
         cdmm_lines.push_back(std::move(line));
     FunctionTranslator translator(
         *module, lowered_fn, borrowed_summary, collections, func_op, builder,
