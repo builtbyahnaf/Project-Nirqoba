@@ -71,6 +71,16 @@ struct AllocationSite {
   // Repeated, plain, locally used storage whose lifetime ends with the
   // activation: the shape a bulk pool exists for.
   bool pool_eligible = false;
+  // The narrowest loop that encloses this site and every use of its storage, if
+  // one exists. A region created on that loop's entry edge and destroyed on its
+  // exit edges then holds storage for one loop instead of for the whole
+  // activation, which is what keeps a long-running loop's peak bounded by its own
+  // work rather than by everything the frame ever allocated.
+  // `scope_begin` is the loop header label's position in the operation stream
+  // and `scope_end` the back edge that closes the loop.
+  bool loop_scoped = false;
+  std::size_t scope_begin = 0;
+  std::size_t scope_end = 0;
   // The programmer released this storage by hand. Bulk release cannot replace
   // that call, so a rewrite must leave the site alone.
   bool manually_released = false;

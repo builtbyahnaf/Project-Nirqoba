@@ -213,6 +213,50 @@ TEST(LifetimeAnalysisTest, ARepeatedSiteInsideALoopIsPoolEligible) {
   ASSERT_TRUE(site->constant_payload);
   ASSERT_EQ(site->payload_bytes, static_cast<std::uint64_t>(8192));
   ASSERT_TRUE(site->pool_eligible);
+  // Every use stays in the loop, so the region belongs to the loop rather than to
+  // the frame.
+  ASSERT_TRUE(site->loop_scoped);
+  ASSERT_TRUE(site->scope_begin < site->scope_end);
+}
+
+TEST(LifetimeAnalysisTest, AUseAfterTheLoopKeepsTheRegionOnTheFrame) {
+  DiagnosticEngine diag;
+  auto module = build_tir(
+      "int function main() {\n"
+      "  var total = 0;\n"
+      "  var index = 0;\n"
+      "  var count = 8192;\n"
+      "  var kept = memory.allocate<int>(count);\n"
+      "  kept[0] = 7;\n"
+      "  while (index < 3) {\n"
+      "    var value = memory.allocate<int>(count);\n"
+      "    value[0] = index;\n"
+      "    total = total + value[0];\n"
+      "    index = index + 1;\n"
+      "  }\n"
+      "  print(total + kept[0]);\n"
+      "  return 0;\n"
+      "}",
+      diag);
+  ASSERT_FALSE(diag.has_errors());
+  const tir::Function* function = find_function(*module, "main");
+  ASSERT_TRUE(function != nullptr);
+
+  const tir::LifetimeAnalysis analysis =
+      tir::LifetimeAnalysis::analyze(*function);
+  ASSERT_EQ(analysis.size(), static_cast<std::size_t>(2));
+  int scoped_to_loop = 0;
+  int anchored_to_frame = 0;
+  for (const auto& entry : analysis.sites()) {
+    if (entry.second.loop_scoped)
+      ++scoped_to_loop;
+    else
+      ++anchored_to_frame;
+  }
+  // Reading `kept` after the loop is what keeps it on the frame: a region that
+  // died at the loop's exit would free storage the print still reads.
+  EXPECT_EQ(scoped_to_loop, 1);
+  EXPECT_EQ(anchored_to_frame, 1);
 }
 
 TEST(LifetimeAnalysisTest, FlatSitesPoolOnlyFromTheThreshold) {
