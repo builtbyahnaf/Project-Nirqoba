@@ -1,0 +1,24 @@
+// A promoted call inside a loop gets a loop-scoped arena.
+//
+// `alloc_and_return` returns fresh storage, and `main` keeps every result inside
+// one iteration: the binding is declared in the body, printed there and dropped
+// there. The classifier can therefore bound the storage to the loop rather than to
+// the frame, and lowering creates the arena on the loop's entry edge and releases
+// it on the exit edge. Three iterations use one arena's worth of memory, not three.
+int* function alloc_and_return() {
+    var node = memory.allocate<int>(8);
+    node[0] = 42;
+    return node;
+}
+
+int function main() {
+    print(1);
+    var i = 0;
+    while (i < 3) {
+        var n = alloc_and_return();
+        print(n[0]);
+        i = i + 1;
+    }
+    print(2);
+    return 0;
+}
