@@ -304,6 +304,56 @@ arena: releasing at a loop exit would free storage a later read still needs. The
 scope analysis is the same one Psi-3 uses for local allocations, so a call site and
 an allocation in the same loop describe exactly the same span.
 
+### Recursive chains forward the handle
+
+A promoted function that calls itself forwards the handle it was given:
+
+```llvm
+define internal ptr @build_list(i64 %0, ptr %1) {
+  ...
+  %13 = call ptr @build_list(i64 %12, ptr %1)   ; the activation's own handle
+  ret ptr %13
+}
+```
+
+`main` creates one arena and passes it once; every level down the chain fills the
+same chunk, and the destroy at the bottom of `main` releases all of it. Passing
+null here would put each level on the general allocator, which is what a recursive
+builder did before the handle existed.
+
+A site forwards only when its storage leaves the frame solely through the return:
+the result is returned, no callee receives it, and no store puts it where the frame
+does not own it. That is what makes the forwarding sound — the callee fills the
+storage this activation is already handing back, so both belong to the same arena.
+A self-call that hands its result to another function, or that is not on every
+return path, stays escaping and passes null. Recursion through a second function
+(`A -> B -> A`) does not forward yet: only a direct self-call has a handle of its
+own to give away.
+
+The callee still branches on the handle, because its body cannot know whether the
+caller had an arena. A promoted callee's release of the storage it returns is
+likewise conditional:
+
+```llvm
+  br i1 %3, label %15, label %16      ; %3 = the handle is null
+15:
+  call void @nrq_memory_deallocate_checked(ptr %9)
+  br label %16
+16:
+  ret ptr %13
+```
+
+The release runs on the null path alone. With a real handle the arena owns that
+storage and destroys the whole chunk, so an individual free would be an invalid
+one.
+
+The report names the site, so a chain that shares the caller's arena is
+distinguishable from one that falls back at every level:
+
+```
+cdmm: main.nrqba:5:16 '<temporary>' int* -> arena (forwarded this activation's handle to build_list)
+```
+
 ### What the optimizer is told
 
 `noalias` follows from freshness: a pointer the allocator just returned cannot
