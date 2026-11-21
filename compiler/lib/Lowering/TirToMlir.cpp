@@ -5922,6 +5922,16 @@ class FunctionTranslator {
           auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_deallocate_checked",
                                      mlir::LLVM::LLVMVoidType::get(ctx_),
                                      {llvm_ptr_type(ctx_)});
+          if (!args.empty() && caller_arena_arg_index_ >= 0 &&
+              arena_param_aliases_.count(op.arguments[0].id) != 0) {
+            // A promoted callee's returned storage lives in the caller's arena when
+            // a handle arrived, and on the general allocator when null did. This
+            // release is on a path where the storage is not handed back, so it is
+            // valid only for the null path: the arena frees in bulk.
+            emit_release_unless_arena(args[0],
+                                      op.arguments[0].type.element_type(), loc);
+            return true;
+          }
           if (!args.empty()) {
             mlir::Value pointer = args[0];
             if (!mlir::isa<mlir::LLVM::LLVMPointerType>(pointer.getType())) {
