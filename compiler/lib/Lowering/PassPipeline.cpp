@@ -828,9 +828,11 @@ class ElideNestedMutatorRegionsPass
 // is the part only the final body can answer.
 //
 // First, every selected site must still have its region. A site reads its handle
-// from a slot the entry block fills with `nrq_cdmm_arena_create` or
-// `nrq_cdmm_pool_create`, so a missing handle would be a null dereference at run
-// time; this check turns a lowering regression into a compile error instead.
+// from a slot that `nrq_cdmm_arena_create` or `nrq_cdmm_pool_create` fills at the
+// start of the slot's scope - the entry block for the frame, the edge into a loop
+// header for storage that dies with the loop - so a missing handle would be a
+// null dereference at run time. This check turns a lowering regression into a
+// compile error instead, without caring where in the body the create sits.
 // Second, an activation whose selected sites did not survive optimization - the
 // site sat in a branch SCCP proved dead - keeps a create/destroy pair that now
 // allocates for nobody. That pair is removed, which is what actually saves the

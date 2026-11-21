@@ -1521,16 +1521,32 @@ static SlotPromotion analyze_promoted_slots(const tir::Function& function) {
   return promotion;
 }
 
-// One pool per layout. Sites that allocate the same layout share a chunk of
-// fixed slots, so the runtime never has to rediscover a size it already knows.
-struct PoolSelection {
+// Where a region's handle lives. A frame region is created once in the entry
+// block and destroyed on every return; a loop region is created on the edge into
+// the loop's header and destroyed on every edge out of it, so the storage is
+// reclaimed when the loop finishes rather than when the activation does.
+struct RegionScope {
+  bool loop = false;
+  // Positions in the operation stream: the loop's header label and the back edge
+  // that closes it.
+  std::size_t begin = 0;
+  std::size_t end = 0;
+};
+
+// One shared region: the scratch arena for the bounded sites of a scope, or one
+// pool per layout group of the repeated ones. The scope is what decides where the
+// create and the destroy go; the layout is what decides whether a group is worth
+// a pool at all.
+struct RegionSelection {
+  bool pooled = false;
   std::string layout_key;
   std::uint64_t slot_bytes = 0;
   std::size_t alignment = 1;
+  RegionScope scope;
   std::vector<int> sites;
-  // Every value naming one of the pooled allocations: the Drop that would
-  // release it becomes a release back to the pool instead of a call to the
-  // allocator.
+  // Every value naming one of the region's allocations: the Drop that would
+  // release one binding must not expand into a call, because the region owns the
+  // storage. A pooled region turns that Drop into a slot release instead.
   std::unordered_set<int> aliases;
 };
 
@@ -1567,16 +1583,14 @@ class FunctionTranslator {
                      bool needs_mutator_region,
                      std::unordered_map<int, StackAllocationLayout>
                          stack_allocations,
-                     std::unordered_set<int> arena_sites,
-                     std::vector<PoolSelection> pools)
+                     std::vector<RegionSelection> regions)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
         builder_(builder), ctx_(ctx), diag_(diag), fast_math_(fast_math),
         configuration_(configuration),
         string_literals_(string_literals),
         emit_abi_reference_(emit_abi_reference),
         stack_allocations_(std::move(stack_allocations)),
-        arena_sites_(std::move(arena_sites)),
-        pools_(std::move(pools)),
+        regions_(std::move(regions)),
         gc_roots_(analyze_gc_root_plan(tir_fn, collections)),
         uses_gc_mutator_(needs_mutator_region),
         needs_gc_root_frame_(uses_gc_mutator_ && gc_roots_.needs_root_frame),
@@ -1585,16 +1599,18 @@ class FunctionTranslator {
     for (std::size_t index = 0; index < operations.size(); ++index)
       if (operations[index].kind == tir::OpKind::Label)
         label_positions_.emplace(operations[index].label_id, index);
-    // Pool membership by TIR value: the site needs its handle, and the Drop must
-    // hand the slot back to the same pool it came from.
-    pool_slots_.resize(pools_.size());
-    for (std::size_t index = 0; index < pools_.size(); ++index) {
-      pool_slots_[index].slot_bytes = pools_[index].slot_bytes;
-      pool_slots_[index].alignment = pools_[index].alignment;
-      for (int site : pools_[index].sites)
-        pool_of_site_.emplace(site, index);
-      for (int value : pools_[index].aliases)
-        pool_of_value_.emplace(value, index);
+    // Region membership by TIR value: a site needs its region's handle, and a
+    // Drop must hand its slot back to the pool that handed it out. A loop-scoped
+    // region is also indexed by its header's position, which is where its create
+    // runs.
+    region_slots_.resize(regions_.size());
+    for (std::size_t index = 0; index < regions_.size(); ++index) {
+      for (int site : regions_[index].sites)
+        region_of_site_.emplace(site, index);
+      for (int value : regions_[index].aliases)
+        region_of_value_.emplace(value, index);
+      if (regions_[index].scope.loop)
+        loop_regions_at_header_[regions_[index].scope.begin].push_back(index);
     }
     // A stack-owned root is observable only at a collection point. Calls that
     // may allocate or collect are points; a loop back edge is one too, because
@@ -1693,8 +1709,7 @@ class FunctionTranslator {
   }
 
   bool translate() {
-    prepare_scratch_arena();
-    prepare_scratch_pools();
+    prepare_frame_regions();
     const std::vector<tir::Op>& operations = tir_fn_.operations();
     for (std::size_t index = 0; index < operations.size(); ++index) {
       current_operation_index_ = index;
@@ -1972,93 +1987,188 @@ class FunctionTranslator {
         loc, llvm_ptr_type(ctx_), element_type, one).getResult();
   }
 
-  // Automated strategy selection (Phase Psi) keeps one arena per activation for
-  // the storage the lifetime classifier proved bounded. Creating the handle at
-  // entry rather than on first use at each site keeps the sites branch-free:
-  // no path reaches a site without an arena, and every return releases it once.
+  // Automated strategy selection (Phase Psi) shares storage between the sites
+  // that can share it: the scratch arena of a scope for bounded sites, and one
+  // pool per layout group of the repeated ones. Each region is created where its
+  // scope begins and destroyed on the edges out of that scope, so a loop that
+  // allocates per iteration reclaims at its own exit instead of holding its
+  // storage until the frame ends.
+  //
+  // Only the create moves with the scope. The handle always lives in a frame
+  // slot, because an alloca inside a loop body would grow the stack once per
+  // iteration, and a load per site keeps that slot the only place it is published.
   static constexpr int64_t kScratchArenaBytes = 4096;
 
-  void prepare_scratch_arena() {
-    if (arena_sites_.empty() || entry_block_ == nullptr) return;
-    const mlir::Location loc = func_op_.getLoc();
-    mlir::Type pointer = llvm_ptr_type(ctx_);
-    mlir::Value slot = alloca_at_entry(pointer, loc);
-    if (!slot) return;
-    scratch_arena_slot_ = slot;
-    mlir::OpBuilder::InsertionGuard guard(builder_);
-    builder_.setInsertionPointAfter(slot.getDefiningOp());
-    auto create_fn = ensure_runtime_fn(
-        module_, builder_, "nrq_cdmm_arena_create", pointer,
-        {builder_.getI64Type(), builder_.getI64Type()});
-    mlir::Value initial = builder_.create<mlir::LLVM::ConstantOp>(
-        loc, builder_.getI64Type(),
-        builder_.getI64IntegerAttr(kScratchArenaBytes)).getResult();
-    // No cap: a bounded site whose data outgrows the first chunk grows the
-    // arena instead of failing, exactly as the general allocator would.
-    mlir::Value no_cap = builder_.create<mlir::LLVM::ConstantOp>(
-        loc, builder_.getI64Type(), builder_.getI64IntegerAttr(0)).getResult();
-    mlir::Value arena = builder_.create<mlir::LLVM::CallOp>(
-        loc, create_fn, mlir::ValueRange{initial, no_cap}).getResult();
-    builder_.create<mlir::LLVM::StoreOp>(loc, arena, slot).setAlignment(8);
-  }
-
-  // Bulk pools live in the same frame as the arena: created at entry, handed a
-  // slot at each pooled site, and destroyed on the way out after every slot has
-  // had its chance to go back.
+  // Slots per chunk for a bulk pool. The runtime defaults to a chunk of at most
+  // 64 KiB, and eight slots is where a chunk stops being grown for a pool whose
+  // payloads are ordinary working-set sizes.
   static constexpr int64_t kPoolSlotsPerChunk = 8;
 
-  void prepare_scratch_pools() {
-    if (pools_.empty() || entry_block_ == nullptr) return;
+  // The frame's regions are created once, in the entry block, beside the slot
+  // that publishes their handles.
+  void prepare_frame_regions() {
+    if (entry_block_ == nullptr) return;
+    for (std::size_t index = 0; index < regions_.size(); ++index)
+      if (!regions_[index].scope.loop) emit_region_create(index);
+  }
+
+  mlir::Value region_handle_slot(std::size_t index, mlir::Location loc) {
+    if (index >= region_slots_.size()) return {};
+    if (region_slots_[index].handle_slot) return region_slots_[index].handle_slot;
+    region_slots_[index].handle_slot = alloca_at_entry(llvm_ptr_type(ctx_), loc);
+    return region_slots_[index].handle_slot;
+  }
+
+  // Creates one region and publishes its handle in its slot. The caller's
+  // insertion point is the scope's entry: the entry block for a frame region, or
+  // the edge into the loop header for a loop region.
+  void emit_region_create(std::size_t index) {
+    if (index >= regions_.size() || entry_block_ == nullptr) return;
+    const RegionSelection& region = regions_[index];
     const mlir::Location loc = func_op_.getLoc();
     mlir::Type pointer = llvm_ptr_type(ctx_);
+    mlir::Value slot = region_handle_slot(index, loc);
+    if (!slot) return;
+    mlir::OpBuilder::InsertionGuard guard(builder_);
+    if (!region.scope.loop) {
+      if (mlir::Operation* slot_op = slot.getDefiningOp())
+        builder_.setInsertionPointAfter(slot_op);
+    }
     auto constant = [&](mlir::Type type, int64_t value) {
       return builder_.create<mlir::LLVM::ConstantOp>(
           loc, type, builder_.getIntegerAttr(type, value)).getResult();
     };
-    for (std::size_t index = 0; index < pools_.size(); ++index) {
-      mlir::Value slot = alloca_at_entry(pointer, loc);
-      if (!slot) return;
-      pool_slots_[index].handle_slot = slot;
-      mlir::OpBuilder::InsertionGuard guard(builder_);
-      builder_.setInsertionPointAfter(slot.getDefiningOp());
+    mlir::LLVM::CallOp create;
+    if (region.pooled) {
       auto create_fn = ensure_runtime_fn(
           module_, builder_, "nrq_cdmm_pool_create", pointer,
           {builder_.getI64Type(), builder_.getI64Type(), builder_.getI64Type(),
            builder_.getI32Type(), pointer, pointer});
       mlir::Value null = builder_.create<mlir::LLVM::ZeroOp>(loc, pointer).getResult();
-      mlir::Value handle = builder_.create<mlir::LLVM::CallOp>(
+      create = builder_.create<mlir::LLVM::CallOp>(
           loc, create_fn,
           mlir::ValueRange{
               constant(builder_.getI64Type(),
-                       static_cast<int64_t>(pools_[index].slot_bytes)),
+                       static_cast<int64_t>(region.slot_bytes)),
               constant(builder_.getI64Type(),
-                       static_cast<int64_t>(pools_[index].alignment)),
+                       static_cast<int64_t>(region.alignment)),
               constant(builder_.getI64Type(), kPoolSlotsPerChunk),
               // No generation words: a pooled slot never outlives the pool, so a
               // stale pointer cannot be validated by a generation either.
-              constant(builder_.getI32Type(), 0), null, null})
-                             .getResult();
-      builder_.create<mlir::LLVM::StoreOp>(loc, handle, slot).setAlignment(8);
+              constant(builder_.getI32Type(), 0), null, null});
+    } else {
+      auto create_fn = ensure_runtime_fn(
+          module_, builder_, "nrq_cdmm_arena_create", pointer,
+          {builder_.getI64Type(), builder_.getI64Type()});
+      create = builder_.create<mlir::LLVM::CallOp>(
+          loc, create_fn,
+          mlir::ValueRange{
+              constant(builder_.getI64Type(), kScratchArenaBytes),
+              // No cap: a bounded site whose data outgrows the first chunk grows
+              // the arena instead of failing, exactly as the general allocator
+              // would.
+              constant(builder_.getI64Type(), 0)});
     }
+    // Names the decision for the pass that audits it and for anyone reading the
+    // emitted IR: a `loop` create sits in the loop's preheader, a `frame` one in
+    // the entry block.
+    create->setAttr("nirqoba.region_scope",
+                    builder_.getStringAttr(region.scope.loop ? "loop" : "frame"));
+    builder_.create<mlir::LLVM::StoreOp>(loc, create.getResult(), slot)
+        .setAlignment(8);
   }
 
-  mlir::Value scratch_pool(std::size_t index, mlir::Location loc) {
-    if (index >= pool_slots_.size() || !pool_slots_[index].handle_slot) return {};
+  // Reads one region's handle out of its slot at the point of use.
+  mlir::Value region_handle(std::size_t index, mlir::Location loc) {
+    if (index >= region_slots_.size() || !region_slots_[index].handle_slot)
+      return {};
     auto load = builder_.create<mlir::LLVM::LoadOp>(
-        loc, llvm_ptr_type(ctx_), pool_slots_[index].handle_slot);
+        loc, llvm_ptr_type(ctx_), region_slots_[index].handle_slot);
     load.setAlignment(8);
     return load.getResult();
   }
 
-  // The frame's arena handle, or an empty value when this function was not
-  // selected. A load per site is deliberate: the handle lives in a slot so the
-  // entry block stays the only place that creates it.
-  mlir::Value scratch_arena(mlir::Location loc) {
-    if (!scratch_arena_slot_) return {};
-    auto load = builder_.create<mlir::LLVM::LoadOp>(loc, llvm_ptr_type(ctx_),
-                                                    scratch_arena_slot_);
-    load.setAlignment(8);
-    return load.getResult();
+  // Destroys one region where the caller has reached: a loop's exit edge, or the
+  // return that ends its frame.
+  void emit_region_destroy(std::size_t index, mlir::Location loc) {
+    if (index >= regions_.size()) return;
+    mlir::Value handle = region_handle(index, loc);
+    if (!handle) return;
+    auto destroy_fn = ensure_runtime_fn(
+        module_, builder_,
+        regions_[index].pooled ? "nrq_cdmm_pool_destroy"
+                               : "nrq_cdmm_arena_destroy",
+        builder_.getI32Type(), {llvm_ptr_type(ctx_)});
+    builder_.create<mlir::LLVM::CallOp>(loc, destroy_fn,
+                                        mlir::ValueRange{handle});
+  }
+
+  // Emits the create for every loop-scoped region whose header this edge enters
+  // from outside the loop. The classifier picked the header as the single entry
+  // edge, so this is the one place the create belongs.
+  void emit_loop_header_creates(int header_label) {
+    const auto position = label_positions_.find(header_label);
+    if (position == label_positions_.end()) return;
+    const auto seated = loop_regions_at_header_.find(position->second);
+    if (seated == loop_regions_at_header_.end()) return;
+    for (std::size_t region : seated->second) emit_region_create(region);
+  }
+
+  // True when an edge from this operation to that label leaves a loop that hosts
+  // a region containing this operation. An unknown label counts as an exit:
+  // destroying early is safe, destroying late is not.
+  bool label_leaves_loop(std::size_t index, int label) const {
+    const auto found = label_positions_.find(label);
+    if (found == label_positions_.end()) return true;
+    const std::size_t target = found->second;
+    for (const RegionSelection& region : regions_) {
+      if (!region.scope.loop) continue;
+      if (index < region.scope.begin || index > region.scope.end) continue;
+      if (target < region.scope.begin || target > region.scope.end) return true;
+    }
+    return false;
+  }
+
+  // Destroys every loop-scoped region this operation leaves. `targets` names the
+  // edges; an empty list means the operation itself ends the scope (a return).
+  void emit_loop_region_destroys(std::size_t index, mlir::Location loc,
+                                 std::vector<int> targets) {
+    std::vector<std::size_t> dying;
+    for (std::size_t region = 0; region < regions_.size(); ++region) {
+      const RegionScope& scope = regions_[region].scope;
+      if (!scope.loop || index < scope.begin || index > scope.end) continue;
+      bool leaves = targets.empty();
+      for (int label : targets) {
+        const auto found = label_positions_.find(label);
+        const std::size_t target =
+            found == label_positions_.end() ? index + 1 : found->second;
+        if (target < scope.begin || target > scope.end) {
+          leaves = true;
+          break;
+        }
+      }
+      if (leaves) dying.push_back(region);
+    }
+    if (dying.empty()) return;
+    // Innermost first: a region created inside another must die before it.
+    std::sort(dying.begin(), dying.end(),
+              [&](std::size_t left, std::size_t right) {
+                return regions_[left].scope.begin > regions_[right].scope.begin;
+              });
+    for (std::size_t region : dying) emit_region_destroy(region, loc);
+  }
+
+  // A conditional edge cannot carry the destroy inline, because the other edge
+  // may stay in the loop. This builds the block the leaving edge jumps to: the
+  // destroys, then the branch to the edge's real target.
+  mlir::Block* destroy_edge_block(mlir::Location loc, mlir::Block* target,
+                                  int label) {
+    mlir::Block* block = func_op_.addBlock();
+    mlir::OpBuilder::InsertionGuard guard(builder_);
+    builder_.setInsertionPointToStart(block);
+    emit_loop_region_destroys(current_operation_index_, loc, {label});
+    builder_.create<mlir::LLVM::BrOp>(loc, target);
+    return block;
   }
 
   // Root registration is likewise a per-activation action: the same slot must
@@ -4018,15 +4128,31 @@ class FunctionTranslator {
       case tir::OpKind::Label: {
         mlir::Block* target_block = get_or_create_block(op.label_id);
         mlir::Block* current = builder_.getBlock();
-        if (current != nullptr && (current->empty() || !current->back().hasTrait<mlir::OpTrait::IsTerminator>())) {
-          builder_.create<mlir::LLVM::BrOp>(loc, target_block);
-        }
+        const bool falls_through =
+            current != nullptr &&
+            (current->empty() ||
+             !current->back().hasTrait<mlir::OpTrait::IsTerminator>());
+        // A loop-scoped region is created on the edge into its header, so it runs
+        // once per entry into the loop and no path inside the loop sees a missing
+        // handle. When the front end branched here explicitly that branch already
+        // carried the create, and this block is not the edge.
+        if (falls_through) emit_loop_header_creates(op.label_id);
+        if (falls_through) builder_.create<mlir::LLVM::BrOp>(loc, target_block);
         builder_.setInsertionPointToStart(target_block);
         return true;
       }
 
       case tir::OpKind::Branch: {
         mlir::Block* target_block = get_or_create_block(op.label_id);
+        // The front end branches to a loop header explicitly, so the entry edge
+        // that carries a loop region's create is usually this branch rather than
+        // a fall-through. A back edge re-enters the loop it is already inside and
+        // creates nothing.
+        if (!is_backedge(op.label_id)) emit_loop_header_creates(op.label_id);
+        // An edge that leaves the loop is where a loop-scoped region dies, so a
+        // loop reclaims its storage at its own exit rather than at the end of the
+        // activation.
+        emit_loop_region_destroys(current_operation_index_, loc, {op.label_id});
         if (is_backedge(op.label_id) && emit_gc_safepoint(loc, target_block))
           return true;
         builder_.create<mlir::LLVM::BrOp>(loc, target_block);
@@ -4039,6 +4165,13 @@ class FunctionTranslator {
         mlir::Value cond = get(op.operand);
         if (is_backedge(op.true_label) || is_backedge(op.false_label))
           emit_gc_safepoint(loc);
+        // A conditional edge cannot carry the destroy inline: the edge that stays
+        // in the loop has to keep the region alive. Each leaving edge therefore
+        // branches through a block of its own that destroys and continues.
+        if (label_leaves_loop(current_operation_index_, op.true_label))
+          true_block = destroy_edge_block(loc, true_block, op.true_label);
+        if (label_leaves_loop(current_operation_index_, op.false_label))
+          false_block = destroy_edge_block(loc, false_block, op.false_label);
         builder_.create<mlir::LLVM::CondBrOp>(loc, cond, true_block, false_block);
         return true;
       }
@@ -5065,40 +5198,34 @@ class FunctionTranslator {
                 {llvm_ptr_type(ctx_), builder_.getI64Type(), builder_.getI64Type()});
             result = builder_.create<mlir::LLVM::CallOp>(
                 loc, fn, mlir::ValueRange{allocator, bytes, alignment}).getResult();
-          } else if (const auto pool = pool_of_site_.find(op.result.id);
-                     pool != pool_of_site_.end()) {
-            // Phase Psi-2: this is repeated work whose storage dies with the
-            // frame, so the slot comes from a pool the frame owns. The byte count
-            // this site allocates with is the pool's slot size - the group was
-            // built from identical layouts - and the Drop below hands the slot
-            // back, which is what keeps a loop to one slot per iteration.
-            mlir::Value handle = scratch_pool(pool->second, loc);
+          } else if (const auto region = region_of_site_.find(op.result.id);
+                     region != region_of_site_.end()) {
+            // Phase Psi: the lifetime classifier proved this pointer never leaves
+            // its region's scope, so its storage comes from the region shared by
+            // every site in the same scope with the same layout. The payload is
+            // plain data by selection - no managed reference to trace and no
+            // field destructor to run - which is why neither a root registration
+            // nor an element cleanup follows this call.
+            mlir::Value handle = region_handle(region->second, loc);
             if (!handle) {
               diag_.error("NRQ4005", op.location,
-                          "internal: pooled allocation has no pool handle");
+                          "internal: selected allocation has no region handle");
               return false;
             }
-            auto pool_fn = ensure_runtime_fn(
-                module_, builder_, "nrq_cdmm_pool_allocate",
-                llvm_ptr_type(ctx_), {llvm_ptr_type(ctx_)});
-            auto call = builder_.create<mlir::LLVM::CallOp>(
-                loc, pool_fn, mlir::ValueRange{handle});
-            call->setAttr("nirqoba.hybrid_strategy",
-                          builder_.getStringAttr("pool"));
-            set(op.result, call.getResult());
-            return true;
-          } else if (arena_sites_.count(op.result.id) != 0) {
-            // Phase Psi: the lifetime classifier proved this pointer never leaves
-            // the activation, so its storage comes from the frame's scratch arena
-            // and is released once, when that arena is destroyed at return. The
-            // payload is plain data by selection - no managed reference to trace
-            // and no field destructor to run - which is why neither a root
-            // registration nor an element cleanup follows this call.
-            mlir::Value arena = scratch_arena(loc);
-            if (!arena) {
-              diag_.error("NRQ4005", op.location,
-                          "internal: selected allocation has no scratch arena");
-              return false;
+            if (regions_[region->second].pooled) {
+              // Repeated work: the slot comes from a pool whose slots are this
+              // exact layout - the group was built from identical ones - and the
+              // Drop below hands the slot back, which is what keeps a loop to one
+              // slot per iteration.
+              auto pool_fn = ensure_runtime_fn(
+                  module_, builder_, "nrq_cdmm_pool_allocate",
+                  llvm_ptr_type(ctx_), {llvm_ptr_type(ctx_)});
+              auto call = builder_.create<mlir::LLVM::CallOp>(
+                  loc, pool_fn, mlir::ValueRange{handle});
+              call->setAttr("nirqoba.hybrid_strategy",
+                            builder_.getStringAttr("pool"));
+              set(op.result, call.getResult());
+              return true;
             }
             auto arena_fn = ensure_runtime_fn(
                 module_, builder_, "nrq_cdmm_arena_allocate",
@@ -5106,7 +5233,7 @@ class FunctionTranslator {
                 {llvm_ptr_type(ctx_), builder_.getI64Type(),
                  builder_.getI64Type()});
             auto call = builder_.create<mlir::LLVM::CallOp>(
-                loc, arena_fn, mlir::ValueRange{arena, bytes, alignment});
+                loc, arena_fn, mlir::ValueRange{handle, bytes, alignment});
             // Names the decision for the pass that audits it and for anyone
             // reading the emitted IR.
             call->setAttr("nirqoba.hybrid_strategy",
@@ -5898,24 +6025,15 @@ class FunctionTranslator {
           val = pin_managed_references_for_return(
               val, op.operand.type, loc);
         }
-        // The activation's arena dies with its frame. This frame's element
+        // A return inside a loop leaves that loop too, so the regions scoped to
+        // it are destroyed here, innermost first. What remains is the frame's own
+        // regions, whose lifetime is the activation. This frame's element
         // cleanups were already emitted earlier in the stream, so nothing that
-        // reads arena storage runs after this point.
-        if (mlir::Value arena = scratch_arena(loc)) {
-          auto destroy_fn = ensure_runtime_fn(
-              module_, builder_, "nrq_cdmm_arena_destroy",
-              builder_.getI32Type(), {llvm_ptr_type(ctx_)});
-          builder_.create<mlir::LLVM::CallOp>(loc, destroy_fn,
-                                              mlir::ValueRange{arena});
-        }
-        for (std::size_t index = 0; index < pool_slots_.size(); ++index) {
-          mlir::Value pool = scratch_pool(index, loc);
-          if (!pool) continue;
-          auto destroy_fn = ensure_runtime_fn(
-              module_, builder_, "nrq_cdmm_pool_destroy",
-              builder_.getI32Type(), {llvm_ptr_type(ctx_)});
-          builder_.create<mlir::LLVM::CallOp>(loc, destroy_fn,
-                                              mlir::ValueRange{pool});
+        // reads region storage runs after this point.
+        emit_loop_region_destroys(current_operation_index_, loc, {});
+        for (std::size_t index = 0; index < regions_.size(); ++index) {
+          if (regions_[index].scope.loop) continue;
+          emit_region_destroy(index, loc);
         }
         if (gc_root_frame_marker_) {
           auto end_frame = ensure_runtime_fn(
@@ -5971,9 +6089,10 @@ class FunctionTranslator {
         // next iteration's site reuses that slot instead of taking another one
         // out of the chunk. Every other Drop is a pure ownership marker: its
         // information lives in the attributes around it.
-        const auto pool = pool_of_value_.find(op.operand.id);
-        if (pool != pool_of_value_.end()) {
-          mlir::Value handle = scratch_pool(pool->second, loc);
+        const auto region = region_of_value_.find(op.operand.id);
+        if (region != region_of_value_.end() &&
+            regions_[region->second].pooled) {
+          mlir::Value handle = region_handle(region->second, loc);
           mlir::Value slot = get(op.operand);
           if (handle && slot) {
             auto release_fn = ensure_runtime_fn(
@@ -6377,22 +6496,22 @@ class FunctionTranslator {
   // True for the one function that is the program's C entry point.
   bool emit_abi_reference_ = false;
   std::unordered_map<int, StackAllocationLayout> stack_allocations_;
-  // Allocation sites automated strategy selection routed to this activation's
-  // scratch arena, keyed by the allocation's TIR value.
-  std::unordered_set<int> arena_sites_;
-  // The handle slot, created at entry when the body has an arena site.
-  mlir::Value scratch_arena_slot_;
-  // Bulk pooling: one pool per layout group, its handle slot, and the maps from
-  // TIR values to the pool that owns them.
-  struct PoolSlotState {
+  // One entry per shared region automated strategy selection chose: the scratch
+  // arena of a scope, or one pool per layout group, each carrying the scope whose
+  // lifetime its storage has.
+  std::vector<RegionSelection> regions_;
+  // Where each region publishes its handle. Always a frame slot: an alloca inside
+  // a loop body would grow the stack once per iteration.
+  struct RegionSlotState {
     mlir::Value handle_slot;
-    std::size_t slot_bytes = 0;
-    std::size_t alignment = 1;
   };
-  std::vector<PoolSelection> pools_;
-  std::vector<PoolSlotState> pool_slots_;
-  std::unordered_map<int, std::size_t> pool_of_site_;
-  std::unordered_map<int, std::size_t> pool_of_value_;
+  std::vector<RegionSlotState> region_slots_;
+  std::unordered_map<int, std::size_t> region_of_site_;
+  std::unordered_map<int, std::size_t> region_of_value_;
+  // Loop-scoped regions whose create belongs at the header label at this position
+  // in the operation stream.
+  std::unordered_map<std::size_t, std::vector<std::size_t>>
+      loop_regions_at_header_;
   std::unordered_map<int, uint64_t> pointer_alignment_;
   GcRootPlan gc_roots_;
   bool uses_gc_mutator_ = false;
@@ -6452,11 +6571,10 @@ class FunctionTranslator {
 // switch is the programmer's own answer to the same question; both win over the
 // classifier.
 struct HybridSelection {
-  std::unordered_set<int> arena_sites;
-  // Every value naming an arena-selected allocation. The Drop that would release
-  // it must not expand into a call: the arena releases the whole chunk.
-  std::unordered_set<int> arena_aliases;
-  std::vector<PoolSelection> pools;
+  std::vector<RegionSelection> regions;
+  // Every value naming a region-selected allocation. The Drop that would release
+  // it must not expand into a call: the region releases the storage wholesale.
+  std::unordered_set<int> region_aliases;
   // Drops that belong to a pool. They keep the ownership record and lower into a
   // release against the pool that handed the slot out.
   std::unordered_set<int> pool_aliases;
@@ -6473,21 +6591,25 @@ struct HybridSelection {
 void drop_stack_claimed(
     HybridSelection& selection,
     const std::unordered_map<int, StackAllocationLayout>& stack_allocations) {
-  for (auto it = selection.arena_sites.begin();
-       it != selection.arena_sites.end();) {
-    if (stack_allocations.count(*it) != 0)
-      it = selection.arena_sites.erase(it);
-    else
-      ++it;
+  std::vector<RegionSelection> kept;
+  for (RegionSelection& region : selection.regions) {
+    if (region.pooled) {
+      bool claimed = false;
+      for (int site : region.sites)
+        claimed |= stack_allocations.count(site) != 0;
+      if (!claimed) kept.push_back(std::move(region));
+      continue;
+    }
+    // An arena is shared by layout, so the sites the stack did not claim keep
+    // theirs rather than losing the region to a neighbour's promotion.
+    std::vector<int> sites;
+    for (int site : region.sites)
+      if (stack_allocations.count(site) == 0) sites.push_back(site);
+    if (sites.empty()) continue;
+    region.sites = std::move(sites);
+    kept.push_back(std::move(region));
   }
-  std::vector<PoolSelection> kept;
-  for (PoolSelection& pool : selection.pools) {
-    bool claimed = false;
-    for (int site : pool.sites)
-      claimed |= stack_allocations.count(site) != 0;
-    if (!claimed) kept.push_back(std::move(pool));
-  }
-  selection.pools = std::move(kept);
+  selection.regions = std::move(kept);
 }
 
 HybridSelection select_hybrid_strategies(const tir::Function& function) {
@@ -6500,7 +6622,37 @@ HybridSelection select_hybrid_strategies(const tir::Function& function) {
     if (op.kind == tir::OpKind::Call && op.callee == "memory.use_allocator")
       return selection;
 
-  std::unordered_map<std::string, std::size_t> pool_index;
+  // One region per scope and layout: sites that share a loop header and a layout
+  // share one handle, and a site whose storage outlives its loop keeps the
+  // frame's. The scope is what decides where the create and the destroy go.
+  std::unordered_map<std::string, std::size_t> region_index;
+  auto region_for = [&](const tir::AllocationSite& site,
+                        const tir::Op& op) -> std::size_t {
+    std::string key = site.loop_scoped
+                          ? std::to_string(site.scope_begin) + ":" +
+                                std::to_string(site.scope_end) + "|"
+                          : std::string("frame|");
+    key += site.pool_eligible ? "pool:" + site.layout_key
+                              : std::string("arena");
+    const auto found = region_index.find(key);
+    if (found != region_index.end()) return found->second;
+
+    RegionSelection region;
+    region.pooled = site.pool_eligible;
+    region.layout_key = site.layout_key;
+    region.slot_bytes = site.payload_bytes;
+    const std::size_t alignment =
+        type_alignment(op.result.type.element_type());
+    region.alignment = alignment == 0 ? 1 : alignment;
+    region.scope.loop = site.loop_scoped;
+    region.scope.begin = site.scope_begin;
+    region.scope.end = site.scope_end;
+    const std::size_t index = selection.regions.size();
+    selection.regions.push_back(std::move(region));
+    region_index.emplace(key, index);
+    return index;
+  };
+
   for (const tir::Op& op : function.operations()) {
     if (!tir::is_allocation_site(op)) continue;
     // Two arguments name an allocator: that hint is the programmer's decision.
@@ -6516,34 +6668,17 @@ HybridSelection select_hybrid_strategies(const tir::Function& function) {
     if (!tir::is_arena_eligible_payload(op.result.type.element_type()))
       continue;
 
+    const std::size_t index = region_for(*site, op);
+    selection.regions[index].sites.push_back(op.result.id);
+    selection.regions[index].aliases.insert(site->aliases.begin(),
+                                            site->aliases.end());
+    selection.region_aliases.insert(site->aliases.begin(),
+                                    site->aliases.end());
     // Repeated storage: a pool recycles one slot per iteration instead of
-    // growing a bump region for the whole frame. It also gives sites that cannot
-    // share one arena page a shared chunk.
-    if (site->pool_eligible) {
-      const auto found = pool_index.find(site->layout_key);
-      std::size_t index = 0;
-      if (found == pool_index.end()) {
-        index = selection.pools.size();
-        PoolSelection pool;
-        pool.layout_key = site->layout_key;
-        pool.slot_bytes = site->payload_bytes;
-        const std::size_t alignment =
-            type_alignment(op.result.type.element_type());
-        pool.alignment = alignment == 0 ? 1 : alignment;
-        selection.pools.push_back(std::move(pool));
-        pool_index.emplace(site->layout_key, index);
-      } else {
-        index = found->second;
-      }
-      selection.pools[index].sites.push_back(op.result.id);
-      selection.pools[index].aliases.insert(site->aliases.begin(),
-                                           site->aliases.end());
-      selection.pool_aliases.insert(site->aliases.begin(), site->aliases.end());
-      continue;
-    }
-
-    selection.arena_sites.insert(op.result.id);
-    selection.arena_aliases.insert(site->aliases.begin(), site->aliases.end());
+    // growing a bump region for the whole scope.
+    if (site->pool_eligible)
+      selection.pool_aliases.insert(site->aliases.begin(),
+                                    site->aliases.end());
   }
   return selection;
 }
@@ -6878,9 +7013,9 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     // The copy keeps the verified module unchanged for later diagnostics.
     tir::Function lowered_fn = *tir_fn;
     HybridSelection selection = select_hybrid_strategies(lowered_fn);
-    // Both regions own the storage, so neither may also see a per-binding
+    // Both region kinds own the storage, so neither may also see a per-binding
     // release: the Drop keeps its record and lowers into the region's own path.
-    std::unordered_set<int> suppressed = selection.arena_aliases;
+    std::unordered_set<int> suppressed = selection.region_aliases;
     suppressed.insert(selection.pool_aliases.begin(), selection.pool_aliases.end());
     lowered_fn.expand_drop_operations_to_calls(suppressed);
     lowered_fn.remove_dead_slot_clears_before_return();
@@ -6897,7 +7032,7 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
         *module, lowered_fn, borrowed_summary, collections, func_op, builder,
         &context, diagnostics, fast_math, configuration, string_literals,
         symbol == "main", mutator_regions.count(tir_fn->name()) != 0,
-        stack_allocations, selection.arena_sites, std::move(selection.pools));
+        stack_allocations, std::move(selection.regions));
     if (!translator.translate()) return nullptr;
 
     builder.setInsertionPointAfter(func_op);
