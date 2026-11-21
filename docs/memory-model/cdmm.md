@@ -208,47 +208,46 @@ classifier now asks it.
 
 For every call whose result the caller keeps in its own frame - no return, no
 callee receives it, no store into memory the frame does not own - the call site is
-marked *caller-bounded*. A callee is promoted only when **every** call to it in the
-module bounds the result, because its signature cannot mean two things:
+marked *caller-bounded*. A single bounded call site is enough to give the callee a
+trailing arena handle, because the handle is nullable: that caller passes the arena
+it created, and every other caller passes null. Promotion is therefore per call
+site, not per function, and one escaping caller no longer denies the arena to the
+rest.
+
+The callee branches on the handle once, at the allocation it returns:
 
 ```llvm
-; promoted callee: the handle is the trailing argument
 define internal ptr @alloc_and_return(ptr %0) {
-  %2 = call ptr @nrq_cdmm_arena_allocate(ptr %0, i64 8, i64 8)
-  ret ptr %2
+  %2 = icmp eq ptr %0, null
+  br i1 %2, label %5, label %3
+
+3:                                                ; preds = %1
+  %4 = call ptr @nrq_cdmm_arena_allocate(ptr %0, i64 8, i64 8)
+  br label %7
+
+5:                                                ; preds = %1
+  %6 = call ptr @nrq_memory_allocate(i64 8, i64 8)
+  br label %7
+
+7:                                                ; preds = %5, %3
+  %8 = phi ptr [ %6, %5 ], [ %4, %3 ]
+  store i64 42, ptr %8, align 8
+  ret ptr %8
 }
-
-; caller: one arena for the frame, released on the way out
-define i64 @main() {
-  %2 = call ptr @nrq_cdmm_arena_create(i64 4096, i64 0)
-  %4 = call ptr @alloc_and_return(ptr %3)
-  %8 = call i32 @nrq_cdmm_arena_destroy(ptr %7)
-}
 ```
 
-One escaped caller leaves the function on the general allocator for everyone, with
-its original signature. The caller's arena is created in its entry block and
-destroyed on its return edges, and the binding that holds the returned pointer no
-longer releases it: the arena owns the storage, so the release would be a second,
-wrong free.
-
-The report names both halves of the decision:
-
-```
-cdmm: main.nrqba:5:16 'node' int* -> arena (bounded by every caller, filled into the caller's arena)
-cdmm: main.nrqba:11:13 'n' int* -> arena (bounded to the caller's frame, filled by alloc_and_return)
-```
-
-### What the optimizer is told
-
-`noalias` follows from freshness: a pointer the allocator just returned cannot
-overlap anything the program could already name. The alignment follows from the
-payload's layout. Both are stated on the allocator's declaration:
+The call sites differ only in that argument:
 
 ```llvm
-declare noalias align 8 ptr @nrq_memory_allocate(i64, i64)
-declare noalias align 8 ptr @nrq_cdmm_arena_allocate(ptr, i64, i64)
+; bounded: the arena this frame created and releases on the way out
+%4 = call ptr @nrq_cdmm_arena_create(i64 4096, i64 0)
+%5 = call ptr @alloc_and_return(ptr %4)
+
+; escaping: the storage must outlive this frame, so the callee allocates it
+%8 = call ptr @alloc_and_return(ptr null)
 ```
 
-A declaration is where LLVM keeps a callee's return attributes, so the facts reach
-every call site and stay in one place as the lowering changes.
+The caller's arena is created in its entry block and destroyed on its return
+edges, and a bounded binding no longer releases the returned pointer: the arena
+owns that storage, so the release would be a second, wrong free. An escaping site
+keeps its own release, because the general allocator handed that storage out.
