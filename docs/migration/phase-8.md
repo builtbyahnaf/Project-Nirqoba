@@ -93,6 +93,11 @@ the ABI shape: a `ptr` parameter receives the buffer alone, while a
 `(pointer, length, capacity)` as three scalars. Any other aggregate parameter is
 rejected rather than given a layout C cannot know.
 
+Ownership can also come back. An `extern` returning `string_owned` binds an owner
+whose destructor is `nrq_ffi_free` — the C allocator's release — because the
+runtime's text release would reject a pointer it never handed out. The value is
+an ordinary owner afterwards: printable, movable, transferable.
+
 Therefore the following contracts are **not supported**: borrowed foreign
 pointers, ownership transferred into Nirqoba, foreign allocations released by a
 supplied allocator, retained foreign pointers, callbacks and reentrant foreign

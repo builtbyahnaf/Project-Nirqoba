@@ -1,6 +1,6 @@
 # Foreign and strategy interoperability (Phase 8)
 
-## FFI status: pointer handoff only
+## FFI status: ownership handoff, in both directions
 
 Nirqoba can now declare a C symbol:
 
@@ -13,8 +13,9 @@ program is linked against, so an `extern` declaration with a `{` is a parser
 error. The symbol is emitted as an ordinary C-linkage declaration, which means
 the name written in the declaration is the symbol resolved at link time.
 
-The surface is deliberately narrow. What exists is exactly the ownership handoff,
-in two ABI shapes that the declaration chooses between:
+The surface is deliberately narrow. What exists is the ownership handoff: out of
+Nirqoba in two ABI shapes that the declaration chooses between, and back into
+Nirqoba for text only.
 
 | Boundary | Implemented rule |
 |---|---|
@@ -25,6 +26,8 @@ in two ABI shapes that the declaration chooses between:
 | ABI shape, declared as the container | `dynamic_array<T>` destructures the header into three scalars: `(void* ptr, int64_t length, int64_t capacity)`, in that order |
 | Any other aggregate by value | Rejected: the declaration must name the container to destructure it or a pointer to take the buffer alone |
 | Return value | Void or a scalar the declared type maps to; no aggregate is returned from C |
+| Ownership back into Nirqoba | An `extern` returning `string_owned` produces an owner whose destructor is `nrq_ffi_free`, the C allocator's own release. The runtime's text and array releases hand pointers back to the deterministic allocator that issued them and abort on anything else, so they are never used for foreign storage |
+| Foreign value as a source | The result is a normal owner: it can be printed, moved, transferred or returned. `nrq_ffi_free` is installed on the binding and on a rebinding of the same type, so exactly one release happens |
 | C releases a Nirqoba buffer | The buffer is released through the C entry point it was handed to, never through a Nirqoba destructor, so exactly one release happens |
 
 That is the whole contract. Nothing else about foreign code is implemented or
@@ -37,8 +40,7 @@ These are design requirements, not implemented features:
 | Boundary | Required contract |
 |---|---|
 | Borrowed foreign pointer | non-owning, bounded by a declared external lifetime; never freed by Nirqoba |
-| Ownership into Nirqoba | a compatible release function/allocator, preserved provenance, exactly-once release |
-| Foreign allocation returned | explicit deallocator; ambiguous ownership rejected |
+| Foreign allocation returned as an aggregate | a layout the C side can express; only text crosses back today |
 | Retained foreign pointer | explicit lifetime contract; unsupported if it cannot be represented |
 | Callback | declared argument ownership, state lifetime, cleanup, roots, reentrancy and thread rules |
 | GC handle | rooted for the required duration; no raw unmanaged pointer outliving the root |
