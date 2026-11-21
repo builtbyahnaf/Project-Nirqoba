@@ -7301,8 +7301,12 @@ std::vector<std::string> cdmm_report(
     line += call->location.is_valid() ? call->location.to_string()
                                       : std::string("<unknown>");
     line += " '" + name + "' " + call->result.type.to_string();
-    line += " -> arena (bounded to the caller's frame, filled by " +
-            call->callee + ")";
+    // The scope is where the arena is created and released, so it belongs in the
+    // line: a loop-scoped site reclaims its storage once per iteration.
+    const bool loop_scoped = selection.regions[entry.second].scope.loop;
+    line += " -> arena (bounded to the ";
+    line += loop_scoped ? "loop" : "caller's frame";
+    line += ", filled by " + call->callee + ")";
     lines.push_back(std::move(line));
   }
 
