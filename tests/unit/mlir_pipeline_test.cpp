@@ -764,10 +764,12 @@ TEST(MlirPipelineTest, DropLowersToItsReleaseCall) {
   context.loadAllAvailableDialects();
   nirq::DiagnosticEngine diagnostics;
   // The size is a parameter, so the allocation cannot be promoted to a stack
-  // slot and the Drop must lower to the real release.
+  // slot, and the payload holds a reference, which is not something an arena may
+  // hold. The general allocator it therefore keeps is released through the Drop,
+  // which is the lowering this fixture exists to check.
   auto module = lower_source_to_mlir(
       "int function take(int size) {\n"
-      "  let buffer = memory.allocate<byte>(size);\n"
+      "  var buffer = memory.allocate<int*>(size);\n"
       "  return size;\n"
       "}\n"
       "int function main() {\n"
