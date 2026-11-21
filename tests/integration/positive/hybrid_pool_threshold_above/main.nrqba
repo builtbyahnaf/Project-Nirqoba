@@ -1,0 +1,18 @@
+// Bulk pooling, at the threshold.
+//
+// Five identical 8 KiB sites: the group is now worth a shared chunk, so every site
+// takes its slot from one pool and each release hands the slot back.
+int function main() {
+    var a = memory.allocate<int>(8192);
+    var b = memory.allocate<int>(8192);
+    var c = memory.allocate<int>(8192);
+    var d = memory.allocate<int>(8192);
+    var e = memory.allocate<int>(8192);
+    a[0] = 1;
+    b[0] = 2;
+    c[0] = 3;
+    d[0] = 4;
+    e[0] = 5;
+    print(a[0] + b[0] + c[0] + d[0] + e[0]);
+    return 0;
+}

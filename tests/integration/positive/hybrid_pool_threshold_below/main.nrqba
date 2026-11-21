@@ -1,0 +1,15 @@
+// Bulk pooling, below the threshold.
+//
+// Three identical 8 KiB sites are not repeated work: they are three objects alive
+// at once. The frame's scratch arena already serves them from one bump region, so
+// the pool would add bookkeeping for nothing.
+int function main() {
+    var a = memory.allocate<int>(8192);
+    var b = memory.allocate<int>(8192);
+    var c = memory.allocate<int>(8192);
+    a[0] = 1;
+    b[0] = 2;
+    c[0] = 3;
+    print(a[0] + b[0] + c[0]);
+    return 0;
+}

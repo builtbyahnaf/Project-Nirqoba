@@ -1,0 +1,19 @@
+// Bulk pooling, loop shape.
+//
+// One site, executed once per iteration. It is bounded and plain, but a 8 KiB
+// slot is larger than the stack promotion's per-allocation limit, and a bump
+// arena would grow a fresh 8 KiB per iteration for the whole frame. A pool hands
+// the same slot back at the end of each iteration, so the loop holds one slot for
+// all four passes and the frame owns one chunk.
+int function main() {
+    var total = 0;
+    var index = 0;
+    while (index < 4) {
+        var value = memory.allocate<int>(8192);
+        value[0] = index;
+        total = total + value[0];
+        index = index + 1;
+    }
+    print(total);
+    return 0;
+}
