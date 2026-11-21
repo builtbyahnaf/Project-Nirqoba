@@ -1,0 +1,17 @@
+// The FFI handoff. `nrq_array_free` stands in for `void consume_buffer(void*)`:
+// it is the C side's owner of an array buffer, and it is not a Nirqoba function.
+// Passing the aggregate to its `ptr int` parameter hands the buffer over, so C
+// releases it and Nirqoba's scope-exit destruction is discharged rather than
+// performed. The live count is the runtime proof (1 before, 0 after) and the
+// single @nrq_array_free call in the module is the structural one: the only
+// release is the explicit handoff, so a second, automatic release cannot exist.
+extern void function nrq_array_free(ptr int buffer);
+
+int function main() {
+    var values: dynamic_array<int> = memory.dynamic_array<int>();
+    memory.array_append(values, 42);
+    print(memory.array_live_count());
+    nrq_array_free(values);
+    print(memory.array_live_count());
+    return 0;
+}

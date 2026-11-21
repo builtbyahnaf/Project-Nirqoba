@@ -1,0 +1,11 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 0,
+  "expect_stdout": "1\n0\n",
+  "expect_ir_contains": [
+    "declare void @nrq_array_free(ptr)"
+  ],
+  "expect_ir_counts": {
+    "call void @nrq_array_free": 1
+  }
+}

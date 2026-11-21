@@ -63,7 +63,8 @@ are included automatically by `tests/run_tests.py`.
 | `manual_function_argument_rejected` | Manual storage cannot cross an owned parameter |
 | `manual_return_rejected` | Manual storage cannot cross an owned return |
 | `manual_owned_payload_rejected` | Deterministic-cleanup payloads are rejected |
-| `manual_ffi_unsupported` | The parser rejects the absent `extern` surface |
+| `ffi_use_after_handoff` | Storage handed to C cannot be read afterwards |
+| `ffi_declaration_rejected` | An `extern` declaration cannot carry a body |
 
 Run the complete suite (integration plus these cases):
 

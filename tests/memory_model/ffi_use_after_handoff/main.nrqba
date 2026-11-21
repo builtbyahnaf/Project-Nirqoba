@@ -1,0 +1,10 @@
+// Storage handed to C is C's to release, so the binding no longer owns it. The
+// read below is a use after the handoff, not a read of a still-live container.
+extern void function nrq_array_free(ptr int buffer);
+
+int function main() {
+    var values: dynamic_array<int> = memory.dynamic_array<int>();
+    memory.array_append(values, 42);
+    nrq_array_free(values);
+    return values.length;
+}

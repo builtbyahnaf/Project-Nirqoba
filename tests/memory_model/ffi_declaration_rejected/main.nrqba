@@ -1,4 +1,10 @@
-extern int function foreign(int value);
+// An `extern` declaration describes a symbol owned by the C object the program
+// links against. A body would define the same contract twice and leave the C
+// symbol unused, so the declaration has to end at the parameter list.
+extern void function consume_buffer(ptr int buffer) {
+    return;
+}
+
 int function main() {
-    return foreign(1);
+    return 0;
 }

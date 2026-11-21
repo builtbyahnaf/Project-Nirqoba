@@ -1,5 +1,5 @@
 {
   "mode": "check",
   "expect_exit": 1,
-  "expect_stderr_contains": "expected a declaration"
+  "expect_stderr_contains": "expected ';' after an extern declaration"
 }
