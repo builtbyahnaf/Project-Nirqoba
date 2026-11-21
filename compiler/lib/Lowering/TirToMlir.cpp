@@ -1919,6 +1919,42 @@ class FunctionTranslator {
     return merged;
   }
 
+  // A promoted callee can reach a release of the storage it returns: a path that
+  // returns something else still drops the binding. The arena owns that storage
+  // only when the caller supplied a handle, so the release is emitted on the null
+  // path alone; the arena's own destroy releases the rest.
+  void emit_release_unless_arena(mlir::Value pointer, const Type& payload,
+                                 mlir::Location loc) {
+    if (caller_arena_arg_index_ < 0) return;
+    const mlir::Type ptr = llvm_ptr_type(ctx_);
+    mlir::Value coerced = pointer;
+    if (!mlir::isa<mlir::LLVM::LLVMPointerType>(coerced.getType()))
+      coerced = builder_.create<mlir::LLVM::IntToPtrOp>(loc, ptr, coerced)
+                    .getResult();
+    mlir::Value handle = func_op_.getArgument(
+        static_cast<unsigned>(caller_arena_arg_index_));
+    mlir::Value missing =
+        builder_.create<mlir::LLVM::ZeroOp>(loc, ptr).getResult();
+    mlir::Value absent = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::eq, handle, missing).getResult();
+
+    mlir::Block* release_block = func_op_.addBlock();
+    mlir::Block* continue_block = func_op_.addBlock();
+    builder_.create<mlir::LLVM::CondBrOp>(loc, absent, release_block,
+                                          continue_block);
+
+    builder_.setInsertionPointToStart(release_block);
+    emit_gc_root_unregistration(coerced, payload, loc);
+    auto release_fn = ensure_runtime_fn(
+        module_, builder_, "nrq_memory_deallocate_checked",
+        mlir::LLVM::LLVMVoidType::get(ctx_), {ptr});
+    builder_.create<mlir::LLVM::CallOp>(loc, release_fn,
+                                        mlir::ValueRange{coerced});
+    builder_.create<mlir::LLVM::BrOp>(loc, continue_block);
+
+    builder_.setInsertionPointToStart(continue_block);
+  }
+
   // One cold failure block serves every bounds check in the function. The
   // message, call and unreachable are identical for all of them, and giving each
   // check its own block tripled the block count of bounds-checked code, which
