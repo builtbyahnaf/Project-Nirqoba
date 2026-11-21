@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "nirqoba/Common/Type.h"
@@ -279,11 +280,18 @@ class Function {
   // each Drop into the equivalent call at the last possible moment, so TIR (and
   // its verifier) sees one destruction record while MLIR still gets an ordinary
   // runtime call. Expansion copies the function, leaving the verified TIR intact.
-  void expand_drop_operations_to_calls() {
+  //
+  // `suppressed_owners` names owners whose release is not a call at all.
+  // Automated strategy selection puts their storage in the activation's scratch
+  // arena, which is released wholesale; the Drop stays in the copy as the
+  // ownership record it already is and expands into nothing.
+  void expand_drop_operations_to_calls(
+      const std::unordered_set<int>& suppressed_owners = {}) {
     std::vector<Op> expanded;
     expanded.reserve(operations_.size());
     for (Op& op : operations_) {
-      if (op.kind != OpKind::Drop) {
+      if (op.kind != OpKind::Drop ||
+          suppressed_owners.count(op.operand.id) != 0) {
         expanded.push_back(std::move(op));
         continue;
       }

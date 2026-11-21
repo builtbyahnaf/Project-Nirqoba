@@ -25,6 +25,7 @@
 #include "nirqoba/Lowering/NrqDialect.h"
 #include "nirqoba/Lowering/NrqOps.h"
 #include "nirqoba/Lowering/RuntimeAttributes.h"
+#include "nirqoba/TIR/LifetimeAnalysis.h"
 
 namespace nirq {
 using namespace std;
@@ -1550,14 +1551,17 @@ class FunctionTranslator {
                      RuntimeConfiguration configuration,
                      StringLiteralTable& string_literals,
                      bool emit_abi_reference,
-                     bool needs_mutator_region)
+                     bool needs_mutator_region,
+                     std::unordered_map<int, StackAllocationLayout>
+                         stack_allocations,
+                     std::unordered_set<int> arena_sites)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
         builder_(builder), ctx_(ctx), diag_(diag), fast_math_(fast_math),
         configuration_(configuration),
         string_literals_(string_literals),
         emit_abi_reference_(emit_abi_reference),
-        stack_allocations_(
-            analyze_stack_allocations(tir_fn, borrowed_summary)),
+        stack_allocations_(std::move(stack_allocations)),
+        arena_sites_(std::move(arena_sites)),
         gc_roots_(analyze_gc_root_plan(tir_fn, collections)),
         uses_gc_mutator_(needs_mutator_region),
         needs_gc_root_frame_(uses_gc_mutator_ && gc_roots_.needs_root_frame),
@@ -1663,6 +1667,7 @@ class FunctionTranslator {
   }
 
   bool translate() {
+    prepare_scratch_arena();
     const std::vector<tir::Op>& operations = tir_fn_.operations();
     for (std::size_t index = 0; index < operations.size(); ++index) {
       current_operation_index_ = index;
@@ -1938,6 +1943,47 @@ class FunctionTranslator {
         loc, builder_.getI64Type(), builder_.getI64IntegerAttr(1)).getResult();
     return builder_.create<mlir::LLVM::AllocaOp>(
         loc, llvm_ptr_type(ctx_), element_type, one).getResult();
+  }
+
+  // Automated strategy selection (Phase Psi) keeps one arena per activation for
+  // the storage the lifetime classifier proved bounded. Creating the handle at
+  // entry rather than on first use at each site keeps the sites branch-free:
+  // no path reaches a site without an arena, and every return releases it once.
+  static constexpr int64_t kScratchArenaBytes = 4096;
+
+  void prepare_scratch_arena() {
+    if (arena_sites_.empty() || entry_block_ == nullptr) return;
+    const mlir::Location loc = func_op_.getLoc();
+    mlir::Type pointer = llvm_ptr_type(ctx_);
+    mlir::Value slot = alloca_at_entry(pointer, loc);
+    if (!slot) return;
+    scratch_arena_slot_ = slot;
+    mlir::OpBuilder::InsertionGuard guard(builder_);
+    builder_.setInsertionPointAfter(slot.getDefiningOp());
+    auto create_fn = ensure_runtime_fn(
+        module_, builder_, "nrq_cdmm_arena_create", pointer,
+        {builder_.getI64Type(), builder_.getI64Type()});
+    mlir::Value initial = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI64Type(),
+        builder_.getI64IntegerAttr(kScratchArenaBytes)).getResult();
+    // No cap: a bounded site whose data outgrows the first chunk grows the
+    // arena instead of failing, exactly as the general allocator would.
+    mlir::Value no_cap = builder_.create<mlir::LLVM::ConstantOp>(
+        loc, builder_.getI64Type(), builder_.getI64IntegerAttr(0)).getResult();
+    mlir::Value arena = builder_.create<mlir::LLVM::CallOp>(
+        loc, create_fn, mlir::ValueRange{initial, no_cap}).getResult();
+    builder_.create<mlir::LLVM::StoreOp>(loc, arena, slot).setAlignment(8);
+  }
+
+  // The frame's arena handle, or an empty value when this function was not
+  // selected. A load per site is deliberate: the handle lives in a slot so the
+  // entry block stays the only place that creates it.
+  mlir::Value scratch_arena(mlir::Location loc) {
+    if (!scratch_arena_slot_) return {};
+    auto load = builder_.create<mlir::LLVM::LoadOp>(loc, llvm_ptr_type(ctx_),
+                                                    scratch_arena_slot_);
+    load.setAlignment(8);
+    return load.getResult();
   }
 
   // Root registration is likewise a per-activation action: the same slot must
@@ -4944,6 +4990,33 @@ class FunctionTranslator {
                 {llvm_ptr_type(ctx_), builder_.getI64Type(), builder_.getI64Type()});
             result = builder_.create<mlir::LLVM::CallOp>(
                 loc, fn, mlir::ValueRange{allocator, bytes, alignment}).getResult();
+          } else if (arena_sites_.count(op.result.id) != 0) {
+            // Phase Psi: the lifetime classifier proved this pointer never leaves
+            // the activation, so its storage comes from the frame's scratch arena
+            // and is released once, when that arena is destroyed at return. The
+            // payload is plain data by selection - no managed reference to trace
+            // and no field destructor to run - which is why neither a root
+            // registration nor an element cleanup follows this call.
+            mlir::Value arena = scratch_arena(loc);
+            if (!arena) {
+              diag_.error("NRQ4005", op.location,
+                          "internal: selected allocation has no scratch arena");
+              return false;
+            }
+            auto arena_fn = ensure_runtime_fn(
+                module_, builder_, "nrq_cdmm_arena_allocate",
+                llvm_ptr_type(ctx_),
+                {llvm_ptr_type(ctx_), builder_.getI64Type(),
+                 builder_.getI64Type()});
+            auto call = builder_.create<mlir::LLVM::CallOp>(
+                loc, arena_fn, mlir::ValueRange{arena, bytes, alignment});
+            // Names the decision for the pass that audits it and for anyone
+            // reading the emitted IR.
+            call->setAttr("nirqoba.hybrid_strategy",
+                          builder_.getStringAttr("arena"));
+            result = call.getResult();
+            set(op.result, result);
+            return true;
           } else {
             auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_allocate",
                 llvm_ptr_type(ctx_), {builder_.getI64Type(), builder_.getI64Type()});
@@ -5728,6 +5801,16 @@ class FunctionTranslator {
           val = pin_managed_references_for_return(
               val, op.operand.type, loc);
         }
+        // The activation's arena dies with its frame. This frame's element
+        // cleanups were already emitted earlier in the stream, so nothing that
+        // reads arena storage runs after this point.
+        if (mlir::Value arena = scratch_arena(loc)) {
+          auto destroy_fn = ensure_runtime_fn(
+              module_, builder_, "nrq_cdmm_arena_destroy",
+              builder_.getI32Type(), {llvm_ptr_type(ctx_)});
+          builder_.create<mlir::LLVM::CallOp>(loc, destroy_fn,
+                                              mlir::ValueRange{arena});
+        }
         if (gc_root_frame_marker_) {
           auto end_frame = ensure_runtime_fn(
               module_, builder_, "nrq_gc_root_frame_end",
@@ -6172,6 +6255,11 @@ class FunctionTranslator {
   // True for the one function that is the program's C entry point.
   bool emit_abi_reference_ = false;
   std::unordered_map<int, StackAllocationLayout> stack_allocations_;
+  // Allocation sites automated strategy selection routed to this activation's
+  // scratch arena, keyed by the allocation's TIR value.
+  std::unordered_set<int> arena_sites_;
+  // The handle slot, created at entry when the body has an arena site.
+  mlir::Value scratch_arena_slot_;
   std::unordered_map<int, uint64_t> pointer_alignment_;
   GcRootPlan gc_roots_;
   bool uses_gc_mutator_ = false;
@@ -6208,6 +6296,68 @@ class FunctionTranslator {
   mlir::Value safepoint_counter_;
   SlotPromotion promoted_slots_;
 };
+
+// ---------------------------------------------------------------------------
+// Automated strategy selection (Phase Psi)
+// ---------------------------------------------------------------------------
+//
+// An explicit allocation is the point where the language lets the programmer
+// choose storage. When the programmer said nothing, the compiler answers:
+//
+//   * the stack, for a site the stack analysis already proved placeable; that
+//     promotion is cheaper than any region and keeps precedence;
+//   * the activation's scratch arena, for a site whose pointer the lifetime
+//     classifier proved bounded, whose payload is plain data, and which no
+//     hand-written release or allocator switch overrides;
+//   * the general allocator otherwise, which is the fallback the language
+//     already had.
+//
+// Every condition is required. An arena cannot hold managed references (nothing
+// traces its memory) or payloads that need field destruction (it releases in
+// bulk), so the payload check is a correctness gate rather than a heuristic.
+// An explicit release is a promise about who frees the storage, and an allocator
+// switch is the programmer's own answer to the same question; both win over the
+// classifier.
+struct HybridSelection {
+  std::unordered_set<int> arena_sites;
+  // Every value naming an arena-selected allocation. The Drop that would release
+  // it must not expand into a call: the arena releases the whole chunk.
+  std::unordered_set<int> arena_aliases;
+};
+
+// Candidates are chosen before the Drop expansion below, because that is the
+// point where a release can still be suppressed. Whether the stack analysis
+// claims one is decided afterwards, and lowering keeps the stack first: a
+// candidate the stack promotes never reaches the arena branch.
+HybridSelection select_hybrid_strategies(const tir::Function& function) {
+  HybridSelection selection;
+  const tir::LifetimeAnalysis lifetimes =
+      tir::LifetimeAnalysis::analyze(function);
+  if (lifetimes.empty()) return selection;
+
+  for (const tir::Op& op : function.operations())
+    if (op.kind == tir::OpKind::Call && op.callee == "memory.use_allocator")
+      return selection;
+
+  for (const tir::Op& op : function.operations()) {
+    if (!tir::is_allocation_site(op)) continue;
+    // Two arguments name an allocator: that hint is the programmer's decision.
+    if (op.arguments.size() != 1) continue;
+    const tir::AllocationSite* site = lifetimes.site(op.result.id);
+    if (site == nullptr || site->lifetime != tir::AllocationLifetime::Bounded)
+      continue;
+    if (site->manually_released) continue;
+    // A site nobody touches is not a local working set; claiming it would buy
+    // nothing and would replace a release the programmer can see with a chunk.
+    if (!site->used_locally) continue;
+    if (!op.result.type.is_pointer()) continue;
+    if (!tir::is_arena_eligible_payload(op.result.type.element_type()))
+      continue;
+    selection.arena_sites.insert(op.result.id);
+    selection.arena_aliases.insert(site->aliases.begin(), site->aliases.end());
+  }
+  return selection;
+}
 
 // The Windows CRT calls `main(int argc, char** argv)`. A Nirqoba entry point
 // that declares `string[] args` needs a different signature, so it is emitted as
@@ -6538,12 +6688,19 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     // Destructive cleanup is represented once, as a Drop, and expanded here.
     // The copy keeps the verified module unchanged for later diagnostics.
     tir::Function lowered_fn = *tir_fn;
-    lowered_fn.expand_drop_operations_to_calls();
+    const HybridSelection selection = select_hybrid_strategies(lowered_fn);
+    lowered_fn.expand_drop_operations_to_calls(selection.arena_aliases);
     lowered_fn.remove_dead_slot_clears_before_return();
+    // The stack analysis runs on the expanded copy, exactly as it did before
+    // automated selection existed: a release is a call there, and its answer must
+    // not change because a site was also classified.
+    const auto stack_allocations =
+        analyze_stack_allocations(lowered_fn, borrowed_summary);
     FunctionTranslator translator(
         *module, lowered_fn, borrowed_summary, collections, func_op, builder,
         &context, diagnostics, fast_math, configuration, string_literals,
-        symbol == "main", mutator_regions.count(tir_fn->name()) != 0);
+        symbol == "main", mutator_regions.count(tir_fn->name()) != 0,
+        stack_allocations, selection.arena_sites);
     if (!translator.translate()) return nullptr;
 
     builder.setInsertionPointAfter(func_op);
