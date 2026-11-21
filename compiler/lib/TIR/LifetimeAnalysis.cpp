@@ -107,31 +107,11 @@ bool is_allocation_site(const Op& op) {
          (op.callee == "memory.allocate" || op.callee == "memory.manual_allocate");
 }
 
+// The rule lives with the type so every stage that has to ask - the call-site
+// classifier, the allocation classifier and Sema's explicit-allocation check -
+// answers it the same way.
 bool is_arena_eligible_payload(const Type& type) {
-  if (!type.is_valid()) return false;
-  // Scalar payloads have no ownership: nothing to trace, nothing to destroy.
-  if (type.is_integer() || type.is_float() || type.is_bool() || type.is_char())
-    return true;
-  if (type.is_array())
-    return type.array_length() > 0 &&
-           is_arena_eligible_payload(type.element_type());
-  if (type.is_tuple()) {
-    const std::vector<Type>& elements = type.tuple_elements();
-    if (elements.empty()) return false;
-    for (const Type& element : elements)
-      if (!is_arena_eligible_payload(element)) return false;
-    return true;
-  }
-  if (type.is_struct()) {
-    const auto& fields = type.struct_fields();
-    if (fields.empty()) return false;
-    for (const auto& field : fields)
-      if (!is_arena_eligible_payload(field.second)) return false;
-    return true;
-  }
-  // Pointers, strings, containers, managed and shared references all carry
-  // ownership or collector state that bulk release cannot describe.
-  return false;
+  return arena_eligible_payload(type);
 }
 
 // The narrowest loop that encloses a site and everything the site's storage is
