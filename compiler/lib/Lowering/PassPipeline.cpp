@@ -942,6 +942,25 @@ class HybridStrategySelectionPass
       function.walk([&](mlir::LLVM::StoreOp store) {
         if (store.getValue() == handle) publishers.push_back(store);
       });
+      // An arena whose handle is handed to a callee is used there: that callee
+      // fills storage this activation proved it bounds. The create, the slot that
+      // publishes it and the destroy are all load-bearing, so the pair stays even
+      // though no site in this function selected it. The destroy reads the handle
+      // from the same slot, so it is not evidence of a user.
+      bool outbound = false;
+      for (mlir::Operation* publisher : publishers) {
+        const mlir::Value slot =
+            mlir::cast<mlir::LLVM::StoreOp>(publisher).getAddr();
+        function.walk([&](mlir::LLVM::CallOp call) {
+          if (outbound) return;
+          if (names(call, "nrq_cdmm_arena_destroy") ||
+              names(call, "nrq_cdmm_pool_destroy"))
+            return;
+          for (mlir::Value operand : call.getOperands())
+            if (arena_slot(operand) == slot) outbound = true;
+        });
+      }
+      if (outbound) continue;
       for (mlir::Operation* store : publishers) store->erase();
       for (mlir::LLVM::CallOp destroy : destroys) destroy.erase();
       create.erase();
