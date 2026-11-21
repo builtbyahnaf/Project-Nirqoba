@@ -3684,9 +3684,12 @@ Type TypeChecker::resolve_aggregate_type(const Type& type,
         resolve_aggregate_type(type.element_type(), active));
   if (type.is_array_view())
     return Type::array_view_type(resolve_aggregate_type(type.element_type(), active));
-  // Pointer elements are deliberately left shallow: layout of a pointee is
-  // resolved where the pointee is allocated, and expanding through pointers
-  // would recurse forever on a self-referential struct.
+  // A plain pointer's pointee is an aggregate the program dereferences and whose
+  // fields must have layouts for member access, so it resolves like an owned or
+  // shared pointee. The active-name set is what stops a self-referential struct
+  // from expanding forever: the second visit to the same name stays shallow.
+  if (type.is_pointer())
+    return Type::pointer_type(resolve_aggregate_type(type.element_type(), active));
   if (!type.is_struct() || !type.struct_fields().empty()) return type;
 
   const string& name = type.struct_name();
