@@ -1,0 +1,10 @@
+// An allocation nobody reads is not an allocation.
+//
+// `scratch` never escapes, nothing dereferences it and its payload is plain
+// data, so automated selection classifies it as dead and removes it from the
+// TIR before any strategy can claim it: no general-allocator call, no arena and
+// no release survive into the emitted program.
+int function main() {
+    var scratch = memory.allocate<int>(32);
+    return 0;
+}
