@@ -5441,6 +5441,24 @@ class FunctionTranslator {
             set(op.result, allocate_for_returned_storage(
                                handle, bytes, alignment, alignment_bytes, loc));
             return true;
+          } else if (activation_sites_.count(op.result.id) != 0) {
+            // A promoted activation fills its caller's chunk rather than opening
+            // one of its own; the caller's destroy releases everything this
+            // activation and its callees put there.
+            mlir::Value handle = func_op_.getArgument(
+                static_cast<unsigned>(caller_arena_arg_index_));
+            auto arena_fn = ensure_runtime_fn(
+                module_, builder_, "nrq_cdmm_arena_allocate",
+                llvm_ptr_type(ctx_),
+                {llvm_ptr_type(ctx_), builder_.getI64Type(),
+                 builder_.getI64Type()});
+            auto call = builder_.create<mlir::LLVM::CallOp>(
+                loc, arena_fn, mlir::ValueRange{handle, bytes, alignment});
+            call->setAttr("nirqoba.hybrid_strategy",
+                          builder_.getStringAttr("arena"));
+            mark_fresh_allocation(arena_fn, alignment_bytes);
+            set(op.result, call.getResult());
+            return true;
           } else if (const auto region = region_of_site_.find(op.result.id);
                      region != region_of_site_.end()) {
             // Phase Psi: the lifetime classifier proved this pointer never leaves
