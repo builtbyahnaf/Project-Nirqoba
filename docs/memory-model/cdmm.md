@@ -291,3 +291,29 @@ ever allocated.
   br label %17
 ```
 
+The create is tagged `nirqoba.region_scope = "loop"`; a frame-scoped one is tagged
+`"frame"` and sits in the entry block. The report names the scope, because that is
+the difference between one arena for the frame and one per loop:
+
+```
+cdmm: main.nrqba:10:17 'n' int* -> arena (bounded to the loop, filled by alloc_and_return)
+```
+
+A call outside any loop, or one whose result outlives its loop, keeps the frame's
+arena: releasing at a loop exit would free storage a later read still needs. The
+scope analysis is the same one Psi-3 uses for local allocations, so a call site and
+an allocation in the same loop describe exactly the same span.
+
+### What the optimizer is told
+
+`noalias` follows from freshness: a pointer the allocator just returned cannot
+overlap anything the program could already name. The alignment follows from the
+payload's layout. Both are stated on the allocator's declaration:
+
+```llvm
+declare noalias align 8 ptr @nrq_memory_allocate(i64, i64)
+declare noalias align 8 ptr @nrq_cdmm_arena_allocate(ptr, i64, i64)
+```
+
+A declaration is where LLVM keeps a callee's return attributes, so the facts reach
+every call site and stay in one place as the lowering changes.
