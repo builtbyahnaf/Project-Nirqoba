@@ -40,6 +40,10 @@ class TirBuilder {
     bool active = true;
     tir::Value owner_slot;
     bool clear_owner_slot_after_call = false;
+    // The fields of the owner that own storage of their own, with the release
+    // each one calls. An owner that has any is destroyed field by field, which is
+    // what makes an aggregate a container of owners rather than one opaque value.
+    std::vector<std::pair<int, std::string>> field_releases;
   };
 
   void lower_function(const FunctionDecl& function, const std::string& symbol,
