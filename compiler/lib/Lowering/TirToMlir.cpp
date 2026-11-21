@@ -1866,6 +1866,57 @@ class FunctionTranslator {
     builder_.setInsertionPointToStart(continue_block);
   }
 
+  // Fresh storage a promoted callee returns has two possible homes: the arena the
+  // caller created when it bounds the result, or the general allocator when the
+  // caller passes null because the result leaves its frame. The handle is checked
+  // here at runtime, so one callee body serves both kinds of call site and a
+  // single escaping caller no longer denies the arena to every other caller. Both
+  // branches produce the pointer the function returns, so nothing downstream has
+  // to know which one ran.
+  mlir::Value allocate_for_returned_storage(mlir::Value handle, mlir::Value bytes,
+                                            mlir::Value alignment,
+                                            std::size_t alignment_bytes,
+                                            mlir::Location loc) {
+    auto arena_fn = ensure_runtime_fn(
+        module_, builder_, "nrq_cdmm_arena_allocate", llvm_ptr_type(ctx_),
+        {llvm_ptr_type(ctx_), builder_.getI64Type(), builder_.getI64Type()});
+    auto general_fn = ensure_runtime_fn(
+        module_, builder_, "nrq_memory_allocate", llvm_ptr_type(ctx_),
+        {builder_.getI64Type(), builder_.getI64Type()});
+    mark_fresh_allocation(arena_fn, alignment_bytes);
+    mark_fresh_allocation(general_fn, alignment_bytes);
+
+    const mlir::Type ptr = llvm_ptr_type(ctx_);
+    mlir::Value missing =
+        builder_.create<mlir::LLVM::ZeroOp>(loc, ptr).getResult();
+    mlir::Value absent = builder_.create<mlir::LLVM::ICmpOp>(
+        loc, mlir::LLVM::ICmpPredicate::eq, handle, missing).getResult();
+
+    mlir::Block* arena_block = func_op_.addBlock();
+    mlir::Block* general_block = func_op_.addBlock();
+    mlir::Block* merge_block = func_op_.addBlock();
+    mlir::Value merged = merge_block->addArgument(ptr, loc);
+    builder_.create<mlir::LLVM::CondBrOp>(loc, absent, general_block,
+                                          arena_block);
+
+    builder_.setInsertionPointToStart(arena_block);
+    auto arena_call = builder_.create<mlir::LLVM::CallOp>(
+        loc, arena_fn, mlir::ValueRange{handle, bytes, alignment});
+    builder_.create<mlir::LLVM::BrOp>(loc,
+                                      mlir::ValueRange{arena_call.getResult()},
+                                      merge_block);
+
+    builder_.setInsertionPointToStart(general_block);
+    auto general_call = builder_.create<mlir::LLVM::CallOp>(
+        loc, general_fn, mlir::ValueRange{bytes, alignment});
+    builder_.create<mlir::LLVM::BrOp>(loc,
+                                      mlir::ValueRange{general_call.getResult()},
+                                      merge_block);
+
+    builder_.setInsertionPointToStart(merge_block);
+    return merged;
+  }
+
   // One cold failure block serves every bounds check in the function. The
   // message, call and unreachable are identical for all of them, and giving each
   // check its own block tripled the block count of bounds-checked code, which
