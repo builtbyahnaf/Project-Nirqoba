@@ -1606,7 +1606,8 @@ class FunctionTranslator {
                      std::unordered_set<int> arena_param_sites,
                      std::unordered_set<int> arena_param_aliases,
                      std::unordered_map<int, std::size_t> arena_call_regions,
-                     std::unordered_set<std::string> promoted_callees)
+                     std::unordered_set<std::string> promoted_callees,
+                     std::unordered_set<int> forwarded_call_results)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
         builder_(builder), ctx_(ctx), diag_(diag), fast_math_(fast_math),
         configuration_(configuration),
@@ -1619,6 +1620,7 @@ class FunctionTranslator {
         arena_param_aliases_(std::move(arena_param_aliases)),
         arena_call_regions_(std::move(arena_call_regions)),
         promoted_callees_(std::move(promoted_callees)),
+        forwarded_call_results_(std::move(forwarded_call_results)),
         gc_roots_(analyze_gc_root_plan(tir_fn, collections)),
         uses_gc_mutator_(needs_mutator_region),
         needs_gc_root_frame_(uses_gc_mutator_ && gc_roots_.needs_root_frame),
@@ -7620,7 +7622,7 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
         promoted_callee ? static_cast<int>(param_types.size()) - 1 : -1,
         std::move(arena_param_sites), std::move(arena_param_aliases),
         std::move(selection.arena_call_regions),
-        arena_plan.promoted_callees);
+        arena_plan.promoted_callees, std::move(forwarded_call_results));
     if (!translator.translate()) return nullptr;
 
     builder.setInsertionPointAfter(func_op);
