@@ -1607,7 +1607,9 @@ class FunctionTranslator {
                      std::unordered_set<int> arena_param_aliases,
                      std::unordered_map<int, std::size_t> arena_call_regions,
                      std::unordered_set<std::string> promoted_callees,
-                     std::unordered_set<int> forwarded_call_results)
+                     std::unordered_set<int> forwarded_call_results,
+                     std::unordered_set<int> activation_sites,
+                     bool activation_handle_guaranteed)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
         builder_(builder), ctx_(ctx), diag_(diag), fast_math_(fast_math),
         configuration_(configuration),
@@ -1621,6 +1623,8 @@ class FunctionTranslator {
         arena_call_regions_(std::move(arena_call_regions)),
         promoted_callees_(std::move(promoted_callees)),
         forwarded_call_results_(std::move(forwarded_call_results)),
+        activation_sites_(std::move(activation_sites)),
+        activation_handle_guaranteed_(activation_handle_guaranteed),
         gc_roots_(analyze_gc_root_plan(tir_fn, collections)),
         uses_gc_mutator_(needs_mutator_region),
         needs_gc_root_frame_(uses_gc_mutator_ && gc_roots_.needs_root_frame),
@@ -6815,6 +6819,11 @@ class FunctionTranslator {
   // the chain that fills one chunk: the outermost bounded caller created it, and
   // each activation hands the same handle to the next.
   std::unordered_set<int> forwarded_call_results_;
+  // Sites this activation fills from the handle its caller gave it, and whether
+  // every call site passes one. A guaranteed handle means the body needs no null
+  // arm and no chunk of its own: this activation lives inside its caller's arena.
+  std::unordered_set<int> activation_sites_;
+  bool activation_handle_guaranteed_ = false;
   std::unordered_map<int, std::size_t> region_of_value_;
   // Loop-scoped regions whose create belongs at the header label at this position
   // in the operation stream.
@@ -7620,8 +7629,13 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
                                      entry.second.aliases.end());
         }
     }
+    // A promoted callee with no escaping call site always receives a handle, so
+    // its activation lives inside the caller's arena: it opens no chunk of its
+    // own, and its allocation has no null arm to fall back on.
+    const bool serves_from_caller =
+        promoted_callee && !arena_plan.partial(tir_fn->name());
     HybridSelection selection =
-        select_hybrid_strategies(lowered_fn, promoted_calls);
+        select_hybrid_strategies(lowered_fn, promoted_calls, serves_from_caller);
     // Both region kinds own the storage, so neither may also see a per-binding
     // release: the Drop keeps its record and lowers into the region's own path.
     std::unordered_set<int> suppressed = selection.region_aliases;
@@ -7660,7 +7674,8 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
         promoted_callee ? static_cast<int>(param_types.size()) - 1 : -1,
         std::move(arena_param_sites), std::move(arena_param_aliases),
         std::move(selection.arena_call_regions),
-        arena_plan.promoted_callees, std::move(forwarded_call_results));
+        arena_plan.promoted_callees, std::move(forwarded_call_results),
+        std::move(selection.activation_sites), serves_from_caller);
     if (!translator.translate()) return nullptr;
 
     builder.setInsertionPointAfter(func_op);
