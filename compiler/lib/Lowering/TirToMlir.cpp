@@ -7572,6 +7572,10 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
         }
         argument_attrs.push_back(attrs.getDictionary(&context));
       }
+      // The trailing arena handle is not a source parameter, so it has no facts
+      // to state, but the array still has to cover every argument of the type.
+      if (promoted_callee)
+        argument_attrs.push_back(mlir::DictionaryAttr::get(&context));
       func_op.setArgAttrsAttr(builder.getArrayAttr(argument_attrs));
     }
 
