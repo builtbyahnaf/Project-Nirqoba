@@ -711,8 +711,13 @@ CallSiteArenaPlan analyze_call_site_arenas(const Module& module) {
     for (const Op& op : function->operations())
       if (op.kind == OpKind::Call && op.callee == "memory.use_allocator")
         caller_chooses_allocator = true;
+    // The same loop nesting the allocation classifier uses, so a call site and a
+    // local allocation that sit together in one loop describe the same span.
+    const LoopNesting nesting = LoopNesting::analyze(*function);
 
-    for (const Op& op : function->operations()) {
+    for (std::size_t index = 0; index < function->operations().size();
+         ++index) {
+      const Op& op = function->operations()[index];
       if (op.kind != OpKind::Call || op.external_call) continue;
       if (!op.result.is_valid()) continue;
       if (returns_storage.count(op.callee) == 0) continue;
@@ -740,6 +745,13 @@ CallSiteArenaPlan analyze_call_site_arenas(const Module& module) {
         escaped[caller].emplace_back(site.result, site.callee);
         continue;
       }
+      // The narrowest loop that holds the call and every use of what it returns.
+      // A site outside any loop, or one whose value outlives its loop, keeps the
+      // frame's arena: the region cannot be released before its last read.
+      const LoopScope scope = nesting.scope_of(index, site.aliases);
+      site.loop_scoped = scope.scoped;
+      site.scope_begin = scope.begin;
+      site.scope_end = scope.end;
       state.any_bounded = true;
       collected[caller].push_back(std::move(site));
     }
