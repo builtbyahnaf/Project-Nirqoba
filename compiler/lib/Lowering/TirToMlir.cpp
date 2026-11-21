@@ -1604,6 +1604,7 @@ class FunctionTranslator {
                      std::vector<RegionSelection> regions,
                      int caller_arena_arg_index,
                      std::unordered_set<int> arena_param_sites,
+                     std::unordered_set<int> arena_param_aliases,
                      std::unordered_map<int, std::size_t> arena_call_regions,
                      std::unordered_set<std::string> promoted_callees)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
@@ -1615,6 +1616,7 @@ class FunctionTranslator {
         regions_(std::move(regions)),
         caller_arena_arg_index_(caller_arena_arg_index),
         arena_param_sites_(std::move(arena_param_sites)),
+        arena_param_aliases_(std::move(arena_param_aliases)),
         arena_call_regions_(std::move(arena_call_regions)),
         promoted_callees_(std::move(promoted_callees)),
         gc_roots_(analyze_gc_root_plan(tir_fn, collections)),
@@ -7508,12 +7510,16 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
         sites != arena_plan.call_sites.end())
       promoted_calls = sites->second;
     std::unordered_set<int> arena_param_sites;
+    std::unordered_set<int> arena_param_aliases;
     if (promoted_callee) {
       const tir::LifetimeAnalysis callee_lifetimes =
           tir::LifetimeAnalysis::analyze(lowered_fn);
       for (const auto& entry : callee_lifetimes.sites())
-        if (entry.second.reason == tir::EscapeReason::Returned)
+        if (entry.second.reason == tir::EscapeReason::Returned) {
           arena_param_sites.insert(entry.first);
+          arena_param_aliases.insert(entry.second.aliases.begin(),
+                                     entry.second.aliases.end());
+        }
     }
     HybridSelection selection =
         select_hybrid_strategies(lowered_fn, promoted_calls);
@@ -7548,7 +7554,8 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
         symbol == "main", mutator_regions.count(tir_fn->name()) != 0,
         stack_allocations, std::move(selection.regions),
         promoted_callee ? static_cast<int>(param_types.size()) - 1 : -1,
-        std::move(arena_param_sites), std::move(selection.arena_call_regions),
+        std::move(arena_param_sites), std::move(arena_param_aliases),
+        std::move(selection.arena_call_regions),
         arena_plan.promoted_callees);
     if (!translator.translate()) return nullptr;
 
