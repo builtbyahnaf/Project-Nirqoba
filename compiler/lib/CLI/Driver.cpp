@@ -69,6 +69,8 @@ static void print_command_help(string_view cmd) {
               << "                       mode is 'all', 'missed', or a pass name\n"
               << "                       (e.g. loop-vectorize)\n"
               << "  --fast-math          Allow FP reassociation and FMA contraction\n"
+              << "  --inspect-cdmm       Report every automated memory decision to\n"
+              << "                       stderr: site, strategy and why\n"
               << "  --debug-enabled      Development configuration: link the debug\n"
               << "                       runtime and emit GC instrumentation (tags,\n"
               << "                       events) for dev tooling\n"
@@ -97,6 +99,8 @@ static void print_command_help(string_view cmd) {
               << "                       mode is 'all', 'missed', or a pass name\n"
               << "                       (e.g. loop-vectorize)\n"
               << "  --fast-math          Allow FP reassociation and FMA contraction\n"
+              << "  --inspect-cdmm       Report every automated memory decision to\n"
+              << "                       stderr: site, strategy and why\n"
               << "  --debug-enabled      Development configuration: link the debug\n"
               << "                       runtime and emit GC instrumentation\n"
               << "  --verbose            Enable verbose output\n";
@@ -565,6 +569,10 @@ bool parse_command_line(int argc, const char* const* argv,
       options.fast_math = true;
       continue;
     }
+    if (arg == "--inspect-cdmm") {
+      options.inspect_cdmm = true;
+      continue;
+    }
     if (arg == "--debug-enabled") {
       options.debug_enabled = true;
       continue;
@@ -776,6 +784,7 @@ int run_driver(int argc, const char* const* argv) {
   pipe_opts.remarks_missed_only = options.remarks_missed_only;
   pipe_opts.remark_filter = options.remark_filter;
   pipe_opts.fast_math = options.fast_math;
+  pipe_opts.inspect_cdmm = options.inspect_cdmm;
   // The flag is the only place the two configurations differ at the command
   // line; everything downstream is derived from this one value.
   pipe_opts.runtime_configuration = runtime_configuration(options.debug_enabled);
