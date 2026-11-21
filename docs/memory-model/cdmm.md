@@ -263,16 +263,12 @@ cdmm: main.nrqba:13:13 'n' int* -> arena (bounded to the caller's frame, filled 
 cdmm: main.nrqba:15:13 'm' int* -> gc (escaping call site, null arena handle passed to alloc_and_return)
 ```
 
-### What the optimizer is told
+### A loop reclaims its arena
 
-`noalias` follows from freshness: a pointer the allocator just returned cannot
-overlap anything the program could already name. The alignment follows from the
-payload's layout. Both are stated on the allocator's declaration:
+A call site inside a loop usually keeps its storage for one iteration: the binding
+is declared in the body, read there, and dropped there. The classifier picks the
+narrowest loop that encloses the call and every use of the result, and the caller's
+arena is then created on that loop's entry edge and released on its exit edges, so
+a long-running loop's peak is one iteration's work rather than everything the frame
+ever allocated.
 
-```llvm
-declare noalias align 8 ptr @nrq_memory_allocate(i64, i64)
-declare noalias align 8 ptr @nrq_cdmm_arena_allocate(ptr, i64, i64)
-```
-
-A declaration is where LLVM keeps a callee's return attributes, so the facts reach
-every call site and stay in one place as the lowering changes.
