@@ -1,0 +1,36 @@
+// A recursive struct in one arena.
+//
+// `Node` holds an owned pointer to another `Node`, which used to make it
+// ineligible for bulk storage: an arena frees a chunk, and a payload whose fields
+// own storage sounded like something only a destructor walk could reclaim. It is
+// not: every node is itself arena storage, so the chunk owns the whole list and
+// destroying it once reclaims every node. What an arena cannot hold is a payload
+// with a release of its own - owned text, a container, a shared token, a resource
+// handle - and `Node` has none.
+//
+// The child is stored into the parent's field. That is not an escape: the parent
+// is this activation's returned storage, so both live in the same chunk. The
+// activation therefore passes its own handle to the recursive call and allocates
+// from it, which is why `main` creates one arena, one destroy frees the list, and
+// the general allocator never appears.
+struct Node {
+    int value;
+    owned ptr Node next;
+}
+
+Node* function build_list(int depth) {
+    var node = memory.allocate<Node>(16);
+    if (depth > 0) {
+        var child = build_list(depth - 1);
+        *node = Node { value: depth, next: child };
+    } else {
+        *node = Node { value: depth, next: nullptr };
+    }
+    return node;
+}
+
+int function main() {
+    var root = build_list(5);
+    print((*root).value);
+    return 0;
+}
