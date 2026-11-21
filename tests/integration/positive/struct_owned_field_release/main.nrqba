@@ -1,0 +1,15 @@
+// A struct owns the managed fields it holds. `get_c_string` is a C function, so
+// the buffer it returns was allocated by C: the field's release is the FFI
+// deallocator, and the binding's destruction is one release of that field rather
+// than a release of the aggregate, whose memory is the binding's own frame slot.
+extern string_owned function get_c_string();
+
+struct Holder {
+    string_owned name;
+}
+
+int function main() {
+    var holder = Holder { name: get_c_string() };
+    print(holder.name);
+    return 0;
+}
