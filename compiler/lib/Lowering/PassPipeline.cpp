@@ -10,6 +10,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinDialect.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringMap.h"
@@ -837,6 +838,11 @@ class ElideNestedMutatorRegionsPass
 // site sat in a branch SCCP proved dead - keeps a create/destroy pair that now
 // allocates for nobody. That pair is removed, which is what actually saves the
 // chunk.
+// The attribute translation leaves for this pass: one string per automated
+// memory decision, plus a count. It exists only when the user asked for the
+// report, and the pass removes it as it prints.
+constexpr const char* kCdmmReportAttr = "nirqoba.cdmm_report";
+
 class HybridStrategySelectionPass
     : public mlir::PassWrapper<HybridStrategySelectionPass,
                                mlir::OperationPass<mlir::ModuleOp>> {
@@ -853,6 +859,18 @@ class HybridStrategySelectionPass
 
   void runOnOperation() override {
     mlir::ModuleOp module = getOperation();
+    // Translation recorded what it decided for every allocation site, because
+    // that is where the analysis and the choice are both in hand. Reporting it
+    // here is what keeps the pass the single place the decision becomes visible,
+    // and removing it afterwards keeps a diagnostic out of the emitted IR.
+    if (mlir::Attribute report = module->getAttr(kCdmmReportAttr)) {
+      if (auto lines = mlir::dyn_cast<mlir::ArrayAttr>(report)) {
+        for (mlir::Attribute line : lines)
+          if (auto text = mlir::dyn_cast<mlir::StringAttr>(line))
+            llvm::errs() << text.getValue() << "\n";
+      }
+      module->removeAttr(kCdmmReportAttr);
+    }
     bool failed = false;
     module.walk([&](mlir::LLVM::LLVMFuncOp function) {
       if (function.isExternal()) return;
