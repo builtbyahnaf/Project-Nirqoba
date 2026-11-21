@@ -28,6 +28,8 @@ Nirqoba for text only.
 | Return value | Void or a scalar the declared type maps to; no aggregate is returned from C |
 | Ownership back into Nirqoba | An `extern` returning `string_owned` produces an owner whose destructor is `nrq_ffi_free`, the C allocator's own release. The runtime's text and array releases hand pointers back to the deterministic allocator that issued them and abort on anything else, so they are never used for foreign storage |
 | Foreign value as a source | The result is a normal owner: it can be printed, moved, transferred or returned. `nrq_ffi_free` is installed on the binding and on a rebinding of the same type, so exactly one release happens |
+| Construction in place (`out`) | `extern ... (out dynamic_array<T> arr)` takes the address of a mutable local binding and C fills the header in place. Nothing is transferred, so the binding stays the owner, and its release becomes `nrq_ffi_free` because C allocated the buffer |
+| `out` argument requirements | A mutable `var` binding of the declared type, not borrowed and not moved. `out` is accepted for `dynamic_array<T>` only |
 | C releases a Nirqoba buffer | The buffer is released through the C entry point it was handed to, never through a Nirqoba destructor, so exactly one release happens |
 
 That is the whole contract. Nothing else about foreign code is implemented or
@@ -40,7 +42,7 @@ These are design requirements, not implemented features:
 | Boundary | Required contract |
 |---|---|
 | Borrowed foreign pointer | non-owning, bounded by a declared external lifetime; never freed by Nirqoba |
-| Foreign allocation returned as an aggregate | a layout the C side can express; only text crosses back today |
+| Foreign allocation returned as a value | an out-parameter covers construction in place today; returning a header by value still needs a layout the C side can express |
 | Retained foreign pointer | explicit lifetime contract; unsupported if it cannot be represented |
 | Callback | declared argument ownership, state lifetime, cleanup, roots, reentrancy and thread rules |
 | GC handle | rooted for the required duration; no raw unmanaged pointer outliving the root |

@@ -98,6 +98,11 @@ whose destructor is `nrq_ffi_free` — the C allocator's release — because the
 runtime's text release would reject a pointer it never handed out. The value is
 an ordinary owner afterwards: printable, movable, transferable.
 
+An `out dynamic_array<T>` parameter is the construction case: C cannot return a
+header by value, so it writes into the address of the caller's mutable binding.
+Nothing is transferred, the binding stays the owner, and its release becomes
+`nrq_ffi_free` because the buffer C installed came from the foreign allocator.
+
 Therefore the following contracts are **not supported**: borrowed foreign
 pointers, ownership transferred into Nirqoba, foreign allocations released by a
 supplied allocator, retained foreign pointers, callbacks and reentrant foreign
