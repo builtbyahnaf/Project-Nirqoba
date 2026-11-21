@@ -1,0 +1,9 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm-raw"],
+  "expect_ir_counts": {
+    "@nrq_memory_allocate": 0,
+    "@nrq_cdmm_arena_allocate": 0,
+    "@nrq_cdmm_arena_create": 0
+  }
+}
