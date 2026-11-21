@@ -5731,7 +5731,17 @@ Type TypeChecker::check_call(CallExpr& call) {
     }
     const Type payload_type =
         resolve_aggregate_type(resolve_generic_type(call.generic_argument()));
-    if (requires_deterministic_cleanup(payload_type)) {
+    // A payload made only of scalars and plain pointers holds nothing a release
+    // has to walk, so a bulk zone can own it whole. A `shared` or `borrow` field is
+    // a lifetime the type does not show, so it never qualifies.
+    const bool arena_payload = arena_eligible_payload(payload_type) &&
+                               !contains_qualified_field(payload_type);
+    if (requires_deterministic_cleanup(payload_type) && !arena_payload) {
+      // An arena-eligible payload is one bulk release can reclaim whole: its
+      // fields are plain data or pointers to more of the same, with no destructor
+      // and no collector root. Releasing the block alone is then the whole answer,
+      // because the chunk that owns every node is what frees them together. A
+      // payload with a real destructor still needs a walk this release cannot run.
       diagnostics_.error(
           diag::kTypeMismatch, call.location(),
           (manual_allocation_call ? "manual allocations" : "explicit allocations") +
