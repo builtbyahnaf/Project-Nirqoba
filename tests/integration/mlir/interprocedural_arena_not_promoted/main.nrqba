@@ -1,9 +1,12 @@
-// The bound is only real when every caller agrees.
+// The escaping call site is not promoted; it passes null.
 //
-// `main` bounds the result of `alloc_and_return`, but `pass_through` hands it
-// straight back to its own caller, so the callee's storage escapes there. One
-// escaped caller is enough: the callee keeps the general allocator, keeps its
-// original signature, and no arena is created for it anywhere.
+// `main` bounds the result of `alloc_and_return`, so the callee gains the trailing
+// handle and main's call fills the frame's arena. `pass_through` hands the same
+// storage straight back to its own caller, so nothing there can own it: that site
+// passes null and the callee allocates from the general allocator for it.
+//
+// One arena is still created - for main's call - and the callee's branch is what
+// keeps pass_through's result out of it.
 int* function alloc_and_return() {
     var node = memory.allocate<int>(8);
     node[0] = 42;
