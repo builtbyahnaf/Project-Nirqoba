@@ -121,6 +121,16 @@ struct BoundedCallResult {
   // it is stored into, the values loaded back out of that slot and the addresses
   // derived from any of them. A Drop or an explicit release is recognised by it.
   std::unordered_set<int> aliases;
+  // The narrowest loop that encloses the call and every use of the storage it
+  // returns, when one exists. The arena this activation creates for the call then
+  // lives for one iteration rather than for the whole frame: it is created on the
+  // loop's entry edge and released on its exits, so a long-running loop's peak is
+  // bounded by one iteration's work instead of by everything the frame allocated.
+  // `scope_begin` is the loop header's position in the caller's operation stream
+  // and `scope_end` the back edge that closes it.
+  bool loop_scoped = false;
+  std::size_t scope_begin = 0;
+  std::size_t scope_end = 0;
 };
 
 // Which callees take their caller's arena for the storage they return, and the
