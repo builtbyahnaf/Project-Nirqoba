@@ -55,11 +55,16 @@ void reset_gc_root_analysis_stats();
 // configuration the translator emits the observation hooks only the development
 // runtime provides, and it names that runtime's ABI symbol from the entry point.
 // The default emits no hook at all, so a production build has nothing to strip.
+// `inspect_cdmm` records the automated memory decisions this translation makes -
+// which site got which strategy and why - on the module, for the strategy audit
+// pass to report. Without it nothing is recorded and the emitted program is
+// identical.
 mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     const tir::Module& tir_module,
     mlir::MLIRContext& context,
     DiagnosticEngine& diagnostics,
     bool fast_math = false,
-    RuntimeConfiguration configuration = RuntimeConfiguration::Production);
+    RuntimeConfiguration configuration = RuntimeConfiguration::Production,
+    bool inspect_cdmm = false);
 
 }  // namespace nirq
