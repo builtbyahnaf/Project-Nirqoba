@@ -62,7 +62,10 @@ leave the ownership model.
 | Returning manual storage | manual allocations cannot cross a function return |
 | Manual from a tracked arena/pool | manual allocation cannot use a tracked arena or pool |
 | Payload with owned/shared/borrow fields | manual allocations cannot contain ... |
-| `extern`/foreign declaration | parser rejects the declaration; no FFI surface exists |
+| `extern` declaration with a body | expected ';' after an extern declaration |
+| Handing a borrowed value to C | a borrowed value cannot be handed to C |
+| Handing storage with a live view to C | cannot hand ... to C while an array view of it is live |
+| Reading after a handoff | use of ... after its allocation was deallocated (`NRQ3033`) |
 
 ## 5. GC, shared, arena and native resources
 
@@ -80,18 +83,21 @@ leave the ownership model.
 
 ## 6. FFI boundary
 
-No foreign-function surface is implemented. There is no `extern`, foreign
-pointer type, callback type, ABI annotation or dynamic-library call. The runtime
-C ABI used by generated code is not exposed to source programs.
+One foreign surface exists: `extern <type> function <name>(<params>);` declares a
+C symbol, and the declaration stops at the parameter list. The only implemented
+contract is ownership out of Nirqoba: passing an owned aggregate to a `ptr`
+parameter hands the buffer to C, discharges the caller's destruction obligation
+and marks the binding moved, so a later use is `NRQ3033`. Only the buffer field
+crosses the boundary; length and capacity stay behind.
 
 Therefore the following contracts are **not supported**: borrowed foreign
-pointers, ownership transferred into or out of Nirqoba, foreign allocations
-released by a supplied allocator, retained foreign pointers, callbacks and
-reentrant foreign calls, GC handles across an ABI, shared tokens across an ABI,
-and arena/pool pointers across an ABI. The `extern` parser rejection is covered
-by a regression fixture. See `docs/memory/management.md` for the current
-supported manual contract and `reports/memory-model/phase-8.md` for the full
-completion report.
+pointers, ownership transferred into Nirqoba, foreign allocations released by a
+supplied allocator, retained foreign pointers, callbacks and reentrant foreign
+calls, GC handles across an ABI, shared tokens across an ABI, arena/pool
+pointers across an ABI, and aggregates returned from C. The declaration shape
+and the handoff rule are covered by regression fixtures. See
+`docs/memory-model/interop.md` for the contract table and
+`reports/memory-model/phase-8.md` for the full completion report.
 
 ## 7. Migration checklist
 
