@@ -53,6 +53,9 @@ struct PipelineOptions {
   bool remarks_missed_only = false;
   std::string remark_filter;
   bool fast_math = false;
+  // Report every automated memory decision (site, strategy, rationale) to
+  // stderr while the strategy audit pass runs.
+  bool inspect_cdmm = false;
   // Selects the runtime the program is built for. One value decides what the
   // lowering emits, which ABI symbol the module requires and which library the
   // link names, so the three cannot disagree.
