@@ -461,3 +461,28 @@ TEST(LifetimeAnalysisTest, BoundedCallSiteInsideALoopIsLoopScoped) {
   ASSERT_TRUE(sites->second[0].loop_scoped);
   ASSERT_TRUE(sites->second[0].scope_begin < sites->second[0].scope_end);
 }
+
+// The same call outside a loop keeps the frame's arena: there is no exit edge to
+// release at, so the storage lives as long as the activation does.
+TEST(LifetimeAnalysisTest, BoundedCallSiteOutsideALoopIsFrameScoped) {
+  DiagnosticEngine diag;
+  auto module = build_tir(
+      "int* function alloc_and_return() {\n"
+      "  var node = memory.allocate<int>(8);\n"
+      "  node[0] = 42;\n"
+      "  return node;\n"
+      "}\n"
+      "int function main() {\n"
+      "  var n = alloc_and_return();\n"
+      "  print(n[0]);\n"
+      "  return 0;\n"
+      "}",
+      diag);
+  ASSERT_FALSE(diag.has_errors());
+
+  const tir::CallSiteArenaPlan plan = tir::analyze_call_site_arenas(*module);
+  const auto sites = plan.call_sites.find("main");
+  ASSERT_TRUE(sites != plan.call_sites.end());
+  ASSERT_EQ(sites->second.size(), static_cast<std::size_t>(1));
+  ASSERT_FALSE(sites->second[0].loop_scoped);
+}
