@@ -1223,7 +1223,14 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
       symbol.manual_allocation = call.callee() == "memory.manual_allocate";
       if (const FunctionSignature* signature = find_function(call.callee())) {
         symbol.shared_allocation = symbol.shared_allocation || signature->returns_shared;
-        if (!signature->returns_borrowed &&
+        // A C function hands back a buffer this language did not allocate, so the
+        // matching destructor is the FFI deallocator. The runtime's own releases
+        // hand pointers back to the allocator that issued them and reject
+        // anything else, so routing this value to one of them would abort.
+        if (signature->is_external && signature->return_type.is_owned_string()) {
+          symbol.owns_allocation = true;
+          symbol.cleanup_callee = "nrq_ffi_free";
+        } else if (!signature->returns_borrowed &&
             (signature->return_type.is_pointer() || signature->return_type.is_owned_array() ||
              contains_owned_array(signature->return_type))) {
           symbol.cleanup_callee = !signature->return_resource_domain.empty()
@@ -2511,11 +2518,19 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                           call.callee() == "memory.shared_retain" ||
                           (signature && signature->returns_shared);
       manual_allocation = call.callee() == "memory.manual_allocate";
-      if (owns_allocation)
+      // Rebinding to a fresh FFI value installs the FFI destructor, exactly as
+      // the declaration path does: the buffer came from C, not from this runtime.
+      const bool ffi_owned_text = signature != nullptr && signature->is_external &&
+                                  signature->return_type.is_owned_string();
+      if (ffi_owned_text) {
+        owns_allocation = true;
+        cleanup_callee = "nrq_ffi_free";
+      } else if (owns_allocation) {
         cleanup_callee = signature && !signature->return_resource_domain.empty()
             ? cleanup_for_return_domain(signature->return_resource_domain)
             : cleanup_for_owner_producer(
                   call.callee(), signature && signature->returns_shared);
+      }
       if (owns_allocation && cleanup_callee.empty())
         cleanup_callee = signature
                              ? cleanup_for_type(signature->return_type)

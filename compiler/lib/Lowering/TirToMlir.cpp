@@ -1003,6 +1003,7 @@ static bool callee_is_collection_free(llvm::StringRef callee) {
       "memory.use_allocator", "memory.reset_allocator",
       "memory.destroy_allocator", "memory.set_default_allocator",
       "memory.array_view", "memory.array_view_mut", "array.owned_release",
+      "nrq_ffi_free",
       "memory.dynamic_array", "memory.array_live_count",
       "memory.array_append",
       "aggregate.owned_drop", "file.open", "file.close", "file.write",
@@ -5892,6 +5893,12 @@ class FunctionTranslator {
         } else if (callee == "file.free_text") {
           runtime_sym = "nrq_file_text_release";
           runtime_ret_ty = builder_.getI32Type();
+          runtime_arg_tys = {llvm_ptr_type(ctx_)};
+        } else if (callee == "nrq_ffi_free") {
+          // The only release for storage the language did not allocate: a C
+          // function's buffer goes back to the C allocator that produced it.
+          runtime_sym = "nrq_ffi_free";
+          runtime_ret_ty = mlir::LLVM::LLVMVoidType::get(ctx_);
           runtime_arg_tys = {llvm_ptr_type(ctx_)};
         } else if (callee == "file.text_live_count") {
           runtime_sym = "nrq_file_text_live_count";
