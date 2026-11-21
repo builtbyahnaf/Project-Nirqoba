@@ -55,16 +55,19 @@ so the function no longer claims a destruction it does not perform.
 
 - The lifetime classifier is now interprocedural in one direction: a call whose
 returned storage the caller keeps in its own frame is marked *caller-bounded*.
-- A callee is promoted only when every call to it in the module bounds the result,
-because one signature cannot mean two things. A promoted callee gains a trailing
-arena handle and fills the storage it returns from it; the caller creates the
-arena in its entry block, passes it, releases the chunk on the way out, and no
-longer releases the returned binding.
-- One escaped caller leaves the callee on the general allocator for everyone, with
-its original signature.
-- The CDMM report names both halves: the callee's site reports `arena (bounded by
-every caller, ...)` and the call site reports `arena (bounded to the caller's
-frame, filled by <callee>)`.
+- A callee that returns fresh storage gains a trailing arena handle as soon as one
+call in the module bounds the result; the caller creates the arena in its entry
+block, passes it, releases the chunk on the way out, and no longer releases the
+returned binding.
+- The handle is nullable, so the other callers do not have to agree: an escaping
+site passes null and the callee allocates that storage from the general allocator
+at runtime. One signature serves every call site, and the decision stays local to
+the caller.
+- The CDMM report names every half: the callee's site reports `arena (returned to
+bounded and escaping callers, arena handle checked at runtime)`, a bounded call
+site reports `arena (bounded to the caller's frame, filled by <callee>)`, and an
+escaping one reports `gc (escaping call site, null arena handle passed to
+<callee>)`.
 
 #### Dynamic strategy dispatch
 
