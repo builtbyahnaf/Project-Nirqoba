@@ -6110,20 +6110,29 @@ class FunctionTranslator {
           return true;
         }
 
-        // The callee was promoted: it fills the storage it returns from the arena
-        // this activation created for the call site, so the handle travels as the
-        // trailing argument its signature gained.
-        if (op.result.is_valid()) {
-          const auto promoted = arena_call_regions_.find(op.result.id);
+        // The callee's signature carries a trailing arena handle. A bounded site
+        // names the arena this activation created for it; every other site passes
+        // null, and the callee picks the general allocator from the handle at
+        // runtime. Passing null is what makes one signature serve both kinds of
+        // caller, instead of the callee's storage decision being global.
+        if (promoted_callees_.count(op.callee) != 0) {
+          mlir::Value handle;
+          const auto promoted = op.result.is_valid()
+                                    ? arena_call_regions_.find(op.result.id)
+                                    : arena_call_regions_.end();
           if (promoted != arena_call_regions_.end()) {
-            mlir::Value handle = region_handle(promoted->second, loc);
+            handle = region_handle(promoted->second, loc);
             if (!handle) {
               diag_.error("NRQ4005", op.location,
                           "internal: promoted call site has no arena handle");
               return false;
             }
-            args.push_back(handle);
+          } else {
+            handle = builder_
+                         .create<mlir::LLVM::ZeroOp>(loc, llvm_ptr_type(ctx_))
+                         .getResult();
           }
+          args.push_back(handle);
         }
         if (op.result.is_valid()) {
           mlir::Type ret_ty = tir_type_to_mlir(op.result.type, ctx_, builder_);
