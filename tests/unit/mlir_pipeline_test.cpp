@@ -764,12 +764,17 @@ TEST(MlirPipelineTest, DropLowersToItsReleaseCall) {
   context.loadAllAvailableDialects();
   nirq::DiagnosticEngine diagnostics;
   // The size is a parameter, so the allocation cannot be promoted to a stack
-  // slot, and the payload holds a reference, which is not something an arena may
-  // hold. The general allocator it therefore keeps is released through the Drop,
-  // which is the lowering this fixture exists to check.
+  // slot, and the buffer is handed to a callee, so nothing can prove it stays in
+  // the frame: no arena may claim it. The general allocator it therefore keeps is
+  // released through the Drop, which is the lowering this fixture exists to check.
   auto module = lower_source_to_mlir(
+      "void function keep(ptr ptr int pointer) {\n"
+      "  print(pointer[0][0]);\n"
+      "  return;\n"
+      "}\n"
       "int function take(int size) {\n"
       "  var buffer = memory.allocate<int*>(size);\n"
+      "  keep(buffer);\n"
       "  return size;\n"
       "}\n"
       "int function main() {\n"
