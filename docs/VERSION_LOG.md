@@ -95,10 +95,35 @@ escaping one reports `gc (escaping call site, null arena handle passed to
 - The create carries `nirqoba.region_scope = "loop"` (frame regions say `"frame"`),
   and `--inspect-cdmm` reports `arena (bounded to the loop, filled by <callee>)`.
 
+#### Recursive handle forwarding
+
+- A promoted function that calls itself now forwards its own trailing arena
+handle instead of passing null. The site qualifies only when its result leaves the
+frame solely through the return: a direct self-call whose storage *is* the
+storage the activation hands back fills the chunk the caller already created, so
+the whole chain is one allocation and the outermost bounded caller releases it
+once.
+- The classifier accepts the site as *forwarding* rather than *escaping*, and the
+callee is still marked as having an unbounded call site, so its body keeps the
+null arm for a caller that arrives without a handle. Forwarding entries survive
+the promotion filter only for callees that actually gained the parameter: a
+function with no bounded caller has no handle to forward.
+- A self-call whose storage is handed to a callee, stored where the frame does not
+own it, or left behind on some other path stays escaping and keeps passing null,
+as does recursion through another function. Only direct self-recursion forwards.
+- A promoted callee can reach a release of the storage it returns, on a path that
+returns something else. That release now runs only when the handle was null, where
+the general allocator really did hand the storage out; with a handle the arena
+owns it and frees it in bulk, so releasing it individually would be an invalid
+free.
+- `--inspect-cdmm` reports the site as `arena (forwarded this activation's handle
+to <callee>)`, and the null-handle line is not printed for it.
+
 #### Documentation
 
 - `docs/memory-model/cdmm.md` gains the reporting vocabulary, the elision rule,
-the promotion rule and the attributes the optimizer is given.
+the promotion rule, the recursive forwarding rule and the attributes the optimizer
+is given.
 
 ---
 
