@@ -101,6 +101,23 @@ static mlir::Type llvm_ptr_type(mlir::MLIRContext* ctx) {
   return mlir::LLVM::LLVMPointerType::get(ctx);
 }
 
+// A fresh allocation is the strongest thing alias analysis can be told about a
+// pointer: nothing the caller could already name overlaps it, and its base is a
+// multiple of the layout's alignment. Both are stated on the allocator's
+// declaration, which is where LLVM reads them from: a call inherits its callee's
+// return attributes, so every call site gets `noalias` and the alignment without
+// a second place to keep in sync.
+static void mark_fresh_allocation(mlir::LLVM::LLVMFuncOp function,
+                                  std::size_t alignment_bytes) {
+  if (!function || function.getNumResults() == 0 || alignment_bytes == 0) return;
+  mlir::MLIRContext* ctx = function.getContext();
+  function.setResultAttr(0, mlir::LLVM::LLVMDialect::getNoAliasAttrName(),
+                         mlir::UnitAttr::get(ctx));
+  function.setResultAttr(
+      0, mlir::LLVM::LLVMDialect::getAlignAttrName(),
+      mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 64), alignment_bytes));
+}
+
 // Promote small, fixed-size owned arrays and raw allocations whose descriptors
 // and data pointers are proven not to leave the current function. This intentionally
 // rejects unknown uses instead of guessing at alias behavior.
@@ -5187,9 +5204,11 @@ class FunctionTranslator {
                 ? builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), bytes).getResult()
                 : builder_.create<mlir::LLVM::TruncOp>(loc, builder_.getI64Type(), bytes).getResult();
           }
+          const std::size_t alignment_bytes =
+              type_alignment(op.result.type.element_type());
           mlir::Value alignment = builder_.create<mlir::LLVM::ConstantOp>(
               loc, builder_.getI64Type(),
-              builder_.getI64IntegerAttr(type_alignment(op.result.type.element_type()))).getResult();
+              builder_.getI64IntegerAttr(alignment_bytes)).getResult();
           mlir::Value result;
           if (args.size() == 2) {
             mlir::Value allocator = args[1];
@@ -5209,8 +5228,10 @@ class FunctionTranslator {
           } else {
             auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_allocate",
                 llvm_ptr_type(ctx_), {builder_.getI64Type(), builder_.getI64Type()});
-            result = builder_.create<mlir::LLVM::CallOp>(
-                loc, fn, mlir::ValueRange{bytes, alignment}).getResult();
+            auto call = builder_.create<mlir::LLVM::CallOp>(
+                loc, fn, mlir::ValueRange{bytes, alignment});
+            mark_fresh_allocation(fn, alignment_bytes);
+            result = call.getResult();
           }
           emit_gc_root_registration(result, op.result.type.element_type(), loc);
           set(op.result, result);
@@ -5264,9 +5285,11 @@ class FunctionTranslator {
                 ? builder_.create<mlir::LLVM::ZExtOp>(loc, builder_.getI64Type(), bytes).getResult()
                 : builder_.create<mlir::LLVM::TruncOp>(loc, builder_.getI64Type(), bytes).getResult();
           }
+          const std::size_t alignment_bytes =
+              type_alignment(op.result.type.element_type());
           mlir::Value alignment = builder_.create<mlir::LLVM::ConstantOp>(
               loc, builder_.getI64Type(),
-              builder_.getI64IntegerAttr(type_alignment(op.result.type.element_type()))).getResult();
+              builder_.getI64IntegerAttr(alignment_bytes)).getResult();
           mlir::Value result;
           if (args.size() == 2) {
             mlir::Value allocator = args[1];
@@ -5286,8 +5309,10 @@ class FunctionTranslator {
                                 : "nrq_memory_allocate_from",
                 llvm_ptr_type(ctx_),
                 {llvm_ptr_type(ctx_), builder_.getI64Type(), builder_.getI64Type()});
-            result = builder_.create<mlir::LLVM::CallOp>(
-                loc, fn, mlir::ValueRange{allocator, bytes, alignment}).getResult();
+            auto call = builder_.create<mlir::LLVM::CallOp>(
+                loc, fn, mlir::ValueRange{allocator, bytes, alignment});
+            mark_fresh_allocation(fn, alignment_bytes);
+            result = call.getResult();
           } else if (const auto region = region_of_site_.find(op.result.id);
                      region != region_of_site_.end()) {
             // Phase Psi: the lifetime classifier proved this pointer never leaves
@@ -5314,6 +5339,10 @@ class FunctionTranslator {
                   loc, pool_fn, mlir::ValueRange{handle});
               call->setAttr("nirqoba.hybrid_strategy",
                             builder_.getStringAttr("pool"));
+              // A pool hands out one fixed-size slot at a time and never the same
+              // slot twice while it is live, so the answer is as fresh as a
+              // malloc's and as aligned as the layout it was built from.
+              mark_fresh_allocation(pool_fn, regions_[region->second].alignment);
               set(op.result, call.getResult());
               return true;
             }
@@ -5328,14 +5357,18 @@ class FunctionTranslator {
             // reading the emitted IR.
             call->setAttr("nirqoba.hybrid_strategy",
                           builder_.getStringAttr("arena"));
+            mark_fresh_allocation(arena_fn, alignment_bytes);
             result = call.getResult();
             set(op.result, result);
             return true;
           } else {
             auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_allocate",
                 llvm_ptr_type(ctx_), {builder_.getI64Type(), builder_.getI64Type()});
-            result = builder_.create<mlir::LLVM::CallOp>(
-                loc, fn, mlir::ValueRange{bytes, alignment}).getResult();
+            auto call = builder_.create<mlir::LLVM::CallOp>(
+                loc, fn, mlir::ValueRange{bytes, alignment});
+            mark_fresh_allocation(
+                fn, type_alignment(op.result.type.element_type()));
+            result = call.getResult();
           }
           // Explicitly owned storage is outside the collector's heap, but a
           // managed field inside it still has to be visible to tracing. Register
@@ -6955,12 +6988,157 @@ static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
 GcRootAnalysisStats gc_root_analysis_stats() { return analysis_stats(); }
 void reset_gc_root_analysis_stats() { analysis_stats() = GcRootAnalysisStats{}; }
 
+// Storage nobody reads and nothing destroys is not an allocation at all. The
+// three facts this needs are the ones strategy selection reads - the pointer stays
+// in the activation, nothing dereferences it, and the payload needs no
+// destructor - so the decision costs no new analysis.
+//
+// Eliding here, before any strategy claims the site, is what keeps the effect
+// honest: the general allocator is not called, no arena is created for it and no
+// release follows it, because there is no site left to select.
+void elide_dead_allocations(tir::Function& function) {
+  const tir::LifetimeAnalysis lifetimes = tir::LifetimeAnalysis::analyze(function);
+  if (lifetimes.empty()) return;
+
+  std::unordered_set<int> aliases;
+  for (const tir::Op& op : function.operations()) {
+    if (!tir::is_allocation_site(op)) continue;
+    const tir::AllocationSite* site = lifetimes.site(op.result.id);
+    if (site == nullptr) continue;
+    if (site->lifetime != tir::AllocationLifetime::Bounded) continue;
+    if (site->used_locally || site->manually_released) continue;
+    if (!op.result.type.is_pointer()) continue;
+    if (!tir::is_arena_eligible_payload(op.result.type.element_type())) continue;
+    aliases.insert(site->aliases.begin(), site->aliases.end());
+  }
+  if (aliases.empty()) return;
+
+  // Every value naming the dead storage goes with it: the allocation, the store
+  // that bound it, the load that read it back and the drop that would have
+  // released it. Nothing else can name it, because it never escaped and nothing
+  // dereferenced it.
+  std::vector<tir::Op> kept;
+  kept.reserve(function.operations().size());
+  for (tir::Op& op : function.operations()) {
+    const bool names_dead =
+        (op.result.is_valid() && aliases.count(op.result.id) != 0) ||
+        (op.operand.is_valid() && aliases.count(op.operand.id) != 0) ||
+        (op.lhs.is_valid() && aliases.count(op.lhs.id) != 0);
+    if (names_dead) continue;
+    kept.push_back(std::move(op));
+  }
+  function.operations() = std::move(kept);
+
+  // The obligation described a release that no longer exists; leaving it behind
+  // would make the function claim a destruction it does not perform.
+  std::vector<tir::DestructionObligation>& obligations = function.obligations();
+  obligations.erase(
+      std::remove_if(obligations.begin(), obligations.end(),
+                     [&](const tir::DestructionObligation& obligation) {
+                       return obligation.owner.is_valid() &&
+                              aliases.count(obligation.owner.id) != 0;
+                     }),
+      obligations.end());
+}
+
+// Why a site escaped, in the words the report uses. The analysis reason is a
+// transport detail; the report states the fact a reader can check in the source.
+static std::string_view escape_rationale(tir::EscapeReason reason) {
+  switch (reason) {
+    case tir::EscapeReason::Returned: return "escaping via return";
+    case tir::EscapeReason::PassedToCallee: return "escaping via callee";
+    case tir::EscapeReason::StoredOutsideActivation:
+      return "escaping into foreign storage";
+    case tir::EscapeReason::ContainedInEscapingObject:
+      return "escaping inside an escaping object";
+    case tir::EscapeReason::CyclicGraph:
+      return "escaping through a reference cycle";
+    case tir::EscapeReason::None: return "escaping";
+  }
+  return "escaping";
+}
+
+// One line per allocation site: where it is, what it allocates, the strategy
+// selected for it and the fact that selected it. Everything here is already
+// known to the analyses that just ran, so the report is an observation rather
+// than a second opinion.
+std::vector<std::string> cdmm_report(
+    const tir::Function& function,
+    const std::unordered_map<int, StackAllocationLayout>& stack_allocations,
+    const HybridSelection& selection) {
+  std::vector<std::string> lines;
+  const tir::LifetimeAnalysis lifetimes = tir::LifetimeAnalysis::analyze(function);
+  if (lifetimes.empty()) return lines;
+
+  // A variable is named where its pointer is stored, not where it is allocated.
+  std::unordered_map<int, std::string> slot_names;
+  for (const tir::Op& op : function.operations())
+    if (op.kind == tir::OpKind::Alloca && op.result.is_valid() &&
+        !op.slot_name.empty())
+      slot_names.emplace(op.result.id, op.slot_name);
+  std::unordered_map<int, std::string> binding_names;
+  for (const tir::Op& op : function.operations()) {
+    if (op.kind != tir::OpKind::Store) continue;
+    if (!op.lhs.is_valid() || !op.operand.is_valid()) continue;
+    const auto found = slot_names.find(op.lhs.id);
+    if (found != slot_names.end()) binding_names.emplace(op.operand.id, found->second);
+  }
+
+  std::unordered_map<int, std::size_t> region_of_site;
+  for (std::size_t index = 0; index < selection.regions.size(); ++index)
+    for (int site : selection.regions[index].sites)
+      region_of_site.emplace(site, index);
+
+  for (const tir::Op& op : function.operations()) {
+    if (!tir::is_allocation_site(op)) continue;
+    const tir::AllocationSite* site = lifetimes.site(op.result.id);
+    if (site == nullptr) continue;
+
+    const auto binding = binding_names.find(op.result.id);
+    const std::string name =
+        binding != binding_names.end() ? binding->second : std::string("<temporary>");
+
+    std::string_view strategy;
+    std::string rationale;
+    if (stack_allocations.count(op.result.id) != 0) {
+      strategy = "stack";
+      rationale = "bounded to function, promoted to the stack";
+      if (site->loop_scoped) rationale += ", loop-scoped";
+    } else if (const auto region = region_of_site.find(op.result.id);
+               region != region_of_site.end()) {
+      if (selection.regions[region->second].pooled) {
+        strategy = "pool";
+        rationale = "bounded to function, repeated layout";
+        if (site->identical_sites > 0)
+          rationale += " (" + std::to_string(site->identical_sites) + " sites)";
+        if (site->loop_scoped) rationale += ", loop-scoped";
+      } else {
+        strategy = "arena";
+        rationale = "bounded to function";
+        if (site->loop_scoped) rationale += ", loop-scoped";
+      }
+    } else {
+      strategy = "gc";
+      rationale = std::string(escape_rationale(site->reason));
+      if (site->in_loop) rationale += ", in loop";
+    }
+
+    std::string line = "cdmm: ";
+    line += op.location.is_valid() ? op.location.to_string() : std::string("<unknown>");
+    line += " '" + name + "' " + op.result.type.to_string();
+    line += " -> " + std::string(strategy) + " (" + rationale + ")";
+    lines.push_back(std::move(line));
+  }
+  return lines;
+}
+
 mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     const tir::Module& tir_module,
     mlir::MLIRContext& context,
     DiagnosticEngine& diagnostics,
     bool fast_math,
-    RuntimeConfiguration configuration) {
+    RuntimeConfiguration configuration,
+    bool inspect_cdmm) {
 
   mlir::OpBuilder builder(&context);
   mlir::OwningOpRef<mlir::ModuleOp> module =
@@ -6974,6 +7152,9 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
   // One table for the whole module: literal globals live at module scope, so the
   // names must not restart for every function the lowering visits.
   StringLiteralTable string_literals;
+  // One report for the module: the audit pass prints it in the order the sites
+  // were translated, which is source order within a function.
+  std::vector<std::string> cdmm_lines;
 
   for (const auto& tir_fn : tir_module.functions()) {
     mlir::Type ret_type;
@@ -7108,6 +7289,7 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     // Destructive cleanup is represented once, as a Drop, and expanded here.
     // The copy keeps the verified module unchanged for later diagnostics.
     tir::Function lowered_fn = *tir_fn;
+    elide_dead_allocations(lowered_fn);
     HybridSelection selection = select_hybrid_strategies(lowered_fn);
     // Both region kinds own the storage, so neither may also see a per-binding
     // release: the Drop keeps its record and lowers into the region's own path.
@@ -7124,6 +7306,9 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     // claims leaves the selection here, which is why a function whose allocations
     // all fit its frame emits no region calls at all.
     drop_stack_claimed(selection, stack_allocations);
+    if (inspect_cdmm)
+      for (std::string& line : cdmm_report(lowered_fn, stack_allocations, selection))
+        cdmm_lines.push_back(std::move(line));
     FunctionTranslator translator(
         *module, lowered_fn, borrowed_summary, collections, func_op, builder,
         &context, diagnostics, fast_math, configuration, string_literals,
@@ -7141,6 +7326,16 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     }
   }
 
+  if (inspect_cdmm) {
+    std::vector<mlir::Attribute> report;
+    report.push_back(builder.getStringAttr(
+        "cdmm: " + std::to_string(cdmm_lines.size()) +
+        " allocation site(s) classified"));
+    for (const std::string& line : cdmm_lines)
+      report.push_back(builder.getStringAttr(line));
+    module->getOperation()->setAttr("nirqoba.cdmm_report",
+                                    builder.getArrayAttr(report));
+  }
   return module;
 }
 
