@@ -1,0 +1,17 @@
+// A payload with a destructor stays out of the arena. `Name` holds owned text,
+// whose release is a runtime call an arena destroy cannot run, so the classifier
+// refuses it and the allocation keeps the collector. The report is where that
+// decision is visible, and this program exists to keep it visible.
+struct Name {
+    string_owned text;
+}
+
+Name* function make_name() {
+    var name = memory.allocate<Name>(8);
+    return name;
+}
+
+int function main() {
+    var n = make_name();
+    return 0;
+}
