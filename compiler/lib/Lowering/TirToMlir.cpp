@@ -1521,6 +1521,19 @@ static SlotPromotion analyze_promoted_slots(const tir::Function& function) {
   return promotion;
 }
 
+// One pool per layout. Sites that allocate the same layout share a chunk of
+// fixed slots, so the runtime never has to rediscover a size it already knows.
+struct PoolSelection {
+  std::string layout_key;
+  std::uint64_t slot_bytes = 0;
+  std::size_t alignment = 1;
+  std::vector<int> sites;
+  // Every value naming one of the pooled allocations: the Drop that would
+  // release it becomes a release back to the pool instead of a call to the
+  // allocator.
+  std::unordered_set<int> aliases;
+};
+
 struct PendingGcRoot {
   mlir::Value slot;
   Type type;
@@ -1554,7 +1567,8 @@ class FunctionTranslator {
                      bool needs_mutator_region,
                      std::unordered_map<int, StackAllocationLayout>
                          stack_allocations,
-                     std::unordered_set<int> arena_sites)
+                     std::unordered_set<int> arena_sites,
+                     std::vector<PoolSelection> pools)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
         builder_(builder), ctx_(ctx), diag_(diag), fast_math_(fast_math),
         configuration_(configuration),
@@ -1562,6 +1576,7 @@ class FunctionTranslator {
         emit_abi_reference_(emit_abi_reference),
         stack_allocations_(std::move(stack_allocations)),
         arena_sites_(std::move(arena_sites)),
+        pools_(std::move(pools)),
         gc_roots_(analyze_gc_root_plan(tir_fn, collections)),
         uses_gc_mutator_(needs_mutator_region),
         needs_gc_root_frame_(uses_gc_mutator_ && gc_roots_.needs_root_frame),
@@ -1570,6 +1585,17 @@ class FunctionTranslator {
     for (std::size_t index = 0; index < operations.size(); ++index)
       if (operations[index].kind == tir::OpKind::Label)
         label_positions_.emplace(operations[index].label_id, index);
+    // Pool membership by TIR value: the site needs its handle, and the Drop must
+    // hand the slot back to the same pool it came from.
+    pool_slots_.resize(pools_.size());
+    for (std::size_t index = 0; index < pools_.size(); ++index) {
+      pool_slots_[index].slot_bytes = pools_[index].slot_bytes;
+      pool_slots_[index].alignment = pools_[index].alignment;
+      for (int site : pools_[index].sites)
+        pool_of_site_.emplace(site, index);
+      for (int value : pools_[index].aliases)
+        pool_of_value_.emplace(value, index);
+    }
     // A stack-owned root is observable only at a collection point. Calls that
     // may allocate or collect are points; a loop back edge is one too, because
     // the runtime safepoint there can publish this activation's roots.
@@ -1668,6 +1694,7 @@ class FunctionTranslator {
 
   bool translate() {
     prepare_scratch_arena();
+    prepare_scratch_pools();
     const std::vector<tir::Op>& operations = tir_fn_.operations();
     for (std::size_t index = 0; index < operations.size(); ++index) {
       current_operation_index_ = index;
@@ -1973,6 +2000,54 @@ class FunctionTranslator {
     mlir::Value arena = builder_.create<mlir::LLVM::CallOp>(
         loc, create_fn, mlir::ValueRange{initial, no_cap}).getResult();
     builder_.create<mlir::LLVM::StoreOp>(loc, arena, slot).setAlignment(8);
+  }
+
+  // Bulk pools live in the same frame as the arena: created at entry, handed a
+  // slot at each pooled site, and destroyed on the way out after every slot has
+  // had its chance to go back.
+  static constexpr int64_t kPoolSlotsPerChunk = 8;
+
+  void prepare_scratch_pools() {
+    if (pools_.empty() || entry_block_ == nullptr) return;
+    const mlir::Location loc = func_op_.getLoc();
+    mlir::Type pointer = llvm_ptr_type(ctx_);
+    auto constant = [&](mlir::Type type, int64_t value) {
+      return builder_.create<mlir::LLVM::ConstantOp>(
+          loc, type, builder_.getIntegerAttr(type, value)).getResult();
+    };
+    for (std::size_t index = 0; index < pools_.size(); ++index) {
+      mlir::Value slot = alloca_at_entry(pointer, loc);
+      if (!slot) return;
+      pool_slots_[index].handle_slot = slot;
+      mlir::OpBuilder::InsertionGuard guard(builder_);
+      builder_.setInsertionPointAfter(slot.getDefiningOp());
+      auto create_fn = ensure_runtime_fn(
+          module_, builder_, "nrq_cdmm_pool_create", pointer,
+          {builder_.getI64Type(), builder_.getI64Type(), builder_.getI64Type(),
+           builder_.getI32Type(), pointer, pointer});
+      mlir::Value null = builder_.create<mlir::LLVM::ZeroOp>(loc, pointer).getResult();
+      mlir::Value handle = builder_.create<mlir::LLVM::CallOp>(
+          loc, create_fn,
+          mlir::ValueRange{
+              constant(builder_.getI64Type(),
+                       static_cast<int64_t>(pools_[index].slot_bytes)),
+              constant(builder_.getI64Type(),
+                       static_cast<int64_t>(pools_[index].alignment)),
+              constant(builder_.getI64Type(), kPoolSlotsPerChunk),
+              // No generation words: a pooled slot never outlives the pool, so a
+              // stale pointer cannot be validated by a generation either.
+              constant(builder_.getI32Type(), 0), null, null})
+                             .getResult();
+      builder_.create<mlir::LLVM::StoreOp>(loc, handle, slot).setAlignment(8);
+    }
+  }
+
+  mlir::Value scratch_pool(std::size_t index, mlir::Location loc) {
+    if (index >= pool_slots_.size() || !pool_slots_[index].handle_slot) return {};
+    auto load = builder_.create<mlir::LLVM::LoadOp>(
+        loc, llvm_ptr_type(ctx_), pool_slots_[index].handle_slot);
+    load.setAlignment(8);
+    return load.getResult();
   }
 
   // The frame's arena handle, or an empty value when this function was not
@@ -4990,6 +5065,28 @@ class FunctionTranslator {
                 {llvm_ptr_type(ctx_), builder_.getI64Type(), builder_.getI64Type()});
             result = builder_.create<mlir::LLVM::CallOp>(
                 loc, fn, mlir::ValueRange{allocator, bytes, alignment}).getResult();
+          } else if (const auto pool = pool_of_site_.find(op.result.id);
+                     pool != pool_of_site_.end()) {
+            // Phase Psi-2: this is repeated work whose storage dies with the
+            // frame, so the slot comes from a pool the frame owns. The byte count
+            // this site allocates with is the pool's slot size - the group was
+            // built from identical layouts - and the Drop below hands the slot
+            // back, which is what keeps a loop to one slot per iteration.
+            mlir::Value handle = scratch_pool(pool->second, loc);
+            if (!handle) {
+              diag_.error("NRQ4005", op.location,
+                          "internal: pooled allocation has no pool handle");
+              return false;
+            }
+            auto pool_fn = ensure_runtime_fn(
+                module_, builder_, "nrq_cdmm_pool_allocate",
+                llvm_ptr_type(ctx_), {llvm_ptr_type(ctx_)});
+            auto call = builder_.create<mlir::LLVM::CallOp>(
+                loc, pool_fn, mlir::ValueRange{handle});
+            call->setAttr("nirqoba.hybrid_strategy",
+                          builder_.getStringAttr("pool"));
+            set(op.result, call.getResult());
+            return true;
           } else if (arena_sites_.count(op.result.id) != 0) {
             // Phase Psi: the lifetime classifier proved this pointer never leaves
             // the activation, so its storage comes from the frame's scratch arena
@@ -5811,6 +5908,15 @@ class FunctionTranslator {
           builder_.create<mlir::LLVM::CallOp>(loc, destroy_fn,
                                               mlir::ValueRange{arena});
         }
+        for (std::size_t index = 0; index < pool_slots_.size(); ++index) {
+          mlir::Value pool = scratch_pool(index, loc);
+          if (!pool) continue;
+          auto destroy_fn = ensure_runtime_fn(
+              module_, builder_, "nrq_cdmm_pool_destroy",
+              builder_.getI32Type(), {llvm_ptr_type(ctx_)});
+          builder_.create<mlir::LLVM::CallOp>(loc, destroy_fn,
+                                              mlir::ValueRange{pool});
+        }
         if (gc_root_frame_marker_) {
           auto end_frame = ensure_runtime_fn(
               module_, builder_, "nrq_gc_root_frame_end",
@@ -5860,10 +5966,26 @@ class FunctionTranslator {
 
       case tir::OpKind::Borrow:
       case tir::OpKind::EndBorrow:
-      case tir::OpKind::Drop:
-        // Ownership markers have no runtime effect. Their information is
-        // preserved as attributes on surrounding values and on the function.
+      case tir::OpKind::Drop: {
+        // A pooled allocation goes back to its pool where its owner dies, so the
+        // next iteration's site reuses that slot instead of taking another one
+        // out of the chunk. Every other Drop is a pure ownership marker: its
+        // information lives in the attributes around it.
+        const auto pool = pool_of_value_.find(op.operand.id);
+        if (pool != pool_of_value_.end()) {
+          mlir::Value handle = scratch_pool(pool->second, loc);
+          mlir::Value slot = get(op.operand);
+          if (handle && slot) {
+            auto release_fn = ensure_runtime_fn(
+                module_, builder_, "nrq_cdmm_pool_release",
+                builder_.getI32Type(),
+                {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)});
+            builder_.create<mlir::LLVM::CallOp>(
+                loc, release_fn, mlir::ValueRange{handle, slot});
+          }
+        }
         return true;
+      }
 
       case tir::OpKind::Unreachable: {
         builder_.create<mlir::LLVM::UnreachableOp>(loc);
@@ -6260,6 +6382,17 @@ class FunctionTranslator {
   std::unordered_set<int> arena_sites_;
   // The handle slot, created at entry when the body has an arena site.
   mlir::Value scratch_arena_slot_;
+  // Bulk pooling: one pool per layout group, its handle slot, and the maps from
+  // TIR values to the pool that owns them.
+  struct PoolSlotState {
+    mlir::Value handle_slot;
+    std::size_t slot_bytes = 0;
+    std::size_t alignment = 1;
+  };
+  std::vector<PoolSelection> pools_;
+  std::vector<PoolSlotState> pool_slots_;
+  std::unordered_map<int, std::size_t> pool_of_site_;
+  std::unordered_map<int, std::size_t> pool_of_value_;
   std::unordered_map<int, uint64_t> pointer_alignment_;
   GcRootPlan gc_roots_;
   bool uses_gc_mutator_ = false;
@@ -6323,12 +6456,40 @@ struct HybridSelection {
   // Every value naming an arena-selected allocation. The Drop that would release
   // it must not expand into a call: the arena releases the whole chunk.
   std::unordered_set<int> arena_aliases;
+  std::vector<PoolSelection> pools;
+  // Drops that belong to a pool. They keep the ownership record and lower into a
+  // release against the pool that handed the slot out.
+  std::unordered_set<int> pool_aliases;
 };
 
 // Candidates are chosen before the Drop expansion below, because that is the
 // point where a release can still be suppressed. Whether the stack analysis
 // claims one is decided afterwards, and lowering keeps the stack first: a
 // candidate the stack promotes never reaches the arena branch.
+// A site the stack promotes keeps the stack: it costs no bookkeeping at all. The
+// whole pool group goes when any of its sites is claimed there, because one group
+// is one pool and a pool of some sites would not match the layout the group was
+// built from; the remaining sites fall back to the arena on their own.
+void drop_stack_claimed(
+    HybridSelection& selection,
+    const std::unordered_map<int, StackAllocationLayout>& stack_allocations) {
+  for (auto it = selection.arena_sites.begin();
+       it != selection.arena_sites.end();) {
+    if (stack_allocations.count(*it) != 0)
+      it = selection.arena_sites.erase(it);
+    else
+      ++it;
+  }
+  std::vector<PoolSelection> kept;
+  for (PoolSelection& pool : selection.pools) {
+    bool claimed = false;
+    for (int site : pool.sites)
+      claimed |= stack_allocations.count(site) != 0;
+    if (!claimed) kept.push_back(std::move(pool));
+  }
+  selection.pools = std::move(kept);
+}
+
 HybridSelection select_hybrid_strategies(const tir::Function& function) {
   HybridSelection selection;
   const tir::LifetimeAnalysis lifetimes =
@@ -6339,6 +6500,7 @@ HybridSelection select_hybrid_strategies(const tir::Function& function) {
     if (op.kind == tir::OpKind::Call && op.callee == "memory.use_allocator")
       return selection;
 
+  std::unordered_map<std::string, std::size_t> pool_index;
   for (const tir::Op& op : function.operations()) {
     if (!tir::is_allocation_site(op)) continue;
     // Two arguments name an allocator: that hint is the programmer's decision.
@@ -6353,6 +6515,33 @@ HybridSelection select_hybrid_strategies(const tir::Function& function) {
     if (!op.result.type.is_pointer()) continue;
     if (!tir::is_arena_eligible_payload(op.result.type.element_type()))
       continue;
+
+    // Repeated storage: a pool recycles one slot per iteration instead of
+    // growing a bump region for the whole frame. It also gives sites that cannot
+    // share one arena page a shared chunk.
+    if (site->pool_eligible) {
+      const auto found = pool_index.find(site->layout_key);
+      std::size_t index = 0;
+      if (found == pool_index.end()) {
+        index = selection.pools.size();
+        PoolSelection pool;
+        pool.layout_key = site->layout_key;
+        pool.slot_bytes = site->payload_bytes;
+        const std::size_t alignment =
+            type_alignment(op.result.type.element_type());
+        pool.alignment = alignment == 0 ? 1 : alignment;
+        selection.pools.push_back(std::move(pool));
+        pool_index.emplace(site->layout_key, index);
+      } else {
+        index = found->second;
+      }
+      selection.pools[index].sites.push_back(op.result.id);
+      selection.pools[index].aliases.insert(site->aliases.begin(),
+                                           site->aliases.end());
+      selection.pool_aliases.insert(site->aliases.begin(), site->aliases.end());
+      continue;
+    }
+
     selection.arena_sites.insert(op.result.id);
     selection.arena_aliases.insert(site->aliases.begin(), site->aliases.end());
   }
@@ -6688,19 +6877,27 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     // Destructive cleanup is represented once, as a Drop, and expanded here.
     // The copy keeps the verified module unchanged for later diagnostics.
     tir::Function lowered_fn = *tir_fn;
-    const HybridSelection selection = select_hybrid_strategies(lowered_fn);
-    lowered_fn.expand_drop_operations_to_calls(selection.arena_aliases);
+    HybridSelection selection = select_hybrid_strategies(lowered_fn);
+    // Both regions own the storage, so neither may also see a per-binding
+    // release: the Drop keeps its record and lowers into the region's own path.
+    std::unordered_set<int> suppressed = selection.arena_aliases;
+    suppressed.insert(selection.pool_aliases.begin(), selection.pool_aliases.end());
+    lowered_fn.expand_drop_operations_to_calls(suppressed);
     lowered_fn.remove_dead_slot_clears_before_return();
     // The stack analysis runs on the expanded copy, exactly as it did before
     // automated selection existed: a release is a call there, and its answer must
     // not change because a site was also classified.
     const auto stack_allocations =
         analyze_stack_allocations(lowered_fn, borrowed_summary);
+    // The stack is cheaper than either region, so its answer wins. A site it
+    // claims leaves the selection here, which is why a function whose allocations
+    // all fit its frame emits no region calls at all.
+    drop_stack_claimed(selection, stack_allocations);
     FunctionTranslator translator(
         *module, lowered_fn, borrowed_summary, collections, func_op, builder,
         &context, diagnostics, fast_math, configuration, string_literals,
         symbol == "main", mutator_regions.count(tir_fn->name()) != 0,
-        stack_allocations, selection.arena_sites);
+        stack_allocations, selection.arena_sites, std::move(selection.pools));
     if (!translator.translate()) return nullptr;
 
     builder.setInsertionPointAfter(func_op);
