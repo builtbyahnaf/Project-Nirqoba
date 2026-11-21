@@ -51,10 +51,25 @@ it: no allocator call, no arena, no release.
 local use, plain payload), and it removes the obligation along with the storage,
 so the function no longer claims a destruction it does not perform.
 
+#### Call-site arena promotion
+
+- The lifetime classifier is now interprocedural in one direction: a call whose
+returned storage the caller keeps in its own frame is marked *caller-bounded*.
+- A callee is promoted only when every call to it in the module bounds the result,
+because one signature cannot mean two things. A promoted callee gains a trailing
+arena handle and fills the storage it returns from it; the caller creates the
+arena in its entry block, passes it, releases the chunk on the way out, and no
+longer releases the returned binding.
+- One escaped caller leaves the callee on the general allocator for everyone, with
+its original signature.
+- The CDMM report names both halves: the callee's site reports `arena (bounded by
+every caller, ...)` and the call site reports `arena (bounded to the caller's
+frame, filled by <callee>)`.
+
 #### Documentation
 
-- `docs/memory-model/cdmm.md` gains the reporting vocabulary, the elision rule
-and the attributes the optimizer is given.
+- `docs/memory-model/cdmm.md` gains the reporting vocabulary, the elision rule,
+the promotion rule and the attributes the optimizer is given.
 
 ---
 
