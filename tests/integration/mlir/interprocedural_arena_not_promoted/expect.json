@@ -2,8 +2,10 @@
   "mode": "build",
   "args": ["--emit=llvm-raw"],
   "expect_ir_counts": {
-    "@nrq_cdmm_arena_allocate": 0,
-    "@nrq_cdmm_arena_create": 0,
-    "call ptr @nrq_memory_allocate": 1
+    "call ptr @nrq_cdmm_arena_create": 1,
+    "call ptr @nrq_cdmm_arena_allocate": 1,
+    "call ptr @nrq_memory_allocate": 1,
+    "call ptr @alloc_and_return(ptr null)": 1,
+    "call ptr @alloc_and_return(ptr %": 1
   }
 }
