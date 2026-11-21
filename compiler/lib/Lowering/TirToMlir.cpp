@@ -6889,6 +6889,9 @@ struct HybridSelection {
   // Drops that belong to a pool. They keep the ownership record and lower into a
   // release against the pool that handed the slot out.
   std::unordered_set<int> pool_aliases;
+  // Sites filled from this activation's caller arena instead of a chunk of its
+  // own. The allocation lowering passes the incoming handle to the arena.
+  std::unordered_set<int> activation_sites;
 };
 
 // Candidates are chosen before the Drop expansion below, because that is the
@@ -6923,9 +6926,15 @@ void drop_stack_claimed(
   selection.regions = std::move(kept);
 }
 
+// `serve_from_caller` is set for a promoted activation whose every caller passes a
+// real handle: its arena is the caller's, so it creates none of its own. Its
+// arena-eligible sites are recorded in `activation_sites` for the allocation
+// lowering, and their aliases still join `region_aliases` so the release the
+// binding would emit is suppressed - the arena owns that storage either way.
 HybridSelection select_hybrid_strategies(
     const tir::Function& function,
-    const std::vector<tir::BoundedCallResult>& promoted_calls) {
+    const std::vector<tir::BoundedCallResult>& promoted_calls,
+    bool serve_from_caller) {
   HybridSelection selection;
 
   for (const tir::Op& op : function.operations())
@@ -6938,6 +6947,11 @@ HybridSelection select_hybrid_strategies(
   // region member so the region survives its own audit, and its aliases suppress
   // the release the binding would otherwise emit - the arena owns the storage now.
   for (const tir::BoundedCallResult& site : promoted_calls) {
+    if (serve_from_caller) {
+      selection.activation_sites.insert(site.result);
+      selection.region_aliases.insert(site.aliases.begin(), site.aliases.end());
+      continue;
+    }
     RegionSelection region;
     region.pooled = false;
     // The classifier already chose the narrowest scope that holds the call and
@@ -7005,6 +7019,13 @@ HybridSelection select_hybrid_strategies(
     if (!op.result.type.is_pointer()) continue;
     if (!tir::is_arena_eligible_payload(op.result.type.element_type()))
       continue;
+    if (serve_from_caller) {
+      // Filled from the handle this activation was given, not from a chunk of its
+      // own: the caller created the chunk and releases it.
+      selection.activation_sites.insert(op.result.id);
+      selection.region_aliases.insert(site->aliases.begin(), site->aliases.end());
+      continue;
+    }
 
     const std::size_t index = region_for(*site, op);
     selection.regions[index].sites.push_back(op.result.id);
