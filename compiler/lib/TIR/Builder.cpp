@@ -399,9 +399,96 @@ void TirBuilder::register_obligation(const tir::Value& slot,
                           location);
 }
 
+// The operation that produced a value. Values are numbered in emission order, so
+// the defining operation is the last one that names this result.
+static const tir::Op* defining_operation(const tir::Function& function,
+                                         const tir::Value& value) {
+  for (auto op = function.operations().rbegin();
+       op != function.operations().rend(); ++op)
+    if (op->result.is_valid() && op->result.id == value.id) return &*op;
+  return nullptr;
+}
+
+// The release one managed field needs, or false when the field owns nothing.
+// Where the value came from decides the release: storage a C function handed over
+// goes back to the foreign allocator, because the runtime's own releases hand a
+// pointer to the deterministic allocator that issued it and abort on anything
+// else.
+static bool managed_field_release(const Type& type,
+                                  const tir::Function& function,
+                                  const tir::Value& value,
+                                  std::string& release) {
+  const tir::Op* origin = defining_operation(function, value);
+  const bool foreign = origin != nullptr && origin->kind == tir::OpKind::Call &&
+                       origin->external_call;
+  if (type.is_owned_string()) {
+    release = foreign ? "nrq_ffi_free" : "file.free_text";
+    return true;
+  }
+  if (type.is_dynamic_array()) {
+    release = foreign ? "nrq_ffi_free" : "nrq_array_free";
+    return true;
+  }
+  // A fixed array owns its buffer the same way, but its release takes the whole
+  // aggregate: only field zero is a pointer, and the runtime releases that.
+  if (type.is_owned_array()) {
+    release = "array.owned_release";
+    return true;
+  }
+  return false;
+}
+
 void TirBuilder::emit_destruction(const DeferredCall& deferred,
                                   tir::Function& function) {
   if (!deferred.owner_slot.is_valid()) return;
+  // An aggregate owns its fields, so its destruction is one release per managed
+  // field and never a release of the aggregate itself: the memory belongs to the
+  // binding that holds it, and the fields own what is inside.
+  if (!deferred.field_releases.empty()) {
+    const std::vector<std::pair<std::string, Type>>& fields =
+        deferred.owner_slot.type.struct_fields();
+    for (const std::pair<int, std::string>& field : deferred.field_releases) {
+      if (field.first < 0 ||
+          static_cast<std::size_t>(field.first) >= fields.size())
+        continue;
+      const Type& field_type = fields[static_cast<std::size_t>(field.first)].second;
+      tir::Value field_ptr = function.allocate_value(field_type);
+      tir::Op gep;
+      gep.kind = tir::OpKind::GetElementPtr;
+      gep.location = deferred.location;
+      gep.lhs = deferred.owner_slot;
+      gep.field_index = field.first;
+      gep.result = field_ptr;
+      function.add_operation(std::move(gep));
+      tir::Value loaded = function.allocate_value(field_type);
+      tir::Op load;
+      load.kind = tir::OpKind::Load;
+      load.location = deferred.location;
+      load.lhs = field_ptr;
+      load.result = loaded;
+      function.add_operation(std::move(load));
+      tir::Op release;
+      release.kind = tir::OpKind::Call;
+      release.location = deferred.location;
+      release.callee = field.second;
+      release.arguments.push_back(loaded);
+      function.add_operation(std::move(release));
+    }
+    tir::Value null_value = function.allocate_value(deferred.owner_slot.type);
+    tir::Op null_op;
+    null_op.kind = tir::OpKind::ConstantNull;
+    null_op.location = deferred.location;
+    null_op.result = null_value;
+    function.add_operation(std::move(null_op));
+    tir::Op clear;
+    clear.kind = tir::OpKind::Store;
+    clear.location = deferred.location;
+    clear.lhs = deferred.owner_slot;
+    clear.operand = null_value;
+    clear.result = deferred.owner_slot;
+    function.add_operation(std::move(clear));
+    return;
+  }
   tir::Value owner = function.allocate_value(
       deferred.owner_slot.type, ownership_for_release(deferred.callee));
   tir::Op load;
