@@ -251,3 +251,25 @@ The caller's arena is created in its entry block and destroyed on its return
 edges, and a bounded binding no longer releases the returned pointer: the arena
 owns that storage, so the release would be a second, wrong free. An escaping site
 keeps its own release, because the general allocator handed that storage out.
+
+The report names all three decisions:
+
+```
+cdmm: main.nrqba:2:16 'node' int* -> arena (returned to bounded and escaping callers, arena handle checked at runtime)
+cdmm: main.nrqba:13:13 'n' int* -> arena (bounded to the caller's frame, filled by alloc_and_return)
+cdmm: main.nrqba:15:13 'm' int* -> gc (escaping call site, null arena handle passed to alloc_and_return)
+```
+
+### What the optimizer is told
+
+`noalias` follows from freshness: a pointer the allocator just returned cannot
+overlap anything the program could already name. The alignment follows from the
+payload's layout. Both are stated on the allocator's declaration:
+
+```llvm
+declare noalias align 8 ptr @nrq_memory_allocate(i64, i64)
+declare noalias align 8 ptr @nrq_cdmm_arena_allocate(ptr, i64, i64)
+```
+
+A declaration is where LLVM keeps a callee's return attributes, so the facts reach
+every call site and stay in one place as the lowering changes.
