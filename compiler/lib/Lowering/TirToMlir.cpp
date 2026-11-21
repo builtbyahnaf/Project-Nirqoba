@@ -6738,6 +6738,10 @@ class FunctionTranslator {
   // Allocation sites whose storage leaves through the return, so they are the
   // ones a caller's arena can serve.
   std::unordered_set<int> arena_param_sites_;
+  // Every value that names the storage those sites fill. A release of one of them
+  // is only valid when the caller passed null: a real handle means the arena owns
+  // the storage and frees it wholesale.
+  std::unordered_set<int> arena_param_aliases_;
   // Call sites served from this activation's arena, and the region publishing
   // the handle they receive.
   std::unordered_map<int, std::size_t> arena_call_regions_;
