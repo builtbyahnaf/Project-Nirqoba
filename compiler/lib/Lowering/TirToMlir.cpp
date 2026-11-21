@@ -4603,6 +4603,28 @@ class FunctionTranslator {
           abi_args.reserve(args.size());
           for (size_t index = 0; index < args.size(); ++index) {
             const bool described = index < op.external_parameter_types.size();
+            if (described && op.external_parameter_types[index].is_dynamic_array()) {
+              // The declaration asked for the container itself, so the whole
+              // header crosses the boundary: the buffer, then the length and the
+              // capacity as separate scalars. C gets the bounds it needs to
+              // respect, and no struct layout has to be agreed on.
+              if (!mlir::isa<mlir::LLVM::LLVMStructType>(args[index].getType())) {
+                diag_.error("NRQ4005", op.location,
+                            "internal: a destructured extern argument is not a "
+                            "container header value");
+                return false;
+              }
+              for (const int64_t field : {int64_t{0}, int64_t{1}, int64_t{2}}) {
+                mlir::Value part = builder_
+                                       .create<mlir::LLVM::ExtractValueOp>(
+                                           loc, args[index],
+                                           builder_.getDenseI64ArrayAttr({field}))
+                                       .getResult();
+                abi_args.push_back(part);
+                abi_parameter_types.push_back(part.getType());
+              }
+              continue;
+            }
             mlir::Type target = described
                 ? tir_type_to_mlir(op.external_parameter_types[index], ctx_, builder_)
                 : mlir::Type{};

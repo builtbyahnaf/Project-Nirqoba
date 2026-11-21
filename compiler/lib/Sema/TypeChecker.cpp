@@ -4336,14 +4336,25 @@ Type TypeChecker::check_external_call(CallExpr& call,
     const Type& parameter_type = signature.parameter_types[i];
     if (!argument_type.is_valid()) continue;
 
-    // The handoff. Only a pointer parameter can take the buffer, and only an
-    // aggregate owns one, so any other pairing falls through to the plain type
-    // check below.
-    const bool receives_buffer = parameter_type.is_pointer() &&
-                                 (argument_type.is_dynamic_array() ||
-                                  argument_type.is_owned_array() ||
-                                  contains_owned_array(argument_type));
-    if (receives_buffer) {
+    // The handoff has two shapes, and the declaration chooses which one the ABI
+    // uses. A pointer parameter takes the buffer alone. A `dynamic_array<T>`
+    // parameter takes the whole header, which the ABI flattens into three
+    // scalars (pointer, length, capacity) so the C side keeps the bounds it is
+    // given. Either shape removes the storage from Nirqoba, so the transfer below
+    // is identical for both.
+    const bool hands_aggregate = argument_type.is_dynamic_array() ||
+                                 argument_type.is_owned_array() ||
+                                 contains_owned_array(argument_type);
+    const bool destructures = parameter_type.is_dynamic_array();
+    const bool receives_buffer = parameter_type.is_pointer() && hands_aggregate;
+    if (destructures && argument_type != parameter_type) {
+      diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                         "extern parameter " + to_string(i + 1) + " takes '" +
+                             parameter_type.to_string() + "', which crosses the "
+                             "ABI as its pointer, length and capacity; the "
+                             "argument must have that type, not '" +
+                             argument_type.to_string() + "'");
+    } else if (destructures || receives_buffer) {
       const Symbol* source = argument.kind() == Expr::Kind::Name
                                  ? find_root_symbol(argument, symbols_)
                                  : nullptr;
@@ -4372,6 +4383,18 @@ Type TypeChecker::check_external_call(CallExpr& call,
         diagnostics_.error(diag::kTypeMismatch, argument.location(),
                            "handing an aggregate to C requires a live tracked owner");
       }
+      continue;
+    }
+
+    // An aggregate the declaration neither destructures nor takes as a pointer
+    // would be handed to C as a struct whose layout it cannot know, so that
+    // pairing has no ABI.
+    if (hands_aggregate) {
+      diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                         "an extern parameter cannot take '" +
+                             argument_type.to_string() + "' by value: declare it "
+                             "as the same type to pass its parts, or as a pointer "
+                             "to pass its buffer");
       continue;
     }
 
