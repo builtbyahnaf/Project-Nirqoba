@@ -740,6 +740,10 @@ CallSiteArenaPlan analyze_call_site_arenas(const Module& module) {
   // Sites that stay off the arena, with the callee they call: that callee needs
   // the fallback there, and the report names the decision at the call site.
   std::unordered_map<std::string, std::vector<std::pair<int, std::string>>> escaped;
+  // Direct self-calls whose storage is this function's own returned storage. The
+  // handle that gets forwarded is this activation's, so the site only counts once
+  // promotion gives that activation a handle.
+  std::unordered_map<std::string, std::unordered_set<int>> forwarded;
 
   for (const auto& function : module.functions()) {
     if (function == nullptr) continue;
