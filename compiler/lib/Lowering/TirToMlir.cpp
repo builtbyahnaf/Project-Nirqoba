@@ -6869,7 +6869,13 @@ HybridSelection select_hybrid_strategies(
   for (const tir::BoundedCallResult& site : promoted_calls) {
     RegionSelection region;
     region.pooled = false;
-    region.scope.loop = false;
+    // The classifier already chose the narrowest scope that holds the call and
+    // every use of its storage. A loop-scoped site gets its arena created on the
+    // loop's entry edge and released on its exits, so the peak stays one
+    // iteration's worth; anything else lives until the frame returns.
+    region.scope.loop = site.loop_scoped;
+    region.scope.begin = site.scope_begin;
+    region.scope.end = site.scope_end;
     region.alignment = 8;
     region.sites.push_back(site.result);
     region.aliases = site.aliases;
