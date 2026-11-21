@@ -1,0 +1,16 @@
+// Automated strategy selection, reported.
+//
+// The buffer never leaves `main` and its payload is plain data, so it belongs in
+// the activation's scratch arena. The byte count is computed rather than
+// constant, which is what keeps the stack promotion from claiming it: the report
+// has to name the strategy that actually ran.
+int function main() {
+    var count = 4;
+    var value = memory.allocate<int>(count * 8);
+    value[0] = 10;
+    value[1] = 20;
+    value[2] = 30;
+    value[3] = 40;
+    print(value[0] + value[1] + value[2] + value[3]);
+    return 0;
+}
