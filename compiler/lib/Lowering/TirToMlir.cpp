@@ -5374,21 +5374,16 @@ class FunctionTranslator {
             result = call.getResult();
           } else if (caller_arena_arg_index_ >= 0 &&
                      arena_param_sites_.count(op.result.id) != 0) {
-            // The caller proved this storage never leaves its frame, so the arena
-            // it created is the right home: the callee fills it and the caller
-            // releases the whole chunk at once. The decision belongs to the call
-            // site, so this call carries no strategy attribute of its own.
-            auto arena_fn = ensure_runtime_fn(
-                module_, builder_, "nrq_cdmm_arena_allocate",
-                llvm_ptr_type(ctx_),
-                {llvm_ptr_type(ctx_), builder_.getI64Type(),
-                 builder_.getI64Type()});
+            // The storage leaves through the return, so its home is the caller's
+            // arena - when the caller had one to give. An escaping call site
+            // passes null instead, and this body must then allocate the storage
+            // itself: one signature serves both. The decision belongs to the call
+            // site, so neither allocation carries a strategy attribute of its
+            // own.
             mlir::Value handle = func_op_.getArgument(
                 static_cast<unsigned>(caller_arena_arg_index_));
-            auto call = builder_.create<mlir::LLVM::CallOp>(
-                loc, arena_fn, mlir::ValueRange{handle, bytes, alignment});
-            mark_fresh_allocation(arena_fn, alignment_bytes);
-            set(op.result, call.getResult());
+            set(op.result, allocate_for_returned_storage(
+                               handle, bytes, alignment, alignment_bytes, loc));
             return true;
           } else if (const auto region = region_of_site_.find(op.result.id);
                      region != region_of_site_.end()) {
