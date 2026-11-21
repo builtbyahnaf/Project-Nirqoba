@@ -3,7 +3,7 @@
   "args": ["--emit=llvm"],
   "expect_exit": 0,
   "expect_stdout_contains": [
-    "declare noalias ptr @nrq_memory_allocate",
+    "declare noalias align 8 ptr @nrq_memory_allocate",
     "declare void @nrq_memory_deallocate_checked"
   ],
   "expect_stdout_not_contains": [
