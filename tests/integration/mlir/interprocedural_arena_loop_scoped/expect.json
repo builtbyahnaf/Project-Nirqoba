@@ -1,0 +1,10 @@
+{
+  "mode": "build",
+  "args": ["--emit=mlir"],
+  "expect_ir_counts": {
+    "nirqoba.region_scope = \"loop\"": 2,
+    "nirqoba.region_scope = \"frame\"": 0,
+    "llvm.call @nrq_cdmm_arena_create": 2,
+    "llvm.call @nrq_cdmm_arena_destroy": 2
+  }
+}
