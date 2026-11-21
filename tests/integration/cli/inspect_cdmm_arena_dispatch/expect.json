@@ -1,0 +1,5 @@
+{
+  "mode": "build",
+  "args": ["--inspect-cdmm"],
+  "expect_stderr_contains": "'node' int* -> arena (returned to bounded and escaping callers, arena handle checked at runtime)"
+}
