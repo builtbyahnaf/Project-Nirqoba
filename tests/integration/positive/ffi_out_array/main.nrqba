@@ -1,0 +1,16 @@
+// An aggregate C constructs. C cannot return a `{ptr, length, capacity}` header by
+// value, so the declaration asks for the address of the caller's binding and
+// fills it in place. Nothing leaves Nirqoba: the binding stays the owner, and the
+// length it reports is whatever C wrote.
+//
+// The buffer C installed came from the foreign allocator, so the scope exit
+// releases it with `nrq_ffi_free` rather than the array allocator's release,
+// which would reject a pointer it never handed out.
+extern void function populate(out dynamic_array<int> values);
+
+int function main() {
+    var values: dynamic_array<int> = memory.dynamic_array<int>();
+    populate(values);
+    print(values.length);
+    return 0;
+}

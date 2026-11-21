@@ -1,0 +1,14 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm-raw"],
+  "expect_ir_counts": {
+    "declare void @populate(ptr)": 1,
+    "call void @populate(ptr": 1,
+    "call void @nrq_ffi_free(ptr": 1,
+    "call void @nrq_array_free": 0
+  },
+  "expect_stdout_index_order": [
+    "call void @populate(ptr",
+    "call void @nrq_ffi_free(ptr"
+  ]
+}

@@ -1,0 +1,10 @@
+// C writes through the out parameter, so the binding it addresses has to be
+// mutable. A `let` binding is not: filling it in place would mutate a value the
+// caller declared immutable.
+extern void function populate(out dynamic_array<int> values);
+
+int function main() {
+    let values: dynamic_array<int> = memory.dynamic_array<int>();
+    populate(values);
+    return 0;
+}

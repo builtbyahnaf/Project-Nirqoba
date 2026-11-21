@@ -64,6 +64,7 @@ are included automatically by `tests/run_tests.py`.
 | `manual_return_rejected` | Manual storage cannot cross an owned return |
 | `manual_owned_payload_rejected` | Deterministic-cleanup payloads are rejected |
 | `ffi_use_after_handoff` | Storage handed to C cannot be read afterwards |
+| `ffi_out_immutable_rejected` | An `out` argument must be a mutable binding |
 | `ffi_declaration_rejected` | An `extern` declaration cannot carry a body |
 
 Run the complete suite (integration plus these cases):
