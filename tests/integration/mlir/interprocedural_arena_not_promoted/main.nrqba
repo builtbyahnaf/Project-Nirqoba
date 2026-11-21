@@ -1,0 +1,23 @@
+// The bound is only real when every caller agrees.
+//
+// `main` bounds the result of `alloc_and_return`, but `pass_through` hands it
+// straight back to its own caller, so the callee's storage escapes there. One
+// escaped caller is enough: the callee keeps the general allocator, keeps its
+// original signature, and no arena is created for it anywhere.
+int* function alloc_and_return() {
+    var node = memory.allocate<int>(8);
+    node[0] = 42;
+    return node;
+}
+
+int* function pass_through() {
+    return alloc_and_return();
+}
+
+int function main() {
+    var n = alloc_and_return();
+    print(n[0]);
+    var m = pass_through();
+    print(m[0]);
+    return 0;
+}
