@@ -59,7 +59,8 @@ std::string describe(const tir::AllocationSite& site) {
 TEST(LifetimeAnalysisTest, StorageUsedInsideOneFunctionIsBounded) {
   DiagnosticEngine diag;
   auto module = build_tir(
-      "int function main(int count) {\n"
+      "int function main() {\n"
+      "  var count = 4;\n"
       "  var value = memory.allocate<int>(count * 8);\n"
       "  value[0] = 7;\n"
       "  return value[0];\n"
@@ -77,6 +78,7 @@ TEST(LifetimeAnalysisTest, StorageUsedInsideOneFunctionIsBounded) {
   ASSERT_TRUE(site != nullptr);
   ASSERT_EQ(describe(*site), std::string("bounded/none"));
   ASSERT_FALSE(site->manually_released);
+  ASSERT_TRUE(site->used_locally);
   // The result, the binding slot, the values loaded back and the element
   // pointer all name the same storage.
   ASSERT_TRUE(site->aliases.size() >= 4);
@@ -112,7 +114,8 @@ TEST(LifetimeAnalysisTest, PassingThePointerToACalleeEscapes) {
       "  print(pointer[0]);\n"
       "  return;\n"
       "}\n"
-      "int function main(int count) {\n"
+      "int function main() {\n"
+      "  var count = 4;\n"
       "  var value = memory.allocate<int>(count * 8);\n"
       "  value[0] = 2;\n"
       "  sink(value);\n"
@@ -135,7 +138,8 @@ TEST(LifetimeAnalysisTest, PassingThePointerToACalleeEscapes) {
 TEST(LifetimeAnalysisTest, AHandWrittenReleaseIsRecordedNotAnEscape) {
   DiagnosticEngine diag;
   auto module = build_tir(
-      "int function main(int count) {\n"
+      "int function main() {\n"
+      "  var count = 4;\n"
       "  var value = memory.allocate<int>(count * 8);\n"
       "  value[0] = 3;\n"
       "  print(value[0]);\n"
@@ -153,6 +157,29 @@ TEST(LifetimeAnalysisTest, AHandWrittenReleaseIsRecordedNotAnEscape) {
   ASSERT_TRUE(site != nullptr);
   ASSERT_EQ(describe(*site), std::string("bounded/none"));
   ASSERT_TRUE(site->manually_released);
+  ASSERT_TRUE(site->used_locally);
+}
+
+TEST(LifetimeAnalysisTest, StorageNobodyTouchesIsNotALocalWorkingSet) {
+  DiagnosticEngine diag;
+  auto module = build_tir(
+      "int function take(int size) {\n"
+      "  var buffer = memory.allocate<byte>(size);\n"
+      "  return size;\n"
+      "}\n"
+      "int function main() { return 0; }",
+      diag);
+  ASSERT_FALSE(diag.has_errors());
+  const tir::Function* function = find_function(*module, "take");
+  ASSERT_TRUE(function != nullptr);
+
+  const tir::LifetimeAnalysis analysis =
+      tir::LifetimeAnalysis::analyze(*function);
+  const tir::AllocationSite* site = analysis.site(allocation_result(*function));
+  ASSERT_TRUE(site != nullptr);
+  ASSERT_EQ(describe(*site), std::string("bounded/none"));
+  // Bounded, but never dereferenced: routing it would save nothing.
+  ASSERT_FALSE(site->used_locally);
 }
 
 TEST(LifetimeAnalysisTest, ArenaPayloadsArePlainData) {

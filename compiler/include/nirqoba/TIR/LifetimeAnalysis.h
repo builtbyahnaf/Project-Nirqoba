@@ -53,6 +53,10 @@ struct AllocationSite {
   // The programmer released this storage by hand. Bulk release cannot replace
   // that call, so a rewrite must leave the site alone.
   bool manually_released = false;
+  // The body reads or writes through the storage (an element access, a load
+  // through the pointer). An allocation nobody touches is not evidence of a
+  // local working set, and a rewrite has nothing to gain from claiming it.
+  bool used_locally = false;
   // Every value that names the same storage: the allocation result, the binding
   // slot it is stored in, the values loaded back out, and the element pointers
   // derived from it. Ownership bookkeeping and rewrites need the whole set.

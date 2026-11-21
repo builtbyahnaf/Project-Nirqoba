@@ -70,6 +70,7 @@ std::unordered_set<int> collect_slot_addresses(const Function& function) {
 struct FamilyState {
   EscapeReason reason = EscapeReason::None;
   bool manually_released = false;
+  bool used_locally = false;
   // Families stored inside this one, and the families that contain it.
   std::unordered_set<int> contained;
   std::unordered_set<int> containers;
@@ -136,6 +137,7 @@ bool is_arena_eligible_payload(const Type& type) {
 LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function) {
   LifetimeAnalysis analysis;
 
+  const std::unordered_set<int> slot_addresses = collect_slot_addresses(function);
   ValueSets sets;
   std::vector<int> allocation_results;
   for (const Op& op : function.operations()) {
@@ -164,7 +166,11 @@ LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function) {
                   op.lhs.is_valid() ? op.lhs.id : op.operand.id, op.result.id);
             break;
         case OpKind::Load:
-          if (sets.contains(op.lhs.id) && op.result.is_valid())
+          // A load through a frame slot reads a name back. A load through the
+          // storage itself (an element pointer) reads data, which is not a
+          // pointer to the same allocation and must never join the family.
+          if (sets.contains(op.lhs.id) && op.result.is_valid() &&
+              slot_addresses.count(op.lhs.id) != 0)
             changed |= sets.unite(op.lhs.id, op.result.id);
           break;
         case OpKind::Store:
@@ -199,8 +205,15 @@ LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function) {
     if (!value.is_valid() || !sets.contains(value.id)) return -1;
     return sets.find(value.id);
   };
-  const std::unordered_set<int> slot_addresses = collect_slot_addresses(function);
   auto state_for = [&](int root) -> FamilyState& { return families[root]; };
+  // Storage is "used" when the body touches it through the pointer rather than
+  // merely naming it: an element index, a load, or a write into it.
+  auto note_use = [&](const Value& address) {
+    if (slot_addresses.count(address.id) != 0) return;
+    const int root = root_of(address);
+    if (root < 0) return;
+    state_for(root).used_locally = true;
+  };
 
   for (const Op& op : function.operations()) {
     switch (op.kind) {
@@ -238,6 +251,7 @@ LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function) {
         // pointer, not memory inside the object, so it is already part of the
         // family and says nothing about where the storage goes.
         if (slot_addresses.count(op.lhs.id) != 0) break;
+        note_use(op.lhs);
         const int destination = root_of(op.lhs);
         const int source = root_of(op.operand);
         if (destination >= 0) {
@@ -253,9 +267,11 @@ LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function) {
           record_escape(state_for(source), EscapeReason::StoredOutsideActivation);
         break;
       }
-      case OpKind::GetElementPtr:
+            case OpKind::GetElementPtr:
+        // Indexing the storage is the ordinary way it is used.
+        note_use(op.lhs);
+        break;
       case OpKind::SoaColumnPtr:
-      case OpKind::Load:
       case OpKind::Move:
       case OpKind::Cast:
       case OpKind::Borrow:
@@ -272,6 +288,11 @@ LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function) {
       case OpKind::BranchCond:
       case OpKind::Unreachable:
       case OpKind::Length:
+        break;
+      case OpKind::Load:
+        // A load through the storage reads data out of it; a load of the slot
+        // reads the pointer back and is not a use of the storage itself.
+        note_use(op.lhs);
         break;
       case OpKind::Print:
       case OpKind::PrintString:
@@ -349,6 +370,7 @@ LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function) {
     if (found != families.end()) {
       site.reason = found->second.reason;
       site.manually_released = found->second.manually_released;
+      site.used_locally = found->second.used_locally;
     }
     site.lifetime = site.reason == EscapeReason::None
                         ? AllocationLifetime::Bounded
