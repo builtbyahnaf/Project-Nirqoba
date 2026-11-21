@@ -255,7 +255,8 @@ int run_pipeline(const PipelineOptions& options,
 
   mlir::OwningOpRef<mlir::ModuleOp> mlir_module =
       translate_tir_to_mlir(*tir_module, mlir_context, diagnostics,
-                            options.fast_math, options.runtime_configuration);
+                            options.fast_math, options.runtime_configuration,
+                            options.inspect_cdmm);
   if (!mlir_module || diagnostics.has_errors()) {
     return fail_with(diagnostics, sources);
   }
