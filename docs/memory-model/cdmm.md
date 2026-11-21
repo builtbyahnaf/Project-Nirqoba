@@ -183,6 +183,9 @@ function` with `, loop-scoped` when the storage dies with its loop, `promoted to
 the stack`, `repeated layout (N sites)` for a pool group, and the escape reasons
 (`escaping via return`, `escaping via callee`, `escaping into foreign storage`,
 `escaping inside an escaping object`, `escaping through a reference cycle`).
+A site whose storage a promoted callee returns from reports `arena (returned to bounded
+and escaping callers, arena handle checked at runtime)`, and a call site that passes
+null reports `gc (escaping call site, null arena handle passed to <callee>)`.
 
 The report is diagnostic only: it goes to stderr, the emitted program is identical
 with and without the flag, and the attribute that carries the decisions to the
