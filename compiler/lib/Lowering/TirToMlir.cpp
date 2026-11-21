@@ -1894,6 +1894,15 @@ class FunctionTranslator {
     mark_fresh_allocation(arena_fn, alignment_bytes);
     mark_fresh_allocation(general_fn, alignment_bytes);
 
+    if (activation_handle_guaranteed_) {
+      // Every caller passes a handle, so the null arm is unreachable: this
+      // activation fills the chunk its caller created and never reaches for the
+      // general allocator.
+      auto arena_only = builder_.create<mlir::LLVM::CallOp>(
+          loc, arena_fn, mlir::ValueRange{handle, bytes, alignment});
+      return arena_only.getResult();
+    }
+
     const mlir::Type ptr = llvm_ptr_type(ctx_);
     mlir::Value missing =
         builder_.create<mlir::LLVM::ZeroOp>(loc, ptr).getResult();
