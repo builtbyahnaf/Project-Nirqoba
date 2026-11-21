@@ -1481,6 +1481,33 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       }
       lowering_release_argument_ = previous_release_argument;
 
+      // An `out` aggregate crosses the boundary as the address of the caller's
+      // binding: C fills the header in place, so there is no value to pass. The
+      // buffer it installs belongs to the foreign allocator, so this binding's
+      // release is retargeted to the FFI deallocator - both the pending cleanup
+      // and the obligation that verification compares it against.
+      if (call.is_external_call()) {
+        for (size_t index = 0; index < arg_vals.size(); ++index) {
+          if (!call.is_external_out_parameter(index)) continue;
+          const Expr& argument = *call.arguments()[index];
+          if (argument.kind() != Expr::Kind::Name) continue;
+          const tir::Value slot =
+              lookup_slot(static_cast<const NameExpr&>(argument).name());
+          if (!slot.is_valid()) continue;
+          arg_vals[index] = slot;
+          for (auto& scope : deferred_expressions_)
+            for (auto& pending : scope)
+              if (pending.automatic && pending.active &&
+                  pending.owner_slot.is_valid() &&
+                  pending.owner_slot.id == slot.id)
+                pending.callee = "nrq_ffi_free";
+          if (current_function_ != nullptr)
+            if (tir::DestructionObligation* obligation =
+                    current_function_->pending_obligation_for_owner(slot))
+              obligation->release = "nrq_ffi_free";
+        }
+      }
+
       // `length(value)` is the call spelling of the `.length` property.
       if (call.callee() == "length" && arg_vals.size() == 1) {
         tir::Value result = function.allocate_value(

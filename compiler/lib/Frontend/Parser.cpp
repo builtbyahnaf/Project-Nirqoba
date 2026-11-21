@@ -421,6 +421,15 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility, bool exte
     if (!check(TokenKind::RParen)) {
       do {
         if (check(TokenKind::RParen)) break;
+        // `out` marks a parameter the callee writes through. It is read here, at
+        // the only place a declaration can say it, and carried on the parameter
+        // so Sema can require the caller's binding to be mutable.
+        bool out_parameter = false;
+        if (check(TokenKind::Identifier) && peek().text == "out" &&
+            (is_type_keyword(peek(1).kind) || peek(1).kind == TokenKind::Identifier)) {
+          advance();
+          out_parameter = true;
+        }
         const Token& parameter_type_token = peek();
         bool borrowed = false;
         bool mutable_borrow = false;
@@ -464,7 +473,7 @@ unique_ptr<FunctionDecl> Parser::parse_function(Visibility visibility, bool exte
         const Token parameter_name = advance();
         parameters.push_back(
             Parameter{parameter_name.text, parameter_type, parameter_type_token.location,
-                      borrowed, mutable_borrow, shared, resource_domain});
+                      borrowed, mutable_borrow, shared, resource_domain, out_parameter});
       } while (match(TokenKind::Comma));
     }
     expect(TokenKind::RParen, "after the parameter list");

@@ -538,6 +538,7 @@ bool TypeChecker::check(Program& program) {
       sig.parameter_borrowed.push_back(param.borrowed);
       sig.parameter_mutable_borrow.push_back(param.mutable_borrow);
       sig.parameter_shared.push_back(param.shared);
+      sig.parameter_out.push_back(param.out);
       sig.parameter_resource_domains.push_back(param.resource_domain);
       sig.parameter_names.push_back(param.name);
     }
@@ -718,6 +719,7 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
         sig.parameter_borrowed.push_back(param.borrowed);
         sig.parameter_mutable_borrow.push_back(param.mutable_borrow);
         sig.parameter_shared.push_back(param.shared);
+        sig.parameter_out.push_back(param.out);
         sig.parameter_resource_domains.push_back(param.resource_domain);
         sig.parameter_names.push_back(param.name);
       }
@@ -4343,13 +4345,59 @@ static bool element_needs_teardown(const Type& type) {
 // storage so a later use is a use-after-move rather than a second owner.
 Type TypeChecker::check_external_call(CallExpr& call,
                                       const FunctionSignature& signature) {
-  call.set_external_abi(signature.parameter_types);
+  // An `out` parameter receives an address instead of a value, so the ABI type
+  // recorded for it is the pointer C writes through.
+  std::vector<Type> abi_parameter_types = signature.parameter_types;
+  std::vector<bool> out_parameters(abi_parameter_types.size(), false);
+  for (size_t i = 0; i < abi_parameter_types.size(); ++i) {
+    if (i >= signature.parameter_out.size() || !signature.parameter_out[i]) continue;
+    out_parameters[i] = true;
+    if (abi_parameter_types[i].is_dynamic_array())
+      abi_parameter_types[i] = Type::pointer_type(abi_parameter_types[i].element_type());
+  }
+  call.set_external_abi(std::move(abi_parameter_types), std::move(out_parameters));
   const size_t count = min(call.arguments().size(), signature.parameter_types.size());
   for (size_t i = 0; i < count; ++i) {
     Expr& argument = const_cast<Expr&>(*call.arguments()[i]);
     const Type argument_type = check_expression(argument);
     const Type& parameter_type = signature.parameter_types[i];
     if (!argument_type.is_valid()) continue;
+
+    // `out`: C constructs the value in the caller's own storage. Nothing leaves
+    // Nirqoba, so the binding stays the owner; only its release changes, because
+    // the buffer C installs came from the foreign allocator.
+    if (i < signature.parameter_out.size() && signature.parameter_out[i]) {
+      if (!parameter_type.is_dynamic_array()) {
+        diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                           "out parameters are only supported for dynamic_array<T>");
+      } else if (argument.kind() != Expr::Kind::Name) {
+        diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                           "an out argument must name a local binding: C writes "
+                           "through the address of the caller's storage");
+      } else {
+        const std::string& name = static_cast<const NameExpr&>(argument).name();
+        const Symbol* source = symbols_.lookup(name);
+        if (!source || source->type != parameter_type) {
+          diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                             "out argument '" + name + "' must be a '" +
+                                 parameter_type.to_string() + "' binding");
+        } else if (source->borrowed) {
+          diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                             "a borrowed value cannot be filled in place");
+        } else if (source->moved) {
+          diagnostics_.error(diag::kUseAfterFree, argument.location(),
+                             "use of '" + name +
+                                 "' after its allocation was deallocated");
+        } else if (!source->is_mutable()) {
+          diagnostics_.error(diag::kTypeMismatch, argument.location(),
+                             "out argument '" + name + "' must be a mutable 'var' "
+                                 "binding");
+        } else {
+          symbols_.set_cleanup_callee(name, "nrq_ffi_free");
+        }
+      }
+      continue;
+    }
 
     // The handoff has two shapes, and the declaration chooses which one the ABI
     // uses. A pointer parameter takes the buffer alone. A `dynamic_array<T>`

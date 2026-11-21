@@ -5042,6 +5042,19 @@ class FunctionTranslator {
         // not the three-word value itself, so the runtime receives field 0. An
         // element that owns storage is destroyed first, in reverse index order
         // and only up to `length`, and the buffer is released afterwards.
+        // An array a C function filled in place owns a buffer C allocated, so its
+        // release is the foreign one and only the buffer field is handed over.
+        if (op.callee == "nrq_ffi_free" && args.size() == 1 &&
+            op.arguments[0].type.is_dynamic_array()) {
+          mlir::Value buffer = builder_.create<mlir::LLVM::ExtractValueOp>(
+              loc, args[0], builder_.getDenseI64ArrayAttr({0})).getResult();
+          auto release = ensure_runtime_fn(
+              module_, builder_, "nrq_ffi_free",
+              mlir::LLVM::LLVMVoidType::get(ctx_), {llvm_ptr_type(ctx_)});
+          builder_.create<mlir::LLVM::CallOp>(loc, release,
+                                             mlir::ValueRange{buffer});
+          return true;
+        }
         if (op.callee == "nrq_array_free" && args.size() == 1 &&
             op.arguments[0].type.is_dynamic_array()) {
           const Type& element_type =

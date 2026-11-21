@@ -242,6 +242,16 @@ void SymbolTable::rebind_pointer(const string& name, uint64_t allocation_id) {
   }
 }
 
+void SymbolTable::set_cleanup_callee(const string& name, string callee) {
+  for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+    auto found = scope->find(name);
+    if (found != scope->end()) {
+      found->second.cleanup_callee = std::move(callee);
+      return;
+    }
+  }
+}
+
 void SymbolTable::set_definitely_null(const string& name, bool definitely_null) {
   for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
     auto found = scope->find(name);

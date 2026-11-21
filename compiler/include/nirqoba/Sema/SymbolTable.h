@@ -171,6 +171,10 @@ class SymbolTable {
       const std::string& except_name = {}) const;
   void rebind_pointer(const std::string& name, uint64_t allocation_id);
   void set_definitely_null(const std::string& name, bool definitely_null);
+  // Retargets a binding's release. Storage a foreign call filled in place was
+  // allocated by the foreign allocator, so only its own deallocator may release
+  // it, and that replaces whatever destructor the declaration installed.
+  void set_cleanup_callee(const std::string& name, std::string callee);
   void set_field_borrows(const std::string& name,
                          std::vector<BorrowTarget> field_borrows);
   // A non-null branch can discharge a conditional borrow only when the absence

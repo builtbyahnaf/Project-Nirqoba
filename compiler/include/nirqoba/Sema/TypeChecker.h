@@ -40,6 +40,9 @@ struct FunctionSignature {
   std::vector<bool> parameter_borrowed;
   std::vector<bool> parameter_mutable_borrow;
   std::vector<bool> parameter_shared;
+  // `out` parameters: the callee writes through the address of the caller's
+  // storage, so the ABI is a pointer and the caller keeps ownership.
+  std::vector<bool> parameter_out;
   std::vector<std::string> parameter_resource_domains;
   std::vector<std::string> parameter_names;
   bool returns_shared = false;

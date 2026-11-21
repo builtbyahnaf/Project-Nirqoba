@@ -243,13 +243,20 @@ class CallExpr : public Expr {
   // parameter types are the C ABI the call site has to be lowered to, which is
   // not the types of the arguments: an owned aggregate handed to a pointer
   // parameter becomes the buffer pointer alone.
-  void set_external_abi(std::vector<Type> parameter_types) {
+  void set_external_abi(std::vector<Type> parameter_types,
+                        std::vector<bool> out_parameters = {}) {
     external_call_ = true;
     external_parameter_types_ = std::move(parameter_types);
+    external_out_parameters_ = std::move(out_parameters);
   }
   bool is_external_call() const { return external_call_; }
   const std::vector<Type>& external_parameter_types() const {
     return external_parameter_types_;
+  }
+  // An `out` parameter receives the address of the caller's binding, so the ABI
+  // type recorded for it is a pointer and the argument is not a value.
+  bool is_external_out_parameter(size_t index) const {
+    return index < external_out_parameters_.size() && external_out_parameters_[index];
   }
 
  private:
@@ -259,6 +266,7 @@ class CallExpr : public Expr {
   std::string resolved_symbol_;
   bool external_call_ = false;
   std::vector<Type> external_parameter_types_;
+  std::vector<bool> external_out_parameters_;
 };
 
 // AddressOf and Dereference implement §8.2/§8.3 of the pointer specification:
@@ -630,6 +638,10 @@ struct Parameter {
   bool mutable_borrow = false;
   bool shared = false;
   std::string resource_domain;
+  // `out`: the callee writes through this parameter instead of reading it. Only
+  // an `extern` parameter uses it, where it is the address of the caller's own
+  // storage.
+  bool out = false;
 };
 
 class StructDecl {
