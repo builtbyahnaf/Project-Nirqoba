@@ -426,3 +426,38 @@ TEST(LifetimeAnalysisTest, EscapingOnlyCallerLeavesTheSignatureAlone) {
   ASSERT_TRUE(plan.call_sites.empty());
   ASSERT_TRUE(plan.escaping_call_results.empty());
 }
+
+// Phase 9d: a bounded call site inside a loop asks for a loop-scoped arena.
+//
+// Every use of the returned storage is in the loop body, so the arena can be
+// created on the loop's entry edge and released on its exit instead of living
+// until the frame returns.
+TEST(LifetimeAnalysisTest, BoundedCallSiteInsideALoopIsLoopScoped) {
+  DiagnosticEngine diag;
+  auto module = build_tir(
+      "int* function alloc_and_return() {\n"
+      "  var node = memory.allocate<int>(8);\n"
+      "  node[0] = 42;\n"
+      "  return node;\n"
+      "}\n"
+      "int function main() {\n"
+      "  var i = 0;\n"
+      "  while (i < 3) {\n"
+      "    var n = alloc_and_return();\n"
+      "    print(n[0]);\n"
+      "    i = i + 1;\n"
+      "  }\n"
+      "  return 0;\n"
+      "}",
+      diag);
+  ASSERT_FALSE(diag.has_errors());
+
+  const tir::CallSiteArenaPlan plan = tir::analyze_call_site_arenas(*module);
+  ASSERT_TRUE(plan.promoted("alloc_and_return"));
+  const auto sites = plan.call_sites.find("main");
+  ASSERT_TRUE(sites != plan.call_sites.end());
+  ASSERT_EQ(sites->second.size(), static_cast<std::size_t>(1));
+  // The span runs from the loop header to the back edge that closes it.
+  ASSERT_TRUE(sites->second[0].loop_scoped);
+  ASSERT_TRUE(sites->second[0].scope_begin < sites->second[0].scope_end);
+}
