@@ -1,0 +1,20 @@
+// The report has to name the call site that passes null, because the fallback it
+// selects happens inside a different function: the callee's own line describes both
+// branches and cannot say which one this caller reaches.
+int* function alloc_and_return() {
+    var node = memory.allocate<int>(8);
+    node[0] = 42;
+    return node;
+}
+
+void function keep(int* pointer) {
+    print(pointer[0]);
+}
+
+int function main() {
+    var n = alloc_and_return();
+    print(n[0]);
+    var m = alloc_and_return();
+    keep(m);
+    return 0;
+}
