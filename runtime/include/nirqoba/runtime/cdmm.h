@@ -171,6 +171,11 @@ int32_t nrq_cdmm_pool_release(void* pool, void* slot);
 // Same, and also rejects `generation` when the slot has been reallocated since
 // that generation was handed out.
 int32_t nrq_cdmm_pool_release_checked(void* pool, void* slot, uint64_t generation);
+// Registers a field teardown for one live slot, with the same `context` encoding
+// `nrq_cdmm_arena_register_teardown` uses. The record is consumed when the object
+// is released or when the pool is reset or destroyed, so a reused slot never runs
+// the previous occupant's teardown. Returns one when the record was made.
+int32_t nrq_cdmm_pool_register_teardown(void* pool, void* object, void* context);
 size_t nrq_cdmm_pool_release_bulk(void* pool, void* const* slots, size_t count);
 // The generation handed out with the slot's current allocation, or zero when the
 // pool was created without `NRQ_CDMM_POOL_GENERATIONS` or the slot is foreign.

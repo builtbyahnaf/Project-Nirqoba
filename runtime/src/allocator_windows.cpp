@@ -3379,6 +3379,26 @@ int32_t nrq_cdmm_pool_release_checked(void* handle, void* slot,
   return cdmm_pool_release_entry(handle, slot, true, generation);
 }
 
+int32_t nrq_cdmm_pool_register_teardown(void* handle, void* object,
+                                        void* context) {
+  if (!handle || !object) return 0;
+  CdmmPool* pool = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+    pool = pin_cdmm_pool_locked(handle);
+  }
+  if (!pool) return 0;
+  bool registered = false;
+  try {
+    registered = pool->register_serialized_teardown(
+        object, &nrq_cdmm_release_managed_field, context);
+  } catch (...) {
+    registered = false;
+  }
+  pool->unpin_operation();
+  return registered ? 1 : 0;
+}
+
 size_t nrq_cdmm_pool_release_bulk(void* handle, void* const* slots,
                                   size_t count) {
   if (!handle || !slots) return 0;
