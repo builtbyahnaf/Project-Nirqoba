@@ -1,0 +1,6 @@
+{
+  "mode": "build",
+  "args": ["--inspect-cdmm"],
+  "expect_stderr_contains": "'node' TreeNode* -> gc (escaping into foreign storage)",
+  "expect_stderr_not_contains": ["cyclic object graph detected"]
+}

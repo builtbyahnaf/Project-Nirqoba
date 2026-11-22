@@ -1,0 +1,20 @@
+// The same escape, with a payload whose fields cannot close a cycle.
+//
+// A `TreeNode` owns its child, and unique ownership is a chain: the closing edge a
+// cycle would need belongs to a second owner, which no well-formed program can
+// write. The site is still collector storage - it escapes into foreign storage -
+// so the report gives the escape, never the cycle.
+struct TreeNode {
+    int value;
+    owned ptr TreeNode child;
+}
+
+int function main() {
+    var kept = memory.dynamic_array<TreeNode*>();
+    var node = memory.allocate<TreeNode>(24);
+    *node = TreeNode { value: 7, child: nullptr };
+    memory.array_append(kept, node);
+    print((*node).value);
+    print(kept.length);
+    return 0;
+}
