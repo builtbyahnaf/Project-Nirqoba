@@ -5728,7 +5728,12 @@ Type TypeChecker::check_call(CallExpr& call) {
     // a lifetime the type does not show, so it never qualifies.
     const bool arena_payload = arena_eligible_payload(payload_type) &&
                                !contains_qualified_field(payload_type);
-    if (requires_deterministic_cleanup(payload_type) && !arena_payload) {
+    // A manual allocation has no teardown registry: its release frees the block
+    // and nothing walks the fields, so it may not carry a managed field at all.
+    // An arena or a pool records a teardown per managed field and runs them
+    // before it reclaims the chunk, so the fields it can describe are allowed.
+    if (requires_deterministic_cleanup(payload_type) &&
+        (manual_allocation_call || !arena_payload)) {
       // An arena-eligible payload is one bulk release can reclaim whole: its
       // fields are plain data or pointers to more of the same, with no destructor
       // and no collector root. Releasing the block alone is then the whole answer,
