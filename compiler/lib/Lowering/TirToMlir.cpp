@@ -1635,7 +1635,8 @@ class FunctionTranslator {
                      std::unordered_set<int> collector_sites,
                      bool activation_handle_guaranteed,
                      std::unordered_map<std::string, PayloadTeardowns>
-                         payload_field_releases)
+                         payload_field_releases,
+                     const StructFieldTable* struct_types)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
         builder_(builder), ctx_(ctx), diag_(diag), fast_math_(fast_math),
         configuration_(configuration),
@@ -1653,6 +1654,7 @@ class FunctionTranslator {
         collector_sites_(std::move(collector_sites)),
         activation_handle_guaranteed_(activation_handle_guaranteed),
         payload_field_releases_(std::move(payload_field_releases)),
+        struct_types_(struct_types),
         gc_roots_(analyze_gc_root_plan(tir_fn, collections,
                                        !collector_sites_.empty())),
         uses_gc_mutator_(needs_mutator_region),
@@ -7095,6 +7097,11 @@ class FunctionTranslator {
   // Allocation sites the collector owns: their payload's type can close a cycle
   // through a reference count, so no deterministic release describes them.
   std::unordered_set<int> collector_sites_;
+
+  // The declared field types of every struct in the program. Aggregate layouts in
+  // TIR have their pointer ownership erased, so a store through a field address or
+  // a collected payload's reference counts are read from here.
+  const StructFieldTable* struct_types_ = nullptr;
   // Payload struct name -> the fields that own storage, with the release each
   // one calls. The arena teardown registry is fed from this table.
   std::unordered_map<std::string, PayloadTeardowns> payload_field_releases_;
@@ -8115,7 +8122,7 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
         std::move(selection.arena_call_regions),
         arena_plan.promoted_callees, std::move(forwarded_call_results),
         std::move(selection.activation_sites), std::move(collector_sites),
-        serves_from_caller, payload_field_releases);
+        serves_from_caller, payload_field_releases, struct_types);
     if (!translator.translate()) return nullptr;
 
     builder.setInsertionPointAfter(func_op);
