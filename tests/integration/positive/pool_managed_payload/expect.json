@@ -1,0 +1,11 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 0,
+  "expect_stdout": "4\n4\n0\n",
+  "expect_ir_counts": {
+    "call ptr @nrq_cdmm_pool_allocate": 4,
+    "call i32 @nrq_cdmm_pool_register_teardown": 4,
+    "call i32 @nrq_cdmm_pool_destroy": 1,
+    "call ptr @nrq_memory_allocate": 0
+  }
+}
