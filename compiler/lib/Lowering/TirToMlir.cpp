@@ -2371,7 +2371,18 @@ class FunctionTranslator {
   void emit_arena_field_teardowns(mlir::Value handle, mlir::Value object,
                                   const Type& payload, mlir::Location loc,
                                   bool pool_slot = false) {
-    if (!handle || !object) return;
+    emit_field_teardowns(pool_slot ? "nrq_cdmm_pool_register_teardown"
+                                   : "nrq_cdmm_arena_register_teardown",
+                         handle, object, payload, loc);
+  }
+
+  // The one emitter behind all three registries. An arena names the region its
+  // object belongs to, a pool names the slot's pool, and a shared payload names
+  // only itself - its teardowns are its own until its final release runs them.
+  void emit_field_teardowns(const char* register_fn_name, mlir::Value handle,
+                            mlir::Value object, const Type& payload,
+                            mlir::Location loc) {
+    if (!register_fn_name || !object) return;
     // An allocation's result is a pointer to the payload, and it is the payload's
     // fields the teardown table describes.
     const Type& storage_type =
@@ -2406,6 +2417,12 @@ class FunctionTranslator {
         kind = 4;
       else if (field.second == "file.close")
         kind = 5;
+      // An owned pointer field is storage of its own, allocated by the checked
+      // allocator: freeing it is the field's release, exactly as it is for an
+      // owned array's buffer.
+      else if (field.second == "memory.deallocate" ||
+               field.second == "nrq_memory_deallocate_checked")
+        kind = 6;
       if (kind == 0) continue;
       // The pack position is the field index, exactly as the pack itself was
       // lowered, so both halves of the layout agree.
@@ -2436,10 +2453,8 @@ class FunctionTranslator {
       // A pool slot is reused, so its registry runs the teardown when the slot is
       // released rather than when the pool dies; the record itself is the same.
       auto register_fn = ensure_runtime_fn(
-          module_, builder_,
-          pool_slot ? "nrq_cdmm_pool_register_teardown"
-                    : "nrq_cdmm_arena_register_teardown",
-          builder_.getI32Type(), {ptr, ptr, ptr});
+          module_, builder_, register_fn_name, builder_.getI32Type(),
+          {ptr, ptr, ptr});
       builder_.create<mlir::LLVM::CallOp>(
           loc, register_fn, mlir::ValueRange{handle, object, context});
     }
@@ -5922,16 +5937,30 @@ class FunctionTranslator {
                 loc, builder_.getI64Type(),
                 builder_.getI64IntegerAttr(
                     static_cast<int64_t>(root_offsets.size()))).getResult();
-            set(op.result, builder_.create<mlir::LLVM::CallOp>(
-                loc, fn, mlir::ValueRange{bytes, alignment, object_size,
-                                          offsets_slot, reference_count})
-                               .getResult());
+            mlir::Value allocated = builder_
+                .create<mlir::LLVM::CallOp>(
+                    loc, fn,
+                    mlir::ValueRange{bytes, alignment, object_size, offsets_slot,
+                                     reference_count})
+                .getResult();
+            set(op.result, allocated);
+            // A shared payload's final release is its destruction, so the fields
+            // it holds are registered with the storage that owns them.
+            // The registry is keyed by the payload itself, so the payload stands
+            // in for the handle the arena and pool registries take.
+            emit_field_teardowns("nrq_memory_shared_register_teardown", allocated,
+                                 allocated, op.result.type, loc);
             return true;
           }
           auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_shared_allocate",
               llvm_ptr_type(ctx_), {builder_.getI64Type(), builder_.getI64Type()});
-          set(op.result, builder_.create<mlir::LLVM::CallOp>(
-              loc, fn, mlir::ValueRange{bytes, alignment}).getResult());
+          mlir::Value allocated = builder_
+              .create<mlir::LLVM::CallOp>(loc, fn,
+                                          mlir::ValueRange{bytes, alignment})
+              .getResult();
+          set(op.result, allocated);
+          emit_field_teardowns("nrq_memory_shared_register_teardown", allocated,
+                               allocated, op.result.type, loc);
           return true;
         }
         if (op.callee == "memory.shared_retain" ||
