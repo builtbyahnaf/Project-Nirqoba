@@ -101,6 +101,22 @@ alive inside the frame and the live count is zero after it returns.
 owned array and a file resource, registers three teardowns (kinds 3, 4 and 5) and
 reclaims all three when the arena is destroyed.
 
+#### Micro-phase 10b: pool resets and the integration proof
+
+- `nrq_cdmm_pool_reset` ends a generation properly: every live slot runs the
+  teardowns registered for it before its payload is poisoned, its generation word
+  advances so a pointer from the generation that just ended fails
+  `nrq_cdmm_pool_release_checked`, and the record table is cleared once the whole
+  pool has been walked, so the next generation inherits nothing.
+- `CdmmPoolTest.ResetRunsLiveTeardownsAndEndsTheGeneration` proves both halves at
+  once: two slots holding arrays come back to the live count they started at, no
+  slot is live afterwards, and both stale generations are refused.
+- `CdmmPoolTest.AResetLeavesNoTeardownForTheNextGeneration` and
+  `CdmmPoolTest.EachResetAdvancesTheGenerationOnce` pin the registry clear and the
+  counter: a reused slot frees only what it owns, and a second reset moves the
+  generation again.
+
+
 ---
 
 ## Version 0.647-beta
