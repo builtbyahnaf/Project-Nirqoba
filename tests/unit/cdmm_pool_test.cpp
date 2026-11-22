@@ -12,6 +12,7 @@
 #include <set>
 #include <vector>
 
+#include "nirqoba/runtime/array.h"
 #include "nirqoba/runtime/cdmm.h"
 
 namespace {
@@ -244,4 +245,53 @@ TEST(CdmmPoolTest, InvalidCreateArgumentsAreRejected) {
   ASSERT_EQ(nrq_cdmm_pool_release(pool, nullptr), int32_t{0});
   ASSERT_EQ(nrq_cdmm_pool_reset(nullptr), int32_t{0});
   ASSERT_EQ(nrq_cdmm_pool_destroy(pool), int32_t{1});
+}
+// A pool slot is reused, so a managed field has to be destroyed before the slot
+// goes back on the free list. The registration names the release by a kind in the
+// low bits of the context, exactly as the arena does, and the pool consumes the
+// record when that object leaves.
+TEST(CdmmPoolTest, RegisteredFieldTeardownRunsWhenTheSlotIsReleased) {
+  void* pool = nrq_cdmm_pool_create(32, 8, 0, 0, nullptr, nullptr);
+  ASSERT_NE(pool, nullptr);
+  void* slot = nrq_cdmm_pool_allocate(pool);
+  ASSERT_NE(slot, nullptr);
+  void* buffer = nrq_array_create(4, 8, 8);
+  ASSERT_NE(buffer, nullptr);
+  *static_cast<void**>(slot) = buffer;
+  const int32_t live_before = nrq_array_live_count();
+  // Kind 3 is `nrq_array_free`; the address is the field's pointer word, which a
+  // pool slot keeps eight-byte aligned.
+  void* context = reinterpret_cast<void*>(
+      reinterpret_cast<uintptr_t>(slot) | uintptr_t{3});
+  ASSERT_EQ(nrq_cdmm_pool_register_teardown(pool, slot, context), int32_t{1});
+  ASSERT_EQ(nrq_cdmm_pool_release(pool, slot), int32_t{1});
+  ASSERT_EQ(nrq_array_live_count(), live_before - 1);
+  // The record belonged to that object, so the next occupant inherits nothing.
+  void* reused = nrq_cdmm_pool_allocate(pool);
+  ASSERT_EQ(reused, slot);
+  *static_cast<void**>(reused) = nullptr;
+  ASSERT_EQ(nrq_cdmm_pool_release(pool, reused), int32_t{1});
+  ASSERT_EQ(nrq_array_live_count(), live_before - 1);
+  ASSERT_EQ(nrq_cdmm_pool_destroy(pool), int32_t{1});
+}
+
+// A pool that dies with live slots still runs their teardowns: destroying the
+// chunks without them would leak every buffer those objects owned.
+TEST(CdmmPoolTest, RegisteredFieldTeardownRunsForLiveSlotsOnPoolDestroy) {
+  void* pool = nrq_cdmm_pool_create(32, 8, 0, 0, nullptr, nullptr);
+  ASSERT_NE(pool, nullptr);
+  const int32_t live_before = nrq_array_live_count();
+  for (int index = 0; index < 3; ++index) {
+    void* slot = nrq_cdmm_pool_allocate(pool);
+    ASSERT_NE(slot, nullptr);
+    void* buffer = nrq_array_create(4, 8, 8);
+    ASSERT_NE(buffer, nullptr);
+    *static_cast<void**>(slot) = buffer;
+    void* context = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(slot) | uintptr_t{3});
+    ASSERT_EQ(nrq_cdmm_pool_register_teardown(pool, slot, context), int32_t{1});
+  }
+  ASSERT_EQ(nrq_array_live_count(), live_before + 3);
+  ASSERT_EQ(nrq_cdmm_pool_destroy(pool), int32_t{1});
+  ASSERT_EQ(nrq_array_live_count(), live_before);
 }
