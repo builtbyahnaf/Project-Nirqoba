@@ -3290,6 +3290,22 @@ struct SweepCursor {
 };
 SweepCursor sweep_cursor;
 
+// True when a payload with a registered reference-count table lives inside this
+// page's bump area. The whole-page reclaim path has to know: it never visits an
+// object, so the tables it holds would survive the storage they describe.
+bool page_holds_shared_field_registrations(const GcPage& page) {
+  SharedFieldRegistrations& registry = shared_field_registrations();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  if (registry.fields.empty()) return false;
+  const unsigned char* const begin = page.storage;
+  const unsigned char* const end = page.storage + page.used;
+  for (const auto& entry : registry.fields) {
+    const auto* address = static_cast<const unsigned char*>(entry.first);
+    if (address >= begin && address < end) return true;
+  }
+  return false;
+}
+
 bool sweep_chunk_locked(size_t budget_bytes) {
   size_t steps = 0;
   size_t touched = 0;
@@ -3450,7 +3466,13 @@ bool sweep_chunk_locked(size_t budget_bytes) {
           ? (live == young && page->marked_objects == 0 &&
              page->born_this_cycle == 0)
           : (page->marked_objects == 0 && page->born_this_cycle == 0);
-      if (all_dead) {
+      // A page that holds a registered payload cannot take the whole-page path:
+      // that path retires the page without reading a header, so a reference count
+      // registered for one of its objects would never be dropped. Falling through
+      // to the per-object sweep is what runs the finalizer for such a page.
+      const bool holds_registered_payloads =
+          all_dead && page_holds_shared_field_registrations(*page);
+      if (all_dead && !holds_registered_payloads) {
         // Managed payloads have no destructors, so there is nothing to run per
         // object. The page keeps its storage until the next cycle boundary, but
         // its start bits and marks are cleared now; an allocation can reuse the
