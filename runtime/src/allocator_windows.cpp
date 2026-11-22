@@ -689,6 +689,15 @@ class CdmmPool final : public Allocator {
     std::vector<uint32_t> generations;
   };
 
+  // The generation word is what a checked release compares against, so it moves
+  // whenever the allocation that word described stops being the one a caller
+  // holds. Zero means "no allocation", so a wrap skips it.
+  static void bump_generation(Chunk& chunk, size_t local) {
+    uint32_t generation = chunk.generations[local] + 1;
+    if (generation == 0) generation = 1;
+    chunk.generations[local] = generation;
+  }
+
   // Maps an address to its chunk and local slot, or returns false when the
   // address is not the start of a slot in this pool. An interior address is
   // rejected rather than rounded: releasing one would corrupt its neighbour.
