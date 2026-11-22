@@ -1,0 +1,21 @@
+// The True GC Test: a payload whose type can close a cycle is allocated from the
+// collector's heap, published through a registered root slot, and never freed by
+// a deterministic release.
+//
+// `shared ptr GraphNode next` gives the node a reference count that can include
+// itself, so no block release describes the object. The array is foreign storage,
+// which is what keeps the stack and the arena out of the decision: the collector
+// is the only strategy left, and its allocation is what the IR must show.
+struct GraphNode {
+    int value;
+    shared ptr GraphNode next;
+}
+
+int function main() {
+    var kept = memory.dynamic_array<GraphNode*>();
+    var node = memory.allocate<GraphNode>(32);
+    *node = GraphNode { value: 7, next: nullptr };
+    memory.array_append(kept, node);
+    print((*node).value);
+    return 0;
+}
