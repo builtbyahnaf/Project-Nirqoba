@@ -1552,9 +1552,13 @@ static SlotPromotion analyze_promoted_slots(const tir::Function& function) {
 struct RegionScope {
   bool loop = false;
   // Positions in the operation stream: the loop's header label and the back edge
-  // that closes it.
+  // that closes it. The analysis measures them on the stream it walked; the
+  // lowering re-derives them from `header_label` on the stream it emits, because
+  // the teardown expansion changes that stream's length.
   std::size_t begin = 0;
   std::size_t end = 0;
+  // The header label the span belongs to.
+  int header_label = -1;
 };
 
 // One shared region: the scratch arena for the bounded sites of a scope, or one
@@ -7115,6 +7119,7 @@ HybridSelection select_hybrid_strategies(
     region.scope.loop = site.loop_scoped;
     region.scope.begin = site.scope_begin;
     region.scope.end = site.scope_end;
+    region.scope.header_label = site.scope_header;
     region.alignment = 8;
     region.sites.push_back(site.result);
     region.aliases = site.aliases;
@@ -7153,6 +7158,7 @@ HybridSelection select_hybrid_strategies(
     region.scope.loop = site.loop_scoped;
     region.scope.begin = site.scope_begin;
     region.scope.end = site.scope_end;
+    region.scope.header_label = site.scope_header;
     const std::size_t index = selection.regions.size();
     selection.regions.push_back(std::move(region));
     region_index.emplace(key, index);
