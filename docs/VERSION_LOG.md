@@ -12,6 +12,30 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.670-beta
+
+### Summary of Changes (since `0.665-beta`)
+
+The CDMM arc closes. Release label `+0.005` (`0.665-beta` -> `0.670-beta`).
+
+#### Micro-phase 12c: the zero-regression measurement
+
+- `benchmarks/stress_test_2` was re-run with the released compiler across
+  allocation, marking/sweeping and cyclic reclamation, against the C, C++, Rust and
+  Java tracks. Every validation check passed (checksums, live-object counts,
+  collection counts).
+- No phase regressed against the manual baselines: allocation 4.0 ms against 26.65
+  (C), traversal 2.0 against 5.30, collection 0.0 against 16.99; mark-and-sweep
+  collection 29.0 against 33.99; cyclic reclamation 0.0 against 6.68 with a 5.0 ms
+  build against 6.85.
+- Regenerated benchmark artifacts (executables, raw repeat logs, machine-readable
+  results) were reverted rather than committed; the numbers live in the report and in
+  the documents named above, where a reader can compare them without diffing
+  binaries.
+- `docs/memory-model/cdmm.md` and `project_context/AOR_ROADMAP.md` now declare the
+  hybrid selector and implicit return promotion implemented and measured, with the
+  limits stated alongside the results.
+
 ## Version 0.665-beta
 
 ### Summary of Changes (since `0.660-beta`)
