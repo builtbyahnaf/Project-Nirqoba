@@ -569,11 +569,11 @@ def stats(values: list[float]) -> dict[str, Any]:
     clean = [float(value) for value in values]
     return {
         "samples": len(clean),
-        "median": round(statistics.median(clean), 3),
-        "mean": round(statistics.fmean(clean), 3),
-        "min": round(min(clean), 3),
-        "max": round(max(clean), 3),
-        "stdev": round(statistics.stdev(clean), 3) if len(clean) > 1 else 0.0,
+        "median": round(statistics.median(clean), 4),
+        "mean": round(statistics.fmean(clean), 4),
+        "min": round(min(clean), 4),
+        "max": round(max(clean), 4),
+        "stdev": round(statistics.stdev(clean), 4) if len(clean) > 1 else 0.0,
     }
 
 
@@ -983,7 +983,7 @@ def print_summary(payload: dict[str, Any]) -> None:
         for impl, impl_data in by_impl.items():
             row = impl.ljust(10)
             for name in metric_names:
-                row += f"{impl_data['metrics'][name]['median']:>14.3f}"
+                row += f"{impl_data['metrics'][name]['median']:>14.4f}"
             print(row)
 
     if payload["validation_failures"]:

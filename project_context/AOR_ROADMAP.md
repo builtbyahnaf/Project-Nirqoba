@@ -316,7 +316,7 @@ Prefer measurable performance improvements over merely matching H48.
 
 If a representation is consistently slower than H48 for its intended workload, redesign it rather than forcing its adoption.
 
-## 7. Execution Rules
+## 7. Coding Agent Execution Rules
 
 1. Inspect the actual repository and current implementation before modifying anything.
 2. Follow the existing architecture and naming conventions.
@@ -330,6 +330,9 @@ If a representation is consistently slower than H48 for its intended workload, r
 10. Record regressions honestly and resolve them before continuing.
 11. Keep production and debug runtime implementations synchronized.
 12. Maintain clear progress reports, benchmark results, and architectural decision records.
+13. Use multiple separate, meaningful Git commits where appropriate. Do not combine the entire migration into one enormous commit.
+14. Do not add ChatGPT or any AI assistant as a Git co-author.
+15. Follow Nirqoba's versioning convention: bump the beta version by +0.004 after every two meaningful upgrades, not after every individual upgrade.
 
 If an architectural decision proves inefficient, revise it based on measured evidence. Do not blindly follow the proposed design when repository evidence demonstrates a better solution, but document significant deviations and their justification.
 
