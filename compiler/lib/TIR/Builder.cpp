@@ -832,6 +832,44 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
         retain.arguments.push_back(value);
         function.add_operation(std::move(retain));
       }
+      // An aggregate literal assigned through a pointer transfers its managed
+      // fields to the storage the pointer names. The destination's lifetime now
+      // owns them, so the cleanup is pushed against the destination pointer and
+      // runs when that scope ends - unless the storage belongs to an arena or a
+      // pool, whose registry destroys the fields instead.
+      if (const tir::Op* origin = defining_operation(function, value);
+          origin != nullptr && origin->kind == tir::OpKind::AggregatePack &&
+          !origin->release_fields.empty()) {
+        // `*name` lowers to a zero index into the pointer the binding holds. The
+        // pointer itself is the value the lifetime analysis tracks, so the record
+        // names it: a destination an arena or a pool owns then matches the
+        // region's aliases and the registry keeps the teardown instead.
+        tir::Value destination = slot;
+        for (auto op = function.operations().rbegin();
+             op != function.operations().rend(); ++op) {
+          if (!op->result.is_valid() || op->result.id != slot.id) continue;
+          // A store names its destination as its own result, so it says nothing
+          // about where the pointer came from.
+          if (op->kind == tir::OpKind::Store) continue;
+          if (op->kind == tir::OpKind::GetElementPtr && op->lhs.is_valid() &&
+              op->lhs.type.is_pointer() &&
+              op->lhs.type.element_type().is_struct())
+            destination = op->lhs;
+          break;
+        }
+        DeferredCall teardown;
+        teardown.callee = "aggregate.field_destroy";
+        teardown.location = assignment.location();
+        teardown.automatic = true;
+        teardown.owner_slot = destination;
+        for (std::size_t i = 0; i < origin->release_fields.size() &&
+                                i < origin->release_callees.size();
+             ++i)
+          teardown.field_releases.emplace_back(origin->release_fields[i],
+                                               origin->release_callees[i]);
+        deferred_expressions_.back().push_back(std::move(teardown));
+        return;
+      }
       track_assignment_cleanup(slot, assignment.cleanup_callee(),
                                assignment.location());
       return;
