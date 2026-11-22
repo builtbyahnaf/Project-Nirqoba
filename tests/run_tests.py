@@ -120,6 +120,12 @@ def check_outputs(spec, out, err, stage):
         if needle not in err:
             return False, f"{stage}: stderr does not contain '{needle}'.\nGot:\n{err}"
 
+    # A report is only meaningful if it says a thing *and* does not say another:
+    # the negative side of a classifier needs the absence to be asserted too.
+    for needle in spec.get("expect_stderr_not_contains", []):
+        if needle in err:
+            return False, f"{stage}: stderr unexpectedly contains '{needle}'.\nGot:\n{err}"
+
     return True, "PASSED"
 
 
