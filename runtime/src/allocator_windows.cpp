@@ -599,8 +599,13 @@ class CdmmPool final : public Allocator {
           const size_t local = word * 64 + bit_index;
           if (local >= chunk.slot_count) break;
           void* slot = reinterpret_cast<void*>(chunk.base + local * stride_);
+          // The fields go first: the object still owns them while its slot is
+          // live, and the record has to run while the payload is still readable.
           run_slot_teardowns(slot);
           if (destructor_) destructor_(slot, context_);
+          // A pointer handed out in the generation that just ended is stale from
+          // here on, even before the slot is allocated again.
+          if (generations_) bump_generation(chunk, local);
           std::memset(slot, 0xDD, stride_);
           *static_cast<size_t*>(slot) = chunk.free_head;
           chunk.free_head = local;
