@@ -591,12 +591,39 @@ bool TypeChecker::check(Program& program) {
     }
   }
 
+  // The struct catalog is complete once the declarations are read, and both the
+  // allocation gate below and the strategy selector behind lowering ask it
+  // whether a payload can close a cycle.
+  analyze_struct_types();
+
   // Pass 2: Type-check each function body.
   for (const auto& function : program.functions()) {
     check_function(*function);
   }
 
   return !diagnostics_.has_errors();
+}
+
+void TypeChecker::analyze_struct_types() {
+  struct_field_table_.clear();
+  cyclic_structs_.clear();
+  // The catalog is keyed by the name a field would use to name the struct, which
+  // is the name the checker registered. An imported struct may appear under both
+  // its qualified and its bare name; both entries describe the same fields.
+  for (const auto& entry : structs_) {
+    std::vector<std::pair<std::string, Type>> fields;
+    fields.reserve(entry.second.fields.size());
+    for (const Parameter& field : entry.second.fields)
+      fields.emplace_back(field.name, field.type);
+    struct_field_table_.emplace(entry.first, std::move(fields));
+  }
+  // A struct is cyclic when its own fields lead back to it. The walk is the one
+  // the type model owns, so the answer here and the answer any other stage gets
+  // for the same type cannot disagree.
+  for (const auto& entry : struct_field_table_)
+    if (is_structurally_cyclic(Type::struct_type(entry.first),
+                               struct_field_table_))
+      cyclic_structs_.insert(entry.first);
 }
 
 bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
@@ -847,6 +874,11 @@ bool TypeChecker::check_modules(const vector<unique_ptr<ModuleUnit>>& modules) {
                              main_function->return_type().to_string() + "'");
     }
   }
+
+  // The struct catalog is complete once the declarations are read, and both the
+  // allocation gate below and the strategy selector behind lowering ask it
+  // whether a payload can close a cycle.
+  analyze_struct_types();
 
   // Pass 2: Type-check each function body in each module.
   for (const auto& unit : modules) {

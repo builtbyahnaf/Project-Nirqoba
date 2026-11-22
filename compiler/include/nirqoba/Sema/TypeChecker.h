@@ -79,6 +79,17 @@ class TypeChecker {
   bool check(Program& program);
   bool check_modules(const std::vector<std::unique_ptr<ModuleUnit>>& modules);
 
+  // The declared fields of every struct this checker registered, keyed by name,
+  // and the struct types whose owning edges can close a cycle. One walk produces
+  // both, so a later stage asks the checker instead of rebuilding the catalog
+  // from the types it happens to see.
+  const StructFieldTable& struct_field_table() const {
+    return struct_field_table_;
+  }
+  const std::unordered_set<std::string>& cyclic_structs() const {
+    return cyclic_structs_;
+  }
+
  private:
   struct DeferredCleanup {
     const CallExpr* call = nullptr;
@@ -89,6 +100,9 @@ class TypeChecker {
     BorrowPathSet paths;
     bool mutable_borrow = false;
   };
+  // Fills `struct_field_table_` from the registered structs and decides, per
+  // struct, whether its field graph can close a cycle of owning edges.
+  void analyze_struct_types();
   void check_function(FunctionDecl& function);
   void check_statement(Stmt& statement);
   void check_block(BlockStmt& block);
@@ -257,6 +271,8 @@ class TypeChecker {
   std::vector<std::vector<DeferredCleanup>> deferred_calls_;
   std::unordered_map<std::string, FunctionSignature> functions_;
   std::unordered_map<std::string, StructInfo> structs_;
+  StructFieldTable struct_field_table_;
+  std::unordered_set<std::string> cyclic_structs_;
 };
 
 }  // namespace nirq
