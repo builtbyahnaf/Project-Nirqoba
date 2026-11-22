@@ -1,0 +1,30 @@
+// A pooled allocation inside a loop.
+//
+// The classifier claims `node` as a loop-scoped pool: created on the edge into
+// the loop's header, one slot handed out per iteration, and destroyed on the edge
+// out of the loop, so the loop's peak is one iteration's payload and the chunks do
+// not survive the loop. The induction variable is plain assignment: Nirqoba has no
+// `++` operator, so `++i` here would parse as two unary pluses and the loop would
+// never advance.
+struct Cell {
+    dynamic_array<int> items;
+}
+
+int function fill(int count) {
+    var total = 0;
+    for (var i = 0; i < count; i = i + 1) {
+        var node = memory.allocate<Cell>(8192);
+        var items = memory.dynamic_array<int>();
+        memory.array_append(items, i);
+        *node = Cell { items: items };
+        total += (*node).items.length;
+        print(memory.array_live_count());
+    }
+    return total;
+}
+
+int function main() {
+    print(fill(4));
+    print(memory.array_live_count());
+    return 0;
+}
