@@ -7,7 +7,10 @@
 #endif
 
 #include "nirqoba/runtime/allocator.h"
+#include "nirqoba/runtime/array.h"
 #include "nirqoba/runtime/cdmm.h"
+#include "nirqoba/runtime/ffi.h"
+#include "nirqoba/runtime/file.h"
 #include "nirqoba/runtime/gc.h"
 #include "nirqoba/runtime/alloc_hint.h"
 #include "nirqoba/runtime/fatal.h"
@@ -3024,6 +3027,44 @@ void* nrq_cdmm_arena_allocate_destructible(void* handle, size_t bytes,
                                            NrqCdmmDestructor destructor,
                                            void* context) {
   return cdmm_arena_entry(handle, bytes, alignment, destructor, context);
+}
+
+// Releases one managed field of an object the arena owns. `context` carries the
+// address of the field's pointer word with the release kind in the two low bits:
+// a field pointer is at least eight-byte aligned, so the kind never overwrites a
+// bit the address needs. The object argument is the storage the arena allocated
+// and is not needed: the field address is the whole input.
+void nrq_cdmm_release_managed_field(void* object, void* context) {
+  (void)object;
+  const uintptr_t encoded = reinterpret_cast<uintptr_t>(context);
+  const uint32_t kind = static_cast<uint32_t>(encoded & 0x3u);
+  void** slot = reinterpret_cast<void**>(encoded & ~static_cast<uintptr_t>(0x3u));
+  if (!slot) return;
+  void* pointer = *slot;
+  if (!pointer) return;
+  switch (kind) {
+    case 1: nrq_ffi_free(pointer); break;
+    case 2: nrq_file_text_release(static_cast<char*>(pointer)); break;
+    case 3: nrq_array_free(pointer); break;
+    default: break;
+  }
+}
+
+int32_t nrq_cdmm_arena_register_teardown(void* handle, void* object,
+                                         void* context) {
+  if (!handle || !object) return 0;
+  std::shared_lock<std::shared_mutex> lock(cdmm_handle_mutex);
+  auto found = cdmm_handles.find(handle);
+  if (found == cdmm_handles.end()) return 0;
+  Allocator* allocator = found->second.get();
+  if (allocator->kind() != NRQ_ALLOCATOR_ARENA) return 0;
+  auto* arena = static_cast<ArenaAllocator*>(allocator);
+  return arena->serialize_operation([&] {
+    return arena->register_destructor(object, &nrq_cdmm_release_managed_field,
+                                      context)
+               ? 1
+               : 0;
+  });
 }
 
 size_t nrq_cdmm_arena_allocate_bulk(void* handle, size_t bytes,

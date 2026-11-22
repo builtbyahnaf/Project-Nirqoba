@@ -78,6 +78,30 @@ void* nrq_cdmm_arena_allocate_destructible(void* arena, size_t bytes,
                                            size_t alignment,
                                            NrqCdmmDestructor destructor,
                                            void* context);
+
+// Registers a teardown for an object the arena already handed out, so a bulk
+// destroy destroys the object's managed fields before releasing its chunks.
+//
+// The compiler knows where a field's pointer word sits, and the object exists
+// only after the allocation, so registration follows allocation instead of
+// riding on it. `context` is the field's pointer-word address with the release
+// kind in the two low bits - the address is at least eight-byte aligned, so the
+// kind fits without displacing a bit of it:
+//   1 = nrq_ffi_free, 2 = nrq_file_text_release, 3 = nrq_array_free.
+// `nrq_cdmm_release_managed_field` is the destructor that reads that encoding,
+// which is why no function pointer crosses the boundary.
+//
+// Returns one when the record was made and zero when the handle is unknown, the
+// object is null, or the arena has no room for the record.
+int32_t nrq_cdmm_arena_register_teardown(void* arena, void* object,
+                                         void* context);
+
+// The destructor registered above: loads the pointer word at the decoded
+// address, does nothing when it is null, and hands it to the release the kind
+// names. Exposed so a caller can register it directly with
+// `nrq_cdmm_arena_allocate_destructible` when the field address is already
+// known.
+void nrq_cdmm_release_managed_field(void* object, void* context);
 // Allocates `count` blocks and stores the successful prefix in `output`. Stops
 // at the first failure, so the return value is the number of blocks written.
 size_t nrq_cdmm_arena_allocate_bulk(void* arena, size_t bytes, size_t alignment,
