@@ -393,3 +393,25 @@ TEST(CdmmPoolTest, EachResetAdvancesTheGenerationOnce) {
   ASSERT_EQ(nrq_cdmm_pool_generation(pool, again), second + 1);
   ASSERT_EQ(nrq_cdmm_pool_destroy(pool), int32_t{1});
 }
+
+// The destructor belongs to the same pass: a reset destroys every live object, not
+// only the fields a teardown record names, and it does so before the payload is
+// poisoned - the destructor here still reads what the allocation wrote.
+TEST(CdmmPoolTest, ResetRunsThePoolDestructorForEveryLiveSlot) {
+  pool_destructor_calls = 0;
+  observed_first_byte = 0;
+  void* pool = nrq_cdmm_pool_create(32, 8, 0, 0, &count_destructor, nullptr);
+  ASSERT_NE(pool, nullptr);
+  void* first = nrq_cdmm_pool_allocate(pool);
+  ASSERT_NE(first, nullptr);
+  *static_cast<unsigned char*>(first) = 0x5A;
+  void* second = nrq_cdmm_pool_allocate(pool);
+  ASSERT_NE(second, nullptr);
+  *static_cast<unsigned char*>(second) = 0x5A;
+  ASSERT_EQ(pool_destructor_calls, 0);
+  ASSERT_EQ(nrq_cdmm_pool_reset(pool), int32_t{1});
+  ASSERT_EQ(pool_destructor_calls, 2);
+  ASSERT_EQ(static_cast<int>(observed_first_byte), 0x5A);
+  ASSERT_EQ(nrq_cdmm_pool_live(pool), uint64_t{0});
+  ASSERT_EQ(nrq_cdmm_pool_destroy(pool), int32_t{1});
+}
