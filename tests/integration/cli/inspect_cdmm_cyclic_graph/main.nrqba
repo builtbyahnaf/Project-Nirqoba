@@ -1,0 +1,22 @@
+// A payload whose type can close a cycle is collector storage by construction.
+//
+// `shared ptr GraphNode next` gives the node a reference count that can include
+// itself, so no deterministic release describes the object. The site is accepted
+// for the collector and the report names the shape that selected it, rather than
+// calling the fallback an escape.
+struct GraphNode {
+    int value;
+    shared ptr GraphNode next;
+}
+
+int function main() {
+    // The array is foreign storage: the node outlives this frame's use of it, so
+    // neither the stack nor an arena may own it.
+    var kept = memory.dynamic_array<GraphNode*>();
+    var node = memory.allocate<GraphNode>(32);
+    *node = GraphNode { value: 7, next: nullptr };
+    memory.array_append(kept, node);
+    print((*node).value);
+    print(kept.length);
+    return 0;
+}
