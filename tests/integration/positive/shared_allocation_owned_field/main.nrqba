@@ -1,0 +1,15 @@
+// A shared payload may own a pointer field. Its final release is the payload's
+// destruction, so the field is freed there - the same order a stack local keeps.
+struct Holder {
+    owned ptr int data;
+}
+
+int function main() {
+    var holder = memory.shared_allocate<Holder>(8);
+    *holder = Holder { data: memory.allocate<int>(4) };
+    *(*holder).data = 7;
+    print(*(*holder).data);
+    print(memory.shared_count(holder));
+    memory.shared_release(holder);
+    return 0;
+}

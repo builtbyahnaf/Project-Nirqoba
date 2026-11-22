@@ -1,7 +1,21 @@
-struct Node { shared ptr Node next; }
+// A shared payload may hold a shared pointer, which is what makes a cycle of them
+// expressible: each node's field takes a count of the other.
+struct Node {
+    int value;
+    shared ptr Node next;
+}
 
 int function main() {
-    let node = memory.shared_allocate<Node>(16);
-    memory.shared_release(node);
+    var a = memory.shared_allocate<Node>(16);
+    var b = memory.shared_allocate<Node>(16);
+    *a = Node { value: 1, next: nullptr };
+    *b = Node { value: 2, next: nullptr };
+    (*a).next = b;
+    (*b).next = a;
+    print(memory.shared_count(a));
+    print(memory.shared_count(b));
+    print((*(*a).next).value);
+    memory.shared_release(a);
+    memory.shared_release(b);
     return 0;
 }
