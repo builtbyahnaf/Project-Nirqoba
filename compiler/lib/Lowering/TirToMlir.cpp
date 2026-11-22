@@ -5801,6 +5801,37 @@ class FunctionTranslator {
             // reading the emitted IR.
             gc_call->setAttr("nirqoba.hybrid_strategy",
                              builder_.getStringAttr("gc"));
+            // A reference count inside collector storage has no deterministic
+            // owner left once the object is swept, so the runtime is told which
+            // words hold one and drops them when it reclaims the object.
+            std::vector<uint64_t> shared_offsets;
+            if (struct_types_ != nullptr)
+              collect_catalog_shared_offsets(payload, *struct_types_, 0,
+                                             shared_offsets);
+            else
+              collect_shared_reference_offsets(payload, 0, shared_offsets);
+            if (!shared_offsets.empty()) {
+              mlir::Value shared_descriptor =
+                  reference_layout_descriptor(shared_offsets, loc);
+              if (!shared_descriptor) {
+                diag_.error("NRQ4005", op.location,
+                            "internal: no descriptor for the shared fields");
+                return false;
+              }
+              mlir::Value shared_count = builder_.create<mlir::LLVM::ConstantOp>(
+                  loc, builder_.getI64Type(),
+                  builder_.getI64IntegerAttr(
+                      static_cast<int64_t>(shared_offsets.size()))).getResult();
+              auto register_fn = ensure_runtime_fn(
+                  module_, builder_, "nrq_gc_register_shared_fields",
+                  mlir::LLVM::LLVMVoidType::get(ctx_),
+                  {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_),
+                   builder_.getI64Type()});
+              builder_.create<mlir::LLVM::CallOp>(
+                  loc, register_fn,
+                  mlir::ValueRange{gc_call.getResult(), shared_descriptor,
+                                   shared_count});
+            }
             if (cold_marker) {
               auto end_fn = ensure_runtime_fn(
                   module_, builder_, "nrq_gc_root_frame_end",
