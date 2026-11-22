@@ -12,6 +12,65 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.647-beta
+
+### Summary of Changes (since `0.640-beta`)
+
+Aggregates own their fields now, and the arena keeps a teardown registry, so a
+payload that holds owned text or a container can live in a chunk without leaking
+the storage its fields own. Release label `+0.007` (`0.640-beta` -> `0.647-beta`)
+per the three-upgrade rule.
+
+#### An aggregate owns its fields
+
+- Packing a managed value into a struct literal moves the release into the
+  aggregate: the literal records which field owns storage and which release that
+  field needs, and a named owner that moves into the field stops cleaning itself up.
+  Before this, `Holder { name: get_c_string() }` emitted the call and never freed
+  the resulting buffer.
+- Destruction of an aggregate is one release per managed field, and never a release
+  of the aggregate itself: the binding owns the memory, the fields own what is
+  inside. The release is the one the producing value needed, so a buffer C handed
+  over keeps `nrq_ffi_free` while a buffer the language allocated gets
+  `nrq_file_text_release`.
+
+#### Arena-registered field teardowns
+
+- `nrq_cdmm_arena_register_teardown(arena, object, context)` records a field's
+  release on an object the arena already handed out. The runtime's existing
+  destructor list runs the records in reverse allocation order on reset and
+  destroy, before any chunk is released.
+- `nrq_cdmm_release_managed_field` is the one destructor the records name: it
+  decodes the field's pointer-word address and the release kind from `context`,
+  loads the word, and does nothing when it is null. No function pointer crosses the
+  boundary and no per-payload thunk is generated.
+- The lowering registers one record per managed field at the arena allocation, with
+  the field address computed by the compiler and the kind taken from the release
+  the literal recorded.
+
+#### Arena eligibility
+
+- A payload may hold `string_owned` or `dynamic_array<T>` now: both have a release
+  the registry can name, so `struct AstNode { string_owned identifier; owned ptr
+  AstNode next; }` is arena storage and a three-node chain costs one create and one
+  destroy. `shared` fields, bare `string`, fixed owned arrays and resource handles
+  still keep a payload with the collector.
+
+#### Tests
+
+- `positive/arena_hybrid_payload_ast` builds a three-node AST in one arena and
+  asserts one create, one destroy, one arena allocate, no general allocator and one
+  registered teardown whose kind is the FFI deallocator.
+- `positive/arena_hybrid_payload_text` runs the same shape with language-allocated
+  text and proves three live buffers before the arena dies and zero after it: the
+  registered teardowns are what reclaimed them.
+- `positive/struct_owned_field_release` keeps the aggregate half visible: an extern
+  string held in a struct field is released exactly once, at scope exit.
+- `cli/inspect_cdmm_owned_string_payload` now refutes a payload holding a `shared`
+  token, which the arena still refuses.
+
+---
+
 ## Version 0.640-beta
 
 ### Summary of Changes (since `0.637-beta`)
