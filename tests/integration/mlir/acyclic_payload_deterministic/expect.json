@@ -1,0 +1,10 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm-raw"],
+  "expect_ir_counts": {
+    "call ptr @nrq_memory_allocate(": 1,
+    "call void @nrq_memory_deallocate_checked(": 1,
+    "call ptr @nrq_gc_allocate_planned(": 0,
+    "call i64 @nrq_gc_root_frame_begin(": 0
+  }
+}
