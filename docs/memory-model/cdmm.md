@@ -554,9 +554,60 @@ matches it, and the stack, the arena and the pool are still asked first.
 
 A `shared ptr` field is a reference count, not a traced edge - the marking walk
 sees managed references only - so a collected object's shared fields keep their own
-protocol, and the count one holds when the collector reclaims the object is not
-released yet. That is the next step, and it needs a finalizer the storage does not
-have.
+protocol. The collector is their last owner: the payload's counts are registered
+with it at allocation, as byte offsets the sweep walks once the object is gone.
+
+### A collected payload returns its counts
+
+The registration table is per object, not per layout. A layout describes traced
+edges, and two payloads of the same geometry can still differ in which word carries
+a count, so the offsets travel with the allocation call instead:
+
+```
+@nrq_gc_layout_8_16 = private constant [2 x i64] [i64 8, i64 16]
+call void @nrq_gc_register_shared_fields(ptr %10, ptr @nrq_gc_layout_8_16, i64 2)
+```
+
+The table is keyed by the payload address. Reclaim releases each non-null word
+through `nrq_memory_shared_release`, after the registry lock is dropped, so a last
+release can take the shared-control lock without nesting inside the collector's.
+
+The sweep has two ways to reclaim an object, and only one of them visits it: a page
+whose objects are all unreachable is retired whole, from its counters, without
+reading a header. That path is correct for a payload the collector has no
+obligation to - nothing observable lives inside one - and wrong for a registered
+payload, whose counts would outlive the storage that described them. A page that
+holds a registration therefore falls through to the per-object sweep, which is what
+runs the finalizer:
+
+```
+struct Node { int value; shared ptr Node next; shared ptr int counter; }
+
+var keep = memory.shared_retain(counter);   // 2: keep and the field
+gc.collect();                                // node unreachable
+memory.shared_count(keep);                   // 1: the field's share came back
+```
+
+### Only a live field is overwritten
+
+A store into a shared field is two ownership operations: the value joins the field's
+ownership, and the value the field already held leaves it. The second half is only
+valid when the field held something. A field of a partially initialized aggregate
+holds undefined bytes, and releasing those is a use of uninitialized storage - the
+one thing a destructor-shaped protocol must never do.
+
+Sema already tracks which fields have been written. The answer travels with the
+statement: `AssignmentStmt::destination_holds_live_value`, then
+`tir.store ... destination_holds_live_value`, and the lowering that emits the load
+and release reads it there. A first store into a field emits the retain and the
+store and nothing else. The same statement also records whether the value is an
+existing reference or a fresh one: a name read out of storage keeps the count its
+source owns, so the destination takes one of its own; a fresh allocation hands its
+single count over, and retaining it would orphan the count.
+
+Where a field is addressed, the catalog decides whether it holds a reference at all
+- a GEP's own type has that erased - so the ids that name a shared field are
+recorded when the address is formed.
 
 ### A dynamic array is a field
 
