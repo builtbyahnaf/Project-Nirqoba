@@ -1,0 +1,36 @@
+// The same hybrid payload, runnable: the field's storage comes from the language,
+// so the registration names the runtime's own text release and the arena destroy
+// hands each buffer back before the chunk goes.
+//
+// The live counts are the proof. Three texts are alive while the chain holds them,
+// and none afterwards: the arena's bulk release reclaimed the nodes, and the three
+// registered teardowns reclaimed the fields they owned.
+struct Node {
+    string_owned name;
+    owned ptr Node next;
+}
+
+Node* function build_chain(int depth) {
+    var node = memory.allocate<Node>(32);
+    var text: string_owned = file.read_text_owned("tests/integration/positive/arena_hybrid_payload_text/a.txt");
+    if (depth > 0) {
+        var child = build_chain(depth - 1);
+        *node = Node { name: text, next: child };
+    } else {
+        *node = Node { name: text, next: nullptr };
+    }
+    return node;
+}
+
+int function use_chain() {
+    var root = build_chain(2);
+    print(file.text_live_count());
+    print((*root).name.length);
+    return 0;
+}
+
+int function main() {
+    use_chain();
+    print(file.text_live_count());
+    return 0;
+}
