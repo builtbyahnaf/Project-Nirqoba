@@ -518,6 +518,24 @@ membership is re-derived at lowering time from the loop's header label, because 
 teardown expansion changes the operation stream's length and a position measured
 before it can land on the loop's own exit label.
 
+### A payload that can close a cycle is collector storage
+
+The classifier's shape analysis answers where a value's storage may live; it cannot
+answer whether the value's *type* lets deterministic release describe it at all.
+`is_structurally_cyclic` answers that second question from the program's struct
+catalog: a loop of owning edges that crosses a reference count (`shared ptr`) is a
+cycle no release can break, because the count includes the edge that closes it,
+while a loop of unique owners is a tree - the closing edge would give the object a
+second owner, and no well-formed program can write one. Borrows, raw pointers, views
+and weak references keep nothing alive, and a `managed` reference leaves the cycle to
+the collector.
+
+A site whose payload can close such a cycle is accepted for the collector even when
+its fields need destruction: the deterministic gate in Sema refuses a payload whose
+release would not run its field teardowns, and a cyclic payload has no such release
+to run. The report names the shape - `-> gc (cyclic object graph detected)` - rather
+than an escape rationale, which is the difference between a fallback and a selection.
+
 ### A dynamic array is a field
 
 A `dynamic_array<T>` field owns its buffer, and both halves of the machinery above
