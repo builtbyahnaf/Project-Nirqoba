@@ -7911,12 +7911,14 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     // storage an arena or a pool owns is dropped here instead, because that
     // strategy's registry destroys the fields itself.
     {
-      std::unordered_set<int> served = selection.region_aliases;
-      // The sites themselves, not only the values that name them: a walk from the
-      // pointer a region handed out must find the storage it came from.
-      for (const RegionSelection& region : selection.regions)
+      // Only the regions that survived the stack analysis: a site the stack claimed
+      // has left them, and its frame runs the walk itself. Every surviving region
+      // names its storage by its sites and by the values that alias them.
+      std::unordered_set<int> served;
+      for (const RegionSelection& region : selection.regions) {
         served.insert(region.sites.begin(), region.sites.end());
-      served.insert(selection.pool_aliases.begin(), selection.pool_aliases.end());
+        served.insert(region.aliases.begin(), region.aliases.end());
+      }
       served.insert(selection.activation_sites.begin(),
                     selection.activation_sites.end());
       served.insert(arena_param_sites.begin(), arena_param_sites.end());
