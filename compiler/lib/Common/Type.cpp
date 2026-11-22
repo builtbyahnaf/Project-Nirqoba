@@ -94,8 +94,12 @@ bool arena_eligible_payload(const Type& type,
     if (type.is_shared_pointer() || type.is_resource_pointer()) return false;
     return arena_eligible_payload(type.element_type(), active);
   }
-  // Text, containers and array views all own or observe storage with a release or
-  // a lifetime of its own.
+  // Owned text and a dynamic container own storage, but a release can be named
+  // for them: the arena records a field teardown when it allocates, so the chunk
+  // releases the field's storage before it releases the chunk. Array views, SoA
+  // containers, fixed owned arrays and resource handles still cannot be
+  // described that way and stay out of the arena.
+  if (type.is_owned_string() || type.is_dynamic_array()) return true;
   return false;
 }
 
