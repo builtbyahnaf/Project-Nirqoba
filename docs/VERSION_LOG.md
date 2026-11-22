@@ -117,6 +117,17 @@ reclaims all three when the arena is destroyed.
   generation again.
 
 
+- `positive/pool_managed_payload` is the end-to-end pool proof: four identical
+  8192-byte payload sites exceed the frame budget, so the classifier claims them as
+  a pool ("repeated layout (4 sites)"), each slot registers its array teardown, and
+  the pool destroys the four buffers before it releases its chunks - four live
+  arrays inside the frame, none after it.
+- A loop-scoped pooled region still emits a broken loop: the induction variable's
+  increment block comes out empty and no scope-exit destroy is emitted, so a loop
+  the classifier pools does not run. The frame-scoped pool path is the one the
+  fixture proves; the loop path is the first item for 10c.
+
+
 ---
 
 ## Version 0.647-beta
