@@ -1654,6 +1654,34 @@ class FunctionTranslator {
     for (std::size_t index = 0; index < operations.size(); ++index)
       if (operations[index].kind == tir::OpKind::Label)
         label_positions_.emplace(operations[index].label_id, index);
+    // The span the analysis measured is on the stream it walked; a create, a
+    // membership test and a destroy all act on the stream this lowering emits, and
+    // that one is longer or shorter wherever a teardown was expanded. The header
+    // label names the loop in both streams, so the span is re-derived from it: the
+    // header's own position, then the last branch back to it, which is the back
+    // edge.
+    for (RegionSelection& region : regions_) {
+      if (!region.scope.loop || region.scope.header_label < 0) continue;
+      const auto header = label_positions_.find(region.scope.header_label);
+      if (header == label_positions_.end()) continue;
+      std::size_t end = header->second;
+      for (std::size_t index = header->second + 1; index < operations.size();
+           ++index) {
+        const tir::Op& op = operations[index];
+        if (op.kind != tir::OpKind::Branch &&
+            op.kind != tir::OpKind::BranchCond)
+          continue;
+        if (op.label_id == region.scope.header_label ||
+            op.true_label == region.scope.header_label ||
+            op.false_label == region.scope.header_label)
+          end = index;
+      }
+      // A loop with no back edge cannot host a region: keep the analysis answer,
+      // which is what the guard upstream agreed to.
+      if (end <= header->second) continue;
+      region.scope.begin = header->second;
+      region.scope.end = end;
+    }
     // Region membership by TIR value: a site needs its region's handle, and a
     // Drop must hand its slot back to the pool that handed it out. A loop-scoped
     // region is also indexed by its header's position, which is where its create
