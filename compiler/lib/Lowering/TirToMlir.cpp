@@ -2253,7 +2253,8 @@ class FunctionTranslator {
   // Registration follows the allocation because the object's address is the
   // allocation's result.
   void emit_arena_field_teardowns(mlir::Value handle, mlir::Value object,
-                                  const Type& payload, mlir::Location loc) {
+                                  const Type& payload, mlir::Location loc,
+                                  bool pool_slot = false) {
     if (!handle || !object) return;
     // An allocation's result is a pointer to the payload, and it is the payload's
     // fields the teardown table describes.
@@ -2313,8 +2314,12 @@ class FunctionTranslator {
       mlir::Value context = builder_
           .create<mlir::LLVM::IntToPtrOp>(loc, ptr, encoded)
           .getResult();
+      // A pool slot is reused, so its registry runs the teardown when the slot is
+      // released rather than when the pool dies; the record itself is the same.
       auto register_fn = ensure_runtime_fn(
-          module_, builder_, "nrq_cdmm_arena_register_teardown",
+          module_, builder_,
+          pool_slot ? "nrq_cdmm_pool_register_teardown"
+                    : "nrq_cdmm_arena_register_teardown",
           builder_.getI32Type(), {ptr, ptr, ptr});
       builder_.create<mlir::LLVM::CallOp>(
           loc, register_fn, mlir::ValueRange{handle, object, context});
