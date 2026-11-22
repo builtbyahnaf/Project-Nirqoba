@@ -550,6 +550,32 @@ class CdmmPool final : public Allocator {
     return release_slot(slot, checked, generation);
   }
 
+  bool register_serialized_teardown(void* object, NrqCdmmDestructor destructor,
+                                   void* context) {
+    return serialize_operation(
+        [&] { return register_teardown(object, destructor, context); });
+  }
+
+  // Registers a field teardown for one live slot. A pool reuses slots, so the
+  // record is looked up by the object it belongs to and consumed when that object
+  // is released: the next occupant of the slot must not inherit it.
+  bool register_teardown(void* object, NrqCdmmDestructor destructor,
+                        void* context) {
+    if (!object || !destructor) return false;
+    size_t chunk_index = 0;
+    size_t local = 0;
+    if (!locate(object, chunk_index, local)) return false;
+    Chunk& chunk = chunks_[chunk_index];
+    if ((chunk.live_bits[local / 64] & (uint64_t{1} << (local % 64))) == 0)
+      return false;
+    try {
+      teardowns_.push_back(SlotTeardown{object, destructor, context});
+    } catch (...) {
+      return false;
+    }
+    return true;
+  }
+
   bool reset() override {
     free_slot_count_ = 0;
     for (size_t chunk_index = 0; chunk_index < chunks_.size(); ++chunk_index) {
