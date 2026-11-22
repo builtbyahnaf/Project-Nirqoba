@@ -724,8 +724,11 @@ static std::unordered_map<int, StackAllocationLayout> analyze_stack_allocations(
           }
           continue;
         }
+        // A field walk destroys what the storage holds; it neither keeps the
+        // storage nor lets it out of the frame.
         if (op.kind == tir::OpKind::Borrow || op.kind == tir::OpKind::EndBorrow ||
-            op.kind == tir::OpKind::Drop)
+            op.kind == tir::OpKind::Drop ||
+            op.kind == tir::OpKind::AggregateFieldDestroy)
           continue;
         escapes = true;
       }
@@ -831,8 +834,11 @@ static std::unordered_map<int, StackAllocationLayout> analyze_stack_allocations(
           }
           continue;
         }
+        // A field walk destroys what the storage holds; it neither keeps the
+        // storage nor lets it out of the frame.
         if (op.kind == tir::OpKind::Borrow || op.kind == tir::OpKind::EndBorrow ||
-            op.kind == tir::OpKind::Drop)
+            op.kind == tir::OpKind::Drop ||
+            op.kind == tir::OpKind::AggregateFieldDestroy)
           continue;
         escapes = true;
       }
