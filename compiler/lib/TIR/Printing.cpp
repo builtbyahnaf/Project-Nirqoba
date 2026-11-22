@@ -182,6 +182,14 @@ string print_tir(const tir::Module& module) {
           out << " " << value_name(op.operand) << " obligation=" << op.obligation_id
               << " release=" << op.string_value;
           break;
+        case tir::OpKind::AggregateFieldDestroy:
+          out << " " << value_name(op.lhs);
+          for (std::size_t index = 0; index < op.release_fields.size() &&
+                                      index < op.release_callees.size();
+               ++index)
+            out << " field=" << op.release_fields[index] << ":"
+                << op.release_callees[index];
+          break;
         case tir::OpKind::Unreachable:
           break;
       }
