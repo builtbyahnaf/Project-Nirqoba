@@ -817,6 +817,18 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       store.operand = value;
       store.lhs = slot;
       store.result = slot;
+      store.destination_holds_live_value =
+          assignment.destination_holds_live_value();
+      store.destination_is_aggregate_field =
+          assignment.target().kind() == Expr::Kind::MemberAccess;
+      // A reference read out of storage keeps the count its source still owns, so
+      // the destination takes one of its own. A fresh allocation or a literal has
+      // no other owner and hands its single count to the destination instead.
+      const Expr& stored = assignment.value();
+      store.stores_shared_reference =
+          stored.kind() == Expr::Kind::MemberAccess ||
+          (stored.kind() == Expr::Kind::Name &&
+           stored.ownership() == ValueOwnership::Shared);
       function.add_operation(std::move(store));
       const Expr& copy_source = assignment.value();
       const bool copies_shared_aggregate =

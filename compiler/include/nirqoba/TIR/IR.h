@@ -211,6 +211,20 @@ struct Op {
   bool external_call = false;
   std::vector<Type> external_parameter_types;
 
+  // Store: the value is an existing shared reference, so the destination takes a
+  // count of its own instead of inheriting the value's single ownership.
+  bool stores_shared_reference = false;
+
+  // Store: the destination names one field of an aggregate rather than a
+  // binding, so the aggregate's ownership has to absorb the value.
+  bool destination_is_aggregate_field = false;
+
+  // Store: true when the destination already held a live value, so the store
+  // inherits an obligation to release what was there. False for the first write
+  // into a field, where the bytes are undefined and releasing them would be a
+  // use of uninitialized storage.
+  bool destination_holds_live_value = false;
+
   // Ownership metadata carried by Move/Borrow/Drop operations.
   TransferKind transfer_kind = TransferKind::Local;
   bool mutable_borrow = false;    // Borrow: exclusive access
