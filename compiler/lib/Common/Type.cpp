@@ -88,18 +88,22 @@ bool arena_eligible_payload(const Type& type,
   }
   if (type.is_managed_pointer()) return false;
   if (type.is_pointer()) {
-    // Only storage the compiler frees: a shared token is reference counted, and a
-    // resource handle names a runtime destructor, so neither may travel through a
-    // chunk that release does not walk.
-    if (type.is_shared_pointer() || type.is_resource_pointer()) return false;
+    // Only storage the compiler frees. A shared token is reference counted, and a
+    // resource handle names a runtime destructor: a file handle is the one domain
+    // the teardown registry can name, so it may travel through a chunk and the
+    // rest stay out until the registry grows a kind for them.
+    if (type.is_shared_pointer()) return false;
+    if (type.is_resource_pointer()) return type.resource_domain() == "file";
     return arena_eligible_payload(type.element_type(), active);
   }
-  // Owned text and a dynamic container own storage, but a release can be named
-  // for them: the arena records a field teardown when it allocates, so the chunk
-  // releases the field's storage before it releases the chunk. Array views, SoA
-  // containers, fixed owned arrays and resource handles still cannot be
-  // described that way and stay out of the arena.
-  if (type.is_owned_string() || type.is_dynamic_array()) return true;
+  // Owned text, a dynamic container and an owned array own storage, but a release
+  // can be named for them: the arena records a field teardown when it allocates,
+  // so the chunk releases each field's storage before it releases the chunk.
+  // Array views and SoA containers still cannot be described that way and stay
+  // out of the arena.
+  if (type.is_owned_string() || type.is_dynamic_array() ||
+      type.is_owned_array())
+    return true;
   return false;
 }
 
