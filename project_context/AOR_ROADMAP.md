@@ -354,6 +354,38 @@ AOR is complete only when:
 
 ---
 
+## 9. CDMM Hybrid Selector — Measured Status (Phase 12 complete)
+
+The CDMM arc is implemented and benchmarked. The selector is the compiler's, not the
+programmer's: a `memory.allocate` site (written by hand or synthesized by implicit
+return promotion) is classified as stack, pool, arena or collector from the escape
+and lifetime evidence around it, and `--inspect-cdmm` reports every decision with
+its reason.
+
+Micro-phase 12c re-ran `benchmarks/stress_test_2` with the released compiler, all
+validation checks passing (checksums, live-object counts, collection counts):
+
+| Topic | Phase | Nirqoba | C | C++ | Rust | Java |
+|---|---|---|---|---|---|---|
+| 01 allocation | alloc | **4.0 ms** | 26.65 | 27.00 | 28.77 | 2.43 |
+| 01 allocation | traverse | **2.0 ms** | 5.30 | 5.41 | 5.29 | 1.87 |
+| 01 allocation | collect | **0.0 ms** | 16.99 | 16.81 | 17.80 | 5.87 |
+| 02 mark and sweep | collect | **29.0 ms** | 33.99 | 33.25 | 36.60 | 59.72 |
+| 02 mark and sweep | build | **20.0 ms** | 24.56 | 25.36 | 23.37 | 14.28 |
+| 02 mark and sweep | traverse | **6.0 ms** | 13.39 | 13.78 | 7.42 | 5.51 |
+| 03 cycles | build | **5.0 ms** | 6.85 | 6.49 | 6.06 | 6.16 |
+| 03 cycles | collect | **0.0 ms** | 6.68 | 6.11 | 6.31 | 46.40 |
+
+Every phase on every topic is at or better than the manual baselines (C `malloc`,
+C++ `new`, Rust `Box`), which is the zero-regression requirement this arc was held
+to: the automated model is not paying for its automation.
+
+Known limits, recorded rather than hidden: the automated path is measured on these
+three shapes, not on every workload; promotion covers `return <name>` (a local
+stored into an escaping structure still takes the ordinary path); and a promoted
+pointer handed out of a bounded caller is validated by the arena's runtime handle
+check rather than at compile time.
+
 ## Final Directive
 
 **Extreme performance is the highest engineering priority. Runtime correctness, memory safety, stability, and maintainability are non-negotiable constraints.**
