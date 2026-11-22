@@ -85,9 +85,11 @@ void* nrq_cdmm_arena_allocate_destructible(void* arena, size_t bytes,
 // The compiler knows where a field's pointer word sits, and the object exists
 // only after the allocation, so registration follows allocation instead of
 // riding on it. `context` is the field's pointer-word address with the release
-// kind in the two low bits - the address is at least eight-byte aligned, so the
+// kind in the three low bits - the address is at least eight-byte aligned, so the
 // kind fits without displacing a bit of it:
-//   1 = nrq_ffi_free, 2 = nrq_file_text_release, 3 = nrq_array_free.
+//   1 = nrq_ffi_free, 2 = nrq_file_text_release, 3 = nrq_array_free,
+//   4 = an owned array's buffer (nrq_array_free on the field's first word),
+//   5 = a file resource (nrq_file_close_handle).
 // `nrq_cdmm_release_managed_field` is the destructor that reads that encoding,
 // which is why no function pointer crosses the boundary.
 //
