@@ -124,6 +124,9 @@ struct LoopScope {
   // that closes it.
   std::size_t begin = 0;
   std::size_t end = 0;
+  // The header's label id. Positions change when the stream is rewritten; the
+  // label names the same loop in every rewrite.
+  int header_label = -1;
 };
 
 // The loops of one function as spans of its operation stream, plus every position
@@ -148,6 +151,7 @@ class LoopNesting {
         const auto found = label_index.find(target);
         if (found == label_index.end() || found->second >= index) continue;
         nesting.spans_.emplace_back(found->second, index);
+        nesting.span_headers_.push_back(target);
       }
     }
     for (const auto& span : nesting.spans_)
@@ -206,6 +210,7 @@ class LoopNesting {
       scope.scoped = true;
       scope.begin = span.first;
       scope.end = span.second;
+      scope.header_label = span_headers_[index];
       width = candidate;
     }
     return scope;
@@ -251,6 +256,8 @@ class LoopNesting {
   }
 
   std::vector<std::pair<std::size_t, std::size_t>> spans_;
+  // The header label of each span, in the same order.
+  std::vector<int> span_headers_;
   std::vector<bool> enterable_;
   std::unordered_map<int, std::vector<std::size_t>> uses_;
 };
@@ -543,6 +550,7 @@ LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function) {
       site.loop_scoped = scope.scoped;
       site.scope_begin = scope.begin;
       site.scope_end = scope.end;
+      site.scope_header = scope.header_label;
     }
     if (allocation != nullptr) {
       site.layout_key = allocation->result.type.element_type().mangle();
@@ -826,6 +834,7 @@ CallSiteArenaPlan analyze_call_site_arenas(const Module& module) {
       site.loop_scoped = scope.scoped;
       site.scope_begin = scope.begin;
       site.scope_end = scope.end;
+      site.scope_header = scope.header_label;
       state.any_bounded = true;
       collected[caller].push_back(std::move(site));
     }

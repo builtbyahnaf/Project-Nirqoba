@@ -77,10 +77,12 @@ struct AllocationSite {
   // activation, which is what keeps a long-running loop's peak bounded by its own
   // work rather than by everything the frame ever allocated.
   // `scope_begin` is the loop header label's position in the operation stream
-  // and `scope_end` the back edge that closes the loop.
+  // and `scope_end` the back edge that closes the loop. `scope_header` is that
+  // header's label id, which names the same loop in any rewrite of the stream.
   bool loop_scoped = false;
   std::size_t scope_begin = 0;
   std::size_t scope_end = 0;
+  int scope_header = -1;
   // The programmer released this storage by hand. Bulk release cannot replace
   // that call, so a rewrite must leave the site alone.
   bool manually_released = false;
@@ -131,6 +133,7 @@ struct BoundedCallResult {
   bool loop_scoped = false;
   std::size_t scope_begin = 0;
   std::size_t scope_end = 0;
+  int scope_header = -1;
 };
 
 // Which callees take their caller's arena for the storage they return, and the
