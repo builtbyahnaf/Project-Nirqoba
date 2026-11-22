@@ -1990,21 +1990,15 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       // now that storage's owner, so whoever destroys the aggregate destroys the
       // field. The release is the one the producing value needed, which is why an
       // extern result keeps the foreign deallocator.
-      const std::vector<std::pair<std::string, Type>> declared_fields =
-          struct_type.struct_fields();
-      auto collect_release = [&](const std::string& field_name,
-                                 const Expr& element, const tir::Value& value) {
-        int index = -1;
-        for (std::size_t i = 0; i < declared_fields.size(); ++i)
-          if (declared_fields[i].first == field_name) {
-            index = static_cast<int>(i);
-            break;
-          }
-        if (index < 0 || !value.is_valid()) return;
+      // The pack position is the field index the lowering reads, so a literal
+      // whose type names only the struct still records every managed field in the
+      // slot the lowering will address. The element's own type decides whether it
+      // owns anything.
+      auto collect_release = [&](std::size_t position, const Expr& element,
+                                 const tir::Value& value) {
+        if (!value.is_valid()) return;
         std::string release;
-        if (!managed_field_release(declared_fields[static_cast<std::size_t>(index)].second,
-                                   function, value, release))
-          return;
+        if (!managed_field_release(value.type, function, value, release)) return;
         // A named owner moves into the field: the binding it left no longer owns
         // it, so its own cleanup stands down and the field's takes over.
         if (element.kind() == Expr::Kind::Name) {
@@ -2012,21 +2006,21 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
               lookup_slot(static_cast<const NameExpr&>(element).name());
           if (source.is_valid()) suppress_automatic_cleanup(source);
         }
-        pack.release_fields.push_back(index);
+        pack.release_fields.push_back(static_cast<int>(position));
         pack.release_callees.push_back(std::move(release));
       };
       if (si.is_positional()) {
-        for (std::size_t i = 0; i < si.positional_inits().size(); ++i)
-          if (i < pack.aggregate_elements.size() && i < declared_fields.size())
-            collect_release(declared_fields[i].first, *si.positional_inits()[i],
-                            pack.aggregate_elements[i]);
+        for (std::size_t i = 0;
+             i < si.positional_inits().size() && i < pack.aggregate_elements.size();
+             ++i)
+          collect_release(i, *si.positional_inits()[i],
+                          pack.aggregate_elements[i]);
       } else {
         const std::vector<std::pair<std::string, ExprPtr>>& inits =
             si.field_inits();
         for (std::size_t i = 0; i < inits.size() && i < pack.aggregate_elements.size();
              ++i)
-          collect_release(inits[i].first, *inits[i].second,
-                          pack.aggregate_elements[i]);
+          collect_release(i, *inits[i].second, pack.aggregate_elements[i]);
       }
       function.add_operation(std::move(pack));
       return result;
