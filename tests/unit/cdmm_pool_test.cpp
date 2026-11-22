@@ -367,3 +367,29 @@ TEST(CdmmPoolTest, AResetLeavesNoTeardownForTheNextGeneration) {
   ASSERT_EQ(nrq_cdmm_pool_destroy(pool), int32_t{1});
 }
 
+// A second reset advances the generation again and still runs what is live: the
+// counter is not reset, only the slots are.
+TEST(CdmmPoolTest, EachResetAdvancesTheGenerationOnce) {
+  void* pool = nrq_cdmm_pool_create(32, 8, 0, NRQ_CDMM_POOL_GENERATIONS, nullptr,
+                                    nullptr);
+  ASSERT_NE(pool, nullptr);
+  const int32_t live_before = nrq_array_live_count();
+  void* slot = nrq_cdmm_pool_allocate(pool);
+  ASSERT_NE(slot, nullptr);
+  const uint64_t first = nrq_cdmm_pool_generation(pool, slot);
+  *static_cast<void**>(slot) = nrq_array_create(4, 8, 8);
+  void* context = reinterpret_cast<void*>(
+      reinterpret_cast<uintptr_t>(slot) | uintptr_t{3});
+  ASSERT_EQ(nrq_cdmm_pool_register_teardown(pool, slot, context), int32_t{1});
+  ASSERT_EQ(nrq_cdmm_pool_reset(pool), int32_t{1});
+  const uint64_t second = nrq_cdmm_pool_generation(pool, slot);
+  ASSERT_EQ(second, first + 1);
+  ASSERT_EQ(nrq_array_live_count(), live_before);
+  // An empty pool can be reset again, and the generation still moves.
+  ASSERT_EQ(nrq_cdmm_pool_reset(pool), int32_t{1});
+  ASSERT_EQ(nrq_cdmm_pool_generation(pool, slot), second);
+  void* again = nrq_cdmm_pool_allocate(pool);
+  ASSERT_EQ(again, slot);
+  ASSERT_EQ(nrq_cdmm_pool_generation(pool, again), second + 1);
+  ASSERT_EQ(nrq_cdmm_pool_destroy(pool), int32_t{1});
+}
