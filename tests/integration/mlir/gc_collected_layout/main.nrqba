@@ -1,0 +1,24 @@
+// A collected object's reference-bearing fields travel with the allocation.
+//
+// `Holder` is cyclic because of its `shared ptr` field, and it also holds a
+// `managed<Payload>` field. The collector cannot see the type, so the lowering
+// hands it the payload's reference offsets (the managed field at byte 16) and the
+// runtime walks those bytes during marking instead of guessing.
+struct Payload {
+    int tag;
+}
+
+struct Holder {
+    int tag;
+    shared ptr Holder self;
+    managed<Payload> payload;
+}
+
+int function main() {
+    var kept = memory.dynamic_array<Holder*>();
+    var node = memory.allocate<Holder>(32);
+    *node = Holder { tag: 3, self: nullptr, payload: nullptr };
+    memory.array_append(kept, node);
+    print((*node).tag);
+    return 0;
+}
