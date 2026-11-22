@@ -7487,11 +7487,13 @@ std::vector<std::string> cdmm_report(
     bool promoted_callee,
     bool partially_promoted,
     const std::unordered_set<int>& escaping_call_results,
-    const std::unordered_set<int>& forwarded_call_results) {
+    const std::unordered_set<int>& forwarded_call_results,
+    const StructFieldTable* struct_types) {
   std::vector<std::string> lines;
   // A caller with no allocation sites of its own still reports the strategy it
   // chose for a callee's storage, so an empty analysis is not an empty report.
-  const tir::LifetimeAnalysis lifetimes = tir::LifetimeAnalysis::analyze(function);
+  const tir::LifetimeAnalysis lifetimes =
+      tir::LifetimeAnalysis::analyze(function, struct_types);
 
   // A variable is named where its pointer is stored, not where it is allocated.
   std::unordered_map<int, std::string> slot_names;
@@ -7552,7 +7554,12 @@ std::vector<std::string> cdmm_report(
       }
     } else {
       strategy = "gc";
-      rationale = std::string(escape_rationale(site->reason));
+      // A payload whose own type can close a cycle of owning edges is storage no
+      // deterministic release can describe: the collector is the strategy the
+      // shape selects, so the report names the shape rather than the escape.
+      rationale = site->cyclic_payload
+                      ? std::string("cyclic object graph detected")
+                      : std::string(escape_rationale(site->reason));
       if (site->in_loop) rationale += ", in loop";
     }
 
@@ -7712,7 +7719,8 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     DiagnosticEngine& diagnostics,
     bool fast_math,
     RuntimeConfiguration configuration,
-    bool inspect_cdmm) {
+    bool inspect_cdmm,
+    const StructFieldTable* struct_types) {
 
   mlir::OpBuilder builder(&context);
   mlir::OwningOpRef<mlir::ModuleOp> module =
@@ -7972,7 +7980,8 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
                                            promoted_callee,
                                            arena_plan.partial(tir_fn->name()),
                                            escaping_call_results,
-                                           forwarded_call_results))
+                                           forwarded_call_results,
+                                           struct_types))
         cdmm_lines.push_back(std::move(line));
     FunctionTranslator translator(
         *module, lowered_fn, borrowed_summary, collections, func_op, builder,

@@ -59,12 +59,17 @@ void reset_gc_root_analysis_stats();
 // which site got which strategy and why - on the module, for the strategy audit
 // pass to report. Without it nothing is recorded and the emitted program is
 // identical.
+// `struct_types` is the program's struct catalog. The strategy report uses it to
+// say when a payload can close a cycle of owning edges and the collector was
+// chosen for that reason; a caller with no catalog gets the report without that
+// sentence, and no other part of the translation changes.
 mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     const tir::Module& tir_module,
     mlir::MLIRContext& context,
     DiagnosticEngine& diagnostics,
     bool fast_math = false,
     RuntimeConfiguration configuration = RuntimeConfiguration::Production,
-    bool inspect_cdmm = false);
+    bool inspect_cdmm = false,
+    const StructFieldTable* struct_types = nullptr);
 
 }  // namespace nirq
