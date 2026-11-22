@@ -493,6 +493,15 @@ kind in the three low bits, read by `nrq_cdmm_release_managed_field`.
 makes a stale pointer harmless:
 
 
+1. The live bitmap is scanned and every live slot's records run, newest first, so a
+   slot's fields are destroyed while the payload is still readable.
+2. The optional pool destructor runs, then the slot's generation advances and the
+   payload is poisoned and linked back onto its chunk's free list.
+3. After every chunk has been walked, the record table is cleared once. A chunk that
+   held no live slot could not have registered anything, so the next generation
+   begins with nothing to inherit.
+
+
 ### A dynamic array is a field
 
 A `dynamic_array<T>` field owns its buffer, and both halves of the machinery above
