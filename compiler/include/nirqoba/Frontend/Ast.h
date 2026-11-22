@@ -471,11 +471,22 @@ class AssignmentStmt : public Stmt {
     destination_holds_live_value_ = live;
   }
 
+  // True when the destination lives in shared storage. Such storage is released
+  // once, by whichever owner takes the count to zero, so the fields are destroyed
+  // there instead of at the end of this frame.
+  bool destination_is_shared_storage() const {
+    return destination_is_shared_storage_;
+  }
+  void set_destination_is_shared_storage(bool shared) {
+    destination_is_shared_storage_ = shared;
+  }
+
  private:
   ExprPtr target_;
   ExprPtr value_;
   std::string cleanup_callee_;
   bool destination_holds_live_value_ = false;
+  bool destination_is_shared_storage_ = false;
 };
 
 class CompoundAssignmentStmt : public Stmt {

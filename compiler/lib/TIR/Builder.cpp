@@ -849,9 +849,13 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       // owns them, so the cleanup is pushed against the destination pointer and
       // runs when that scope ends - unless the storage belongs to an arena or a
       // pool, whose registry destroys the fields instead.
+      // Shared storage is destroyed by its final release, which the runtime runs
+      // through the registry the allocation site filled in. A walk here would
+      // free the same fields a second time, at a frame that does not own them.
       if (const tir::Op* origin = defining_operation(function, value);
           origin != nullptr && origin->kind == tir::OpKind::AggregatePack &&
-          !origin->release_fields.empty()) {
+          !origin->release_fields.empty() &&
+          !assignment.destination_is_shared_storage()) {
         // `*name` lowers to a zero index into the pointer the binding holds. The
         // pointer itself is the value the lifetime analysis tracks, so the record
         // names it: a destination an arena or a pool owns then matches the
