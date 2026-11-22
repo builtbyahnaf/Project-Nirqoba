@@ -1,0 +1,22 @@
+// Writing a shared reference into a field is two ownership operations.
+//
+// The value is read out of storage, so its source keeps its count and the field
+// takes one of its own. The field already held a value, so that value leaves:
+// the store releases it before overwriting the word. The payload also tells the
+// collector which of its words hold a count, because a swept object is the last
+// owner of each of them.
+struct Node {
+    int value;
+    shared ptr Node next;
+    shared ptr int counter;
+}
+
+int function main() {
+    var kept = memory.dynamic_array<Node*>();
+    var node = memory.allocate<Node>(16);
+    *node = Node { value: 1, next: nullptr, counter: nullptr };
+    var counter = memory.shared_allocate<int>(4);
+    (*node).counter = counter;
+    memory.array_append(kept, node);
+    return 0;
+}
