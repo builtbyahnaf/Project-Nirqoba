@@ -12,6 +12,52 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.660-beta
+
+### Summary of Changes (since `0.655-beta`)
+
+Phase 10 closes, and with it the memory-management arc: micro-phase 10d taught the
+classifier to recognise a payload whose type can close a cycle, and 10e makes that
+recognition a backend. A site the report calls `gc (cyclic object graph detected)`
+is now physically allocated by the collector, rooted, and reclaimed by reachability
+rather than by a block release. Release label `+0.004` (`0.655-beta` ->
+`0.660-beta`) per the three-upgrade rule.
+
+#### Micro-phase 10e: the cyclic GC backend
+
+- A `memory.allocate` site whose payload is structurally cyclic, and which no
+  stack, arena, pool or activation claim takes, lowers to
+  `nrq_gc_allocate_planned` instead of `nrq_memory_allocate`. The decision is read
+  from the struct catalog the checker publishes, so Sema's gate, the strategy
+  report and the emitted IR cannot disagree about which sites the collector owns.
+- The object is published into a root slot that is registered before the call: the
+  site opens a root frame around its allocation, registers the slot as a typed
+  pointer root (`nrq_gc_root_register_typed` with the offset table for a single
+  pointer), and closes the frame once the collector has stored the result. In a
+  function that already holds managed references the slot joins the activation's
+  frame instead and stays published until the activation ends.
+- The payload's reference offsets accompany the allocation: `GraphNode` reports an
+  empty table, a payload holding a `managed` field reports the field's byte offset
+  and the plan's `HAS_REFERENCES` bit, and the runtime walks the table during
+  marking. One read-only descriptor per layout and one cache word per site, so a
+  repeated allocation resolves its layout once.
+- The deterministic release of a collected object is suppressed: its Drop stays in
+  the TIR as the ownership record it is and lowers into nothing, exactly like a
+  region-owned binding. Without that, the frame-end free returned a block the
+  collector still traced.
+- `mlir/gc_cyclic_payload_allocation` pins the brief's True GC Test - one
+  `nrq_gc_allocate_planned`, zero `nrq_memory_allocate`, zero deterministic frees,
+  one root frame - and `mlir/gc_collected_layout` pins the traced field,
+  `mlir/acyclic_payload_deterministic` pins the other side: the same escape with a
+  payload that cannot close a cycle keeps its deterministic allocation and free.
+- Known gap for the next phase: a collected object's `shared ptr` fields are
+  reference counts, not traced edges, so the count one holds at reclamation is not
+  released. Cycles through shared pointers are now allocated and rooted by the
+  collector; releasing the counts they hold needs a finalizer the storage does not
+  have yet.
+
+---
+
 ## Version 0.655-beta
 
 ### Summary of Changes (since `0.651-beta`)
