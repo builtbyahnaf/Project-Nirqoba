@@ -587,3 +587,77 @@ TEST(LifetimeAnalysisTest, SelfRecursiveForwardingNeedsAHandle) {
   ASSERT_TRUE(plan.forwarded_call_results.empty());
   ASSERT_TRUE(plan.escaping_call_results.empty());
 }
+
+// Micro-phase 10d: the type-level fact travels with the classification.
+//
+// A payload's shape is a fact about the program's struct catalog, not about the
+// operation stream the shape analysis walks: the analysis sees a pointer, and only
+// the catalog knows what the pointee owns. Both answers below come from the same
+// site, and the flag is exactly as present as the catalog it was asked with.
+TEST(LifetimeAnalysisTest, APayloadThatCanCloseACycleIsFlaggedAtItsSite) {
+  DiagnosticEngine diag;
+  auto module = build_tir(
+      "struct GraphNode {\n"
+      "  int value;\n"
+      "  shared ptr GraphNode next;\n"
+      "}\n"
+      "int function main() {\n"
+      "  var kept = memory.dynamic_array<GraphNode*>();\n"
+      "  var node = memory.allocate<GraphNode>(32);\n"
+      "  *node = GraphNode { value: 7, next: nullptr };\n"
+      "  memory.array_append(kept, node);\n"
+      "  return 0;\n"
+      "}\n",
+      diag);
+  ASSERT_TRUE(module != nullptr);
+  const tir::Function* main_fn = find_function(*module, "main");
+  ASSERT_TRUE(main_fn != nullptr);
+  const int id = allocation_result(*main_fn);
+  ASSERT_TRUE(id >= 0);
+
+  // Without a catalog the site is classified exactly as before, and the type-level
+  // question is simply unanswered.
+  const tir::LifetimeAnalysis blind = tir::LifetimeAnalysis::analyze(*main_fn);
+  ASSERT_TRUE(blind.site(id) != nullptr);
+  EXPECT_TRUE(!blind.site(id)->cyclic_payload);
+
+  StructFieldTable table;
+  table["GraphNode"] = {
+      {"value", Type::int_type()},
+      {"next", Type::shared_pointer_type(Type::struct_type("GraphNode"))}};
+  const tir::LifetimeAnalysis aware =
+      tir::LifetimeAnalysis::analyze(*main_fn, &table);
+  ASSERT_TRUE(aware.site(id) != nullptr);
+  EXPECT_TRUE(aware.site(id)->cyclic_payload);
+  // The escape fact itself does not depend on the catalog.
+  EXPECT_TRUE(aware.site(id)->reason == blind.site(id)->reason);
+  EXPECT_TRUE(aware.site(id)->lifetime == tir::AllocationLifetime::Escaping);
+}
+
+// The catalog the classifier reads is the one the checker publishes, so the
+// allocation gate, the report and this analysis cannot disagree about a type.
+TEST(LifetimeAnalysisTest, TheCheckerPublishesTheStructCatalogAndItsCyclicTypes) {
+  DiagnosticEngine diag;
+  SourceFile src("catalog.nrqba",
+                 "struct GraphNode {\n"
+                 "  int value;\n"
+                 "  shared ptr GraphNode next;\n"
+                 "}\n"
+                 "struct TreeNode {\n"
+                 "  int value;\n"
+                 "  owned ptr TreeNode child;\n"
+                 "}\n"
+                 "int function main() { return 0; }\n");
+  Lexer lexer(src, diag);
+  Parser parser(lexer.tokenize(), diag);
+  auto program = parser.parse_program();
+  ASSERT_TRUE(program != nullptr);
+  TypeChecker checker(diag);
+  ASSERT_TRUE(checker.check(*program));
+
+  EXPECT_TRUE(checker.struct_field_table().count("GraphNode") == 1);
+  EXPECT_TRUE(checker.struct_field_table().count("TreeNode") == 1);
+  // A reference count can close a loop; a chain of unique owners cannot.
+  EXPECT_TRUE(checker.cyclic_structs().count("GraphNode") == 1);
+  EXPECT_TRUE(checker.cyclic_structs().count("TreeNode") == 0);
+}
