@@ -7,20 +7,25 @@ struct Payload {
     owned file ptr byte handle;
 }
 
-int function hold() {
+Payload* function build_payload() {
     var node = memory.allocate<Payload>(64);
     var children = memory.dynamic_array<int>();
     memory.array_append(children, 7);
     var cells = memory.owned_array<int>(3);
     var handle = file.open("tests/integration/positive/hello/expect.json", false);
     *node = Payload { children: children, cells: cells, handle: handle };
+    return node;
+}
+
+int function use_payload() {
+    var root = build_payload();
     print(memory.array_live_count());
-    print((*node).cells.length);
+    print((*root).cells.length);
     return 0;
 }
 
 int function main() {
-    hold();
+    use_payload();
     print(memory.array_live_count());
     return 0;
 }
