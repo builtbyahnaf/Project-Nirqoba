@@ -337,3 +337,33 @@ TEST(CdmmPoolTest, ResetRunsLiveTeardownsAndEndsTheGeneration) {
   ASSERT_EQ(nrq_cdmm_pool_destroy(pool), int32_t{1});
 }
 
+// The registry belongs to the generation that made it: a slot handed out after a
+// reset inherits nothing, so its own release frees only what it owns.
+TEST(CdmmPoolTest, AResetLeavesNoTeardownForTheNextGeneration) {
+  void* pool = nrq_cdmm_pool_create(32, 8, 0, 0, nullptr, nullptr);
+  ASSERT_NE(pool, nullptr);
+  const int32_t live_before = nrq_array_live_count();
+  void* slot = nrq_cdmm_pool_allocate(pool);
+  ASSERT_NE(slot, nullptr);
+  void* buffer = nrq_array_create(4, 8, 8);
+  ASSERT_NE(buffer, nullptr);
+  *static_cast<void**>(slot) = buffer;
+  void* context = reinterpret_cast<void*>(
+      reinterpret_cast<uintptr_t>(slot) | uintptr_t{3});
+  ASSERT_EQ(nrq_cdmm_pool_register_teardown(pool, slot, context), int32_t{1});
+  ASSERT_EQ(nrq_cdmm_pool_reset(pool), int32_t{1});
+  ASSERT_EQ(nrq_array_live_count(), live_before);
+  void* reused = nrq_cdmm_pool_allocate(pool);
+  ASSERT_EQ(reused, slot);
+  void* fresh = nrq_array_create(2, 8, 8);
+  ASSERT_NE(fresh, nullptr);
+  *static_cast<void**>(reused) = fresh;
+  ASSERT_EQ(nrq_array_live_count(), live_before + 1);
+  // Nothing was registered for this occupant, so the release frees no field.
+  ASSERT_EQ(nrq_cdmm_pool_release(pool, reused), int32_t{1});
+  ASSERT_EQ(nrq_array_live_count(), live_before + 1);
+  nrq_array_free(fresh);
+  ASSERT_EQ(nrq_array_live_count(), live_before);
+  ASSERT_EQ(nrq_cdmm_pool_destroy(pool), int32_t{1});
+}
+
