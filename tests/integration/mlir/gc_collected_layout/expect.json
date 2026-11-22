@@ -1,0 +1,11 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm-raw"],
+  "expect_ir_counts": {
+    "call ptr @nrq_gc_allocate_planned(": 1,
+    "call ptr @nrq_memory_allocate(": 0,
+    "@nrq_gc_layout_16 = private constant [1 x i64] [i64 16]": 1,
+    "ptr @nrq_gc_layout_16, i64 1": 1,
+    "call void @nrq_gc_root_register_typed(": 1
+  }
+}
