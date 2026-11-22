@@ -2705,6 +2705,33 @@ class FunctionTranslator {
     }
   }
 
+  // Storing a reference into a field is two ownership operations: the value joins
+  // the field's ownership, and whatever the field held leaves it. The second half
+  // only applies when the destination already held a value - a field of a
+  // partially initialized aggregate holds undefined bytes, and releasing those
+  // would be a use of uninitialized storage. Sema answers that question, the store
+  // carries the answer here.
+  void emit_managed_field_store(mlir::Value address, mlir::Value value,
+                                bool destination_holds_live_value,
+                                mlir::Location loc) {
+    if (value) {
+      auto retain = ensure_runtime_fn(module_, builder_,
+                                      "nrq_memory_shared_retain",
+                                      llvm_ptr_type(ctx_), {llvm_ptr_type(ctx_)});
+      builder_.create<mlir::LLVM::CallOp>(loc, retain, mlir::ValueRange{value});
+    }
+    if (!destination_holds_live_value) return;
+    auto previous = builder_.create<mlir::LLVM::LoadOp>(
+        loc, llvm_ptr_type(ctx_), address);
+    previous.setAlignment(8);
+    auto release = ensure_runtime_fn(module_, builder_,
+                                     "nrq_memory_shared_release",
+                                     builder_.getI32Type(),
+                                     {llvm_ptr_type(ctx_)});
+    builder_.create<mlir::LLVM::CallOp>(loc, release,
+                                        mlir::ValueRange{previous.getResult()});
+  }
+
   // Copying an aggregate retains every shared pointer field it carries, in
   // declaration order. Like destruction this is a plain recursion, not a
   // heap-allocated callable.
@@ -4624,6 +4651,12 @@ class FunctionTranslator {
         mlir::Value ptr = get(op.lhs);
         mlir::Value val = get(op.operand);
         if (!ptr || !val) return true;
+        // A shared reference written into an aggregate field: the field takes a
+        // count and, when it already held one, releases it.
+        if (op.stores_shared_reference &&
+            shared_field_addresses_.count(op.lhs.id) != 0)
+          emit_managed_field_store(ptr, val, op.destination_holds_live_value,
+                                   loc);
         // A destination no collection can observe needs neither a write barrier
         // nor a root copy. Keeping the store plain also leaves the slot free for
         // SSA promotion instead of making every access a runtime call.
@@ -6890,6 +6923,14 @@ class FunctionTranslator {
             : builder_.create<mlir::LLVM::GEPOp>(
                   loc, llvm_ptr_type(ctx_), pointee_type, base_ptr,
                   mlir::ValueRange{zero, idx}).getResult();
+        if (op.field_index >= 0 && op.lhs.type.is_struct() && struct_types_) {
+          const auto declared = struct_types_->find(op.lhs.type.struct_name());
+          const auto index = static_cast<std::size_t>(op.field_index);
+          if (declared != struct_types_->end() &&
+              index < declared->second.size() &&
+              declared->second[index].second.is_shared_pointer())
+            shared_field_addresses_.insert(op.result.id);
+        }
         set(op.result, gep);
         // A field or element sits at a multiple of its own alignment inside a
         // naturally aligned aggregate, so the derived pointer keeps the smaller
@@ -7201,6 +7242,10 @@ class FunctionTranslator {
   // TIR have their pointer ownership erased, so a store through a field address or
   // a collected payload's reference counts are read from here.
   const StructFieldTable* struct_types_ = nullptr;
+  // TIR value ids that name a field the catalog declares as a shared pointer. A
+  // GEP's own type has that erased, so the ids are recorded where the field is
+  // addressed and read where it is written.
+  std::unordered_set<int> shared_field_addresses_;
   // Payload struct name -> the fields that own storage, with the release each
   // one calls. The arena teardown registry is fed from this table.
   std::unordered_map<std::string, PayloadTeardowns> payload_field_releases_;
