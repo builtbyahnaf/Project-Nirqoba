@@ -6505,6 +6505,10 @@ class FunctionTranslator {
 
       case tir::OpKind::Borrow:
       case tir::OpKind::EndBorrow:
+      // Already expanded into a release per field, or dropped because a strategy's
+      // registry owns the storage. Nothing reaches lowering.
+      case tir::OpKind::AggregateFieldDestroy:
+        return true;
       case tir::OpKind::Drop: {
         // A pooled allocation goes back to its pool where its owner dies, so the
         // next iteration's site reuses that slot instead of taking another one
