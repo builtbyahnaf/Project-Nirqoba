@@ -12,6 +12,45 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.651-beta
+
+### Summary of Changes (since `0.647-beta`)
+
+Phase 9 closes with the last two pieces: a dynamic array is a legal aggregate field,
+and a pool runs the same field teardowns an arena runs. Release label `+0.004`
+(`0.647-beta` -> `0.651-beta`) per the three-upgrade rule.
+
+#### Dynamic array fields
+
+- Sema no longer refuses a `dynamic_array<T>` field. Its release is kind 3
+  (`nrq_array_free`), so an aggregate holding one has a teardown both halves of the
+  machinery can name: the binding-level field destruction from the previous phase
+  and the arena or pool registry.
+- `struct AstNode { dynamic_array<int> children; owned ptr AstNode next; }` is arena
+  storage, and a three-node chain reclaims all three buffers when the arena dies.
+
+#### Pool teardown registry
+
+- `CdmmPool` keeps a per-object record list. `nrq_cdmm_pool_register_teardown`
+  registers one, a slot release runs and consumes that object's records before the
+  slot is poisoned and put back on the free list, and reset or destroy runs every
+  remaining record before the chunks go.
+- The record is keyed by the object, not the slot: a pool hands the same address out
+  again, so an inherited record would destroy the next occupant's fields.
+- The lowering registers at the pooled allocation with the same encoded context the
+  arena uses, so one runtime destructor serves both strategies.
+
+#### Tests
+
+- `positive/arena_array_field_ast` builds a three-node AST whose nodes own dynamic
+  arrays and proves three live buffers before the arena dies and none after it.
+- `CdmmPoolTest.RegisteredFieldTeardownRunsWhenTheSlotIsReleased` and
+  `RegisteredFieldTeardownRunsForLiveSlotsOnPoolDestroy` prove the pool half
+  directly: a released slot reclaims its field, the reused slot inherits nothing,
+  and a pool that dies with live slots still reclaims all three.
+
+---
+
 ## Version 0.647-beta
 
 ### Summary of Changes (since `0.640-beta`)
