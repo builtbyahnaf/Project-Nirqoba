@@ -1,0 +1,21 @@
+{
+  "mode": "build",
+  "args": ["--emit=llvm-raw"],
+  "expect_ir_counts": {
+    "call ptr @nrq_cdmm_arena_create": 1,
+    "call i32 @nrq_cdmm_arena_destroy": 1,
+    "call ptr @nrq_cdmm_arena_allocate": 1,
+    "call ptr @nrq_memory_allocate": 0,
+    "call i32 @nrq_cdmm_arena_register_teardown": 1,
+    "or i64": 1,
+    "call ptr @get_c_string()": 2
+  },
+  "expect_ir_contains": [
+    "declare i32 @nrq_cdmm_arena_register_teardown(ptr, ptr, ptr)",
+    "declare noalias align 8 ptr @nrq_cdmm_arena_allocate(ptr, i64, i64)"
+  ],
+  "expect_stdout_index_order": [
+    "call i32 @nrq_cdmm_arena_register_teardown",
+    "call i32 @nrq_cdmm_arena_destroy"
+  ]
+}
