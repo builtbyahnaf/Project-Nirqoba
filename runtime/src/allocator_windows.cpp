@@ -906,6 +906,23 @@ class ArenaAllocator : public Allocator {
     return object;
   }
 
+  // Registers a destructor for an object the arena already handed out. The
+  // record lives in the arena beside the object, so a registered teardown costs
+  // one record and nothing outside the chunk that owns the storage.
+  bool register_destructor(void* object, NrqCdmmDestructor destructor,
+                           void* context) {
+    if (destroying_ || !object || !destructor) return false;
+    void* record = allocate(sizeof(DestructorRecord), alignof(std::max_align_t));
+    if (!record) return false;
+    DestructorRecord* entry = static_cast<DestructorRecord*>(record);
+    entry->previous = destructors_;
+    entry->destructor = destructor;
+    entry->context = context;
+    entry->object = object;
+    destructors_ = entry;
+    return true;
+  }
+
   void* allocate_destructible_serialized(size_t bytes, size_t alignment,
                                          NrqCdmmDestructor destructor,
                                          void* context) {
