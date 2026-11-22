@@ -1,5 +1,10 @@
 #include "nirqoba/TIR/Builder.h"
 
+// The layout rules are the compiler's, not the backend's: a promoted binding
+// asks for the same size an explicit allocation would, and two answers would
+// drift apart.
+#include "nirqoba/Lowering/DataLayout.h"
+
 #include <utility>
 
 namespace nirq {
@@ -1154,7 +1159,66 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       tir::Op op;
       op.kind = tir::OpKind::Return;
       op.location = return_statement.location();
-      if (return_statement.has_value()) {
+      if (return_statement.has_value() &&
+          !return_statement.implicit_promotion_name().empty()) {
+        // The binding's storage becomes an allocation the CDMM selector owns, the
+        // value moves into it, and the pointer is what leaves the frame. Every
+        // record this frame made about the binding is the caller's now: leaving
+        // them armed would free the same storage twice, once at this return and
+        // once at the caller's release.
+        const std::string& promoted = return_statement.implicit_promotion_name();
+        const tir::Value slot = lookup_slot(promoted);
+        if (!slot.is_valid()) {
+          diagnostics_.error(kUnresolvedSymbol, return_statement.location(),
+                             "internal: promoted binding '" + promoted +
+                                 "' has no TIR slot");
+          return;
+        }
+        for (auto& scope : deferred_expressions_)
+          for (DeferredCall& pending : scope)
+            if (pending.automatic && pending.owner_slot.is_valid() &&
+                pending.owner_slot.id == slot.id)
+              pending.active = false;
+        if (tir::DestructionObligation* obligation =
+                current_function_->pending_obligation_for_owner(slot)) {
+          obligation->discharged = true;
+          obligation->transferred = true;
+        }
+        const bool shared = return_statement.implicit_promotion_shared();
+        tir::Value bytes = function.allocate_value(Type::int_type());
+        tir::Op size_op;
+        size_op.kind = tir::OpKind::ConstantInt;
+        size_op.location = return_statement.location();
+        size_op.result = bytes;
+        size_op.integer_value = static_cast<long long>(nirq::type_size(slot.type));
+        function.add_operation(std::move(size_op));
+        tir::Value allocated = function.allocate_value(
+            Type::pointer_type(slot.type),
+            shared ? ValueOwnership::Shared : ValueOwnership::Owned);
+        tir::Op allocate;
+        allocate.kind = tir::OpKind::Call;
+        allocate.location = return_statement.location();
+        allocate.callee = shared ? "memory.shared_allocate" : "memory.allocate";
+        allocate.arguments = {bytes};
+        allocate.result = allocated;
+        function.add_operation(std::move(allocate));
+        tir::Value moved = function.allocate_value(slot.type,
+                                                   ValueOwnership::Owned);
+        tir::Op load;
+        load.kind = tir::OpKind::Load;
+        load.location = return_statement.location();
+        load.lhs = slot;
+        load.result = moved;
+        function.add_operation(std::move(load));
+        tir::Op store;
+        store.kind = tir::OpKind::Store;
+        store.location = return_statement.location();
+        store.operand = moved;
+        store.lhs = allocated;
+        store.result = allocated;
+        function.add_operation(std::move(store));
+        op.operand = allocated;
+      } else if (return_statement.has_value()) {
         TransferContextGuard guard(transfer_context_, tir::TransferKind::Return);
         op.operand = lower_expression(*return_statement.value(), function);
         if (op.operand.is_valid() &&
