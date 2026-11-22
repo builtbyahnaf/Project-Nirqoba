@@ -2194,6 +2194,21 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
       return;
     }
   }
+  // `*h = ...` and `(*h).field = ...` both name storage in the object `h` holds,
+  // so the root binding answers whether the destination is shared. The answer
+  // decides whether the fields are destroyed here or by the final release, so it
+  // is recorded for every destination shape.
+  // A dereference is a shape the ownership helpers do not follow, so the target
+  // is unwrapped once for the root: `*h = ...` names storage in `h`.
+  const Expr* destination_expr = &assignment.target();
+  while (destination_expr->kind() == Expr::Kind::Unary &&
+         static_cast<const UnaryExpr&>(*destination_expr).op() ==
+             UnaryOp::Dereference)
+    destination_expr = &static_cast<const UnaryExpr&>(*destination_expr).operand();
+  if (const Symbol* destination_owner =
+          find_root_symbol(*destination_expr, symbols_))
+    const_cast<AssignmentStmt&>(assignment)
+        .set_destination_is_shared_storage(destination_owner->shared_allocation);
   string field_owner;
   string field_name;
   const bool assigning_owned_field =
@@ -5662,13 +5677,11 @@ Type TypeChecker::check_call(CallExpr& call) {
     }
     const Type payload_type =
         resolve_aggregate_type(resolve_generic_type(call.generic_argument()));
-    if (requires_deterministic_cleanup(payload_type)) {
-      diagnostics_.error(
-          diag::kTypeMismatch, call.location(),
-          "shared allocations cannot contain '" + payload_type.to_string() +
-              "': the final release frees storage without running field destruction");
-      return Type::error();
-    }
+    // A shared allocation's final release is the one release of that storage, so
+    // the fields it holds are destroyed there. The lowering registers one teardown
+    // per destructible field with the runtime, and the last release runs them
+    // before it frees the block - a shared payload may therefore carry anything a
+    // stack local may.
     return Type::pointer_type(payload_type);
   }
   if (call.callee() == "memory.shared_retain") {
