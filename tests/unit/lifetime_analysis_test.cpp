@@ -356,12 +356,17 @@ TEST(LifetimeAnalysisTest, ArenaPayloadsArePlainData) {
   ASSERT_TRUE(tir::is_arena_eligible_payload(Type::struct_type(
       "Node", {{"value", Type::int_type()},
                {"next", Type::owned_pointer_type(Type::struct_type("Node"))}})));
-  // Storage with a release of its own cannot: an arena frees in bulk, so nothing
-  // here may need a destructor or a collector root.
-  ASSERT_FALSE(tir::is_arena_eligible_payload(Type::string_type()));
-  ASSERT_FALSE(tir::is_arena_eligible_payload(Type::owned_string_type()));
-  ASSERT_FALSE(tir::is_arena_eligible_payload(
+  // Owned text and a dynamic container are hybrid: they own storage, and the
+  // arena records a field teardown when it allocates, so the chunk's release
+  // reclaims the field's buffer before it reclaims the chunk.
+  ASSERT_TRUE(tir::is_arena_eligible_payload(Type::owned_string_type()));
+  ASSERT_TRUE(tir::is_arena_eligible_payload(
       Type::dynamic_array_type(Type::int_type())));
+  ASSERT_TRUE(tir::is_arena_eligible_payload(Type::struct_type(
+      "AstNode", {{"name", Type::owned_string_type()},
+                  {"next", Type::pointer_type(Type::struct_type("AstNode"))}})));
+  // A bare `string` is a view of someone else's buffer, so it stays out.
+  ASSERT_FALSE(tir::is_arena_eligible_payload(Type::string_type()));
   ASSERT_FALSE(tir::is_arena_eligible_payload(
       Type::owned_array_type(Type::int_type())));
   ASSERT_FALSE(tir::is_arena_eligible_payload(
@@ -369,11 +374,9 @@ TEST(LifetimeAnalysisTest, ArenaPayloadsArePlainData) {
   ASSERT_FALSE(tir::is_arena_eligible_payload(
       Type::managed_pointer_type(Type::int_type())));
   ASSERT_FALSE(tir::is_arena_eligible_payload(Type::struct_type(
-      "Text", {{"name", Type::owned_string_type()}})));
+      "Columns", {{"rows", Type::owned_array_type(Type::int_type())}})));
   ASSERT_FALSE(tir::is_arena_eligible_payload(Type::struct_type(
       "Handle", {{"file", Type::owned_pointer_type(Type::u8_type(), "file")}})));
-  ASSERT_FALSE(tir::is_arena_eligible_payload(Type::struct_type(
-      "Nodes", {{"items", Type::dynamic_array_type(Type::int_type())}})));
   ASSERT_FALSE(tir::is_arena_eligible_payload(Type::struct_type(
       "Nodes", {{"next", Type::shared_pointer_type(Type::int_type())}})));
 }
