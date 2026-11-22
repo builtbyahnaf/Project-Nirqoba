@@ -1,0 +1,35 @@
+// A shared reference stored into a field is the field's count, and the sweep is
+// what gives it back.
+//
+// `build` stores its parameter into the node's field, so the field takes a count
+// of its own; `keep` holds a second. The node then becomes unreachable and is
+// collected, and the count drops to one - the field's share, returned by the
+// collector's finalizer - while `keep` stays valid.
+struct Node {
+    int value;
+    shared ptr Node next;
+    shared ptr int counter;
+}
+
+int function build(shared ptr int counter) {
+    var kept = memory.dynamic_array<Node*>();
+    var node = memory.allocate<Node>(16);
+    *node = Node { value: 1, next: nullptr, counter: nullptr };
+    (*node).counter = counter;
+    memory.array_append(kept, node);
+    return kept.length;
+}
+
+int function main() {
+    var counter = memory.shared_allocate<int>(8);
+    *counter = 7;
+    print(memory.shared_count(counter));
+    var keep = memory.shared_retain(counter);
+    print(memory.shared_count(keep));
+    print(build(counter));
+    print(memory.shared_count(keep));
+    gc.collect();
+    gc.collect();
+    print(memory.shared_count(keep));
+    return 0;
+}
