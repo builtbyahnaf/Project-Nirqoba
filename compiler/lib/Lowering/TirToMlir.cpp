@@ -7509,6 +7509,28 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
   const CollectionSummary collections = summarize_collections(tir_module);
   const std::unordered_set<std::string> mutator_regions =
       summarize_mutator_regions(tir_module);
+  // The managed fields of every aggregate a literal packed with a release. An
+  // arena allocation of such a payload registers one teardown per field, because
+  // the chunk's bulk release cannot visit them: the release frees storage, and a
+  // field owns storage of its own.
+  std::unordered_map<std::string, PayloadTeardowns> payload_field_releases;
+  for (const auto& tir_fn : tir_module.functions())
+    for (const tir::Op& op : tir_fn->operations())
+      if (op.kind == tir::OpKind::AggregatePack && !op.slot_name.empty()) {
+        PayloadTeardowns& entry = payload_field_releases[op.slot_name];
+        if (entry.layout.struct_fields().empty()) entry.layout = op.result.type;
+        for (std::size_t i = 0;
+             i < op.release_fields.size() && i < op.release_callees.size(); ++i) {
+          // Two literals of the same payload describe the same field twice; the
+          // field is one slot, so it is registered once.
+          bool seen = false;
+          for (const std::pair<int, std::string>& known : entry.fields)
+            if (known.first == op.release_fields[i]) seen = true;
+          if (seen) continue;
+          entry.fields.emplace_back(op.release_fields[i],
+                                    op.release_callees[i]);
+        }
+      }
   // One table for the whole module: literal globals live at module scope, so the
   // names must not restart for every function the lowering visits.
   StringLiteralTable string_literals;
@@ -7721,7 +7743,8 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
         std::move(arena_param_sites), std::move(arena_param_aliases),
         std::move(selection.arena_call_regions),
         arena_plan.promoted_callees, std::move(forwarded_call_results),
-        std::move(selection.activation_sites), serves_from_caller);
+        std::move(selection.activation_sites), serves_from_caller,
+        payload_field_releases);
     if (!translator.translate()) return nullptr;
 
     builder.setInsertionPointAfter(func_op);
