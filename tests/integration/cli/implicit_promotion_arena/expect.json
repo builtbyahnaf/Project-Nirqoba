@@ -1,0 +1,6 @@
+{
+  "mode": "build",
+  "args": ["--inspect-cdmm", "--emit=llvm-raw"],
+  "expect_stderr_contains": "AstNode* -> arena (returned to bounded callers, arena handle checked at runtime)",
+  "expect_stdout_contains": ["call ptr @nrq_cdmm_arena_allocate("]
+}

@@ -1,0 +1,14 @@
+struct AstNode {
+    int value;
+}
+
+AstNode* function build() {
+    var root = AstNode { value: 42 };
+    return root;
+}
+
+int function main() {
+    var node = build();
+    print((*node).value);
+    return 0;
+}

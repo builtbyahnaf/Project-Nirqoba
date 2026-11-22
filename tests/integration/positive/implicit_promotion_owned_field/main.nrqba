@@ -1,0 +1,19 @@
+struct Payload {
+    int value;
+    dynamic_array<int> items;
+}
+
+Payload* function build_items() {
+    var items = memory.dynamic_array<int>();
+    memory.array_append(items, 4);
+    var p = Payload { value: 9, items: items };
+    return p;
+}
+
+int function main() {
+    var built = build_items();
+    print((*built).value);
+    print((*built).items.length);
+    print((*built).items[0]);
+    return 0;
+}
