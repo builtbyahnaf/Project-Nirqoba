@@ -128,6 +128,27 @@ reclaims all three when the arena is destroyed.
   fixture proves; the loop path is the first item for 10c.
 
 
+#### Micro-phase 10c: loop-scoped pools reach their exit edge
+
+- A loop-scoped region's span is re-derived from the loop's header label at lowering
+  time. The analysis measured it on the operation stream it walked; the aggregate
+  teardown expansion changes that stream's length, so a recorded end could land one
+  operation short of the back edge and the loop's exit label then looked like it was
+  inside the loop. `AllocationSite::scope_header` / `BoundedCallResult::scope_header`
+  carry the label, and `RegionScope::header_label` names it on the lowering side.
+- With the span corrected, `nrq_cdmm_pool_destroy` is emitted on the edge out of a
+  loop-scoped pool, so a pooled loop reclaims its chunks when the loop ends instead
+  of holding them for the rest of the activation. A `break`, an early `return` and a
+  false condition each get their own destroy block, exactly as loop-scoped arenas do.
+- `positive/pool_loop_scoped` proves it end-to-end: one `pool_create` on the
+  preheader, one `pool_allocate` and one `register_teardown` for the loop's single
+  pooled slot, one `pool_release` per iteration, and a single `pool_destroy` on the
+  exit edge - four live arrays inside the loop, none after it, and no
+  `nrq_memory_allocate` anywhere.
+- Nirqoba has no `++` operator: `for (...; ++i)` parses as two unary pluses, so the
+  step has no effect and such a loop never advances. That is a parser feature gap
+  rather than a lowering defect, and loop fixtures write `i = i + 1`.
+
 ---
 
 ## Version 0.647-beta
