@@ -326,12 +326,13 @@ bool arena_eligible_payload(const Type& type);
 using StructFieldTable =
     std::unordered_map<std::string, std::vector<std::pair<std::string, Type>>>;
 
-// True when `type`'s aggregate can close a cycle of owning edges: a struct that
-// holds an owner, or a reference count, to itself - directly, or through other
-// structs, fields and container elements. A borrow, a weak reference, a raw
-// pointer and an array view are not owning edges (they do not keep their target
-// alive), and a collector-managed pointer is left out because the collector is
-// what reclaims a cycle it reaches.
+// True when `type`'s aggregate can close a cycle that deterministic release
+// cannot break: a loop of owning edges with a reference count somewhere on it.
+// A loop of unique owners is not a cycle - the closing edge would give the object
+// a second owner, which no well-formed program can write - so a tree of
+// `owned ptr` fields stays a tree. A borrow, a weak reference, a raw pointer and
+// an array view do not keep their target alive at all, and a collector-managed
+// pointer leaves the cycle to the collector.
 //
 // This is a property of the type, not of a program's runtime graph: it says the
 // shape *allows* a cycle, which is the strongest statement the type alone can

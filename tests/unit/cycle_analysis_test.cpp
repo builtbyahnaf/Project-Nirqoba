@@ -49,12 +49,25 @@ TEST(CycleAnalysisTest, ASharedPointerBackToItsOwnStructIsCyclic) {
   EXPECT_TRUE(is_structurally_cyclic(Type::pointer_type(node), table) == false);
 }
 
-TEST(CycleAnalysisTest, AnOwnedPointerBackToItsOwnStructIsCyclic) {
+TEST(CycleAnalysisTest, AChainOfUniqueOwnersIsNotACycle) {
   StructFieldTable table;
   declare(table, "Ring",
           {{"value", Type::int_type()},
            {"next", Type::owned_pointer_type(struct_of("Ring"))}});
-  EXPECT_TRUE(is_structurally_cyclic(site_type("Ring", table), table));
+  // Unique ownership makes a loop impossible: the closing edge would give the
+  // object a second owner, which no well-formed program can write. The type names
+  // itself, but nothing here can hold a cycle.
+  EXPECT_TRUE(!is_structurally_cyclic(site_type("Ring", table), table));
+}
+
+TEST(CycleAnalysisTest, ACycleThatCrossesAReferenceCountIsCyclic) {
+  StructFieldTable table;
+  declare(table, "First",
+          {{"to_second", Type::owned_pointer_type(struct_of("Second"))}});
+  declare(table, "Second",
+          {{"to_first", Type::shared_pointer_type(struct_of("First"))}});
+  // First owns Second while Second counts First: the count never reaches zero.
+  EXPECT_TRUE(is_structurally_cyclic(site_type("First", table), table));
 }
 
 TEST(CycleAnalysisTest, ACycleThroughAnotherStructIsCyclic) {
@@ -91,10 +104,16 @@ TEST(CycleAnalysisTest, ATreeOfOwnedPointersIsNotCyclic) {
   declare(table, "TreeNode",
           {{"value", Type::int_type()},
            {"child", Type::owned_pointer_type(struct_of("TreeNode"))}});
-  // A tree node names itself, so the *type* allows a cycle even though the
-  // program builds a tree. The predicate answers for the type; only a program
-  // that never links a node back stays acyclic at runtime.
-  EXPECT_TRUE(is_structurally_cyclic(site_type("TreeNode", table), table));
+  EXPECT_TRUE(!is_structurally_cyclic(site_type("TreeNode", table), table));
+}
+
+TEST(CycleAnalysisTest, AContainerOfUniqueOwnersIsNotACycle) {
+  StructFieldTable table;
+  declare(table, "Branch",
+          {{"children",
+            Type::owned_array_type(
+                Type::owned_pointer_type(struct_of("Branch")))}});
+  EXPECT_TRUE(!is_structurally_cyclic(site_type("Branch", table), table));
 }
 
 TEST(CycleAnalysisTest, ABorrowDoesNotCloseACycle) {

@@ -1,6 +1,5 @@
 #include "nirqoba/Common/Type.h"
 
-#include <algorithm>
 #include <unordered_set>
 
 namespace nirq {
@@ -405,23 +404,30 @@ Type parse_type_name(string_view spelling) {
   return Type::error();
 }
 
-
-
 namespace {
 
-// An edge is owning when the field keeps its target alive. A deterministic owner
-// releases its target once; a shared pointer keeps a count that includes itself,
-// so a cycle of shared owners never reaches zero - both are owning edges here.
-bool owns_its_element(const Type& field) {
+// A deterministic owner releases its target once, so a chain of them is a tree:
+// unique ownership makes a cycle impossible in a well-formed program. A shared
+// pointer keeps a count that includes itself, so a cycle through one never reaches
+// zero - that is the edge deterministic release cannot break, and the only one
+// that makes a payload structurally cyclic.
+bool counts_references(const Type& field) {
+  return field.kind() == TypeKind::SharedPointer;
+}
+
+// A field whose payload the walk must enter. Ownership decides whether the walk
+// may cross the edge at all; whether a count was crossed rides along with the
+// frame, so the cycle test can ask what kind of loop it found.
+bool carries_the_walk_forward(const Type& field) {
   switch (field.kind()) {
     case TypeKind::OwnedPointer:
     case TypeKind::SharedPointer:
-    // A container owns its buffer, so its elements are reached by ownership.
     case TypeKind::OwnedArray:
     case TypeKind::DynamicArray:
       return true;
-    // Everything else either does not own (borrow, raw pointer, array view, weak)
-    // or hands the cycle to the collector (managed pointer).
+    // A borrow, a raw pointer, a view and a weak reference do not keep their
+    // target alive, and a collector-managed reference hands the cycle to the
+    // collector, so none of them carries a lifetime question forward.
     default:
       return false;
   }
@@ -436,24 +442,37 @@ const std::vector<std::pair<std::string, Type>>* declared_fields(
   return type.struct_fields().empty() ? nullptr : &type.struct_fields();
 }
 
+// One frame of the walk: the struct being entered, and whether a reference count
+// was crossed on the way to it.
+struct Frame {
+  std::string name;
+  bool counted = false;
+};
+
 bool field_closes_a_cycle(const Type& field, const StructFieldTable& table,
-                          std::vector<std::string>& path);
+                          std::vector<Frame>& path, bool counted);
 
 // Walks one aggregate's fields, reporting whether any of them leads back to a
-// struct already on the path. The path is what bounds the walk: a struct is
-// entered once, so a type graph no program could build (a struct holding itself
-// by value) answers instead of recursing forever.
+// struct already on the path through a reference count. The path bounds the walk:
+// a struct is entered once, so a type graph no program could build answers
+// instead of recursing forever.
 bool aggregate_closes_a_cycle(const Type& type, const StructFieldTable& table,
-                              std::vector<std::string>& path) {
+                              std::vector<Frame>& path, bool counted) {
   if (!type.is_struct()) return false;
   const std::string& name = type.struct_name();
   if (name.empty()) return false;
-  if (std::find(path.begin(), path.end(), name) != path.end()) return true;
+  for (const Frame& frame : path) {
+    if (frame.name != name) continue;
+    // The loop closes here. It is a memory-management cycle only when a
+    // reference count is part of it: unique owners around the whole loop cannot
+    // form one, because the last edge would give the object a second owner.
+    return counted || frame.counted;
+  }
   const auto* fields = declared_fields(type, table);
   if (fields == nullptr) return false;
-  path.push_back(name);
+  path.push_back(Frame{name, counted});
   for (const auto& field : *fields) {
-    if (!field_closes_a_cycle(field.second, table, path)) continue;
+    if (!field_closes_a_cycle(field.second, table, path, counted)) continue;
     path.pop_back();
     return true;
   }
@@ -462,20 +481,23 @@ bool aggregate_closes_a_cycle(const Type& type, const StructFieldTable& table,
 }
 
 bool field_closes_a_cycle(const Type& field, const StructFieldTable& table,
-                          std::vector<std::string>& path) {
+                          std::vector<Frame>& path, bool counted) {
   // A struct stored inline is part of the same allocation, so walking it is
   // walking the parent's own fields.
-  if (field.is_struct()) return aggregate_closes_a_cycle(field, table, path);
-  if (!owns_its_element(field)) return false;
+  if (field.is_struct())
+    return aggregate_closes_a_cycle(field, table, path, counted);
+  if (!carries_the_walk_forward(field)) return false;
+  const bool counted_now = counted || counts_references(field);
   const Type element = field.element_type();
-  return element.is_valid() && field_closes_a_cycle(element, table, path);
+  return element.is_valid() &&
+         field_closes_a_cycle(element, table, path, counted_now);
 }
 
 }  // namespace
 
 bool is_structurally_cyclic(const Type& type, const StructFieldTable& table) {
-  std::vector<std::string> path;
-  return field_closes_a_cycle(type, table, path);
+  std::vector<Frame> path;
+  return field_closes_a_cycle(type, table, path, false);
 }
 
 }  // namespace nirq
