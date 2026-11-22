@@ -798,6 +798,18 @@ class CdmmPool final : public Allocator {
     return true;
   }
 
+  // Runs and consumes the records registered for one object, newest first, so a
+  // nested field is destroyed in the reverse order it was registered.
+  void run_slot_teardowns(void* object) {
+    if (teardowns_.empty()) return;
+    for (size_t index = teardowns_.size(); index > 0; --index) {
+      const SlotTeardown& record = teardowns_[index - 1];
+      if (record.object != object) continue;
+      record.destructor(record.object, record.context);
+      teardowns_.erase(teardowns_.begin() + static_cast<ptrdiff_t>(index - 1));
+    }
+  }
+
   bool add_chunk() {
     const size_t slots = slots_per_chunk_;
     if (slots == 0 || slots > (std::numeric_limits<size_t>::max() - 64) / stride_)
@@ -860,6 +872,15 @@ class CdmmPool final : public Allocator {
 
   size_t slot_bytes_ = 0;
   size_t alignment_ = 8;
+  // One registered field teardown: the object it belongs to, and what to run when
+  // that object leaves the pool. The object pointer is the key because a slot is
+  // reused and its next occupant owns nothing of the previous one.
+  struct SlotTeardown {
+    void* object = nullptr;
+    NrqCdmmDestructor destructor = nullptr;
+    void* context = nullptr;
+  };
+
   size_t stride_ = 0;
   size_t slots_per_chunk_ = 0;
   bool generations_ = false;
@@ -874,6 +895,7 @@ class CdmmPool final : public Allocator {
   // never invalidates them.
   std::vector<size_t> chunk_order_;
   std::vector<size_t> chunks_with_free_;
+  std::vector<SlotTeardown> teardowns_;
 };
 
 struct ArenaChunk {
