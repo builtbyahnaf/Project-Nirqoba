@@ -5653,6 +5653,93 @@ class FunctionTranslator {
             set(op.result, result);
             emit_arena_field_teardowns(handle, result, op.result.type, loc);
             return true;
+          } else if (collector_sites_.count(op.result.id) != 0) {
+            // The collector owns this storage. Every cheaper strategy had its
+            // say and declined - a cyclic payload escapes by construction, a
+            // stack copy would dangle, an arena would free it wholesale - so the
+            // allocation goes to the managed heap with the object's reference
+            // offsets attached, and the collector walks those fields itself.
+            const Type& payload = op.result.type.element_type();
+            // The slot that holds the object is itself a managed reference: the
+            // collector publishes into it, and marking must be able to read it
+            // while the allocation is still in flight.
+            const Type root_type = Type::managed_pointer_type(payload);
+            std::vector<uint64_t> reference_offsets;
+            collect_managed_reference_offsets(payload, 0, reference_offsets);
+            mlir::Value root_slot = alloca_at_entry(llvm_ptr_type(ctx_), loc);
+            if (!root_slot) {
+              diag_.error("NRQ4005", op.location,
+                          "internal: no entry block for a collected allocation");
+              return false;
+            }
+            mlir::Value cold_marker;
+            if (gc_roots_.only_cold_alloc_roots) {
+              // Nothing else in this activation holds a managed reference, so the
+              // frame covers this one call and closes as soon as the collector
+              // has published the object.
+              mlir::Value null_ptr = builder_.create<mlir::LLVM::ZeroOp>(
+                  loc, llvm_ptr_type(ctx_)).getResult();
+              builder_.create<mlir::LLVM::StoreOp>(loc, null_ptr, root_slot)
+                  .setAlignment(8);
+              auto begin_fn = ensure_runtime_fn(
+                  module_, builder_, "nrq_gc_root_frame_begin",
+                  builder_.getI64Type(), {});
+              cold_marker = builder_.create<mlir::LLVM::CallOp>(
+                  loc, begin_fn, mlir::ValueRange{}).getResult();
+              emit_gc_root_registration(root_slot, root_type, loc);
+            } else {
+              // The activation already has a frame; the root joins it and stays
+              // published until the frame ends.
+              register_gc_root(root_slot, root_type, loc);
+            }
+            // One read-only descriptor per payload layout, and one
+            // zero-initialised cache word per site: the runtime resolves the
+            // layout once and the site reuses it.
+            constexpr uint32_t kHasReferencesPlanBit = 1u << 3;
+            mlir::Value offsets_pointer = builder_.create<mlir::LLVM::ZeroOp>(
+                loc, llvm_ptr_type(ctx_)).getResult();
+            if (!reference_offsets.empty()) {
+              offsets_pointer = reference_layout_descriptor(reference_offsets, loc);
+              if (!offsets_pointer) {
+                diag_.error("NRQ4005", op.location,
+                            "internal: no descriptor for the collected layout");
+                return false;
+              }
+            }
+            AllocationSiteGlobals site = allocation_site_globals(loc);
+            mlir::Value reference_count = builder_.create<mlir::LLVM::ConstantOp>(
+                loc, builder_.getI64Type(),
+                builder_.getI64IntegerAttr(
+                    static_cast<int64_t>(reference_offsets.size()))).getResult();
+            mlir::Value plan = builder_.create<mlir::LLVM::ConstantOp>(
+                loc, builder_.getI32Type(),
+                builder_.getI32IntegerAttr(
+                    reference_offsets.empty()
+                        ? 0
+                        : static_cast<int32_t>(kHasReferencesPlanBit))).getResult();
+            auto gc_fn = ensure_runtime_fn(
+                module_, builder_, "nrq_gc_allocate_planned",
+                llvm_ptr_type(ctx_),
+                {llvm_ptr_type(ctx_), builder_.getI64Type(),
+                 llvm_ptr_type(ctx_), builder_.getI64Type(),
+                 llvm_ptr_type(ctx_), builder_.getI32Type()});
+            auto gc_call = builder_.create<mlir::LLVM::CallOp>(
+                loc, gc_fn,
+                mlir::ValueRange{root_slot, bytes, offsets_pointer,
+                                 reference_count, site.site_cache, plan});
+            // Names the decision for the pass that audits it and for anyone
+            // reading the emitted IR.
+            gc_call->setAttr("nirqoba.hybrid_strategy",
+                             builder_.getStringAttr("gc"));
+            if (cold_marker) {
+              auto end_fn = ensure_runtime_fn(
+                  module_, builder_, "nrq_gc_root_frame_end",
+                  mlir::LLVM::LLVMVoidType::get(ctx_), {builder_.getI64Type()});
+              builder_.create<mlir::LLVM::CallOp>(loc, end_fn,
+                                                  mlir::ValueRange{cold_marker});
+            }
+            set(op.result, gc_call.getResult());
+            return true;
           } else {
             auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_allocate",
                 llvm_ptr_type(ctx_), {builder_.getI64Type(), builder_.getI64Type()});
