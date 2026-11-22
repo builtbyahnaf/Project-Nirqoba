@@ -112,6 +112,11 @@ enum class OpKind {
   Borrow,            // operand = borrowed value, lhs = owner; no runtime action
   EndBorrow,         // operand = borrow whose lexical lifetime ended
   Drop,              // operand = owning value whose obligation is discharged
+  // An aggregate's field walk: lhs names the aggregate (or a pointer to it) and
+  // `release_fields`/`release_callees` name the managed fields. It is its own kind
+  // rather than a Call so the escape and lifetime analyses do not read it as
+  // passing the storage to a callee.
+  AggregateFieldDestroy,
   Unreachable,       // marks a block control never reaches (emitted at a dead merge point)
 };
 
