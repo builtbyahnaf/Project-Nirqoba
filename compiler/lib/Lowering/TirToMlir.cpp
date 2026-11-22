@@ -2284,9 +2284,12 @@ class FunctionTranslator {
         kind = 1;
       else if (field.second == "file.free_text")
         kind = 2;
-      else if (field.second == "nrq_array_free" ||
-               field.second == "array.owned_release")
+      else if (field.second == "nrq_array_free")
         kind = 3;
+      else if (field.second == "array.owned_release")
+        kind = 4;
+      else if (field.second == "file.close")
+        kind = 5;
       if (kind == 0) continue;
       // The pack position is the field index, exactly as the pack itself was
       // lowered, so both halves of the layout agree.
