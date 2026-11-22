@@ -1,0 +1,39 @@
+// The complete AST shape: a node whose children are a dynamic array.
+//
+// The array owns a buffer, so the chunk's bulk release cannot reclaim it. The
+// allocation registers a field teardown with the arena (kind 3, the array
+// release), and `nrq_cdmm_arena_destroy` runs all three records before it
+// releases the chunks that held the nodes.
+//
+// The live counts are the proof: three buffers are alive while the chain holds
+// them, and none afterwards.
+struct AstNode {
+    dynamic_array<int> children;
+    owned ptr AstNode next;
+}
+
+AstNode* function build_ast(int depth) {
+    var node = memory.allocate<AstNode>(32);
+    var items = memory.dynamic_array<int>();
+    memory.array_append(items, depth);
+    if (depth > 0) {
+        var child = build_ast(depth - 1);
+        *node = AstNode { children: items, next: child };
+    } else {
+        *node = AstNode { children: items, next: nullptr };
+    }
+    return node;
+}
+
+int function use_ast() {
+    var root = build_ast(2);
+    print(memory.array_live_count());
+    print((*root).children.length);
+    return 0;
+}
+
+int function main() {
+    use_ast();
+    print(memory.array_live_count());
+    return 0;
+}
