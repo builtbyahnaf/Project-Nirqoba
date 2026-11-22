@@ -2000,11 +2000,19 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       // whose type names only the struct still records every managed field in the
       // slot the lowering will address. The element's own type decides whether it
       // owns anything.
+      const std::vector<std::pair<std::string, Type>> declared_fields =
+          struct_type.struct_fields();
       auto collect_release = [&](std::size_t position, const Expr& element,
                                  const tir::Value& value) {
         if (!value.is_valid()) return;
+        // The field's declared type decides what it owns: a move hands over a bare
+        // handle whose value type no longer carries the resource domain, and the
+        // declared type is what names the destructor.
+        const Type field_type =
+            position < declared_fields.size() ? declared_fields[position].second
+                                              : value.type;
         std::string release;
-        if (!managed_field_release(value.type, function, value, release)) return;
+        if (!managed_field_release(field_type, function, value, release)) return;
         // A named owner moves into the field: the binding it left no longer owns
         // it, so its own cleanup stands down and the field's takes over.
         if (element.kind() == Expr::Kind::Name) {
