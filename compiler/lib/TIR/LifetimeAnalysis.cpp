@@ -398,6 +398,9 @@ LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function) {
       case OpKind::Borrow:
       case OpKind::EndBorrow:
       case OpKind::Drop:
+      // The walk names the storage but changes nothing about how long it lives:
+      // what it destroys is the fields, at the address it was given.
+      case OpKind::AggregateFieldDestroy:
       case OpKind::ConstantInt:
       case OpKind::ConstantNull:
       case OpKind::ConstantFloat:
