@@ -585,8 +585,22 @@ class ReturnStmt : public Stmt {
   bool has_value() const { return value_ != nullptr; }
   const Expr* value() const { return value_.get(); }
 
+  // Set when Sema accepted a local aggregate value where the function declares a
+  // managed pointer. The binding is promoted to heap storage at this return
+  // instead of being moved onto the caller's frame.
+  const std::string& implicit_promotion_name() const {
+    return implicit_promotion_name_;
+  }
+  bool implicit_promotion_shared() const { return implicit_promotion_shared_; }
+  void set_implicit_promotion(std::string name, bool shared) {
+    implicit_promotion_name_ = std::move(name);
+    implicit_promotion_shared_ = shared;
+  }
+
  private:
   ExprPtr value_;
+  std::string implicit_promotion_name_;
+  bool implicit_promotion_shared_ = false;
 };
 
 // Schedules a call expression to run in reverse order when its lexical block

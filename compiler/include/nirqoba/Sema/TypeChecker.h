@@ -116,6 +116,11 @@ class TypeChecker {
   void check_break(BreakStmt& statement);
   void check_continue(ContinueStmt& statement);
   void check_return(ReturnStmt& statement);
+  // Recognises `return <local aggregate>` where the declared type is a managed
+  // pointer, and marks the binding for promotion. Runs before the ordinary
+  // expression check, whose answers describe a stack binding and would abort on
+  // exactly the shapes promotion exists for.
+  bool promote_returned_local(ReturnStmt& statement);
   void check_deferred_cleanup(DeferredCleanupStmt& statement);
   bool has_pending_deferred_release(uint64_t allocation_id) const;
   bool reject_move_after_defer(const Symbol& source,

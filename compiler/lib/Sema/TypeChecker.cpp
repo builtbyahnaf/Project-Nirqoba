@@ -3084,6 +3084,42 @@ SymbolTable TypeChecker::loop_exit_state_after_defer() const {
   return state;
 }
 
+bool TypeChecker::promote_returned_local(ReturnStmt& statement) {
+  if (!current_return_type_.is_pointer()) return false;
+  if (!statement.has_value()) return false;
+  const Expr& value = *statement.value();
+  if (value.kind() != Expr::Kind::Name) return false;
+  const auto& name = static_cast<const NameExpr&>(value);
+  const Symbol* source = symbols_.lookup(name.name());
+  if (source == nullptr) return false;
+  // Only a plain local value is promoted. Everything already pointer-shaped or
+  // already managed has its own return rule, and running this one would claim a
+  // storage decision another rule already made.
+  if (source->borrowed || source->owns_allocation || source->shared_allocation ||
+      source->manual_allocation)
+    return false;
+  const Type payload = current_return_type_.element_type();
+  if (!payload.is_valid() || payload.is_pointer()) return false;
+  if (!(source->type == payload)) return false;
+  // The payload rule is the explicit allocation's: either a bulk release reclaims
+  // the block whole, or the shape is one the collector owns. Anything else would
+  // hand the allocator a field walk it cannot run.
+  const bool bulk_reclaimable =
+      !requires_deterministic_cleanup(payload) ||
+      (arena_eligible_payload(payload) && !contains_qualified_field(payload)) ||
+      is_structurally_cyclic(payload, struct_field_table_);
+  if (!bulk_reclaimable) return false;
+  const bool shared = current_return_shared_;
+  statement.set_implicit_promotion(name.name(), shared);
+  Expr& mutable_value = const_cast<Expr&>(value);
+  mutable_value.set_type(current_return_type_);
+  mutable_value.set_ownership(shared ? ValueOwnership::Shared
+                                     : ValueOwnership::Owned);
+  mutable_value.set_transfers_ownership();
+  symbols_.mark_field_moved(name.name(), "");
+  return true;
+}
+
 void TypeChecker::check_return(ReturnStmt& statement) {
   if (!current_return_type_.is_valid()) return;
 
@@ -3096,7 +3132,15 @@ void TypeChecker::check_return(ReturnStmt& statement) {
     return;
   }
 
-  const Type value_type = check_expression(const_cast<Expr&>(*statement.value()));
+  // A promoted return is decided before the expression is checked. Everything the
+  // ordinary check would say about it - its type, and that an owned field cannot
+  // escape an aggregate - is true of a stack binding and false of one whose
+  // storage is an allocation the caller receives, so the decision cannot come
+  // after those answers are computed.
+  const bool promoted = promote_returned_local(statement);
+  const Type value_type = promoted
+      ? current_return_type_
+      : check_expression(const_cast<Expr&>(*statement.value()));
   if (statement.value()->ownership() == ValueOwnership::ArenaBound) {
     diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                        "arena-bound storage cannot escape through a return value");
@@ -3106,7 +3150,9 @@ void TypeChecker::check_return(ReturnStmt& statement) {
                        "manual allocations cannot cross a function return; "
                        "release the allocation before returning");
   }
-  consume_field_move(const_cast<Expr&>(*statement.value()), current_return_type_);
+  if (!promoted)
+    consume_field_move(const_cast<Expr&>(*statement.value()),
+                       current_return_type_);
   if (current_return_type_.is_void()) {
     diagnostics_.error(diag::kVoidReturnsValue, statement.location(),
                        "function returns 'void' but 'return' has a value of type '" +
@@ -3206,7 +3252,10 @@ void TypeChecker::check_return(ReturnStmt& statement) {
     diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                        "owned pointer return requires an owned pointer; borrowed or raw pointers cannot escape");
   }
-  if ((current_return_type_.is_pointer() || current_return_type_.is_owned_array() ||
+  // A promoted binding has no pointer type to match: the allocation supplies one,
+  // which is why this rule (and only this rule) stands aside for it.
+  if (!promoted &&
+      (current_return_type_.is_pointer() || current_return_type_.is_owned_array() ||
        contains_owned_array(current_return_type_)) &&
       statement.value()->kind() == Expr::Kind::Name && !returns_borrowed) {
     const Symbol* source = find_root_symbol(*statement.value(), symbols_);
