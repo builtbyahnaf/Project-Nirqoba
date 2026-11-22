@@ -536,6 +536,28 @@ release would not run its field teardowns, and a cyclic payload has no such rele
 to run. The report names the shape - `-> gc (cyclic object graph detected)` - rather
 than an escape rationale, which is the difference between a fallback and a selection.
 
+### The collector's heap, not a deterministic block
+
+A payload the cycle analysis accepts is lowered differently from every other
+ownership strategy. `memory.allocate<GraphNode>` that no stack, arena or pool
+claims becomes a collector allocation: the site publishes the object into a
+registered root slot, the root frame covers the call so the object is reachable the
+moment it exists, and the payload's managed references travel with the allocation
+as byte offsets the runtime walks while marking. The runtime never interprets a
+type; it walks the table the compiler emitted for that layout.
+
+The deterministic release disappears with the deterministic block. A Drop on a
+collected object lowers into nothing, because the collector reclaims it and a manual
+free would return a block the collector still traces. Nothing else moves: a payload
+whose fields cannot close a cycle keeps `nrq_memory_allocate` and the free that
+matches it, and the stack, the arena and the pool are still asked first.
+
+A `shared ptr` field is a reference count, not a traced edge - the marking walk
+sees managed references only - so a collected object's shared fields keep their own
+protocol, and the count one holds when the collector reclaims the object is not
+released yet. That is the next step, and it needs a finalizer the storage does not
+have.
+
 ### A dynamic array is a field
 
 A `dynamic_array<T>` field owns its buffer, and both halves of the machinery above
