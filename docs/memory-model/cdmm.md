@@ -588,6 +588,35 @@ gc.collect();                                // node unreachable
 memory.shared_count(keep);                   // 1: the field's share came back
 ```
 
+### A returned local is promoted, not coerced
+
+`AstNode* function build() { var root = AstNode { ... }; return root; }` is the
+shape a caller wants and a stack binding cannot give: the value would die with the
+frame. The binding is promoted instead - the return site asks the CDMM selector for
+an allocation, moves the value into it, and hands the caller the pointer.
+
+The decision is made before the returned expression is checked, and that ordering is
+the whole implementation. The ordinary check reports that an owned field cannot
+escape an aggregate, and types the value as the aggregate; both are true of a stack
+binding and false of a promoted one. So Sema answers the question first
+(`promote_returned_local`), types the expression as the declared pointer, and the
+later rules see a pointer that matches.
+
+The synthesized site is an ordinary one, which is why nothing downstream needed a
+new strategy:
+
+```
+cdmm: ...:7:5 '<temporary>' AstNode* -> arena (returned to bounded callers, arena handle checked at runtime)
+cdmm: ...:11:16 'node' AstNode* -> arena (bounded to the caller's frame, filled by build)
+  %2 = call ptr @nrq_cdmm_arena_allocate(ptr %0, i64 8, i64 8)
+```
+
+Promotion is only offered where the payload can actually be reclaimed: a bulk
+release reclaims it whole, or the collector owns its shape. The frame's records for
+the binding - its field walk and its release obligation - are deactivated at the
+return, because the storage now belongs to the caller; leaving them armed is a
+double free, and it is the failure this feature would otherwise introduce.
+
 ### Shared storage has a destructor too
 
 Reference counting says *when* shared storage dies; it never said *what dies with

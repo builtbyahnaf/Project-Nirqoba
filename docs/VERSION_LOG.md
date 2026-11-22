@@ -40,6 +40,24 @@ release label `+0.005` (`0.660-beta` -> `0.665-beta`).
   at frame end would free them a second time when the final release ran.
 - Tests: 695/695 integration, 537/537 unit.
 
+#### Micro-phase 12b: implicit owned desugaring
+
+- A local aggregate returned where the function declares a managed pointer is
+  promoted to an allocation the CDMM selector owns, and the caller receives the
+  pointer. The coercion is decided before the returned expression is checked, since
+  the ordinary answers ("an owned field cannot escape an aggregate") describe a
+  stack binding and would abort on the shapes promotion exists for.
+- The synthesized site is an ordinary `memory.allocate`, so the existing selector
+  makes the decision: with a bounded caller the report names both sites as `arena`,
+  and the IR shows `nrq_cdmm_arena_allocate`. The collector is not chosen for a
+  payload that is not cyclic.
+- The frame's field walk and release obligation for the promoted binding are
+  deactivated at the return; the allocation belongs to the caller.
+- Tests: `cli/implicit_promotion_arena` (report + IR), `positive/implicit_promotion_return`,
+  and `positive/implicit_promotion_owned_field` (a promoted payload owning an array
+  buffer, which is the double-free this had to avoid). 698/698 integration,
+  537/537 unit.
+
 #### Still open: implicit allocation
 
 The second half of 12a - `var node = AstNode { ... }` promoting itself to a CDMM
