@@ -295,3 +295,45 @@ TEST(CdmmPoolTest, RegisteredFieldTeardownRunsForLiveSlotsOnPoolDestroy) {
   ASSERT_EQ(nrq_cdmm_pool_destroy(pool), int32_t{1});
   ASSERT_EQ(nrq_array_live_count(), live_before);
 }
+
+// A generational reset ends the generation: every live slot runs the records it
+// registered, and its generation moves so the pointer a caller still holds from
+// the generation that just ended fails its checked release.
+TEST(CdmmPoolTest, ResetRunsLiveTeardownsAndEndsTheGeneration) {
+  void* pool = nrq_cdmm_pool_create(32, 8, 0, NRQ_CDMM_POOL_GENERATIONS, nullptr,
+                                    nullptr);
+  ASSERT_NE(pool, nullptr);
+  const int32_t live_before = nrq_array_live_count();
+  std::vector<void*> slots;
+  std::vector<uint64_t> generations;
+  for (int index = 0; index < 2; ++index) {
+    void* slot = nrq_cdmm_pool_allocate(pool);
+    ASSERT_NE(slot, nullptr);
+    void* buffer = nrq_array_create(4, 8, 8);
+    ASSERT_NE(buffer, nullptr);
+    *static_cast<void**>(slot) = buffer;
+    const void* context = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(slot) | uintptr_t{3});
+    ASSERT_EQ(nrq_cdmm_pool_register_teardown(pool, slot,
+                                              const_cast<void*>(context)),
+              int32_t{1});
+    slots.push_back(slot);
+    generations.push_back(nrq_cdmm_pool_generation(pool, slot));
+  }
+  ASSERT_EQ(nrq_array_live_count(), live_before + 2);
+  ASSERT_EQ(nrq_cdmm_pool_live(pool), uint64_t{2});
+  ASSERT_EQ(nrq_cdmm_pool_reset(pool), int32_t{1});
+  // Both field buffers are back and no slot is live: the reset destroyed what the
+  // live slots held instead of dropping the chunks with those buffers in them.
+  ASSERT_EQ(nrq_array_live_count(), live_before);
+  ASSERT_EQ(nrq_cdmm_pool_live(pool), uint64_t{0});
+  for (size_t index = 0; index < slots.size(); ++index) {
+    ASSERT_TRUE(nrq_cdmm_pool_generation(pool, slots[index]) >
+                generations[index]);
+    ASSERT_EQ(nrq_cdmm_pool_release_checked(pool, slots[index],
+                                            generations[index]),
+              int32_t{0});
+  }
+  ASSERT_EQ(nrq_cdmm_pool_destroy(pool), int32_t{1});
+}
+
