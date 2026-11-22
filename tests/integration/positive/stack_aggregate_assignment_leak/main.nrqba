@@ -1,0 +1,22 @@
+// An aggregate literal assigned through a pointer transfers ownership of its
+// managed fields to the storage the pointer names. The frame owns that storage,
+// so the array is alive while the frame runs and freed exactly once when it ends.
+struct AstNode {
+    dynamic_array<int> children;
+}
+
+int function use_ast() {
+    var node = memory.allocate<AstNode>(24);
+    var items = memory.dynamic_array<int>();
+    memory.array_append(items, 7);
+    *node = AstNode { children: items };
+    print(memory.array_live_count());
+    print((*node).children.length);
+    return 0;
+}
+
+int function main() {
+    use_ast();
+    print(memory.array_live_count());
+    return 0;
+}
