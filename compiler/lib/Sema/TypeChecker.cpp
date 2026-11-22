@@ -2174,6 +2174,15 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     return;
   }
   if (assignment.target().kind() == Expr::Kind::MemberAccess) {
+    string live_root;
+    string live_path;
+    // The destination owns a release only when it already held a value. A field
+    // the symbol table still lists as uninitialized has never been written, so
+    // the first store into it is an initialization, not an overwrite.
+    if (field_path(assignment.target(), live_root, live_path) &&
+        !symbols_.field_is_uninitialized(live_root, live_path))
+      const_cast<AssignmentStmt&>(assignment).set_destination_holds_live_value(
+          true);
     string target_root;
     string target_path;
     if (field_path(assignment.target(), target_root, target_path) &&
