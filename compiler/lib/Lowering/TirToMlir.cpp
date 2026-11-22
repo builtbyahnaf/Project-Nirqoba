@@ -1297,7 +1297,8 @@ GcRootAnalysisStats& analysis_stats() {
 }  // namespace
 
 static GcRootPlan analyze_gc_root_plan(const tir::Function& function,
-                                       const CollectionSummary& summary) {
+                                       const CollectionSummary& summary,
+                                       bool has_collector_allocation = false) {
   const std::vector<tir::Op>& operations = function.operations();
 
   bool has_managed_slots = false;
@@ -1332,6 +1333,10 @@ static GcRootPlan analyze_gc_root_plan(const tir::Function& function,
         collect_has_managed_reference(op.result.type.element_type()))
       has_owned_storage_roots = true;
   }
+  // A collected record publishes its result through an entry root slot for the
+  // same reason the heap containers do: the collector reads that slot while the
+  // allocation is in flight, so the frame has to exist before the call.
+  plan.has_rooted_allocation |= has_collector_allocation;
   for (const tir::Function::Parameter& parameter : function.parameters())
     if (collect_has_managed_reference(parameter.type)) has_managed_parameters = true;
 
@@ -1627,6 +1632,7 @@ class FunctionTranslator {
                      std::unordered_set<std::string> promoted_callees,
                      std::unordered_set<int> forwarded_call_results,
                      std::unordered_set<int> activation_sites,
+                     std::unordered_set<int> collector_sites,
                      bool activation_handle_guaranteed,
                      std::unordered_map<std::string, PayloadTeardowns>
                          payload_field_releases)
@@ -1644,9 +1650,11 @@ class FunctionTranslator {
         promoted_callees_(std::move(promoted_callees)),
         forwarded_call_results_(std::move(forwarded_call_results)),
         activation_sites_(std::move(activation_sites)),
+        collector_sites_(std::move(collector_sites)),
         activation_handle_guaranteed_(activation_handle_guaranteed),
         payload_field_releases_(std::move(payload_field_releases)),
-        gc_roots_(analyze_gc_root_plan(tir_fn, collections)),
+        gc_roots_(analyze_gc_root_plan(tir_fn, collections,
+                                       !collector_sites_.empty())),
         uses_gc_mutator_(needs_mutator_region),
         needs_gc_root_frame_(uses_gc_mutator_ && gc_roots_.needs_root_frame),
         promoted_slots_(analyze_promoted_slots(tir_fn)) {
@@ -6997,6 +7005,9 @@ class FunctionTranslator {
   // every call site passes one. A guaranteed handle means the body needs no null
   // arm and no chunk of its own: this activation lives inside its caller's arena.
   std::unordered_set<int> activation_sites_;
+  // Allocation sites the collector owns: their payload's type can close a cycle
+  // through a reference count, so no deterministic release describes them.
+  std::unordered_set<int> collector_sites_;
   // Payload struct name -> the fields that own storage, with the release each
   // one calls. The arena teardown registry is fed from this table.
   std::unordered_map<std::string, PayloadTeardowns> payload_field_releases_;
@@ -7932,10 +7943,34 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
         promoted_callee && !arena_plan.partial(tir_fn->name());
     HybridSelection selection =
         select_hybrid_strategies(lowered_fn, promoted_calls, serves_from_caller);
+    // Phase 10e: a payload whose type can close a cycle through a reference
+    // count has no deterministic release to run, so a site the cheaper strategies
+    // leave unclaimed is collector storage. The answer is read from the struct
+    // catalog the checker published, so Sema's gate, the report and this lowering
+    // agree about which sites the collector owns. A site a region, a pool or the
+    // stack claims is decided inside the allocation lowering, which asks those
+    // strategies first; suppressing its Drop here is what already happens there.
+    std::unordered_set<int> collector_sites;
+    std::unordered_set<int> collector_owned;
+    if (struct_types) {
+      const tir::LifetimeAnalysis collector_lifetimes =
+          tir::LifetimeAnalysis::analyze(lowered_fn, struct_types);
+      for (const auto& entry : collector_lifetimes.sites()) {
+        if (!entry.second.cyclic_payload) continue;
+        collector_sites.insert(entry.first);
+        collector_owned.insert(entry.first);
+        collector_owned.insert(entry.second.aliases.begin(),
+                               entry.second.aliases.end());
+      }
+    }
     // Both region kinds own the storage, so neither may also see a per-binding
     // release: the Drop keeps its record and lowers into the region's own path.
+    // A collected site is the same case for a stronger reason - the collector
+    // reclaims it, so a deterministic free would return its block while the
+    // collector still traces it.
     std::unordered_set<int> suppressed = selection.region_aliases;
     suppressed.insert(selection.pool_aliases.begin(), selection.pool_aliases.end());
+    suppressed.insert(collector_owned.begin(), collector_owned.end());
     lowered_fn.expand_drop_operations_to_calls(suppressed);
     lowered_fn.remove_dead_slot_clears_before_return();
     // The stack analysis runs on the expanded copy, exactly as it did before
@@ -7992,8 +8027,8 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
         std::move(arena_param_sites), std::move(arena_param_aliases),
         std::move(selection.arena_call_regions),
         arena_plan.promoted_callees, std::move(forwarded_call_results),
-        std::move(selection.activation_sites), serves_from_caller,
-        payload_field_releases);
+        std::move(selection.activation_sites), std::move(collector_sites),
+        serves_from_caller, payload_field_releases);
     if (!translator.translate()) return nullptr;
 
     builder.setInsertionPointAfter(func_op);
