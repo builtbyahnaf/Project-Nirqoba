@@ -615,15 +615,16 @@ class CdmmPool final : public Allocator {
       chunk.live = 0;
       chunk.free_count += released;
       free_slot_count_ += chunk.free_count;
-      // Every live slot has been torn down, so no record can still be waiting for
-      // an object that no longer exists.
-      teardowns_.clear();
       if (!chunk.in_free_set) {
         chunk.in_free_set = true;
         chunks_with_free_.push_back(chunk_index);
       }
     }
     live_total_ = 0;
+    // One clear for the whole reset: every live slot has run its records, and a
+    // chunk that held none could not have registered any, so the next generation
+    // starts with nothing to inherit.
+    teardowns_.clear();
     return true;
   }
   NrqAllocatorKind kind() const override { return NRQ_ALLOCATOR_POOL; }
