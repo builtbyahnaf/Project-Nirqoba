@@ -174,6 +174,16 @@ struct nrq_gc_representation_stats nrq_gc_get_representation_stats(void);
 // fields which contain managed references; scalar fields must not be visited.
 // A null callback describes an object with no managed references.
 void* nrq_gc_allocate(size_t bytes, nrq_gc_trace_fn trace);
+// Records which payload words hold a reference count. Marking walks managed
+// references, so a count inside a collected object is not a traced edge: the
+// object is the count's last owner, and the sweep drops it. Offsets are relative
+// to the payload and must describe a pointer-sized word. Registering the same
+// object twice replaces its table.
+void nrq_gc_register_shared_fields(void* object, const size_t* offsets,
+                                   size_t count);
+// Number of live registrations. A registration is dropped when the object is
+// reclaimed, so this is the direct measure of objects still awaiting a sweep.
+size_t nrq_gc_shared_field_registrations(void);
 void* nrq_gc_allocate_array(size_t count, size_t element_size,
                             nrq_gc_trace_fn trace);
 // Allocates a contiguous array whose elements contain managed references at
