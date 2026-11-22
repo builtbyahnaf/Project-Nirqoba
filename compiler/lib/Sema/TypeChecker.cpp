@@ -5764,8 +5764,13 @@ Type TypeChecker::check_call(CallExpr& call) {
     // and nothing walks the fields, so it may not carry a managed field at all.
     // An arena or a pool records a teardown per managed field and runs them
     // before it reclaims the chunk, so the fields it can describe are allowed.
+    // A payload whose type can close a cycle of owning edges has no deterministic
+    // release that could describe it, so the collector is the strategy the shape
+    // selects and the site is accepted for it. `--inspect-cdmm` names that reason.
+    const bool cyclic_payload =
+        is_structurally_cyclic(payload_type, struct_field_table_);
     if (requires_deterministic_cleanup(payload_type) &&
-        (manual_allocation_call || !arena_payload)) {
+        (manual_allocation_call || !arena_payload) && !cyclic_payload) {
       // An arena-eligible payload is one bulk release can reclaim whole: its
       // fields are plain data or pointers to more of the same, with no destructor
       // and no collector root. Releasing the block alone is then the whole answer,
