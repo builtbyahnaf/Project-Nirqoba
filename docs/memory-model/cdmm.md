@@ -455,9 +455,14 @@ null as nothing to do, so a partially built chain is as safe as a complete one.
 
 A `shared` field is a reference count, not storage: no chunk release can decrement
 it, and there is no field teardown to name. A bare `string` is a view of someone
-else's buffer, a fixed owned array has no registry kind, and a resource handle
-names a runtime destructor of its own. Payloads holding any of those keep the
-collector, and an explicit allocation of one is still refused with `NRQ3015`.
+else's buffer. A resource handle whose domain has no teardown kind - `socket`,
+`mutex`, `mapping`, `secure` - has the same problem, so only a file resource
+travels through a chunk today. Payloads holding any of those keep the collector,
+and an explicit allocation of one is still refused with `NRQ3015`.
+
+A manual allocation has no registry at all: `memory.manual_allocate` frees the
+block and walks nothing, so it refuses every payload with a managed field, not
+only the ones no kind can describe.
 
 ### Pools reuse slots, so their teardowns run on release
 
