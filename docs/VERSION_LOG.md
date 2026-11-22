@@ -12,6 +12,43 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.655-beta
+
+### Summary of Changes (since `0.651-beta`)
+
+Phase 10 closes its final arc: the collector stops being the strategy a site lands
+on when nothing cheaper applies and becomes one the *type* selects. Release label
+`+0.004` (`0.651-beta` -> `0.655-beta`) per the three-upgrade rule.
+
+#### Micro-phase 10d: cyclic graph detection
+
+- `is_structurally_cyclic` (`Common/Type`) walks an aggregate's owning edges through
+  the program's struct catalog and answers whether they can close a cycle that
+  deterministic release cannot break: a loop crossing a `shared ptr` reference count,
+  directly or through another struct, a by-value field or a container element. A loop
+  of unique owners is not a cycle, so a `TreeNode` owning its child stays a tree;
+  borrows, raw pointers, views and `managed` references are not owning edges at all.
+- `TypeChecker` publishes the catalog (`struct_field_table()`) and the struct names
+  that can close a cycle (`cyclic_structs()`) as products of reading declarations, so
+  Sema, the classifier and the report cannot disagree about a type.
+- `AllocationSite::cyclic_payload` carries the fact into the classification, and
+  `--inspect-cdmm` reports `-> gc (cyclic object graph detected)` for a site whose
+  payload has that shape and escapes, in place of the escape rationale.
+- Sema accepts such a payload for `memory.allocate`: the deterministic gate exists
+  because releasing a block cannot run field teardowns, and a cyclic payload has no
+  deterministic release to run - the collector is the strategy the shape selects.
+- `cli/inspect_cdmm_cyclic_graph` pins the sentence and
+  `cli/inspect_cdmm_acyclic_tree` pins its absence: the same escape with a payload
+  whose fields cannot close a cycle still reports `escaping into foreign storage`.
+- `CycleAnalysisTest` covers the predicate edge by edge, and `LifetimeAnalysisTest`
+  shows the flag is present exactly when the catalog it was asked with is.
+- Known gap for 10e: an accepted cyclic payload is still handed to the general
+  allocator, so the shared field inside it is not released at the end of the
+  activation. The site is now *selected* for the collector; moving its allocation
+  onto collector-managed storage is the next step.
+
+---
+
 ## Version 0.651-beta
 
 ### Summary of Changes (since `0.647-beta`)
