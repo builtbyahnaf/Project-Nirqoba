@@ -1555,6 +1555,14 @@ struct RegionScope {
 // pool per layout group of the repeated ones. The scope is what decides where the
 // create and the destroy go; the layout is what decides whether a group is worth
 // a pool at all.
+// The managed fields a payload struct was packed with, and the layout the fields
+// belong to. Kept per struct name because one literal's field list describes
+// every allocation of that payload.
+struct PayloadTeardowns {
+  Type layout;
+  std::vector<std::pair<int, std::string>> fields;
+};
+
 struct RegionSelection {
   bool pooled = false;
   std::string layout_key;
@@ -1609,7 +1617,9 @@ class FunctionTranslator {
                      std::unordered_set<std::string> promoted_callees,
                      std::unordered_set<int> forwarded_call_results,
                      std::unordered_set<int> activation_sites,
-                     bool activation_handle_guaranteed)
+                     bool activation_handle_guaranteed,
+                     std::unordered_map<std::string, PayloadTeardowns>
+                         payload_field_releases)
       : module_(module), tir_fn_(tir_fn), func_op_(func_op),
         builder_(builder), ctx_(ctx), diag_(diag), fast_math_(fast_math),
         configuration_(configuration),
@@ -1625,6 +1635,7 @@ class FunctionTranslator {
         forwarded_call_results_(std::move(forwarded_call_results)),
         activation_sites_(std::move(activation_sites)),
         activation_handle_guaranteed_(activation_handle_guaranteed),
+        payload_field_releases_(std::move(payload_field_releases)),
         gc_roots_(analyze_gc_root_plan(tir_fn, collections)),
         uses_gc_mutator_(needs_mutator_region),
         needs_gc_root_frame_(uses_gc_mutator_ && gc_roots_.needs_root_frame),
@@ -6855,6 +6866,9 @@ class FunctionTranslator {
   // every call site passes one. A guaranteed handle means the body needs no null
   // arm and no chunk of its own: this activation lives inside its caller's arena.
   std::unordered_set<int> activation_sites_;
+  // Payload struct name -> the fields that own storage, with the release each
+  // one calls. The arena teardown registry is fed from this table.
+  std::unordered_map<std::string, PayloadTeardowns> payload_field_releases_;
   bool activation_handle_guaranteed_ = false;
   std::unordered_map<int, std::size_t> region_of_value_;
   // Loop-scoped regions whose create belongs at the header label at this position
