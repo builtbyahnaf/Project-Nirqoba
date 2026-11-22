@@ -1,0 +1,19 @@
+// The collector is selected by the type, never by the escape alone.
+//
+// `TreeNode` owns its child, and unique ownership is a chain: the closing edge a
+// cycle would need belongs to a second owner. The same escape that routes a
+// `GraphNode` to the collector therefore leaves this site on the deterministic
+// allocator, with the free that matches it.
+struct TreeNode {
+    int value;
+    owned ptr TreeNode child;
+}
+
+int function main() {
+    var kept = memory.dynamic_array<TreeNode*>();
+    var node = memory.allocate<TreeNode>(24);
+    *node = TreeNode { value: 7, child: nullptr };
+    memory.array_append(kept, node);
+    print((*node).value);
+    return 0;
+}
