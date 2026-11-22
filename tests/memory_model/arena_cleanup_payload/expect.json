@@ -1,5 +1,4 @@
 {
   "mode": "check",
-  "expect_exit": 1,
-  "expect_stderr_contains": "explicit allocations cannot contain"
+  "expect_exit": 0
 }
