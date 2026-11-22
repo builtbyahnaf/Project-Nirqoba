@@ -7576,6 +7576,93 @@ std::vector<std::string> cdmm_report(
   return lines;
 }
 
+namespace {
+
+// True when a pointer names storage an arena or a pool owns. The registry destroys
+// the fields of such storage, so the aggregate walk must not run a second time.
+// The walk goes through the pointer's history: a load names a slot, and the value
+// the slot holds is whatever the last store put there.
+bool traces_to_registry_storage(const tir::Function& function,
+                               const tir::Value& value,
+                               const std::unordered_set<int>& served, int depth) {
+  if (!value.is_valid() || depth > 8) return false;
+  if (served.count(value.id) != 0) return true;
+  const tir::Op* origin = nullptr;
+  for (auto op = function.operations().rbegin(); op != function.operations().rend();
+       ++op)
+    if (op->result.is_valid() && op->result.id == value.id) {
+      origin = &*op;
+      break;
+    }
+  if (origin == nullptr) return false;
+  if (origin->kind == tir::OpKind::GetElementPtr)
+    return traces_to_registry_storage(function, origin->lhs, served, depth + 1);
+  if (origin->kind != tir::OpKind::Load) return false;
+  // Every value the slot received is a candidate, not only the last one: a
+  // cleanup nulls a slot after moving out of it, and the allocation it held
+  // before that is still the storage the pointer names.
+  for (auto op = function.operations().rbegin(); op != function.operations().rend();
+       ++op)
+    if (op->kind == tir::OpKind::Store && op->lhs.is_valid() &&
+        op->lhs.id == origin->lhs.id && op->operand.is_valid() &&
+        traces_to_registry_storage(function, op->operand, served, depth + 1))
+      return true;
+  return false;
+}
+
+// Expands one aggregate field walk into a release per managed field at the
+// destination's address, and drops the walk where a registry owns the storage.
+void expand_aggregate_field_teardowns(tir::Function& function,
+                                      const std::unordered_set<int>& served) {
+  std::vector<tir::Op> expanded;
+  expanded.reserve(function.operations().size());
+  for (tir::Op& op : function.operations()) {
+    if (op.kind != tir::OpKind::AggregateFieldDestroy || !op.lhs.is_valid()) {
+      expanded.push_back(std::move(op));
+      continue;
+    }
+    const tir::Value base = op.lhs;
+    if (traces_to_registry_storage(function, base, served, 0)) continue;
+    // A pointer destination names the aggregate one level down; an aggregate
+    // binding is the aggregate itself.
+    const Type& aggregate =
+        base.type.is_pointer() ? base.type.element_type() : base.type;
+    const std::vector<std::pair<std::string, Type>> declared =
+        aggregate.struct_fields();
+    for (std::size_t index = 0;
+         index < op.release_fields.size() && index < op.release_callees.size();
+         ++index) {
+      const int field = op.release_fields[index];
+      if (field < 0 || static_cast<std::size_t>(field) >= declared.size()) continue;
+      const Type& field_type = declared[static_cast<std::size_t>(field)].second;
+      tir::Op address;
+      address.kind = tir::OpKind::GetElementPtr;
+      address.location = op.location;
+      address.lhs = base;
+      address.field_index = field;
+      address.result = function.allocate_value(field_type);
+      const tir::Value slot = address.result;
+      expanded.push_back(std::move(address));
+      tir::Op load;
+      load.kind = tir::OpKind::Load;
+      load.location = op.location;
+      load.lhs = slot;
+      load.result = function.allocate_value(field_type);
+      const tir::Value stored = load.result;
+      expanded.push_back(std::move(load));
+      tir::Op release;
+      release.kind = tir::OpKind::Call;
+      release.location = op.location;
+      release.callee = op.release_callees[index];
+      release.arguments.push_back(stored);
+      expanded.push_back(std::move(release));
+    }
+  }
+  function.operations() = std::move(expanded);
+}
+
+}  // namespace
+
 mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     const tir::Module& tir_module,
     mlir::MLIRContext& context,
