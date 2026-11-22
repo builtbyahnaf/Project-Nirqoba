@@ -365,18 +365,25 @@ TEST(LifetimeAnalysisTest, ArenaPayloadsArePlainData) {
   ASSERT_TRUE(tir::is_arena_eligible_payload(Type::struct_type(
       "AstNode", {{"name", Type::owned_string_type()},
                   {"next", Type::pointer_type(Type::struct_type("AstNode"))}})));
+  // An owned array and a file resource are the same bargain: the registry names
+  // the buffer's release, and the file's handle close, so a payload holding them
+  // is released field by field before the chunk goes back.
+  ASSERT_TRUE(tir::is_arena_eligible_payload(
+      Type::owned_array_type(Type::int_type())));
+  ASSERT_TRUE(tir::is_arena_eligible_payload(Type::struct_type(
+      "Columns", {{"rows", Type::owned_array_type(Type::int_type())}})));
+  ASSERT_TRUE(tir::is_arena_eligible_payload(Type::struct_type(
+      "Handle", {{"file", Type::owned_pointer_type(Type::u8_type(), "file")}})));
   // A bare `string` is a view of someone else's buffer, so it stays out.
   ASSERT_FALSE(tir::is_arena_eligible_payload(Type::string_type()));
-  ASSERT_FALSE(tir::is_arena_eligible_payload(
-      Type::owned_array_type(Type::int_type())));
   ASSERT_FALSE(tir::is_arena_eligible_payload(
       Type::shared_pointer_type(Type::int_type())));
   ASSERT_FALSE(tir::is_arena_eligible_payload(
       Type::managed_pointer_type(Type::int_type())));
+  // A domain with no teardown kind stays out until the registry grows one.
   ASSERT_FALSE(tir::is_arena_eligible_payload(Type::struct_type(
-      "Columns", {{"rows", Type::owned_array_type(Type::int_type())}})));
-  ASSERT_FALSE(tir::is_arena_eligible_payload(Type::struct_type(
-      "Handle", {{"file", Type::owned_pointer_type(Type::u8_type(), "file")}})));
+      "Socket",
+      {{"handle", Type::owned_pointer_type(Type::u8_type(), "socket")}})));
   ASSERT_FALSE(tir::is_arena_eligible_payload(Type::struct_type(
       "Nodes", {{"next", Type::shared_pointer_type(Type::int_type())}})));
 }
