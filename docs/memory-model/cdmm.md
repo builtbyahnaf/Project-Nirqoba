@@ -485,12 +485,37 @@ released, before the slot is poisoned and put back on the free list, and it cons
 every remaining record when the pool is reset or destroyed - a pool that died with
 live slots would otherwise leak exactly the buffers those objects owned. The
 `context` encoding is the arena's: the field's pointer-word address with the release
-kind in the two low bits, read by `nrq_cdmm_release_managed_field`.
+kind in the three low bits, read by `nrq_cdmm_release_managed_field`.
 
 ### A dynamic array is a field
 
 A `dynamic_array<T>` field owns its buffer, and both halves of the machinery above
 can name its release, so the field is admitted. Its release kind is 3, and
 `nrq_array_free` reclaims the buffer while the array's own three-word header lives
-in the aggregate that holds it.
+in the aggregate that holds it. An `owned_array<T>` field is admitted the same way
+with kind 4, and a `owned file ptr` field with kind 5.
+
+### Assignment through a pointer transfers the fields
+
+An aggregate literal built on the right of an assignment owns its managed fields
+from the moment it exists. When the assignment's destination is the storage a
+pointer names - `*node = AstNode { children: items }` - the fields must end up
+owned by the *storage*, not by the temporary that filled it:
+
+```
+tir.aggregate_field_destroy %17 field=0:nrq_array_free
+```
+
+One record stands for the whole walk instead of an emitted address-load-release
+triple per field, because whether the walk should run is decided later, where the
+storage's strategy is known. Lowering expands the record into a release per field
+at the destination's address, or drops it when the destination belongs to an arena
+or a pool: that strategy's registry already destroys the fields before it reclaims
+the chunk, and running both would free the buffer twice. The decision traces the
+destination pointer back through the loads and stores of its slot, so a pointer
+loaded from a cleaned-out slot still finds the allocation it named.
+
+The record is its own TIR operation rather than a call to an internal function, so
+the escape and lifetime analyses do not read it as passing the storage to a callee
+and demote the site to the collector.
 
