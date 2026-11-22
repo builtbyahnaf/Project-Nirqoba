@@ -508,6 +508,16 @@ against the slot's new generation even before that slot is reused, and the liven
 bit refuses it again afterwards.
 
 
+### A loop-scoped pool dies with its loop
+
+A pool the classifier scopes to a loop is created on the edge into the loop's
+header and destroyed on every edge out of it: a `break`, an early `return` and a
+false loop condition each carry their own destroy block, so exactly one of them
+runs and the loop's chunks are reclaimed when the loop ends. The span that decides
+membership is re-derived at lowering time from the loop's header label, because the
+teardown expansion changes the operation stream's length and a position measured
+before it can land on the loop's own exit label.
+
 ### A dynamic array is a field
 
 A `dynamic_array<T>` field owns its buffer, and both halves of the machinery above
