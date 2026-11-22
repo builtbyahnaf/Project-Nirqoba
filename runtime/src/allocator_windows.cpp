@@ -758,13 +758,7 @@ class CdmmPool final : public Allocator {
       chunk.live_bits[local / 64] |= bit;
       ++chunk.live;
       ++live_total_;
-      if (generations_) {
-        // Zero means "no allocation", so a wrap skips it. With 2^32 values the
-        // wrap is unreachable for any realistic reuse count.
-        uint32_t generation = chunk.generations[local] + 1;
-        if (generation == 0) generation = 1;
-        chunk.generations[local] = generation;
-      }
+      if (generations_) bump_generation(chunk, local);
       if (chunk.free_count == 0) {
         chunks_with_free_.pop_back();
         chunk.in_free_set = false;
