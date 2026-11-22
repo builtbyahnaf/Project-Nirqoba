@@ -460,10 +460,22 @@ class AssignmentStmt : public Stmt {
     return target_->location();
   }
 
+  // Sema's definite-assignment answer about the destination: true when the field
+  // this statement writes already held a live value, so releasing the old value is
+  // this statement's job. A field of a partially initialized aggregate is not, and
+  // neither is one the symbol table never saw written.
+  bool destination_holds_live_value() const {
+    return destination_holds_live_value_;
+  }
+  void set_destination_holds_live_value(bool live) {
+    destination_holds_live_value_ = live;
+  }
+
  private:
   ExprPtr target_;
   ExprPtr value_;
   std::string cleanup_callee_;
+  bool destination_holds_live_value_ = false;
 };
 
 class CompoundAssignmentStmt : public Stmt {
