@@ -3102,6 +3102,13 @@ void nrq_cdmm_release_managed_field(void* object, void* context) {
     case 1: nrq_ffi_free(pointer); break;
     case 2: nrq_file_text_release(static_cast<char*>(pointer)); break;
     case 3: nrq_array_free(pointer); break;
+    // A fixed owner's buffer comes from the checked allocator, so its release is
+    // the allocator's, not the dynamic container's: the field's first word is the
+    // buffer, and one checked release reclaims it.
+    case 4: nrq_memory_deallocate_checked(pointer); break;
+    // A file resource is a handle, not collector storage: closing it is the whole
+    // release, and the OS reclaims what is behind it.
+    case 5: nrq_file_close_handle(pointer); break;
     default: break;
   }
 }
