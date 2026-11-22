@@ -49,6 +49,33 @@ and a pool runs the same field teardowns an arena runs. Release label `+0.004`
   directly: a released slot reclaims its field, the reused slot inherits nothing,
   and a pool that dies with live slots still reclaims all three.
 
+#### Micro-phase 10a: assignment transfer and the remaining kinds
+
+- An aggregate literal assigned through a pointer (`*node = AstNode { ... }`) now
+transfers its managed fields to the storage the pointer names. The assignment's
+record is expanded into a release per field at the destination's address, so a
+stack-placed node frees its array exactly once when the frame ends.
+- The same record is dropped when the destination belongs to an arena or a pool: the
+registry already destroys the fields before the chunk goes, and running both freed
+the buffer twice. The walk traces the destination pointer back through its slot's
+loads and stores, so a slot that a cleanup already nulled still names its storage.
+- The walk is its own TIR operation (`tir.aggregate_field_destroy`) instead of a call
+to an internal function, so the escape and lifetime analyses do not read it as
+passing the storage to a callee.
+- Two more release kinds: 4 is an `owned_array<T>` field's buffer, released through
+the checked allocator the buffer came from, and 5 is a file resource's handle,
+closed with `nrq_file_close_handle`. The encoded context carries the kind in three
+low bits now that five are defined.
+- The classifier and the `NRQ3015` gate admit `owned_array` fields and file
+resources in arena and pool payloads. A resource domain with no teardown kind still
+stays out, and a manual allocation still refuses every managed field because it has
+no registry to run.
+- `positive/stack_aggregate_assignment_leak` proves the hole is closed: the array is
+alive inside the frame and the live count is zero after it returns.
+- `positive/arena_complete_registry` allocates a payload holding a dynamic array, an
+owned array and a file resource, registers three teardowns (kinds 3, 4 and 5) and
+reclaims all three when the arena is destroyed.
+
 ---
 
 ## Version 0.647-beta
