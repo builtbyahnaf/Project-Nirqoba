@@ -455,3 +455,33 @@ else's buffer, a fixed owned array has no registry kind, and a resource handle
 names a runtime destructor of its own. Payloads holding any of those keep the
 collector, and an explicit allocation of one is still refused with `NRQ3015`.
 
+### Pools reuse slots, so their teardowns run on release
+
+An arena keeps its records until the chunk goes, because an arena never hands the
+same address out twice. A pool does: the slot goes back on the free list and the
+next allocation receives it, so a record that outlived its object would destroy the
+next occupant's fields. The registry is therefore per object, not per pool:
+
+```
+%4 = call ptr @nrq_cdmm_pool_allocate(ptr %1)
+%5 = getelementptr { ptr, i64, i64 }, ptr %4, i32 0, i32 0
+%6 = ptrtoint ptr %5 to i64
+%7 = or i64 %6, 3                     ; kind 3 = nrq_array_free
+%8 = inttoptr i64 %7 to ptr
+%9 = call i32 @nrq_cdmm_pool_register_teardown(ptr %1, ptr %4, ptr %8)
+```
+
+The pool consumes the records registered for an object when that object is
+released, before the slot is poisoned and put back on the free list, and it consumes
+every remaining record when the pool is reset or destroyed - a pool that died with
+live slots would otherwise leak exactly the buffers those objects owned. The
+`context` encoding is the arena's: the field's pointer-word address with the release
+kind in the two low bits, read by `nrq_cdmm_release_managed_field`.
+
+### A dynamic array is a field
+
+A `dynamic_array<T>` field owns its buffer, and both halves of the machinery above
+can name its release, so the field is admitted. Its release kind is 3, and
+`nrq_array_free` reclaims the buffer while the array's own three-word header lives
+in the aggregate that holds it.
+
