@@ -1,0 +1,26 @@
+// The teardown registry names every release a payload's fields need: a dynamic
+// array's buffer, an owned array's buffer and a file resource's handle. All three
+// run when the arena is destroyed - after the last use and never before it.
+struct Payload {
+    dynamic_array<int> children;
+    owned_array<int> cells;
+    owned file ptr byte handle;
+}
+
+int function hold() {
+    var node = memory.allocate<Payload>(64);
+    var children = memory.dynamic_array<int>();
+    memory.array_append(children, 7);
+    var cells = memory.owned_array<int>(3);
+    var handle = file.open("tests/integration/positive/hello/expect.json", false);
+    *node = Payload { children: children, cells: cells, handle: handle };
+    print(memory.array_live_count());
+    print((*node).cells.length);
+    return 0;
+}
+
+int function main() {
+    hold();
+    print(memory.array_live_count());
+    return 0;
+}
