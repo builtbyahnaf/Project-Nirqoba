@@ -782,6 +782,10 @@ class CdmmPool final : public Allocator {
     chunk.live_bits[local / 64] &= ~bit;
     --chunk.live;
     --live_total_;
+    // The slot is about to be reused, so everything the object owns is destroyed
+    // before the slot leaves this call: a pool that only freed slots would leak
+    // every managed field the object held.
+    run_slot_teardowns(pointer);
     if (destructor_) destructor_(pointer, context_);
     // Poison the payload so a stale read is visible in tests and a debugger, then
     // link the slot into this chunk's free list. The link overwrites the first
