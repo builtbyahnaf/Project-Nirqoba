@@ -7896,6 +7896,24 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
     // claims leaves the selection here, which is why a function whose allocations
     // all fit its frame emits no region calls at all.
     drop_stack_claimed(selection, stack_allocations);
+    // The aggregate walks run last, once every strategy has had its say: a site
+    // the stack claimed has left the selection, so a walk into its storage is
+    // what frees the fields - exactly once, at the end of the frame. A walk into
+    // storage an arena or a pool owns is dropped here instead, because that
+    // strategy's registry destroys the fields itself.
+    {
+      std::unordered_set<int> served = selection.region_aliases;
+      // The sites themselves, not only the values that name them: a walk from the
+      // pointer a region handed out must find the storage it came from.
+      for (const RegionSelection& region : selection.regions)
+        served.insert(region.sites.begin(), region.sites.end());
+      served.insert(selection.pool_aliases.begin(), selection.pool_aliases.end());
+      served.insert(selection.activation_sites.begin(),
+                    selection.activation_sites.end());
+      served.insert(arena_param_sites.begin(), arena_param_sites.end());
+      served.insert(arena_param_aliases.begin(), arena_param_aliases.end());
+      expand_aggregate_field_teardowns(lowered_fn, served);
+    }
     std::unordered_set<int> escaping_call_results;
     if (const auto sites = arena_plan.escaping_call_results.find(tir_fn->name());
         sites != arena_plan.escaping_call_results.end())
