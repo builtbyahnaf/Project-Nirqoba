@@ -433,10 +433,14 @@ with managed fields registers one record per field when it is allocated:
 The compiler knows where the field's pointer word sits and the object's address is
 the allocation's result, so registration follows the allocation rather than riding
 on it. `context` is the field's pointer-word address with the release *kind* in the
-two low bits - the address is at least eight-byte aligned, so the kind fits without
-displacing a bit of it: 1 is `nrq_ffi_free`, 2 is `nrq_file_text_release`, 3 is
-`nrq_array_free`. One runtime destructor reads that encoding, which is why no
-function pointer crosses the boundary and no thunk has to be generated per payload.
+three low bits - the address is at least eight-byte aligned, so the kind fits
+without displacing a bit of it: 1 is `nrq_ffi_free`, 2 is
+`nrq_file_text_release`, 3 is `nrq_array_free`, 4 is a fixed owner's buffer
+(`nrq_memory_deallocate_checked`, since that buffer comes from the checked
+allocator rather than the dynamic container's), and 5 is a file resource
+(`nrq_file_close_handle`). One runtime destructor reads that encoding, which is
+why no function pointer crosses the boundary and no thunk has to be generated per
+payload.
 
 `nrq_cdmm_arena_destroy` runs the records in reverse allocation order while every
 chunk is still mapped, and only then releases the chunks. A node allocated three
