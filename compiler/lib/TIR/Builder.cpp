@@ -451,48 +451,38 @@ void TirBuilder::emit_destruction(const DeferredCall& deferred,
   // field and never a release of the aggregate itself: the memory belongs to the
   // binding that holds it, and the fields own what is inside.
   if (!deferred.field_releases.empty()) {
-    const std::vector<std::pair<std::string, Type>>& fields =
-        deferred.owner_slot.type.struct_fields();
+    // One operation stands for the whole field walk. Lowering expands it - or
+    // drops it, when the storage belongs to an arena or a pool and the registry
+    // destroys the fields instead - so the decision is made where the ownership
+    // of the storage is known, not here.
+    tir::Op teardown;
+    teardown.kind = tir::OpKind::AggregateFieldDestroy;
+    teardown.location = deferred.location;
+    teardown.lhs = deferred.owner_slot;
+    teardown.operand = deferred.owner_slot;
     for (const std::pair<int, std::string>& field : deferred.field_releases) {
-      if (field.first < 0 ||
-          static_cast<std::size_t>(field.first) >= fields.size())
-        continue;
-      const Type& field_type = fields[static_cast<std::size_t>(field.first)].second;
-      tir::Value field_ptr = function.allocate_value(field_type);
-      tir::Op gep;
-      gep.kind = tir::OpKind::GetElementPtr;
-      gep.location = deferred.location;
-      gep.lhs = deferred.owner_slot;
-      gep.field_index = field.first;
-      gep.result = field_ptr;
-      function.add_operation(std::move(gep));
-      tir::Value loaded = function.allocate_value(field_type);
-      tir::Op load;
-      load.kind = tir::OpKind::Load;
-      load.location = deferred.location;
-      load.lhs = field_ptr;
-      load.result = loaded;
-      function.add_operation(std::move(load));
-      tir::Op release;
-      release.kind = tir::OpKind::Call;
-      release.location = deferred.location;
-      release.callee = field.second;
-      release.arguments.push_back(loaded);
-      function.add_operation(std::move(release));
+      teardown.release_fields.push_back(field.first);
+      teardown.release_callees.push_back(field.second);
     }
-    tir::Value null_value = function.allocate_value(deferred.owner_slot.type);
-    tir::Op null_op;
-    null_op.kind = tir::OpKind::ConstantNull;
-    null_op.location = deferred.location;
-    null_op.result = null_value;
-    function.add_operation(std::move(null_op));
-    tir::Op clear;
-    clear.kind = tir::OpKind::Store;
-    clear.location = deferred.location;
-    clear.lhs = deferred.owner_slot;
-    clear.operand = null_value;
-    clear.result = deferred.owner_slot;
-    function.add_operation(std::move(clear));
+    function.add_operation(std::move(teardown));
+    // An aggregate the code still holds is emptied like any other owner. A
+    // pointer already names storage that some other owner releases, so clearing it
+    // would only detach the program from a value it may still read.
+    if (!deferred.owner_slot.type.is_pointer()) {
+      tir::Value null_value = function.allocate_value(deferred.owner_slot.type);
+      tir::Op null_op;
+      null_op.kind = tir::OpKind::ConstantNull;
+      null_op.location = deferred.location;
+      null_op.result = null_value;
+      function.add_operation(std::move(null_op));
+      tir::Op clear;
+      clear.kind = tir::OpKind::Store;
+      clear.location = deferred.location;
+      clear.lhs = deferred.owner_slot;
+      clear.operand = null_value;
+      clear.result = deferred.owner_slot;
+      function.add_operation(std::move(clear));
+    }
     return;
   }
   tir::Value owner = function.allocate_value(
