@@ -49,6 +49,7 @@ std::string_view op_name(OpKind kind) {
     case OpKind::Borrow: return "borrow";
     case OpKind::EndBorrow: return "end_borrow";
     case OpKind::Drop: return "drop";
+    case OpKind::AggregateFieldDestroy: return "aggregate_field_destroy";
     case OpKind::Unreachable: return "unreachable";
   }
   return "unknown";
