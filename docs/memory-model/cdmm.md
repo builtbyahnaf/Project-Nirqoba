@@ -413,3 +413,45 @@ release of its own: the caller's destroy releases everything the activation and
 its callees put in the chunk. A callee that is only partially promoted keeps the
 null arm, keeps its own chunk for local work, and keeps the conditional release
 that runs only when no handle arrived.
+
+### Managed fields in arena storage
+
+An arena releases a chunk, so a payload that owns storage of its own cannot be
+reclaimed by dropping the chunk alone: the chunk frees the node, and the node's
+buffer would leak. The arena therefore keeps a teardown registry, and a payload
+with managed fields registers one record per field when it is allocated:
+
+```llvm
+%4 = call ptr @nrq_cdmm_arena_allocate(ptr %1, i64 32, i64 8)
+%5 = getelementptr { ptr, ptr }, ptr %4, i32 0, i32 0
+%6 = ptrtoint ptr %5 to i64
+%7 = or i64 %6, 1
+%8 = inttoptr i64 %7 to ptr
+%9 = call i32 @nrq_cdmm_arena_register_teardown(ptr %1, ptr %4, ptr %8)
+```
+
+The compiler knows where the field's pointer word sits and the object's address is
+the allocation's result, so registration follows the allocation rather than riding
+on it. `context` is the field's pointer-word address with the release *kind* in the
+two low bits - the address is at least eight-byte aligned, so the kind fits without
+displacing a bit of it: 1 is `nrq_ffi_free`, 2 is `nrq_file_text_release`, 3 is
+`nrq_array_free`. One runtime destructor reads that encoding, which is why no
+function pointer crosses the boundary and no thunk has to be generated per payload.
+
+`nrq_cdmm_arena_destroy` runs the records in reverse allocation order while every
+chunk is still mapped, and only then releases the chunks. A node allocated three
+times therefore registers three teardowns from one site - the site is in the
+recursive activation, not in the caller - and a three-node chain releases three
+buffers before the chunk that held them goes away.
+
+A registered field that was never written holds null, and the destructor treats
+null as nothing to do, so a partially built chain is as safe as a complete one.
+
+#### What the arena still refuses
+
+A `shared` field is a reference count, not storage: no chunk release can decrement
+it, and there is no field teardown to name. A bare `string` is a view of someone
+else's buffer, a fixed owned array has no registry kind, and a resource handle
+names a runtime destructor of its own. Payloads holding any of those keep the
+collector, and an explicit allocation of one is still refused with `NRQ3015`.
+
