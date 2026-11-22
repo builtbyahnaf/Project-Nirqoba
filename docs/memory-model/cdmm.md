@@ -588,6 +588,41 @@ gc.collect();                                // node unreachable
 memory.shared_count(keep);                   // 1: the field's share came back
 ```
 
+### Shared storage has a destructor too
+
+Reference counting says *when* shared storage dies; it never said *what dies with
+it*. A shared payload that holds an owned field used to be refused outright
+(`NRQ3015`), because the count's last release freed the block and nothing walked the
+words inside it. So a shared pointer could name a graph but not own anything.
+
+The release that takes the count to zero is the payload's destruction, so the
+allocation site registers one teardown per destructible field with the storage
+itself - the arena and pool registries already had the shape, and the encoding is
+theirs: the field's pointer word with the release kind in the three low bits.
+
+```
+%33 = call i32 @nrq_memory_shared_register_teardown(ptr %28, ptr %28, ptr %32)
+...
+%44 = call i32 @nrq_memory_shared_release(ptr %43)   ; count reaches zero
+  -> nrq_cdmm_release_managed_field per registered field, then the block is freed
+```
+
+A release that only decrements touches nothing: another owner still reads those
+fields. That is the whole difference between this registry and a stack local's
+cleanup, which runs exactly once because the frame runs exactly once.
+
+A destination in shared storage is therefore excluded from the frame's field walk.
+`*node = Node { items: items }` in an ordinary frame destroys the literal's fields
+when the frame ends; in shared storage it does not, because the fields now belong to
+the object and the object's destruction belongs to whichever release reaches zero.
+Sema records the destination's storage class on the assignment
+(`destination_is_shared_storage`) and the TIR builder keeps the walk out.
+
+With the gate gone, a cycle of shared pointers is expressible for the first time:
+two nodes whose fields name each other hold two counts each. It is still not
+*collectable* - that is what the collector is for, and a cycle of owning edges is
+what `is_structurally_cyclic` routes to it.
+
 ### Only a live field is overwritten
 
 A store into a shared field is two ownership operations: the value joins the field's

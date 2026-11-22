@@ -12,6 +12,44 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.665-beta
+
+### Summary of Changes (since `0.660-beta`)
+
+Phase 12 opens by giving shared storage a destructor and closing the 11b arc:
+release label `+0.005` (`0.660-beta` -> `0.665-beta`).
+
+#### Micro-phase 12a: shared finalization
+
+- A shared allocation's final release now destroys the payload's fields. The
+  allocation site registers one teardown per destructible field with the storage
+  (`nrq_memory_shared_register_teardown`, the arena/pool context encoding), and
+  `nrq_memory_shared_release` runs them on the release that takes the count to zero,
+  before the block is freed. A release that only decrements leaves them alone.
+- A release kind was added for a plain owned pointer field (6, the checked
+  allocator's release), so the registry can express every field an aggregate can
+  hold rather than the five container and file kinds.
+- `NRQ3015` no longer refuses a shared payload with a destructible field: it was
+  true when nothing walked the fields, and the registry is what made it false.
+  `negative/shared_allocation_owned_field` becomes
+  `positive/shared_allocation_owned_field`, and
+  `memory_model/shared_allocation_shared_field` becomes a cycle test that compiles,
+  runs, and reports two counts per node.
+- A destination inside shared storage is excluded from the frame's field walk
+  (`AssignmentStmt::destination_is_shared_storage`), because destroying those fields
+  at frame end would free them a second time when the final release ran.
+- Tests: 695/695 integration, 537/537 unit.
+
+#### Still open: implicit allocation
+
+The second half of 12a - `var node = AstNode { ... }` promoting itself to a CDMM
+allocation site when the binding escapes - is not in this release. It is not a
+lowering change: a value that becomes heap storage is a pointer, so every use of the
+binding (`node.field`, passing it, returning it) needs implicit dereference, and the
+classifier's answer would have to reach the type of the binding before Sema could
+check the uses. That is a language-surface decision, and it is the first item of
+12b.
+
 ## Version 0.660-beta
 
 ### Summary of Changes (since `0.655-beta`)
