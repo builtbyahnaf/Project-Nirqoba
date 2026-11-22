@@ -1853,6 +1853,12 @@ struct SharedRootMetadata {
 };
 std::unordered_map<void*, SharedRootMetadata> shared_roots;
 std::mutex shared_roots_mutex;
+// The field teardowns a shared payload owns, keyed by the payload's address. A
+// release that only decrements leaves them alone: another owner still reads the
+// fields. The final release runs them and then frees the block, which is the same
+// order a stack local's destruction follows.
+std::unordered_map<void*, std::vector<void*>> shared_teardowns;
+std::mutex shared_teardowns_mutex;
 std::mutex memory_profile_mutex;
 NrqMemoryProfile memory_profile{};
 std::atomic<bool> memory_profiler_enabled{false};
@@ -2368,6 +2374,13 @@ void* nrq_memory_shared_retain(void* pointer) {
   return nullptr;
 }
 
+int32_t nrq_memory_shared_register_teardown(void* object, void* context) {
+  if (!object || !context) return 0;
+  std::lock_guard<std::mutex> lock(shared_teardowns_mutex);
+  shared_teardowns[object].push_back(context);
+  return 1;
+}
+
 int32_t nrq_memory_shared_release(void* pointer) {
   if (!pointer) return 0;
   SharedShard& shared_shard = shared_shard_for(pointer);
@@ -2436,6 +2449,20 @@ int32_t nrq_memory_shared_release(void* pointer) {
   // control is already absent, so no concurrent retain can resurrect it.
   if (rooted)
     nrq_gc_root_unregister(reinterpret_cast<void**>(pointer));
+
+  // The final release is this payload's destruction. Take the field teardowns the
+  // compiler registered and run them while the words they name still exist: once
+  // the block is freed, a field's pointer word is gone and its release is lost.
+  std::vector<void*> teardowns;
+  {
+    std::lock_guard<std::mutex> lock(shared_teardowns_mutex);
+    auto entry = shared_teardowns.find(pointer);
+    if (entry != shared_teardowns.end()) {
+      teardowns = std::move(entry->second);
+      shared_teardowns.erase(entry);
+    }
+  }
+  for (void* context : teardowns) nrq_cdmm_release_managed_field(pointer, context);
 
   bool released = false;
   bool callback_failed = false;
@@ -3118,6 +3145,10 @@ void nrq_cdmm_release_managed_field(void* object, void* context) {
     // A file resource is a handle, not collector storage: closing it is the whole
     // release, and the OS reclaims what is behind it.
     case 5: nrq_file_close_handle(pointer); break;
+    // A plain owned pointer field: one checked release reclaims the block it
+    // names, and the checked form is what reports a double release instead of
+    // corrupting the heap.
+    case 6: nrq_memory_deallocate_checked(pointer); break;
     default: break;
   }
 }

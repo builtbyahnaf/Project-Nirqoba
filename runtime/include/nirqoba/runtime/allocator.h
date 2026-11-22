@@ -129,6 +129,17 @@ void* nrq_memory_shared_allocate_rooted(size_t bytes, size_t alignment,
                                         size_t reference_count);
 void* nrq_memory_shared_retain(void* pointer);
 int32_t nrq_memory_shared_release(void* pointer);
+
+// Registers one field teardown for a shared payload. `context` uses the same
+// encoding the arena and pool registries use (the field's pointer word with the
+// release kind in the three low bits), so one destructor reads it and nothing
+// crosses the boundary as a function pointer.
+//
+// The record is consumed by the payload's final release, which is the only release
+// that frees the storage: a release that merely decrements the count leaves the
+// fields alone, because another owner still reads them. Returns one when the record
+// was made, zero when the payload or context is null.
+int32_t nrq_memory_shared_register_teardown(void* object, void* context);
 uint64_t nrq_memory_shared_count(void* pointer);
 void* nrq_memory_allocate_from(void* allocator, size_t bytes, size_t alignment);
 // Arena fast path: bump allocation without a per-object ownership record. The
