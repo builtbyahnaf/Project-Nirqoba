@@ -23,6 +23,33 @@ is now physically allocated by the collector, rooted, and reclaimed by reachabil
 rather than by a block release. Release label `+0.004` (`0.655-beta` ->
 `0.660-beta`) per the three-upgrade rule.
 
+#### Micro-phase 11b: definite assignment and the sweep finalizer
+
+- A collected payload's `shared` reference counts are returned by the sweep. The
+  registration 11a introduced is now consulted by the page-level reclaim path too:
+  a page holding a registration falls through to the per-object sweep instead of
+  retiring whole, because the whole-page path never reads a header and cannot run
+  the finalizer that path exists to run.
+- A store into a shared field releases the value the field held only when the field
+  held one. Sema answers that question from the definite-assignment state it already
+  maintains (`field_is_uninitialized`), the AST carries the answer on the assignment,
+  and `tir.store` carries it to the lowering that emits the load and the release. The
+  seven `uninit_*` fixtures are the contract: a field of a partially initialized
+  aggregate is written, never released.
+- The store also records whether its value is an existing reference or a fresh one.
+  A reference read out of storage keeps the count its source owns, so the destination
+  takes one of its own; a fresh allocation hands its single count over, and retaining
+  it would orphan the count. Without the distinction, whole-value copies counted one
+  reference twice.
+- Tests: `mlir/field_reassignment_counts` pins the retain, the release of the old
+  value and the payload's count table in the emitted IR;
+  `memory_model/field_reassignment_count` pins the observable - a node built from a
+  shared field, collected, and the count returning from two to one.
+- Still open: a two-node cycle of `shared` pointers is not expressible - NRQ3015
+  refuses `shared_allocate<Node>` for an aggregate with managed fields, whose final
+  release would free storage without destroying the fields. The cycle the collector
+  proves today is the graph it owns: a collected node releasing the counts it holds.
+
 #### Micro-phase 10e: the cyclic GC backend
 
 - A `memory.allocate` site whose payload is structurally cyclic, and which no
