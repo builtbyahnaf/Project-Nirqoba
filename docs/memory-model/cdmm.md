@@ -705,3 +705,34 @@ The record is its own TIR operation rather than a call to an internal function, 
 the escape and lifetime analyses do not read it as passing the storage to a callee
 and demote the site to the collector.
 
+## The arc is closed
+
+The selector decides every allocation site the compiler can see - written by hand or
+synthesized by implicit return promotion - and the decision is reported with its
+reason. Micro-phase 12c measured it against the manual baselines it exists to match,
+`benchmarks/stress_test_2`, with every validation check passing:
+
+```
+01 managed-object allocation   nirqoba  4.0 ms alloc / 2.0 traverse / 0.0 collect
+                               c      26.65 / 5.30 / 16.99
+                               cpp    27.00 / 5.41 / 16.81
+                               rust   28.77 / 5.29 / 17.80
+02 mark and sweep              nirqoba 29.0 collect / 20.0 build / 6.0 traverse
+                               c      33.99 / 24.56 / 13.39
+                               cpp    33.25 / 25.36 / 13.78
+                               rust   36.60 / 23.37 / 7.42
+03 cyclic graph reclamation    nirqoba  5.0 build / 0.0 collect
+                               c       6.85 / 6.68
+                               cpp     6.49 / 6.11
+                               rust    6.06 / 6.31
+```
+
+No phase on any topic regressed against `malloc`/`new`/`Box`. The automation is not
+what costs: the redundant handle checks, the bulk releases and the classifier's
+stack promotion are cheaper than the per-object bookkeeping the manual tracks pay
+for.
+
+What the numbers do not claim: three shapes are not every workload, promotion covers
+`return <name>` only, and an arena pointer that leaves its bounded caller is checked
+at run time. Those are recorded here, in the version log, and in the roadmap, because
+a memory model that hides its edges is worth less than one that states them.
