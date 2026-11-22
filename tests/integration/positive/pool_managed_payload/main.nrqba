@@ -1,0 +1,35 @@
+// Repeated identical payload sites are what the classifier pools. Four sites of
+// one layout cannot all sit in the frame, so the pool claims them: each slot is
+// handed out by the pool, registers its field teardown, and the pool destroys
+// what the live slots still own before it releases its chunks.
+struct Cell {
+    dynamic_array<int> items;
+}
+
+int function fill() {
+    var first = memory.allocate<Cell>(8192);
+    var a = memory.dynamic_array<int>();
+    memory.array_append(a, 1);
+    *first = Cell { items: a };
+    var second = memory.allocate<Cell>(8192);
+    var b = memory.dynamic_array<int>();
+    memory.array_append(b, 2);
+    *second = Cell { items: b };
+    var third = memory.allocate<Cell>(8192);
+    var c = memory.dynamic_array<int>();
+    memory.array_append(c, 3);
+    *third = Cell { items: c };
+    var fourth = memory.allocate<Cell>(8192);
+    var d = memory.dynamic_array<int>();
+    memory.array_append(d, 4);
+    *fourth = Cell { items: d };
+    print(memory.array_live_count());
+    return (*first).items.length + (*second).items.length +
+           (*third).items.length + (*fourth).items.length;
+}
+
+int function main() {
+    print(fill());
+    print(memory.array_live_count());
+    return 0;
+}
