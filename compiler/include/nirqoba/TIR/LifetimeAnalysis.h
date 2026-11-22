@@ -94,13 +94,23 @@ struct AllocationSite {
   // slot it is stored in, the values loaded back out, and the element pointers
   // derived from it. Ownership bookkeeping and rewrites need the whole set.
   std::unordered_set<int> aliases;
+  // The payload's own type allows a cycle of owning edges (see
+  // `is_structurally_cyclic`). A site with this flag that still escapes is routed
+  // to the collector *because* of the shape, not because the classifier ran out
+  // of cheaper strategies - the report says so in those words.
+  bool cyclic_payload = false;
 };
 
 // The classification of every explicit allocation in one function, keyed by the
 // allocation's result value.
 class LifetimeAnalysis {
  public:
-  static LifetimeAnalysis analyze(const Function& function);
+  // `struct_types` is the program's struct catalog. With it, a site whose payload
+  // type can close a cycle of owning edges is flagged (`AllocationSite::cyclic_payload`);
+  // without it the classification is the same shape analysis it always was, which
+  // is what a caller that only needs escape facts passes.
+  static LifetimeAnalysis analyze(const Function& function,
+                                  const StructFieldTable* struct_types = nullptr);
 
   // The site for an allocation result, or null when the value is not one.
   const AllocationSite* site(int allocation_result) const;

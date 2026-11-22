@@ -262,7 +262,8 @@ class LoopNesting {
   std::unordered_map<int, std::vector<std::size_t>> uses_;
 };
 
-LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function) {
+LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function,
+                                          const StructFieldTable* struct_types) {
   LifetimeAnalysis analysis;
 
   const std::unordered_set<int> slot_addresses = collect_slot_addresses(function);
@@ -578,6 +579,16 @@ LifetimeAnalysis LifetimeAnalysis::analyze(const Function& function) {
         site.payload_bytes > 0 && allocation != nullptr &&
         is_arena_eligible_payload(allocation->result.type.element_type()) &&
         (site.in_loop || site.identical_sites >= kPoolSiteThreshold);
+    // The type decides whether deterministic ownership can describe this payload
+    // at all. The site is the allocation's payload, not the pointer the site hands
+    // back, so the pointer is unwrapped first.
+    if (struct_types != nullptr && allocation != nullptr) {
+      const Type& result_type = allocation->result.type;
+      const Type& payload = result_type.is_pointer()
+                                ? result_type.element_type()
+                                : result_type;
+      site.cyclic_payload = is_structurally_cyclic(payload, *struct_types);
+    }
 
     analysis.sites_.emplace(id, std::move(site));
   }
