@@ -3093,8 +3093,8 @@ void* nrq_cdmm_arena_allocate_destructible(void* handle, size_t bytes,
 void nrq_cdmm_release_managed_field(void* object, void* context) {
   (void)object;
   const uintptr_t encoded = reinterpret_cast<uintptr_t>(context);
-  const uint32_t kind = static_cast<uint32_t>(encoded & 0x3u);
-  void** slot = reinterpret_cast<void**>(encoded & ~static_cast<uintptr_t>(0x3u));
+  const uint32_t kind = static_cast<uint32_t>(encoded & 0x7u);
+  void** slot = reinterpret_cast<void**>(encoded & ~static_cast<uintptr_t>(0x7u));
   if (!slot) return;
   void* pointer = *slot;
   if (!pointer) return;
