@@ -502,6 +502,12 @@ makes a stale pointer harmless:
    begins with nothing to inherit.
 
 
+The generation bump is what makes the reset a boundary rather than a fast free: a
+pointer handed out in the generation that just ended fails its checked release
+against the slot's new generation even before that slot is reused, and the liveness
+bit refuses it again afterwards.
+
+
 ### A dynamic array is a field
 
 A `dynamic_array<T>` field owns its buffer, and both halves of the machinery above
