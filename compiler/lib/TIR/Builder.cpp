@@ -435,6 +435,12 @@ static bool managed_field_release(const Type& type,
     release = "array.owned_release";
     return true;
   }
+  // A resource handle's release is its domain's destructor, not a collector
+  // collection: the registry names the domains it can release as teardown kinds.
+  if (type.is_resource_pointer()) {
+    release = cleanup_for_resource_domain(type.resource_domain());
+    return !release.empty();
+  }
   return false;
 }
 
