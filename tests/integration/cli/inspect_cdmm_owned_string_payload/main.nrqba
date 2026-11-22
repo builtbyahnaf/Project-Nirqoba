@@ -1,9 +1,10 @@
-// A payload with a destructor stays out of the arena. `Name` holds owned text,
-// whose release is a runtime call an arena destroy cannot run, so the classifier
-// refuses it and the allocation keeps the collector. The report is where that
-// decision is visible, and this program exists to keep it visible.
+// A payload the arena still refuses. `Name` holds a shared token, which is a
+// reference count rather than storage: a chunk release cannot decrement it, and
+// the classifier will not pretend a field-level teardown exists for a lifetime the
+// type does not show. The allocation therefore keeps the collector, and the report
+// is where that decision stays visible.
 struct Name {
-    string_owned text;
+    shared ptr int slot;
 }
 
 Name* function make_name() {
