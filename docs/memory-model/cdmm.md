@@ -487,6 +487,12 @@ live slots would otherwise leak exactly the buffers those objects owned. The
 `context` encoding is the arena's: the field's pointer-word address with the release
 kind in the three low bits, read by `nrq_cdmm_release_managed_field`.
 
+### A reset ends the generation
+
+`nrq_cdmm_pool_reset` runs the same per-slot pass a destroy does, in the order that
+makes a stale pointer harmless:
+
+
 ### A dynamic array is a field
 
 A `dynamic_array<T>` field owns its buffer, and both halves of the machinery above
