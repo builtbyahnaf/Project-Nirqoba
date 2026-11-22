@@ -2247,6 +2247,80 @@ class FunctionTranslator {
                                         mlir::ValueRange{handle});
   }
 
+  // Registers one teardown per managed field of storage the arena owns. The
+  // address is the compiler's to compute: it knows where the field's pointer word
+  // sits, and the runtime only has to load that word and hand it to the release.
+  // Registration follows the allocation because the object's address is the
+  // allocation's result.
+  void emit_arena_field_teardowns(mlir::Value handle, mlir::Value object,
+                                  const Type& payload, mlir::Location loc) {
+    if (!handle || !object) return;
+    // An allocation's result is a pointer to the payload, and it is the payload's
+    // fields the teardown table describes.
+    const Type& storage_type =
+        payload.is_pointer() ? payload.element_type() : payload;
+    if (!storage_type.is_struct() || storage_type.struct_name().empty()) return;
+    const auto found =
+        payload_field_releases_.find(storage_type.struct_name());
+    if (found == payload_field_releases_.end() ||
+        found->second.fields.empty())
+      return;
+    mlir::Type payload_type = tir_type_to_mlir(storage_type, ctx_, builder_);
+    if (!payload_type) return;
+    const mlir::Type ptr = llvm_ptr_type(ctx_);
+    auto constant32 = [&](int64_t value) {
+      return builder_
+          .create<mlir::LLVM::ConstantOp>(loc, builder_.getI32Type(),
+                                          builder_.getI32IntegerAttr(value))
+          .getResult();
+    };
+    for (const std::pair<int, std::string>& field : found->second.fields) {
+      // The registry names a release by a small kind, not by a function pointer:
+      // the set of releases the language defines is closed, so one destructor
+      // reads the kind and calls the right one.
+      int64_t kind = 0;
+      if (field.second == "nrq_ffi_free")
+        kind = 1;
+      else if (field.second == "file.free_text")
+        kind = 2;
+      else if (field.second == "nrq_array_free" ||
+               field.second == "array.owned_release")
+        kind = 3;
+      if (kind == 0) continue;
+      // The pack position is the field index, exactly as the pack itself was
+      // lowered, so both halves of the layout agree.
+      const int64_t slot = field.first;
+      if (slot < 0) continue;
+      mlir::Value address = builder_
+          .create<mlir::LLVM::GEPOp>(loc, ptr, payload_type, object,
+                                     mlir::ValueRange{constant32(0),
+                                                      constant32(slot)})
+          .getResult();
+      // The slot is at least eight-byte aligned, so the kind fits in the two low
+      // bits of the encoded context without displacing part of the address.
+      mlir::Value encoded = builder_
+          .create<mlir::LLVM::PtrToIntOp>(loc, builder_.getI64Type(), address)
+          .getResult();
+      encoded = builder_
+          .create<mlir::LLVM::OrOp>(
+              loc, encoded,
+              builder_
+                  .create<mlir::LLVM::ConstantOp>(
+                      loc, builder_.getI64Type(),
+                      builder_.getI64IntegerAttr(kind))
+                  .getResult())
+          .getResult();
+      mlir::Value context = builder_
+          .create<mlir::LLVM::IntToPtrOp>(loc, ptr, encoded)
+          .getResult();
+      auto register_fn = ensure_runtime_fn(
+          module_, builder_, "nrq_cdmm_arena_register_teardown",
+          builder_.getI32Type(), {ptr, ptr, ptr});
+      builder_.create<mlir::LLVM::CallOp>(
+          loc, register_fn, mlir::ValueRange{handle, object, context});
+    }
+  }
+
   // Emits the create for every loop-scoped region whose header this edge enters
   // from outside the loop. The classifier picked the header as the single entry
   // edge, so this is the one place the create belongs.
@@ -5449,8 +5523,10 @@ class FunctionTranslator {
             // own.
             mlir::Value handle = func_op_.getArgument(
                 static_cast<unsigned>(caller_arena_arg_index_));
-            set(op.result, allocate_for_returned_storage(
-                               handle, bytes, alignment, alignment_bytes, loc));
+            mlir::Value storage = allocate_for_returned_storage(
+                handle, bytes, alignment, alignment_bytes, loc);
+            set(op.result, storage);
+            emit_arena_field_teardowns(handle, storage, op.result.type, loc);
             return true;
           } else if (activation_sites_.count(op.result.id) != 0) {
             // A promoted activation fills its caller's chunk rather than opening
@@ -5469,6 +5545,8 @@ class FunctionTranslator {
                           builder_.getStringAttr("arena"));
             mark_fresh_allocation(arena_fn, alignment_bytes);
             set(op.result, call.getResult());
+            emit_arena_field_teardowns(handle, call.getResult(), op.result.type,
+                                       loc);
             return true;
           } else if (const auto region = region_of_site_.find(op.result.id);
                      region != region_of_site_.end()) {
@@ -5517,6 +5595,7 @@ class FunctionTranslator {
             mark_fresh_allocation(arena_fn, alignment_bytes);
             result = call.getResult();
             set(op.result, result);
+            emit_arena_field_teardowns(handle, result, op.result.type, loc);
             return true;
           } else {
             auto fn = ensure_runtime_fn(module_, builder_, "nrq_memory_allocate",
