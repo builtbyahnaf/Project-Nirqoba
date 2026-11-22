@@ -19,6 +19,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -317,5 +318,25 @@ Type parse_type_name(std::string_view spelling);
 // one chunk - while owned text, containers, shared and managed references and
 // resource handles all need a release an arena cannot describe.
 bool arena_eligible_payload(const Type& type);
+
+// The declared fields of every struct a program names, keyed by the struct's
+// name. A struct value carries its own fields, but a *field* that names another
+// struct keeps nothing but that name, so an analysis that walks a type graph by
+// name needs this catalog to descend through it.
+using StructFieldTable =
+    std::unordered_map<std::string, std::vector<std::pair<std::string, Type>>>;
+
+// True when `type`'s aggregate can close a cycle of owning edges: a struct that
+// holds an owner, or a reference count, to itself - directly, or through other
+// structs, fields and container elements. A borrow, a weak reference, a raw
+// pointer and an array view are not owning edges (they do not keep their target
+// alive), and a collector-managed pointer is left out because the collector is
+// what reclaims a cycle it reaches.
+//
+// This is a property of the type, not of a program's runtime graph: it says the
+// shape *allows* a cycle, which is the strongest statement the type alone can
+// make before the program runs. Detecting that a particular graph does close one
+// is a flow-sensitive question this predicate deliberately does not answer.
+bool is_structurally_cyclic(const Type& type, const StructFieldTable& table);
 
 }  // namespace nirq

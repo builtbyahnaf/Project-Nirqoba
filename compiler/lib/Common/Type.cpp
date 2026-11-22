@@ -1,5 +1,6 @@
 #include "nirqoba/Common/Type.h"
 
+#include <algorithm>
 #include <unordered_set>
 
 namespace nirq {
@@ -402,6 +403,79 @@ Type parse_type_name(string_view spelling) {
   if (spelling == "string") return Type::string_type();
   if (spelling == "string_owned") return Type::owned_string_type();
   return Type::error();
+}
+
+
+
+namespace {
+
+// An edge is owning when the field keeps its target alive. A deterministic owner
+// releases its target once; a shared pointer keeps a count that includes itself,
+// so a cycle of shared owners never reaches zero - both are owning edges here.
+bool owns_its_element(const Type& field) {
+  switch (field.kind()) {
+    case TypeKind::OwnedPointer:
+    case TypeKind::SharedPointer:
+    // A container owns its buffer, so its elements are reached by ownership.
+    case TypeKind::OwnedArray:
+    case TypeKind::DynamicArray:
+      return true;
+    // Everything else either does not own (borrow, raw pointer, array view, weak)
+    // or hands the cycle to the collector (managed pointer).
+    default:
+      return false;
+  }
+}
+
+// The fields of `type`'s struct: the table is authoritative when it knows the
+// name, and the type's own copy answers for a struct the table never saw.
+const std::vector<std::pair<std::string, Type>>* declared_fields(
+    const Type& type, const StructFieldTable& table) {
+  const auto found = table.find(type.struct_name());
+  if (found != table.end() && !found->second.empty()) return &found->second;
+  return type.struct_fields().empty() ? nullptr : &type.struct_fields();
+}
+
+bool field_closes_a_cycle(const Type& field, const StructFieldTable& table,
+                          std::vector<std::string>& path);
+
+// Walks one aggregate's fields, reporting whether any of them leads back to a
+// struct already on the path. The path is what bounds the walk: a struct is
+// entered once, so a type graph no program could build (a struct holding itself
+// by value) answers instead of recursing forever.
+bool aggregate_closes_a_cycle(const Type& type, const StructFieldTable& table,
+                              std::vector<std::string>& path) {
+  if (!type.is_struct()) return false;
+  const std::string& name = type.struct_name();
+  if (name.empty()) return false;
+  if (std::find(path.begin(), path.end(), name) != path.end()) return true;
+  const auto* fields = declared_fields(type, table);
+  if (fields == nullptr) return false;
+  path.push_back(name);
+  for (const auto& field : *fields) {
+    if (!field_closes_a_cycle(field.second, table, path)) continue;
+    path.pop_back();
+    return true;
+  }
+  path.pop_back();
+  return false;
+}
+
+bool field_closes_a_cycle(const Type& field, const StructFieldTable& table,
+                          std::vector<std::string>& path) {
+  // A struct stored inline is part of the same allocation, so walking it is
+  // walking the parent's own fields.
+  if (field.is_struct()) return aggregate_closes_a_cycle(field, table, path);
+  if (!owns_its_element(field)) return false;
+  const Type element = field.element_type();
+  return element.is_valid() && field_closes_a_cycle(element, table, path);
+}
+
+}  // namespace
+
+bool is_structurally_cyclic(const Type& type, const StructFieldTable& table) {
+  std::vector<std::string> path;
+  return field_closes_a_cycle(type, table, path);
 }
 
 }  // namespace nirq
