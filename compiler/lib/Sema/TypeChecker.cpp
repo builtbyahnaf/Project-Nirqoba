@@ -249,14 +249,6 @@ static void validate_struct_field_contracts(const std::vector<Parameter>& fields
                             "' needs an ownership qualifier: declare it 'owned', "
                             "'borrow' or 'borrow mut'");
     }
-    if (field.type.is_dynamic_array()) {
-      // The array destructor is registered for a binding or a parameter, not for
-      // an aggregate's field, so a buffer stored here would never be released.
-      diagnostics.error(diag::kTypeMismatch, field.location,
-                        "field '" + field.name +
-                            "' cannot hold a dynamic_array: aggregate field "
-                            "destruction is not implemented yet");
-    }
     if (!field.resource_domain.empty() &&
         (!field.type.is_pointer() || field.borrowed ||
          !field.type.is_owned_pointer())) {
