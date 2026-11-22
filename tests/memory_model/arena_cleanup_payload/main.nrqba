@@ -1,10 +1,20 @@
+// An arena payload may hold an owned array: the registry records the field's
+// release when the payload is allocated, so destroying the arena frees the
+// buffer instead of leaving it behind. The payload is filled by the callee, so
+// the caller's frame owns the arena that served it.
 struct OwnedPayload {
     owned_array<int> items;
 }
 
+OwnedPayload* function make_payload() {
+    var value = memory.allocate<OwnedPayload>(32);
+    var items = memory.owned_array<int>(2);
+    *value = OwnedPayload { items: items };
+    return value;
+}
+
 int function main() {
-    let arena = memory.arena(128);
-    let value = memory.allocate<OwnedPayload>(16, arena);
-    memory.arena_destroy(arena);
-    return 42;
+    var root = make_payload();
+    print((*root).items.length);
+    return 0;
 }
