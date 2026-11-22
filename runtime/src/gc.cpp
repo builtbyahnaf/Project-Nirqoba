@@ -11,6 +11,7 @@
 // parked only briefly at cycle boundaries to publish TLabs and prepare roots.
 
 #include "nirqoba/runtime/gc.h"
+#include "nirqoba/runtime/allocator.h"
 #include "nirqoba/runtime/alloc_hint.h"
 #include "nirqoba/runtime/cache_line.h"
 #include "nirqoba/runtime/fatal.h"
@@ -57,6 +58,67 @@ using nirq::gc::detail::SlotIndex;
 using nirq::gc::detail::debug_emit;
 using nirq::gc::detail::debug_tag;
 
+// Reference counts held by collector storage are registered per object, because a
+// layout only describes traced edges, and two payloads of the same geometry can
+// differ in which words carry a count.
+void nrq_gc_release_shared_fields(void* payload);
+
+namespace {
+struct SharedFieldRegistrations {
+  std::mutex mutex;
+  std::unordered_map<void*, std::vector<uint32_t>> fields;
+};
+
+SharedFieldRegistrations& shared_field_registrations() {
+  static SharedFieldRegistrations registry;
+  return registry;
+}
+}  // namespace
+
+// Public entry points live outside the file's anonymous namespace: they are part
+// of the runtime ABI, so their symbols have to reach the linker.
+void nrq_gc_register_shared_fields(void* object, const size_t* offsets,
+                                   size_t count) {
+  if (object == nullptr || offsets == nullptr || count == 0) return;
+  std::vector<uint32_t> narrowed;
+  try {
+    narrowed.reserve(count);
+    for (size_t index = 0; index < count; ++index) {
+      if (offsets[index] > UINT32_MAX) return;
+      narrowed.push_back(static_cast<uint32_t>(offsets[index]));
+    }
+  } catch (...) {
+    return;
+  }
+  SharedFieldRegistrations& registry = shared_field_registrations();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  registry.fields[object] = std::move(narrowed);
+}
+size_t nrq_gc_shared_field_registrations(void) {
+  SharedFieldRegistrations& registry = shared_field_registrations();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  return registry.fields.size();
+}
+void nrq_gc_release_shared_fields(void* payload) {
+  if (payload == nullptr) return;
+  std::vector<uint32_t> offsets;
+  {
+    SharedFieldRegistrations& registry = shared_field_registrations();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    const auto found = registry.fields.find(payload);
+    if (found == registry.fields.end()) return;
+    offsets = std::move(found->second);
+    registry.fields.erase(found);
+  }
+  // The registry lock is released first: a final count drops storage, which takes
+  // the shared-control lock, and the sweep already holds the heap lock.
+  for (uint32_t offset : offsets) {
+    void* value = nullptr;
+    std::memcpy(&value, static_cast<unsigned char*>(payload) + offset,
+                sizeof(void*));
+    if (value != nullptr) nrq_memory_shared_release(value);
+  }
+}
 namespace {
 
 constexpr size_t kGcPageShift = 16;
@@ -1276,10 +1338,17 @@ class ObjectIndex {
   size_t tombstones_ = 0;
 };
 
-// Managed payloads are trivial or hold managed references, so a reclaimed span
-// has nothing to run before it is reused. Keeping the operation named here makes
-// the absence of a finalizer a deliberate contract rather than an omission.
-inline void forget_object_storage(const ObjectRef&) {}
+// Reference counts held by collector storage are registered per object, because
+// a layout only describes traced edges and two payloads of the same geometry can
+// differ in which words carry a count.
+
+// A reclaimed payload has nothing to run before its span is reused, except the
+// reference counts it still holds: sweeping the object makes the collector their
+// last owner, so they are dropped here. Everything else is either a traced
+// reference (the collector keeps it alive) or plain bytes.
+inline void forget_object_storage(const ObjectRef& object) {
+  nrq_gc_release_shared_fields(object_payload(object));
+}
 
 // The heap lock, instrumented with the one invariant the handshake depends on: no
 // thread may hold it while waiting for a fast-barrier region to drain, because a
