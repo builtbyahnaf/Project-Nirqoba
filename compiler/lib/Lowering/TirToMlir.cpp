@@ -885,6 +885,74 @@ static void collect_managed_reference_offsets(const Type& type, uint64_t base,
   }
 }
 
+// Payload words that hold a reference count rather than a traced edge. The
+// collector walks managed references while marking, but a count has to be dropped
+// by whoever owns it: an object the collector reclaims is the last owner of its
+// shared fields, so the runtime needs their offsets to release them at sweep.
+static void collect_shared_reference_offsets(const Type& type, uint64_t base,
+                                             std::vector<uint64_t>& offsets);
+
+// The struct layout a value carries has its pointer ownership erased: a
+// `shared ptr T` field and a raw `T*` field have the same physical word. The
+// catalog the checker published keeps the declared types, so a walk that needs to
+// know which words hold a count reads the catalog for aggregate fields and the
+// value's own type for everything else.
+static void collect_catalog_shared_offsets(const Type& type,
+                                           const StructFieldTable& table,
+                                           uint64_t base,
+                                           std::vector<uint64_t>& offsets) {
+  const Type& resolved = type;
+  if (resolved.is_shared_pointer()) {
+    offsets.push_back(base);
+    return;
+  }
+  if (resolved.is_array()) {
+    const uint64_t stride = type_size(resolved.element_type());
+    for (std::size_t index = 0; index < resolved.array_length(); ++index)
+      collect_catalog_shared_offsets(resolved.element_type(), table,
+                                     base + index * stride, offsets);
+    return;
+  }
+  if (!resolved.is_struct() && !resolved.is_tuple()) return;
+  const auto found = table.find(resolved.struct_name());
+  if (found == table.end() || found->second.empty()) {
+    collect_shared_reference_offsets(resolved, base, offsets);
+    return;
+  }
+  uint64_t field_offset = 0;
+  for (const std::pair<std::string, Type>& field : found->second) {
+    const uint64_t alignment = type_alignment(field.second);
+    field_offset = (field_offset + alignment - 1) & ~(alignment - 1);
+    collect_catalog_shared_offsets(field.second, table, base + field_offset,
+                                   offsets);
+    field_offset += type_size(field.second);
+  }
+}
+
+static void collect_shared_reference_offsets(const Type& type, uint64_t base,
+                                             std::vector<uint64_t>& offsets) {
+  if (type.is_shared_pointer()) {
+    offsets.push_back(base);
+    return;
+  }
+  if (type.is_array()) {
+    const uint64_t stride = type_size(type.element_type());
+    for (std::size_t index = 0; index < type.array_length(); ++index)
+      collect_shared_reference_offsets(type.element_type(),
+                                       base + index * stride, offsets);
+    return;
+  }
+  if (type.is_struct() || type.is_tuple()) {
+    uint64_t field_offset = 0;
+    for_each_field_in_layout_order(type, [&](const Type& field_type) {
+      const uint64_t alignment = type_alignment(field_type);
+      field_offset = (field_offset + alignment - 1) & ~(alignment - 1);
+      collect_shared_reference_offsets(field_type, base + field_offset, offsets);
+      field_offset += type_size(field_type);
+    });
+  }
+}
+
 static bool collect_has_managed_reference(const Type& type) {
   std::vector<uint64_t> offsets;
   collect_managed_reference_offsets(type, 0, offsets);
