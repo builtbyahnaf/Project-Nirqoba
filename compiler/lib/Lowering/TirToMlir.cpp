@@ -2300,8 +2300,8 @@ class FunctionTranslator {
                                      mlir::ValueRange{constant32(0),
                                                       constant32(slot)})
           .getResult();
-      // The slot is at least eight-byte aligned, so the kind fits in the two low
-      // bits of the encoded context without displacing part of the address.
+      // The slot is at least eight-byte aligned, so the kind fits in the three
+      // low bits of the encoded context without displacing part of the address.
       mlir::Value encoded = builder_
           .create<mlir::LLVM::PtrToIntOp>(loc, builder_.getI64Type(), address)
           .getResult();
