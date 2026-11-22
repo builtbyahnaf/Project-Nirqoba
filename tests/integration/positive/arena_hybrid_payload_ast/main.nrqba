@@ -1,0 +1,33 @@
+// A payload with a managed field, allocated in an arena.
+//
+// `AstNode` holds owned text and a pointer to the next node. The text owns a
+// buffer, so the chunk's bulk release cannot reclaim it: the arena registers a
+// teardown for the field, and `nrq_cdmm_arena_destroy` runs it before it releases
+// the chunk. Each node is its own registration, so the three-node chain made here
+// produces three teardowns from one allocation site.
+//
+// The release is the FFI deallocator: `get_c_string` is C code, so the buffer came
+// from C and goes back to C. That is the kind recorded in the registration.
+extern string_owned function get_c_string();
+
+struct AstNode {
+    string_owned identifier;
+    owned ptr AstNode next;
+}
+
+AstNode* function build_ast(int depth) {
+    var node = memory.allocate<AstNode>(32);
+    if (depth > 0) {
+        var child = build_ast(depth - 1);
+        *node = AstNode { identifier: get_c_string(), next: child };
+    } else {
+        *node = AstNode { identifier: get_c_string(), next: nullptr };
+    }
+    return node;
+}
+
+int function main() {
+    var root = build_ast(2);
+    print((*root).identifier);
+    return 0;
+}
