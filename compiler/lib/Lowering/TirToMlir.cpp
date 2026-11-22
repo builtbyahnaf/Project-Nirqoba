@@ -5584,6 +5584,8 @@ class FunctionTranslator {
               // malloc's and as aligned as the layout it was built from.
               mark_fresh_allocation(pool_fn, regions_[region->second].alignment);
               set(op.result, call.getResult());
+              emit_arena_field_teardowns(handle, call.getResult(), op.result.type,
+                                         loc, /*pool_slot=*/true);
               return true;
             }
             auto arena_fn = ensure_runtime_fn(
