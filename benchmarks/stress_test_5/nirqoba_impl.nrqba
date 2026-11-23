@@ -1,0 +1,114 @@
+// Stress Test 5 - the CDMM gauntlet.
+//
+// One process, four tiers. Every phase is written the way a programmer would
+// write it; which tier serves it is the compiler's decision, reported by
+// `--inspect-cdmm`:
+//
+//   stack  thousands of short-lived vector values in a hot loop
+//   pool   uniform slots larger than the stack limit, handed back per iteration
+//   arena  a deep acyclic tree block, released in bulk
+//   gc     a cyclic graph whose roots are dropped, swept by the collector
+//
+// Each phase is its own function so each phase owns its frame. The checksums a
+// phase returns are the only thing main keeps, which is what stops a phase from
+// being optimised out of existence.
+//
+// Two shapes in this build constrain the code and are recorded rather than
+// hidden: a `T*` from `memory.allocate<T>(n)` is reliable at element 0 only, so
+// every block phase touches element 0 of a large block; and the vector is a
+// one-field struct, because a multi-field struct promoted to a loop's stack slot
+// reads its fields back stale. Both are compiler defects, not benchmark choices.
+
+struct Vec1 {
+    int x;
+}
+
+struct Event {
+    int kind;
+    int payload;
+}
+
+struct ExprNode {
+    int value;
+    int left;
+    int right;
+}
+
+struct CycleNode {
+    int value;
+    shared ptr CycleNode next;
+}
+
+// The arena phase's promoted node: a local aggregate returned where the function
+// declares a pointer is promoted, and the caller's frame owns the result.
+ExprNode* function make_leaf(int value) {
+    var node = ExprNode { value: value, left: 0, right: 0 };
+    return node;
+}
+
+// ---- stack: temporary vectors, one at a time, no escape ---------------------
+int function stack_phase() {
+    var checksum = 0;
+    var i = 0;
+    while (i < 200000) {
+        var v = memory.allocate<Vec1>(1);
+        v[0].x = i;
+        checksum = checksum + v[0].x;
+        i = i + 1;
+    }
+    return checksum;
+}
+
+// ---- pool: uniform slots too large for the stack, reused per iteration ------
+int function pool_phase() {
+    var events = 0;
+    var i = 0;
+    while (i < 2000) {
+        var batch = memory.allocate<Event>(8192);
+        batch[0].kind = i;
+        batch[0].payload = i * 2;
+        events = events + batch[0].kind + batch[0].payload;
+        i = i + 1;
+    }
+    return events;
+}
+
+// ---- arena: a deep acyclic tree block, released in bulk --------------------
+int function arena_phase() {
+    var tree = memory.allocate<ExprNode>(8191);
+    tree[0].value = 5;
+    tree[0].left = 1;
+    tree[0].right = 2;
+    return tree[0].value + tree[0].left + tree[0].right;
+}
+
+// ---- gc: a cyclic graph, published and then dropped ------------------------
+//
+// The nodes are cycle-capable by type, and `kept` is foreign storage: neither
+// the stack nor an arena may own an object the array outlives, so the collector
+// is the only strategy left. Dropping the array drops the roots.
+int function gc_phase() {
+    var cycles = 0;
+    var kept = memory.dynamic_array<CycleNode*>();
+    var i = 0;
+    while (i < 40000) {
+        var node = memory.allocate<CycleNode>(1);
+        *node = CycleNode { value: i, next: nullptr };
+        memory.array_append(kept, node);
+        cycles = cycles + (*node).value;
+        i = i + 1;
+    }
+    kept = memory.dynamic_array<CycleNode*>();
+    gc.collect();
+    gc.collect();
+    return cycles;
+}
+
+int function main() {
+    print(stack_phase());
+    print(pool_phase());
+    var leaf = make_leaf(4);
+    print(arena_phase() + (*leaf).value);
+    print(gc_phase());
+    return 0;
+}
