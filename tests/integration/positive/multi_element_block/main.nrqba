@@ -1,0 +1,44 @@
+// A block asked for in bytes holds exactly that many bytes, and every element
+// inside it is addressable.
+//
+// `memory.allocate<T>(n)` takes a byte count, so the count has to cover the
+// whole run of elements: four 64-bit integers are 32 bytes, four three-field
+// structs are 96. Before this was pinned, the only multi-element case anything
+// tested was element 0, which is why an index mismatch could live here
+// unnoticed.
+struct Vec3 {
+    int x;
+    int y;
+    int z;
+}
+
+int function main() {
+    var ints = memory.allocate<int>(4 * 8);
+    var i = 0;
+    while (i < 4) {
+        ints[i] = (i + 1) * 10;
+        i = i + 1;
+    }
+    i = 0;
+    while (i < 4) {
+        print(ints[i]);
+        i = i + 1;
+    }
+
+    var vecs = memory.allocate<Vec3>(4 * 24);
+    i = 0;
+    while (i < 4) {
+        vecs[i].x = i;
+        vecs[i].y = i + 1;
+        vecs[i].z = i + 2;
+        i = i + 1;
+    }
+    i = 0;
+    var total = 0;
+    while (i < 4) {
+        total = total + vecs[i].x + vecs[i].y + vecs[i].z;
+        i = i + 1;
+    }
+    print(total);
+    return 0;
+}
