@@ -12,6 +12,41 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.675-beta
+
+### Summary of Changes (since `0.670-beta`)
+
+Release label `+0.005`.
+
+#### Micro-phase 13b: lowering soundness after stress test 5
+
+- **Fixed: a collector site inside a frame that also holds an arena.** The hybrid
+  strategy check required every site carrying `nirqoba.hybrid_strategy` to read
+  its handle from a filled region slot. A `gc` site carries the attribute to name
+  its decision but owns its bytes outright, so a mixed arena + collector frame
+  failed with `selected allocation has no region handle; hybrid strategy selection
+  and lowering disagree`. The check now applies to the region strategies, `arena`
+  and `pool`, which are the only ones that have a handle.
+- **Established, not fixed: multi-element blocks were never misaddressed.**
+  `memory.allocate<T>(n)` takes a **byte count** (documented in
+  `docs/memory/management.md` and `docs/memory/allocators.md`), so a block written
+  element-wise needs `n * sizeof(T)` bytes. With that count, four `int`s and four
+  three-field structs read back exactly, at every index. The corruption reported
+  from `benchmarks/stress_test_5` was an under-sized request - `allocate<Vec3>(1)`
+  - written through twelve bytes; the lowering's stride was correct all along.
+  `tests/integration/positive/multi_element_block` pins the correct shape.
+- **Established, not fixed: a multi-field struct promoted to a loop's stack slot
+  is rewritten per iteration.** The stale reads in the benchmark came from the same
+  under-sized request. `tests/integration/positive/stack_promoted_struct_loop`
+  pins a three-field struct at 24 bytes and asserts both the sum and the `stack`
+  classification.
+- **Established, not fixed: two allocation sites in one loop body are two
+  allocations.** `tests/integration/positive/two_sites_one_loop` pins both sites
+  and both sums.
+- `tests/integration/positive/mixed_tier_frame` pins the frame shape that failed
+  for real: an arena block and a collector graph in one function.
+- 702/702 integration, 537/537 unit.
+
 ## Version 0.670-beta
 
 ### Summary of Changes (since `0.665-beta`)

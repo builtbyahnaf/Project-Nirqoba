@@ -110,18 +110,26 @@ the workload defines.
 | arena | one 96 KiB block + one promoted node | one `malloc`/`free` of 96 KiB | |
 | gc | 40,000 published nodes, two full collections | 40,000 `malloc`, 40,000 `free` | no C equivalent: reclamation is manual |
 
-## Compiler defects this workload is shaped around
+## Why this workload is shaped the way it is
 
-Recorded here because the benchmark would be dishonest without them, and
-because they belong in the compiler's own issue list:
+Three things recorded in the first draft of this suite as compiler defects were
+re-examined in micro-phase 13b, and only one of them was real:
 
-1. `memory.allocate<T>(n)` is reliable at element 0 only - writing element 1 and
-   reading it back returns the wrong value. Every block phase therefore touches
-   element 0 of a large block, which is what the tier decision is about anyway.
-2. A multi-field struct promoted to a loop's stack slot reads its fields back
-   stale, so the vector phase uses a one-field struct.
-3. Two allocation sites in one loop body fail lowering with "selected allocation
-   has no region handle; hybrid strategy selection and lowering disagree", and an
-   arena allocation and a collector allocation in the same frame fail the same
-   way. Both are why each phase is its own function and the GC phase allocates one
-   node per iteration.
+1. **Not a defect.** `memory.allocate<T>(n)` takes a byte count, not an element
+   count. The first draft passed element counts, so `allocate<Vec3>(1)` asked for
+   one byte and wrote twelve; the garbage read back was out-of-bounds storage, not
+   a stride bug. With `4 * 24` bytes, four three-field structs read back exactly
+   (`tests/integration/positive/multi_element_block`). The phases here still touch
+   element 0 only, because that is what the tier decision is about.
+2. **Not a defect.** A multi-field struct promoted to a loop's stack slot is
+   rewritten per iteration; the stale read came from the same one-byte request.
+   Pinned by `tests/integration/positive/stack_promoted_struct_loop`. The vector
+   phase still uses a one-field struct, so its numbers stay comparable with the
+   five published runs.
+3. **This one was real, and is fixed.** Every site carrying
+   `nirqoba.hybrid_strategy` was required to read its storage from a filled region
+   slot, which a `gc` site never has - so an arena plus a collector in one frame
+   failed lowering with "selected allocation has no region handle; hybrid strategy
+   selection and lowering disagree". Fixed in `PassPipeline.cpp` (13b), pinned by
+   `tests/integration/positive/mixed_tier_frame`. The phases are still separate
+   functions, which is how a benchmark should be written anyway.

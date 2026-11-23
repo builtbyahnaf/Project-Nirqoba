@@ -45,6 +45,13 @@ collector's guarantee. The remembered set is conservative: a removed
 old-to-young edge may keep a floating young object alive until it is promoted or
 a later minor cycle reclaims it.
 
+`memory.allocate<T>(bytes)` takes a **byte count, not an element count**. A block
+that is written element-wise needs `bytes` to cover the whole run:
+`memory.allocate<int>(4 * 8)` is four 64-bit integers, and `memory.allocate<Vec3>(1)`
+is one byte - writing `v[0].x` into it writes eight bytes past its end. Element
+access is raw pointer arithmetic with no bounds check, so an under-sized request
+corrupts memory silently rather than failing.
+
 Use `memory.allocate<T>(bytes)` for explicitly managed raw memory and pair it
 with `memory.deallocate(pointer)`. A failed allocation returns null. The
 runtime tracks allocation ownership and rejects invalid and repeated frees.
