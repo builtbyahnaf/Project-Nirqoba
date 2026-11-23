@@ -1,0 +1,26 @@
+// A three-field struct promoted to a loop's stack slot is rewritten on every
+// iteration, not once per frame.
+//
+// The slot is one alloca for the whole loop, so the proof that it works is that
+// a value written in iteration `i` is read back in iteration `i` and nowhere
+// else: the sum below is only 45 if all three fields survive every pass.
+struct Vec3 {
+    int x;
+    int y;
+    int z;
+}
+
+int function main() {
+    var total = 0;
+    var i = 0;
+    while (i < 5) {
+        var v = memory.allocate<Vec3>(24);
+        v[0].x = i;
+        v[0].y = i + 1;
+        v[0].z = i + 2;
+        total = total + v[0].x + v[0].y + v[0].z;
+        i = i + 1;
+    }
+    print(total);
+    return 0;
+}

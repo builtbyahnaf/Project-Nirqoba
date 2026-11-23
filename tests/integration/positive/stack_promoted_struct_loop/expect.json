@@ -1,0 +1,7 @@
+{
+  "mode": "build_and_run",
+  "args": ["--inspect-cdmm"],
+  "expect_exit": 0,
+  "expect_stdout": "45\n",
+  "expect_stderr_contains": "'v' Vec3* -> stack (bounded to function, promoted to the stack, loop-scoped)"
+}
