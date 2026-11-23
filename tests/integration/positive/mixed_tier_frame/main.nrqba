@@ -1,0 +1,34 @@
+// One frame, two tiers.
+//
+// The block is bounded to this function, so the selector gives it an arena; the
+// nodes are cycle-capable and published into an array that outlives the frame, so
+// they go to the collector. The region handle belongs to the arena site only - a
+// collector site owns its bytes outright - and this frame is the case that proved
+// the strategy check had confused the two.
+struct ExprNode {
+    int value;
+    int left;
+    int right;
+}
+
+struct CycleNode {
+    int value;
+    shared ptr CycleNode next;
+}
+
+int function main() {
+    var kept = memory.dynamic_array<CycleNode*>();
+    var tree = memory.allocate<ExprNode>(8191 * 24);
+    tree[0].value = 5;
+    print(tree[0].value);
+
+    var i = 0;
+    while (i < 4) {
+        var node = memory.allocate<CycleNode>(16);
+        *node = CycleNode { value: i, next: nullptr };
+        memory.array_append(kept, node);
+        i = i + 1;
+    }
+    print(kept.length);
+    return 0;
+}

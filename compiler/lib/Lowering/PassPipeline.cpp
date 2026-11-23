@@ -912,6 +912,16 @@ class HybridStrategySelectionPass
 
     bool consistent = true;
     for (mlir::LLVM::CallOp site : selected) {
+      // Only the region strategies take their storage from a handle. A site the
+      // selector routed to the collector carries the same attribute to name its
+      // decision, but it owns its bytes outright: demanding a region handle of it
+      // fails every frame that also holds an arena, which is what a mixed-tier
+      // frame is.
+      if (auto strategy = site->getAttrOfType<mlir::StringAttr>(
+              "nirqoba.hybrid_strategy")) {
+        const llvm::StringRef name = strategy.getValue();
+        if (name != "arena" && name != "pool") continue;
+      }
       const mlir::Value slot =
           site.getNumOperands() == 0 ? mlir::Value{}
                                      : arena_slot(site.getOperand(0));

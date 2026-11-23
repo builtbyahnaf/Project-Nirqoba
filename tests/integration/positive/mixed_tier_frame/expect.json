@@ -1,0 +1,7 @@
+{
+  "mode": "build_and_run",
+  "args": ["--inspect-cdmm"],
+  "expect_exit": 0,
+  "expect_stdout": "5\n4\n",
+  "expect_stderr_contains": "'tree' ExprNode* -> arena (bounded to function)"
+}
