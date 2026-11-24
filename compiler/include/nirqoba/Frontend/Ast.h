@@ -273,7 +273,20 @@ class CallExpr : public Expr {
 // `&x` yields the address of an existing storage location and `*p` names the
 // object stored at an address. They are unary expressions rather than new
 // statement kinds so `*p = v` reuses the ordinary assignment path.
-enum class UnaryOp { Negate, Plus, LogicalNot, BitwiseNot, AddressOf, Dereference };
+// PreIncrement/PreDecrement yield the value after the update; the postfix forms
+// yield the value before it. All four write through the operand's storage.
+enum class UnaryOp {
+  Negate,
+  Plus,
+  LogicalNot,
+  BitwiseNot,
+  AddressOf,
+  Dereference,
+  PreIncrement,
+  PreDecrement,
+  PostIncrement,
+  PostDecrement
+};
 enum class BinaryOp {
   Add,
   Subtract,

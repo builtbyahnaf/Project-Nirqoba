@@ -1287,6 +1287,12 @@ ExprPtr Parser::parse_cast() {
 ExprPtr Parser::parse_unary() {
   // `&` and `*` are unary only in prefix position; `a & b` and `a * b` are handled
   // by the binary levels, which never reach this function for their operators.
+  if (check(TokenKind::PlusPlus) || check(TokenKind::MinusMinus)) {
+    const Token op_tok = advance();
+    const UnaryOp op = op_tok.kind == TokenKind::PlusPlus ? UnaryOp::PreIncrement
+                                                          : UnaryOp::PreDecrement;
+    return make_unique<UnaryExpr>(op_tok.location, op, parse_unary());
+  }
   if (check(TokenKind::Amp)) {
     const Token op_tok = advance();
     return make_unique<UnaryExpr>(op_tok.location, UnaryOp::AddressOf, parse_unary());
@@ -1341,6 +1347,12 @@ ExprPtr Parser::parse_postfix() {
       ExprPtr index = parse_expression();
       expect(TokenKind::RBracket, "to close array index");
       expr = make_unique<IndexExpr>(expr->location(), move(expr), move(index));
+    } else if (match(TokenKind::PlusPlus)) {
+      expr = make_unique<UnaryExpr>(expr->location(), UnaryOp::PostIncrement,
+                                    move(expr));
+    } else if (match(TokenKind::MinusMinus)) {
+      expr = make_unique<UnaryExpr>(expr->location(), UnaryOp::PostDecrement,
+                                    move(expr));
     } else if (match(TokenKind::Question)) {
       // `value?` is one token rather than a keyword-and-block: the operand is the
       // Result being propagated. It parses as a call so the checker and the
@@ -1593,6 +1605,10 @@ string_view unary_op_spelling(UnaryOp op) {
     case UnaryOp::BitwiseNot: return "~";
     case UnaryOp::AddressOf: return "&";
     case UnaryOp::Dereference: return "*";
+    case UnaryOp::PreIncrement: return "++";
+    case UnaryOp::PreDecrement: return "--";
+    case UnaryOp::PostIncrement: return "++";
+    case UnaryOp::PostDecrement: return "--";
   }
   return "?";
 }

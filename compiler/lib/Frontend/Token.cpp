@@ -64,11 +64,14 @@ string_view token_kind_name(TokenKind kind) {
     case TokenKind::Comma: return ",";
     case TokenKind::Semicolon: return ";";
     case TokenKind::Colon: return ":";
+    case TokenKind::Question: return "?";
     case TokenKind::Dot: return ".";
     case TokenKind::Arrow: return "->";
     case TokenKind::At: return "@";
     case TokenKind::Plus: return "+";
+    case TokenKind::PlusPlus: return "++";
     case TokenKind::Minus: return "-";
+    case TokenKind::MinusMinus: return "--";
     case TokenKind::Star: return "*";
     case TokenKind::StarStar: return "**";
     case TokenKind::Slash: return "/";

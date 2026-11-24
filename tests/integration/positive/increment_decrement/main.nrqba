@@ -1,0 +1,41 @@
+// `++` and `--` are one operation each, not a sign folded into another sign: the
+// lexer produces a single token, and the value the expression yields is the one
+// the surrounding code asked for.
+//
+//   prefix:  the value after the update     postfix: the value before it
+//
+// Both write through the operand's own storage, so a loop step mutates the
+// counter instead of computing a new value and discarding it.
+int function main() {
+    var i = 0;
+    print(i++);
+    print(i);
+    print(++i);
+    print(i--);
+    print(--i);
+
+    var total = 0;
+    for (var n = 0; n < 5; ++n) {
+        total += n;
+    }
+    print(total);
+
+    // The postfix form advances the loop the same way; only the value it yields
+    // differs, and a step statement never reads that value.
+    for (var n = 5; n > 0; n--) {
+        total -= n;
+    }
+    print(total);
+
+    // Floating point values take the same operators.
+    var f = 1.5;
+    f++;
+    print(f == 2.5);
+    print(--f == 1.5);
+
+    // An element is storage too, so it updates in place.
+    var counts = [1, 2, 3];
+    counts[1]++;
+    print(counts[1]);
+    return 0;
+}

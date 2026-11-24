@@ -143,10 +143,14 @@ Token Lexer::scan_token() {
     case '.': return make_token(TokenKind::Dot, start);
     case '+':
       if (match('=')) return make_token(TokenKind::PlusEqual, start);
+      // `++` is one operator, not two unary pluses: the lexer decides it before
+      // the parser can fold `+(+x)` into something that discards the update.
+      if (match('+')) return make_token(TokenKind::PlusPlus, start);
       return make_token(TokenKind::Plus, start);
     case '-':
       if (match('=')) return make_token(TokenKind::MinusEqual, start);
       if (match('>')) return make_token(TokenKind::Arrow, start);
+      if (match('-')) return make_token(TokenKind::MinusMinus, start);
       return make_token(TokenKind::Minus, start);
     case '*':
       if (match('*')) return make_token(TokenKind::StarStar, start);

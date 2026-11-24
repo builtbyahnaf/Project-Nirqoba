@@ -1,0 +1,8 @@
+// `++` writes the updated value back into its operand, so a literal has nowhere
+// to put it. The rejection belongs to semantic analysis: lowering would have no
+// slot to store into.
+int function main() {
+    var value = 5++;
+    print(value);
+    return 0;
+}

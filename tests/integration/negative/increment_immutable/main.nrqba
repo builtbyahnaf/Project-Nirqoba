@@ -1,0 +1,8 @@
+// A `let` binding was declared immutable, and `++` is a write. The diagnostic
+// names the binding and the declaration keyword, because the fix is to declare it
+// with `var` rather than to remove the operator.
+int function main() {
+    let limit = 10;
+    limit++;
+    return 0;
+}

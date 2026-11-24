@@ -1548,6 +1548,64 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
     }
     case Expr::Kind::Unary: {
       const auto& unary = static_cast<const UnaryExpr&>(expr);
+      if (unary.op() == UnaryOp::PreIncrement ||
+          unary.op() == UnaryOp::PreDecrement ||
+          unary.op() == UnaryOp::PostIncrement ||
+          unary.op() == UnaryOp::PostDecrement) {
+        // The operand names storage, so its address is computed once and both the
+        // read and the write go through it. Prefix yields the updated value,
+        // postfix the value that was there before the update.
+        const bool adds = unary.op() == UnaryOp::PreIncrement ||
+                          unary.op() == UnaryOp::PostIncrement;
+        const bool prefix = unary.op() == UnaryOp::PreIncrement ||
+                            unary.op() == UnaryOp::PreDecrement;
+        const tir::Value slot = resolve_lvalue_ptr(unary.operand(), function);
+        if (!slot.is_valid()) {
+          diagnostics_.error(kUnresolvedSymbol, unary.location(),
+                             "internal: increment target has no TIR slot");
+          return tir::Value{};
+        }
+        tir::Value previous = function.allocate_value(slot.type);
+        tir::Op load;
+        load.kind = tir::OpKind::Load;
+        load.location = unary.location();
+        load.lhs = slot;
+        load.result = previous;
+        function.add_operation(std::move(load));
+
+        tir::Value one = function.allocate_value(slot.type);
+        tir::Op literal;
+        literal.location = unary.location();
+        literal.result = one;
+        if (slot.type.is_float()) {
+          literal.kind = tir::OpKind::ConstantFloat;
+          literal.float_value = 1.0;
+        } else {
+          literal.kind = tir::OpKind::ConstantInt;
+          literal.integer_value = 1;
+        }
+        function.add_operation(std::move(literal));
+
+        tir::Value updated = function.allocate_value(slot.type);
+        tir::Op arithmetic;
+        arithmetic.kind = tir::OpKind::Binary;
+        arithmetic.location = unary.location();
+        arithmetic.binary_op =
+            adds ? tir::BinaryOp::Add : tir::BinaryOp::Subtract;
+        arithmetic.lhs = previous;
+        arithmetic.rhs = one;
+        arithmetic.result = updated;
+        function.add_operation(std::move(arithmetic));
+
+        tir::Op store;
+        store.kind = tir::OpKind::Store;
+        store.location = unary.location();
+        store.operand = updated;
+        store.lhs = slot;
+        store.result = slot;
+        function.add_operation(std::move(store));
+        return prefix ? updated : previous;
+      }
       if (unary.op() == UnaryOp::AddressOf) {
         // `&x` yields the address of the existing stack slot. Sema has already
         // restricted the operand to an addressable lvalue, so the slot lookup can

@@ -92,7 +92,9 @@ enum class TokenKind {
 
   // Operators.
   Plus,
+  PlusPlus,
   Minus,
+  MinusMinus,
   Star,
   StarStar,
   Slash,

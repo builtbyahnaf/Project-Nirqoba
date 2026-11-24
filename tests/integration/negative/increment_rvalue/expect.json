@@ -1,0 +1,7 @@
+{
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": [
+    "'++' updates a stored value, so it needs a variable, field, element or dereference"
+  ]
+}

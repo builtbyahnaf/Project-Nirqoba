@@ -3669,6 +3669,64 @@ Type TypeChecker::check_expression(Expr& expr) {
       if (!operand_type.is_valid()) break;
 
       switch (unary.op()) {
+        case UnaryOp::PreIncrement:
+        case UnaryOp::PreDecrement:
+        case UnaryOp::PostIncrement:
+        case UnaryOp::PostDecrement: {
+          // `++`/`--` read a stored value, add or subtract one, and write it back.
+          // The operand therefore has to name writable storage the program may
+          // mutate; a computed value has nowhere for the update to land.
+          const bool adds = unary.op() == UnaryOp::PreIncrement ||
+                            unary.op() == UnaryOp::PostIncrement;
+          const string spelling = adds ? "++" : "--";
+          const Expr::Kind operand_kind = unary.operand().kind();
+          const bool writable =
+              operand_kind == Expr::Kind::Name ||
+              operand_kind == Expr::Kind::MemberAccess ||
+              operand_kind == Expr::Kind::Index ||
+              (operand_kind == Expr::Kind::Unary &&
+               static_cast<const UnaryExpr&>(unary.operand()).op() ==
+                   UnaryOp::Dereference);
+          const Symbol* symbol =
+              writable ? find_root_symbol(unary.operand(), symbols_) : nullptr;
+          string immutable_subject;
+          bool immutable_is_field = false;
+          if (!writable) {
+            diagnostics_.error(
+                diag::kTypeMismatch, unary.location(),
+                "operator '" + spelling +
+                    "' updates a stored value, so it needs a variable, field, "
+                    "element or dereference");
+            type = Type::error();
+          } else if (!operand_type.is_numeric()) {
+            diagnostics_.error(diag::kTypeMismatch, unary.location(),
+                               "operator '" + spelling +
+                                   "' requires a numeric operand, not '" +
+                                   operand_type.to_string() + "'");
+            type = Type::error();
+          } else if (write_through_immutable_borrow(
+                         unary.operand(), immutable_subject,
+                         immutable_is_field)) {
+            diagnostics_.error(
+                diag::kTypeMismatch, unary.location(),
+                immutable_is_field
+                    ? "cannot write through borrowed field '" +
+                          immutable_subject + "'; declare it 'borrow mut'"
+                    : "cannot write through immutable borrowed pointer '" +
+                          immutable_subject + "'");
+            type = Type::error();
+          } else if (symbol != nullptr && !symbol->is_mutable()) {
+            diagnostics_.error(
+                diag::kImmutableAssignment, unary.location(),
+                "'" + symbol->name + "' was declared as " +
+                    string(binding_kind_spelling(symbol->binding)) +
+                    " and cannot be mutated; declare it with 'var' to mutate it");
+            type = Type::error();
+          } else {
+            type = operand_type;
+          }
+          break;
+        }
         case UnaryOp::Negate:
         case UnaryOp::Plus:
           if (!operand_type.is_numeric()) {
