@@ -1,0 +1,33 @@
+// Descending a chain by moving each link into a binding of its own.
+//
+// Reading `(*node).next` moves the field's owner out: the node keeps a moved field,
+// which is why its own destruction frees nothing there, and the binding that received
+// it becomes the node's owner. Splitting a chain this way is what lets a program walk
+// a recursive structure without aliasing it.
+struct Node {
+    int value;
+    owned ptr Node next;
+}
+
+int function main() {
+    var tail = memory.allocate<Node>(16);
+    (*tail).value = 3;
+    (*tail).next = nullptr;
+
+    var mid = memory.allocate<Node>(16);
+    (*mid).value = 2;
+    (*mid).next = tail;
+
+    var head = memory.allocate<Node>(16);
+    (*head).value = 1;
+    (*head).next = mid;
+
+    var second = (*head).next;
+    var third = (*second).next;
+
+    print((*head).value);
+    print((*second).value);
+    print((*third).value);
+    print((*third).value + (*second).value + (*head).value);
+    return 0;
+}

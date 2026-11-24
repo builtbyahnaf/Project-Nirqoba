@@ -1,5 +1,6 @@
 {
-  "mode": "check",
-  "expect_exit": 1,
-  "expect_stderr_contains": "explicit allocations cannot contain 'Name'"
+  "mode": "build",
+  "args": ["--inspect-cdmm"],
+  "expect_exit": 0,
+  "expect_stderr_contains": "'name' Name* -> gc (escaping via return)"
 }

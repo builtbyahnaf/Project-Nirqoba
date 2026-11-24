@@ -1,8 +1,9 @@
-// A payload the arena still refuses. `Name` holds a shared token, which is a
-// reference count rather than storage: a chunk release cannot decrement it, and
-// the classifier will not pretend a field-level teardown exists for a lifetime the
-// type does not show. The allocation therefore keeps the collector, and the report
-// is where that decision stays visible.
+// A payload that holds a reference count is collector storage.
+//
+// `Name` holds a shared token, so the block's release has to decrement it: the
+// payload's own drop does that, and the report names the escape that keeps the site
+// out of a deterministic zone. The site is accepted rather than rejected, because
+// the walk that frees the block also releases the counts its fields hold.
 struct Name {
     shared ptr int slot;
 }

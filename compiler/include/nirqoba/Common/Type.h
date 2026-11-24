@@ -340,4 +340,13 @@ using StructFieldTable =
 // is a flow-sensitive question this predicate deliberately does not answer.
 bool is_structurally_cyclic(const Type& type, const StructFieldTable& table);
 
+// True when destroying a value of this type means destroying its fields rather
+// than returning one block: a struct whose fields are owned or shared pointers, and
+// nothing else that owns storage. Recursive structures are the reason the
+// distinction exists - the release of a node is the release of the node's own
+// pointer fields plus the node's block, and the same sentence describes its child.
+// A payload that also holds text, an array, a container or a resource handle keeps
+// the field walk its literal registered, so it answers false here.
+bool aggregate_owns_pointer_fields(const Type& type, const StructFieldTable& table);
+
 }  // namespace nirq

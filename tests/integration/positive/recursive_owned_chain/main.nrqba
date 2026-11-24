@@ -1,0 +1,41 @@
+// A recursive structure built field by field, released from one owning pointer.
+//
+// Each node owns the next one, so the list is a chain of unique owners and no cycle
+// is possible. The chain is built by storing into `(*node).next`, which is the write
+// that used to be rejected for an owned field reached through a pointer, and read by
+// projecting through the links.
+//
+// The head is handed to a dynamic array, so its release goes to the general
+// allocator instead of an arena. That release is the payload's own walk: the node's
+// fields are destroyed first and the walk repeats for the child it finds, which is
+// what frees the whole chain from the single owning pointer. One drop helper, three
+// blocks returned, and no block returned twice.
+struct Node {
+    int value;
+    owned ptr Node next;
+}
+
+int function main() {
+    var kept = memory.dynamic_array<Node*>();
+
+    var tail = memory.allocate<Node>(16);
+    (*tail).value = 3;
+    (*tail).next = nullptr;
+
+    var mid = memory.allocate<Node>(16);
+    (*mid).value = 2;
+    (*mid).next = tail;
+
+    var head = memory.allocate<Node>(16);
+    (*head).value = 1;
+    (*head).next = mid;
+
+    memory.array_append(kept, head);
+
+    print((*head).value);
+    print((*((*head).next)).value);
+    print((*((*((*head).next)).next)).value);
+    print((*head).value + (*((*head).next)).value +
+          (*((*((*head).next)).next)).value);
+    return 0;
+}

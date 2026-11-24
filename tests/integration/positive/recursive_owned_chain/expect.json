@@ -1,0 +1,10 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 0,
+  "expect_stdout": "1\n2\n3\n6\n",
+  "expect_ir_counts": {
+    "call ptr @nrq_memory_allocate": 3,
+    "call void @nrq_drop_payload_Node": 2,
+    "call void @nrq_memory_deallocate_checked": 1
+  }
+}

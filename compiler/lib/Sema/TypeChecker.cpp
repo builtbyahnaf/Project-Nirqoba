@@ -1491,6 +1491,34 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
         symbols_.mark_field_uninitialized(declaration.name(), "." + field.first);
     }
   }
+  // Raw allocation hands an aggregate back with nothing written into it. The
+  // fields that carry tracked ownership are recorded as uninitialized, so the
+  // first store into one of them is an initialization: treating it as an
+  // overwrite would release a value the memory never held.
+  if (!uninitialized_declaration && binding_type.is_pointer() &&
+      declaration.initializer().kind() == Expr::Kind::Call) {
+    const auto& allocation_call =
+        static_cast<const CallExpr&>(declaration.initializer());
+    const Type payload_type = binding_type.element_type();
+    if ((allocation_call.callee() == "memory.allocate" ||
+         allocation_call.callee() == "memory.shared_allocate" ||
+         allocation_call.callee() == "memory.manual_allocate") &&
+        payload_type.is_struct()) {
+      auto mark_owning = [&](const string& field_name, const Type& field_type) {
+        if (contains_owned_array(field_type) ||
+            contains_shared_pointer(field_type))
+          symbols_.mark_field_uninitialized(declaration.name(),
+                                            "." + field_name);
+      };
+      if (const StructInfo* info = find_struct(payload_type.struct_name())) {
+        for (const Parameter& field : info->fields)
+          mark_owning(field.name, field.type);
+      } else {
+        for (const auto& field : payload_type.struct_fields())
+          mark_owning(field.first, field.second);
+      }
+    }
+  }
   if (const Symbol* declared = symbols_.lookup(new_name))
     declaration.set_cleanup_callee(declared->borrowed ? string{}
                                                       : declared->cleanup_callee);
@@ -1606,7 +1634,15 @@ bool TypeChecker::field_path(const Expr& expression, string& root,
   }
   if (expression.kind() != Expr::Kind::MemberAccess) return false;
   const auto& member = static_cast<const MemberAccessExpr&>(expression);
-  if (!field_path(member.base(), root, path)) return false;
+  // `(*a).next` names a field of the object `a` points at, so the dereference is
+  // a projection like any other rather than a different storage location. Without
+  // this, every field write through a pointer looked like an assignment to an
+  // unknown destination and could not take the aggregate field paths at all.
+  const Expr* base = &member.base();
+  while (base->kind() == Expr::Kind::Unary &&
+         static_cast<const UnaryExpr&>(*base).op() == UnaryOp::Dereference)
+    base = &static_cast<const UnaryExpr&>(*base).operand();
+  if (!field_path(*base, root, path)) return false;
   path += ".";
   path += member.is_tuple_access() ? to_string(member.tuple_index())
                                    : member.member();
@@ -2223,9 +2259,13 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
                        "owned fields can only be reinitialized by assigning to a moved field path");
     return;
   }
+  // `nullptr` transfers no ownership, so it initializes a field of any pointer
+  // kind without a release or a retained reference to account for.
   if ((assignment.target().kind() == Expr::Kind::MemberAccess ||
        assignment.target().kind() == Expr::Kind::Index) &&
-      has_untracked_pointer_ownership(target_type, assignment.value().ownership())) {
+      has_untracked_pointer_ownership(target_type,
+                                      assignment.value().ownership()) &&
+      !is_null_pointer_literal(assignment.value())) {
     diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
                        "owned, shared, and borrowed pointers cannot be stored in aggregate fields");
     return;
@@ -2254,6 +2294,28 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     string field_target;
     if (field_path(assignment.target(), field_root, field_target))
       mark_field_initialized(field_root, field_target);
+  }
+  // A whole-aggregate store - `h = Holder { ... }` or `*h = Holder { ... }` -
+  // writes every field at once, so nothing in the destination is uninitialized
+  // afterwards. Without this a heap aggregate whose fields were recorded as
+  // uninitialized stayed that way even though its construction filled them.
+  if (value_type.is_struct() && target_type == value_type) {
+    const Expr* aggregate_root = &assignment.target();
+    while (aggregate_root->kind() == Expr::Kind::Unary &&
+           static_cast<const UnaryExpr&>(*aggregate_root).op() ==
+               UnaryOp::Dereference)
+      aggregate_root = &static_cast<const UnaryExpr&>(*aggregate_root).operand();
+    if (aggregate_root->kind() == Expr::Kind::Name) {
+      const string& root_name =
+          static_cast<const NameExpr&>(*aggregate_root).name();
+      if (const StructInfo* info = find_struct(value_type.struct_name())) {
+        for (const Parameter& field : info->fields)
+          mark_field_initialized(root_name, "." + field.name);
+      } else {
+        for (const auto& field : value_type.struct_fields())
+          mark_field_initialized(root_name, "." + field.first);
+      }
+    }
   }
   const Symbol* symbol = find_root_symbol(assignment.target(), symbols_);
   bool extracted_mutable_borrow = false;
@@ -2374,6 +2436,15 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
     if (symbols_.has_live_borrow(owner->allocation_id)) {
       diagnostics_.error(diag::kTypeMismatch, assignment.target().location(),
                          "cannot reinitialize an owned field while an array view is live");
+      return;
+    }
+    // A null field is the one owned value that needs no release: the slot owns
+    // nothing, so storing it initializes the field and ends the move obligation.
+    if (is_null_pointer_literal(assignment.value()) &&
+        target_type.is_pointer()) {
+      const_cast<Expr&>(assignment.value()).set_type(target_type);
+      symbols_.clear_field_moved(field_owner, field_name);
+      mark_field_initialized(field_owner, field_name);
       return;
     }
     // Reinitializing an owned pointer field accepts a fresh owner, the same coercion
@@ -4342,7 +4413,9 @@ Type TypeChecker::check_struct_init(StructInitExpr& expr) {
                            "borrowed field '" + fields[i].name +
                                "' must be initialized with a borrow");
       } else if (!fields[i].borrowed &&
-                 has_untracked_pointer_ownership(fields[i].type, positional_ownership)) {
+                 has_untracked_pointer_ownership(fields[i].type,
+                                                 positional_ownership) &&
+                 !is_null_pointer_literal(*expr.positional_inits()[i])) {
         diagnostics_.error(diag::kTypeMismatch,
                            expr.positional_inits()[i]->location(),
                            "owned, shared, and borrowed pointers cannot be stored in aggregate fields");
@@ -5856,8 +5929,16 @@ Type TypeChecker::check_call(CallExpr& call) {
     // selects and the site is accepted for it. `--inspect-cdmm` names that reason.
     const bool cyclic_payload =
         is_structurally_cyclic(payload_type, struct_field_table_);
+    // A payload whose fields are owned or shared pointers now has a release that
+    // does run field destruction: the drop walks the block's fields and repeats
+    // for the child each one names, which is what recursive structures need. The
+    // kinds this release cannot describe - text, arrays, containers, resource
+    // handles - still have no walk and stay rejected here.
+    const bool payload_has_pointer_walk =
+        aggregate_owns_pointer_fields(payload_type, struct_field_table_);
     if (requires_deterministic_cleanup(payload_type) &&
-        (manual_allocation_call || !arena_payload) && !cyclic_payload) {
+        (manual_allocation_call || !arena_payload) && !cyclic_payload &&
+        !payload_has_pointer_walk) {
       // An arena-eligible payload is one bulk release can reclaim whole: its
       // fields are plain data or pointers to more of the same, with no destructor
       // and no collector root. Releasing the block alone is then the whole answer,

@@ -1,0 +1,10 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 0,
+  "expect_stdout": "11\n2\n1\n",
+  "expect_ir_counts": {
+    "call void @nrq_drop_payload_Holder": 1,
+    "call i32 @nrq_memory_shared_release": 2,
+    "call void @nrq_memory_deallocate_checked": 1
+  }
+}

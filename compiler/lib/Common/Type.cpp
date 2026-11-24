@@ -500,4 +500,31 @@ bool is_structurally_cyclic(const Type& type, const StructFieldTable& table) {
   return field_closes_a_cycle(type, table, path, false);
 }
 
+bool aggregate_owns_pointer_fields(const Type& type,
+                                   const StructFieldTable& table) {
+  if (!type.is_struct()) return false;
+  const auto* fields = declared_fields(type, table);
+  if (fields == nullptr) return false;
+  bool owns_pointer = false;
+  for (const auto& field : *fields) {
+    const Type& field_type = field.second;
+    if (field_type.is_owned_pointer() || field_type.is_shared_pointer()) {
+      // A resource handle's release is its domain's destructor, not a block free,
+      // so a payload carrying one is not described by the pointer walk.
+      if (field_type.is_resource_pointer()) return false;
+      owns_pointer = true;
+      continue;
+    }
+    // Every other kind that owns storage is the field walk's business, and an
+    // aggregate stored inline would need that walk to descend into it.
+    if (field_type.is_owned_string() || field_type.is_dynamic_array() ||
+        field_type.is_owned_array() || field_type.is_soa() ||
+        field_type.is_resource_pointer())
+      return false;
+    if (field_type.is_struct() && !field_type.struct_fields().empty())
+      return false;
+  }
+  return owns_pointer;
+}
+
 }  // namespace nirq

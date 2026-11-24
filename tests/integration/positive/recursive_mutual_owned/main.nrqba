@@ -1,0 +1,37 @@
+// Two structs that own each other's type.
+//
+// `Branch` owns a `Leaf` and `Leaf` owns a `Branch`, so the type graph is mutual
+// recursion. Unique ownership keeps a well-formed program a tree: the chain ends at a
+// null field instead of closing, which is why the whole thing is freed by walking the
+// fields from the outermost owner.
+struct Leaf {
+    int value;
+    owned ptr Branch parent;
+}
+
+struct Branch {
+    int value;
+    owned ptr Leaf child;
+}
+
+int function main() {
+    var top = memory.allocate<Branch>(16);
+    (*top).value = 1;
+    (*top).child = nullptr;
+
+    var leaf = memory.allocate<Leaf>(16);
+    (*leaf).value = 20;
+    (*leaf).parent = top;
+
+    var lower = memory.allocate<Branch>(16);
+    (*lower).value = 3;
+    (*lower).child = leaf;
+
+    print((*lower).value + (*((*lower).child)).value);
+    print((*((*((*lower).child)).parent)).value);
+
+    var kept = memory.dynamic_array<Branch*>();
+    memory.array_append(kept, lower);
+    print(kept.length);
+    return 0;
+}

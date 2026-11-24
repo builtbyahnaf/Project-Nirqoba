@@ -2610,6 +2610,147 @@ class FunctionTranslator {
     builder_.setInsertionPointToStart(done);
   }
 
+  // The declared fields of every struct, as the catalog knows them. A type that
+  // erased its field table still answers by name here.
+  const StructFieldTable& field_table() const {
+    static const StructFieldTable empty;
+    return struct_types_ != nullptr ? *struct_types_ : empty;
+  }
+
+  // The name of the drop function for one payload. Struct names come from the
+  // program, so everything but letters and digits becomes an underscore.
+  static std::string payload_drop_symbol(const Type& payload) {
+    std::string symbol = "nrq_drop_payload_";
+    for (const char ch : payload.struct_name())
+      symbol += std::isalnum(static_cast<unsigned char>(ch)) ? ch : '_';
+    return symbol;
+  }
+
+  // The payload as the catalog declares it. A type reached through a pointer word
+  // may name its struct without carrying its fields, and the walk addresses those
+  // fields, so the declared list is what the layout is built from.
+  Type declared_payload(const Type& payload) const {
+    if (!payload.is_struct()) return payload;
+    const auto found = field_table().find(payload.struct_name());
+    if (found == field_table().end() || found->second.empty()) return payload;
+    return Type::struct_type(payload.struct_name(), found->second);
+  }
+
+  // The payload's pointer fields, in the order the walk releases them.
+  std::vector<std::pair<int, Type>> owning_payload_fields(const Type& payload) {
+    std::vector<std::pair<int, Type>> fields;
+    if (!payload.is_struct()) return fields;
+    std::vector<std::pair<std::string, Type>> declared = payload.struct_fields();
+    const auto found = field_table().find(payload.struct_name());
+    if (found != field_table().end() && !found->second.empty())
+      declared = found->second;
+    for (std::size_t index = 0; index < declared.size(); ++index) {
+      const Type& field_type = declared[index].second;
+      if (field_type.is_owned_pointer() || field_type.is_shared_pointer())
+        fields.emplace_back(static_cast<int>(index), field_type);
+    }
+    return fields;
+  }
+
+  // Destroys a payload that owns pointer fields, then returns its block to the
+  // allocator.
+  //
+  // One function per payload type, calling itself for the same reason the structure
+  // does: the child of a node is destroyed by exactly this walk. Freeing the block
+  // alone would leave every field's own storage behind, which is why a chain built
+  // field by field used to leak all but its head. A null pointer is what a
+  // moved-out or never written field holds, so the walk ends before it reads one.
+  mlir::LLVM::LLVMFuncOp payload_drop_function(const Type& payload) {
+    const std::string name = payload_drop_symbol(payload);
+    if (auto existing = module_.lookupSymbol<mlir::LLVM::LLVMFuncOp>(name))
+      return existing;
+    const mlir::Type ptr = llvm_ptr_type(ctx_);
+    const mlir::Location loc = module_.getLoc();
+    const mlir::Type void_type = mlir::LLVM::LLVMVoidType::get(ctx_);
+    mlir::OpBuilder::InsertionGuard guard(builder_);
+    builder_.setInsertionPointToEnd(module_.getBody());
+    auto function = builder_.create<mlir::LLVM::LLVMFuncOp>(
+        loc, name, mlir::LLVM::LLVMFunctionType::get(void_type, {ptr}));
+    mlir::Block* entry = new mlir::Block();
+    mlir::Block* walk = new mlir::Block();
+    mlir::Block* done = new mlir::Block();
+    function.getBody().push_back(entry);
+    function.getBody().push_back(walk);
+    function.getBody().push_back(done);
+    mlir::Value self = entry->addArgument(ptr, loc);
+
+    builder_.setInsertionPointToStart(entry);
+    mlir::Value null_value =
+        builder_.create<mlir::LLVM::ZeroOp>(loc, ptr).getResult();
+    mlir::Value is_null = builder_
+                              .create<mlir::LLVM::ICmpOp>(
+                                  loc, mlir::LLVM::ICmpPredicate::eq, self,
+                                  null_value)
+                              .getResult();
+    builder_.create<mlir::LLVM::CondBrOp>(loc, is_null, done, walk);
+
+    builder_.setInsertionPointToStart(walk);
+    mlir::Type payload_mlir =
+        tir_type_to_mlir(declared_payload(payload), ctx_, builder_);
+    if (payload_mlir) {
+      auto constant32 = [&](int64_t value) {
+        return builder_
+            .create<mlir::LLVM::ConstantOp>(loc, builder_.getI32Type(),
+                                            builder_.getI32IntegerAttr(value))
+            .getResult();
+      };
+      const auto fields = owning_payload_fields(payload);
+      // Reverse declaration order, matching the LIFO discipline every other
+      // destruction walk in this backend uses.
+      for (auto field = fields.rbegin(); field != fields.rend(); ++field) {
+        mlir::Value address = builder_
+                                  .create<mlir::LLVM::GEPOp>(
+                                      loc, ptr, payload_mlir, self,
+                                      mlir::ValueRange{constant32(0),
+                                                       constant32(field->first)})
+                                  .getResult();
+        mlir::Value value = builder_.create<mlir::LLVM::LoadOp>(loc, ptr, address)
+                                .getResult();
+        if (field->second.is_shared_pointer()) {
+          auto release = ensure_runtime_fn(module_, builder_,
+                                           "nrq_memory_shared_release",
+                                           builder_.getI32Type(), {ptr});
+          builder_.create<mlir::LLVM::CallOp>(loc, release,
+                                              mlir::ValueRange{value});
+          continue;
+        }
+        const Type child = field->second.element_type();
+        if (child.is_struct() &&
+            aggregate_owns_pointer_fields(child, field_table())) {
+          builder_.create<mlir::LLVM::CallOp>(
+              loc, payload_drop_function(child), mlir::ValueRange{value});
+          continue;
+        }
+        if (release_payload_has_managed_reference(field->second)) {
+          auto unregister = ensure_runtime_fn(module_, builder_,
+                                              "nrq_gc_root_unregister",
+                                              void_type, {ptr});
+          builder_.create<mlir::LLVM::CallOp>(loc, unregister,
+                                              mlir::ValueRange{value});
+        }
+        auto release = ensure_runtime_fn(module_, builder_,
+                                         "nrq_memory_deallocate_checked",
+                                         void_type, {ptr});
+        builder_.create<mlir::LLVM::CallOp>(loc, release,
+                                            mlir::ValueRange{value});
+      }
+    }
+    auto free_self = ensure_runtime_fn(module_, builder_,
+                                       "nrq_memory_deallocate_checked",
+                                       void_type, {ptr});
+    builder_.create<mlir::LLVM::CallOp>(loc, free_self, mlir::ValueRange{self});
+    builder_.create<mlir::LLVM::BrOp>(loc, done);
+
+    builder_.setInsertionPointToStart(done);
+    builder_.create<mlir::LLVM::ReturnOp>(loc, mlir::ValueRange{});
+    return function;
+  }
+
   // Destroying an aggregate walks its physical fields in reverse declaration
   // order. The recursion carries a path of aggregate indices, so one extract per
   // leaf is enough; no per-traversal callable is built, which keeps destruction
@@ -2676,6 +2817,15 @@ class FunctionTranslator {
                                                mlir::ValueRange{data});
           return;
         }
+      }
+      // A payload that owns pointer fields is destroyed by its own walk: the
+      // block's fields hold storage of their own, and for a recursive structure
+      // that storage is itself the rest of the structure.
+      if (aggregate_owns_pointer_fields(type.element_type(), field_table())) {
+        builder_.create<mlir::LLVM::CallOp>(
+            loc, payload_drop_function(type.element_type()),
+            mlir::ValueRange{data});
+        return;
       }
       if (release_payload_has_managed_reference(type)) unregister_root(data);
       auto release = ensure_runtime_fn(
@@ -6369,6 +6519,18 @@ class FunctionTranslator {
             if (!mlir::isa<mlir::LLVM::LLVMPointerType>(pointer.getType())) {
               pointer = builder_.create<mlir::LLVM::IntToPtrOp>(
                   loc, llvm_ptr_type(ctx_), pointer).getResult();
+            }
+            // Storage whose payload owns pointer fields is released field by
+            // field: the recursive walk frees what the block's fields hold before
+            // the block goes back to the allocator.
+            const Type& released = op.arguments[0].type;
+            const Type payload = released.is_pointer()
+                                     ? released.element_type() : Type::error();
+            if (aggregate_owns_pointer_fields(payload, field_table())) {
+              builder_.create<mlir::LLVM::CallOp>(
+                  loc, payload_drop_function(payload),
+                  mlir::ValueRange{pointer});
+              return true;
             }
             // The pointer owns collector-visible storage when its pointee has
             // managed fields; remove that root before the block is freed.

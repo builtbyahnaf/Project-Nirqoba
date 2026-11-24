@@ -1,0 +1,26 @@
+// A payload allocated by the general allocator may hold a reference count.
+//
+// The release of such a payload is its field walk: the block's own drop runs before
+// the block goes back to the allocator, so the count the field holds is decremented
+// once. Storing the token into the field retains it, which is why the binding and the
+// field together report two references.
+struct Holder {
+    shared ptr int data;
+}
+
+int function main() {
+    var holder = memory.allocate<Holder>(64);
+    var counter = memory.shared_allocate<int>(4);
+    *counter = 11;
+    (*holder).data = counter;
+    print(*(*holder).data);
+    print(memory.shared_count(counter));
+
+    // Escaping into foreign storage keeps the payload off the stack and out of an
+    // arena, so its release is the general allocator's drop: the field walk runs
+    // before the block goes back.
+    var kept = memory.dynamic_array<Holder*>();
+    memory.array_append(kept, holder);
+    print(kept.length);
+    return 0;
+}
