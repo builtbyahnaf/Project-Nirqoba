@@ -35,6 +35,13 @@ NrqStringArray* nrq_args_build(int32_t argc, const char* const* argv) {
     return &g_arguments;
 }
 
+const NrqStringArray* nrq_args_current(void) {
+    // The descriptor is static storage, so this is never null: before the wrapper
+    // builds it, length and items are both zero, which is what an argument-less
+    // process looks like anyway. A caller therefore needs no null branch.
+    return &g_arguments;
+}
+
 int64_t nrq_args_length(const NrqStringArray* array) {
     return array ? array->length : 0;
 }

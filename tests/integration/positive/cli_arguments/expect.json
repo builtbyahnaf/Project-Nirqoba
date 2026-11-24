@@ -1,0 +1,6 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 0,
+  "args": ["--", "alpha", "beta gamma"],
+  "expect_stdout": "2\nalpha\n5\nbeta gamma\n10\n"
+}

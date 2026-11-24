@@ -25,6 +25,13 @@ typedef struct NrqStringArray {
 // nullptr and behaves as an empty array.
 NrqStringArray* nrq_args_build(int32_t argc, const char* const* argv);
 
+// The process argument descriptor built at startup, for code that wants the
+// arguments without receiving them as a parameter. It is never null: before the
+// descriptor is built, and in a process started with no arguments, it reports a
+// length of zero. The descriptor and the strings it names live as long as the
+// process, so what a caller takes from it is a borrow.
+const NrqStringArray* nrq_args_current(void);
+
 // Number of arguments (0 for a null array).
 int64_t nrq_args_length(const NrqStringArray* array);
 

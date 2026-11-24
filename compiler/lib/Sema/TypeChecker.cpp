@@ -1434,9 +1434,15 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
                          "a mutable array view must be bound with 'var'");
     if (declaration.initializer().kind() == Expr::Kind::Call) {
       const auto& call = static_cast<const CallExpr&>(declaration.initializer());
-      if ((call.callee() == "memory.array_view" ||
-           call.callee() == "memory.array_view_mut") &&
-          !call.arguments().empty()) {
+      if (call.callee() == "env.args") {
+        // The argument table is process storage, so the view outlives every scope
+        // in the program: it borrows something that has no owner inside the
+        // program to track.
+        symbol.allocation_id = next_allocation_id_++;
+        symbol.borrowed = true;
+      } else if ((call.callee() == "memory.array_view" ||
+                  call.callee() == "memory.array_view_mut") &&
+                 !call.arguments().empty()) {
         if (const Symbol* source = find_root_symbol(*call.arguments()[0], symbols_)) {
           symbol.allocation_id = source->allocation_id;
           symbol.borrow_owner = borrow_owner_name(*source);
@@ -5435,6 +5441,20 @@ Type TypeChecker::check_call(CallExpr& call) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[2]->location(),
                          "'string.slice' end offset must be an integer");
     return Type::owned_string_type();
+  }
+
+  // The process arguments, as a view over the table the runtime built at startup.
+  // A view rather than an array because the storage belongs to the process: the
+  // caller borrows it, so reading the arguments never moves them and a program can
+  // ask as often as it likes.
+  if (call.callee() == "env.args") {
+    if (!call.arguments().empty()) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'env.args' takes no arguments");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+    }
+    return Type::array_view_type(Type::string_type());
   }
 
   // Namespaced GC API from Phase 6.5. Statistics are a value with named

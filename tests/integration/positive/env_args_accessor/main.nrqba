@@ -1,0 +1,23 @@
+// `env.args()` is the process arguments as a view over the table the runtime
+// built at startup. Because the storage belongs to the process, nothing is copied
+// and nothing is released, which is what makes the arguments readable from any
+// function rather than only from `main` - and readable twice, since a view never
+// moves.
+int function total_letters(array_view<string> words) {
+    var total = 0;
+    for (var i = 0; i < words.length; i += 1) {
+        total += words[i].length;
+    }
+    return total;
+}
+
+int function main() {
+    var args = env.args();
+    print(args.length);
+    print(args[0]);
+    print(total_letters(args));
+    var again = env.args();
+    print(again.length);
+    print(again[1] == "beta");
+    return 0;
+}

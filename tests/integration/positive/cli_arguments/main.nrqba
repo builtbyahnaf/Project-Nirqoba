@@ -1,0 +1,12 @@
+// `main(string[] args)` receives the process arguments: every token after the
+// executable path, in order, each one a borrowed `string` over the CRT's own
+// buffer. The count and the values are both visible, so a program can dispatch on
+// them the way any command-line tool does.
+int function main(string[] args) {
+    print(args.length);
+    for (var i = 0; i < args.length; i += 1) {
+        print(args[i]);
+        print(args[i].length);
+    }
+    return 0;
+}

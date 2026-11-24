@@ -1099,7 +1099,8 @@ static bool callee_is_collection_free(llvm::StringRef callee) {
       "memory.array_append",
       // The text operations allocate from the deterministic allocator, never the
       // managed heap, so a concatenation in a loop is not a collection point.
-      "string.concat", "string.equals", "string.slice", "string.byte_at",
+      "env.args", "string.concat", "string.equals", "string.slice",
+      "string.byte_at",
       "string.from_int",
       "string.from_float", "string.to_int", "string.to_float",
       "aggregate.owned_drop", "file.open", "file.close", "file.write",
@@ -5567,6 +5568,44 @@ class FunctionTranslator {
           return true;
         }
 
+        // `env.args()` is the process argument table, described as a view. The
+        // runtime keeps one descriptor for the whole process, so this reads its
+        // two words and builds the view the language sees: nothing is copied and
+        // nothing has to be released.
+        if (op.callee == "env.args" && op.result.is_valid() &&
+            op.result.type.is_array_view()) {
+          mlir::Type i64 = builder_.getI64Type();
+          mlir::Type table_type = mlir::LLVM::LLVMStructType::getLiteral(
+              ctx_, {i64, llvm_ptr_type(ctx_)});
+          auto current = ensure_runtime_fn(module_, builder_, "nrq_args_current",
+                                           llvm_ptr_type(ctx_), {});
+          mlir::Value table = builder_.create<mlir::LLVM::CallOp>(
+              loc, current, mlir::ValueRange{}).getResult();
+          mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, builder_.getI32Type(), builder_.getI32IntegerAttr(0)).getResult();
+          mlir::Value one = builder_.create<mlir::LLVM::ConstantOp>(
+              loc, builder_.getI32Type(), builder_.getI32IntegerAttr(1)).getResult();
+          mlir::Value length_pointer = builder_.create<mlir::LLVM::GEPOp>(
+              loc, llvm_ptr_type(ctx_), table_type, table,
+              mlir::ValueRange{zero, zero}).getResult();
+          mlir::Value length = builder_.create<mlir::LLVM::LoadOp>(
+              loc, i64, length_pointer).getResult();
+          mlir::Value items_pointer = builder_.create<mlir::LLVM::GEPOp>(
+              loc, llvm_ptr_type(ctx_), table_type, table,
+              mlir::ValueRange{zero, one}).getResult();
+          mlir::Value items = builder_.create<mlir::LLVM::LoadOp>(
+              loc, llvm_ptr_type(ctx_), items_pointer).getResult();
+          mlir::Type view_type = tir_type_to_mlir(op.result.type, ctx_, builder_);
+          mlir::Value view = builder_.create<mlir::LLVM::UndefOp>(
+              loc, view_type).getResult();
+          view = builder_.create<mlir::LLVM::InsertValueOp>(
+              loc, view, items, builder_.getDenseI64ArrayAttr({0})).getResult();
+          view = builder_.create<mlir::LLVM::InsertValueOp>(
+              loc, view, length, builder_.getDenseI64ArrayAttr({1})).getResult();
+          set(op.result, view);
+          return true;
+        }
+
         // The container owns one block: unregister its root, then free it. There is
         // no descriptor aggregate to extract, unlike an owned array value.
         if (op.callee == "soa.owned_release" && args.size() == 1) {
@@ -7893,10 +7932,15 @@ static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
     builder.create<mlir::LLVM::CallOp>(loc, enter, mlir::ValueRange{});
   }
 
+  // A parameterless `main` is wrapped only so the runtime descriptor gets built,
+  // so it takes no argument: the array travels to main only when it declared one.
+  llvm::SmallVector<mlir::Value> entry_arguments;
+  if (!user_main.parameters().empty()) entry_arguments.push_back(array);
+
   mlir::Value exit_code;
   if (user_ret) {
     mlir::Value result = builder.create<mlir::func::CallOp>(
-        loc, user_symbol, mlir::TypeRange{user_ret}, mlir::ValueRange{array}).getResult(0);
+        loc, user_symbol, mlir::TypeRange{user_ret}, entry_arguments).getResult(0);
 
     if (result.getType() == i32) {
       exit_code = result;
@@ -7912,7 +7956,7 @@ static bool emit_entry_wrapper(mlir::ModuleOp module, mlir::OpBuilder& builder,
     }
   } else {
     builder.create<mlir::func::CallOp>(
-        loc, user_symbol, mlir::TypeRange{}, mlir::ValueRange{array});
+        loc, user_symbol, mlir::TypeRange{}, entry_arguments);
     exit_code = builder.create<mlir::LLVM::ConstantOp>(
         loc, i32, builder.getI32IntegerAttr(0)).getResult();
   }
@@ -8295,6 +8339,16 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
   // were translated, which is source order within a function.
   std::vector<std::string> cdmm_lines;
 
+  // A program that reads `env.args()` needs the runtime's argument descriptor even
+  // when its `main` takes no parameters, and only the entry wrapper builds it. So
+  // the wrapper is emitted for that program too: without it, main would be the C
+  // entry point itself and the descriptor would stay empty.
+  bool module_reads_process_arguments = false;
+  for (const auto& tir_fn : tir_module.functions())
+    for (const tir::Op& op : tir_fn->operations())
+      if (op.kind == tir::OpKind::Call && op.callee == "env.args")
+        module_reads_process_arguments = true;
+
   for (const auto& tir_fn : tir_module.functions()) {
     mlir::Type ret_type;
     if (tir_fn->return_type().is_void()) {
@@ -8334,8 +8388,11 @@ mlir::OwningOpRef<mlir::ModuleOp> translate_tir_to_mlir(
 
     // An entry point that takes `string[] args` cannot be the C `main`, so it
     // is emitted under an internal name and reached through the wrapper below.
+    // A parameterless main that reads the arguments program-wide needs the
+    // wrapper for the same reason: the wrapper is what builds the descriptor.
     const bool is_entry_with_args =
-        tir_fn->name() == "main" && !tir_fn->parameters().empty();
+        tir_fn->name() == "main" &&
+        (!tir_fn->parameters().empty() || module_reads_process_arguments);
     const std::string symbol = is_entry_with_args ? "nrq_entry_args" : tir_fn->name();
 
     auto func_op = builder.create<mlir::func::FuncOp>(
