@@ -357,20 +357,22 @@ entirely to sentinel values and process death. This is a Version 1.0 blocker.
 
 ## 10. Version 1.0 blockers
 
-Ordered by how much they cost a real program, not by how hard they are.
+Ordered by how much they cost a real program, not by how hard they are. Where
+`0.675-beta` closed the release-blocking part of an entry, the closure is recorded
+inline (B2, B10).
 
 **B1 — No error handling of any kind.** No exceptions, no `Result`, no `panic`,
 no `assert`. Every fallible operation is a sentinel plus hope, and the only
 failure path that exists ends the process. Nothing in the standard library can
 report a failure to its caller.
 
-**B2 — FFI is declared but cannot be called with scalar arguments.** `extern`
-parses and typechecks; the moment a call carries an `int` the lowering fails with
-`'llvm.call' op operand type mismatch for operand 0: 'i64' != 'f64'` (`NRQ5004`).
-Strings cannot cross the boundary either, because there is no `string` → `u8*`
-conversion. A language that cannot call a C function with an integer argument
-cannot claim a runtime boundary at all. This is a codegen defect, not a missing
-feature.
+**B2 — FFI cannot take a struct, and text only crosses inwards.** *The scalar
+half is closed in `0.675-beta`: a declared function now outranks a same-named math
+builtin, so `extern int function abs(int)` reaches its own ABI, and a `string`
+satisfies a `ptr byte` parameter by borrowing its buffer.* What remains is
+aggregation: an extern parameter takes its struct's parts or a pointer to its
+buffer, never the struct itself, and nothing reads a returned `char*` back as a
+`string` yet.
 
 **B3 — Pointers cannot live in aggregates, so recursive data is unbuildable.**
 `owned`/`shared`/`borrow` pointer fields are rejected outright, and a `shared`
@@ -405,8 +407,10 @@ language needs a documented way to abort with a message. Today the only abort is
 **B9 — No program arguments.** The runtime builds `argc`/`argv`, but no builtin
 exposes them; a Nirqoba program cannot read its command line.
 
-**B10 — `math` is half-broken.** `math.abs` on an integer fails to lower; only the
-float overload works. `math` has six functions and no `min`/`max`/`pow`/`round`.
+**B10 — `math` is small.** *Integer `abs` is closed in `0.675-beta`: it keeps its
+argument's type and lowers to a compare-and-negate, and a runtime entry point that
+wants a float now gets a converted argument instead of a rejected one.* `math` has
+six functions and no `min`/`max`/`pow`/`round`.
 
 ### Secondary defects found while auditing (not blockers)
 
