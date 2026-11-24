@@ -1133,7 +1133,84 @@ vector<ExprPtr> Parser::parse_argument_list() {
   return arguments;
 }
 
-ExprPtr Parser::parse_expression() { return parse_logical_or(); }
+ExprPtr Parser::parse_expression() { return parse_conditional(); }
+
+bool Parser::question_opens_branch() const {
+  // `?` closes an expression when what follows it already ends or continues the
+  // expression: `r?;`, `f(r?)`, `r? + 1`, `r?.field`. Anything else is the start
+  // of a true branch, which is confirmed by finding the `:` that pairs with it
+  // before the enclosing expression can end.
+  switch (peek(1).kind) {
+    case TokenKind::Semicolon:
+    case TokenKind::Comma:
+    case TokenKind::RParen:
+    case TokenKind::RBracket:
+    case TokenKind::RBrace:
+    case TokenKind::Colon:
+    case TokenKind::Dot:
+    case TokenKind::EndOfFile:
+    // Operators that can only continue an expression: none of them can begin the
+    // true branch, so `r? > 0` and `r? == x` propagate.
+    case TokenKind::EqualEqual:
+    case TokenKind::BangEqual:
+    case TokenKind::Less:
+    case TokenKind::LessEqual:
+    case TokenKind::Greater:
+    case TokenKind::GreaterEqual:
+    case TokenKind::LessLess:
+    case TokenKind::GreaterGreater:
+    case TokenKind::AmpAmp:
+    case TokenKind::PipePipe:
+    case TokenKind::Pipe:
+    case TokenKind::Caret:
+    case TokenKind::KwAs:
+      return false;
+    default:
+      break;
+  }
+  int depth = 0;
+  for (std::size_t offset = 1; position_ + offset < tokens_.size(); ++offset) {
+    switch (peek(offset).kind) {
+      case TokenKind::LParen:
+      case TokenKind::LBracket:
+      case TokenKind::LBrace:
+        ++depth;
+        break;
+      case TokenKind::RParen:
+      case TokenKind::RBracket:
+      case TokenKind::RBrace:
+        if (depth == 0) return false;
+        --depth;
+        break;
+      case TokenKind::Colon:
+        if (depth == 0) return true;
+        break;
+      case TokenKind::Semicolon:
+      case TokenKind::Comma:
+      case TokenKind::EndOfFile:
+        if (depth == 0) return false;
+        break;
+      default:
+        break;
+    }
+  }
+  return false;
+}
+
+ExprPtr Parser::parse_conditional() {
+  ExprPtr condition = parse_logical_or();
+  if (!condition) return condition;
+  if (!check(TokenKind::Question) || !question_opens_branch()) return condition;
+  const Token question = advance();
+  // The true branch runs to the `:` that belongs to this `?`, so it is parsed as
+  // a full expression; the false branch is again conditional, which makes the
+  // operator right-associative.
+  ExprPtr then_value = parse_expression();
+  expect(TokenKind::Colon, "before the false branch of the conditional");
+  ExprPtr else_value = parse_expression();
+  return make_unique<ConditionalExpr>(question.location, move(condition),
+                                      move(then_value), move(else_value));
+}
 
 ExprPtr Parser::parse_logical_or() {
   ExprPtr lhs = parse_logical_and();
@@ -1353,7 +1430,8 @@ ExprPtr Parser::parse_postfix() {
     } else if (match(TokenKind::MinusMinus)) {
       expr = make_unique<UnaryExpr>(expr->location(), UnaryOp::PostDecrement,
                                     move(expr));
-    } else if (match(TokenKind::Question)) {
+    } else if (check(TokenKind::Question) && !question_opens_branch()) {
+      advance();  // '?'
       // `value?` is one token rather than a keyword-and-block: the operand is the
       // Result being propagated. It parses as a call so the checker and the
       // builder see it in the shape they already handle, with no new node kind.

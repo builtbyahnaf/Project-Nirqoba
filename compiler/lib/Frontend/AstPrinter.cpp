@@ -271,6 +271,12 @@ class Printer {
         const auto& cast = static_cast<const CastExpr&>(expr);
         return "(" + expression(cast.operand()) + " as " + cast.target_type().to_string() + ")";
       }
+      case Expr::Kind::Conditional: {
+        const auto& conditional = static_cast<const ConditionalExpr&>(expr);
+        return "(" + expression(conditional.condition()) + " ? " +
+               expression(conditional.then_value()) + " : " +
+               expression(conditional.else_value()) + ")";
+      }
     }
     return "<unknown>";
   }

@@ -1,0 +1,40 @@
+// `?` means two things and the parser tells them apart: after a value it is
+// propagation, and at the top of an expression with a `:` to pair with it is a
+// conditional. Both spellings appear in the same expression here.
+Result<int, string> function checked(int a, int b) {
+    if (b == 0) {
+        return result.err("division by zero");
+    }
+    return result.ok(a / b);
+}
+
+Result<int, string> function scaled(int a, int b, bool double_it) {
+    var quotient = checked(a, b)?;
+    return result.ok(double_it ? quotient * 2 : quotient);
+}
+
+Result<string, string> function describe(int a, int b) {
+    // A propagated call inside a branch: the `?` yields a plain value to the
+    // conditional, and a failure leaves the function before the branch is chosen.
+    var label = checked(a, b)? > 0 ? "positive" : "not positive";
+    return result.ok(label == "positive" ? "ok" : "still ok");
+}
+
+int function main() {
+    var doubled = scaled(20, 4, true);
+    print(doubled.unwrap());
+
+    var plain = scaled(20, 4, false);
+    print(plain.unwrap());
+
+    var text = describe(9, 3);
+    print(text.unwrap());
+
+    var failed = scaled(1, 0, true);
+    print(failed.is_err());
+    print(failed.unwrap_err());
+
+    var stopped = describe(1, 0);
+    print(stopped.is_err());
+    return 0;
+}

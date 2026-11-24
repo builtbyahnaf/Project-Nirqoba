@@ -31,7 +31,8 @@ class Expr {
     Call,
     Unary,
     Binary,
-    Cast
+    Cast,
+    Conditional
   };
 
   Expr(Kind kind, SourceLocation location) : kind_(kind), location_(std::move(location)) {}
@@ -337,6 +338,24 @@ class BinaryExpr : public Expr {
   BinaryOp op_;
   ExprPtr lhs_;
   ExprPtr rhs_;
+};
+
+// `cond ? a : b` evaluates the condition and then exactly one branch, which is
+// what makes it safe to put an allocation or a side effect on either side.
+class ConditionalExpr : public Expr {
+ public:
+  ConditionalExpr(SourceLocation location, ExprPtr condition, ExprPtr then_value,
+                  ExprPtr else_value)
+      : Expr(Kind::Conditional, std::move(location)), condition_(std::move(condition)),
+        then_value_(std::move(then_value)), else_value_(std::move(else_value)) {}
+  const Expr& condition() const { return *condition_; }
+  const Expr& then_value() const { return *then_value_; }
+  const Expr& else_value() const { return *else_value_; }
+
+ private:
+  ExprPtr condition_;
+  ExprPtr then_value_;
+  ExprPtr else_value_;
 };
 
 class CastExpr : public Expr {

@@ -1,0 +1,21 @@
+// Only the selected branch runs. The untaken side is not a value that gets
+// computed and discarded: it is a block that was never entered, so its calls,
+// its allocations and its side effects never happen.
+int function expensive(int value, string tag) {
+    print(tag);
+    return value * 2;
+}
+
+int function main() {
+    var pick = 1;
+    print(pick == 1 ? expensive(21, "true branch") : expensive(99, "false branch"));
+
+    pick = 2;
+    print(pick == 1 ? expensive(21, "true branch") : expensive(50, "false branch"));
+
+    // The condition itself is evaluated once, before either branch.
+    var seen = 0;
+    var value = seen == 0 ? 10 : 20;
+    print(value);
+    return 0;
+}

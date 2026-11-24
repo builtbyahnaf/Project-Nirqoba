@@ -1,0 +1,5 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 0,
+  "expect_stdout": "true branch\n42\nfalse branch\n100\n10\n"
+}

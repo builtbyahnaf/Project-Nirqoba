@@ -1532,6 +1532,63 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       }
       return result;
     }
+    case Expr::Kind::Conditional: {
+      const auto& conditional = static_cast<const ConditionalExpr&>(expr);
+      const Type result_type =
+          expr.type().is_valid() ? expr.type() : Type::error();
+      // Both branches write the same slot, and each is lowered inside its own
+      // block, so the branch that was not taken never runs: an allocation or a
+      // side effect on one side costs nothing on the other.
+      tir::Value slot = function.allocate_value(result_type);
+      tir::Op alloca;
+      alloca.kind = tir::OpKind::Alloca;
+      alloca.location = conditional.location();
+      alloca.result = slot;
+      alloca.slot_name = "$conditional";
+      function.add_operation(std::move(alloca));
+
+      const tir::Value cond =
+          lower_expression(conditional.condition(), function);
+      const int then_label = function.allocate_label();
+      const int else_label = function.allocate_label();
+      const int merge_label = function.allocate_label();
+      tir::Op branch;
+      branch.kind = tir::OpKind::BranchCond;
+      branch.location = conditional.location();
+      branch.operand = cond;
+      branch.true_label = then_label;
+      branch.false_label = else_label;
+      function.add_operation(std::move(branch));
+
+      auto lower_branch = [&](const Expr& value, int label) {
+        tir::Op start;
+        start.kind = tir::OpKind::Label;
+        start.label_id = label;
+        function.add_operation(std::move(start));
+        ConditionalRegion branch_region(conditional_depth_);
+        const tir::Value produced = lower_expression(value, function);
+        if (block_terminated(function)) return;
+        tir::Op store;
+        store.kind = tir::OpKind::Store;
+        store.location = value.location();
+        store.lhs = slot;
+        store.operand = produced;
+        store.result = slot;
+        function.add_operation(std::move(store));
+        tir::Op leave;
+        leave.kind = tir::OpKind::Branch;
+        leave.label_id = merge_label;
+        function.add_operation(std::move(leave));
+      };
+      lower_branch(conditional.then_value(), then_label);
+      lower_branch(conditional.else_value(), else_label);
+
+      tir::Op merge;
+      merge.kind = tir::OpKind::Label;
+      merge.label_id = merge_label;
+      function.add_operation(std::move(merge));
+      return load_value(function, conditional.location(), slot);
+    }
     case Expr::Kind::Cast: {
       const auto& cast = static_cast<const CastExpr&>(expr);
       const tir::Value operand = lower_expression(cast.operand(), function);

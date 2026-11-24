@@ -3541,6 +3541,48 @@ Type TypeChecker::check_expression(Expr& expr) {
       }
       break;
     }
+        case Expr::Kind::Conditional: {
+      auto& conditional = static_cast<ConditionalExpr&>(expr);
+      const Type cond_type =
+          check_expression(const_cast<Expr&>(conditional.condition()));
+      if (cond_type.is_valid() && !cond_type.is_bool()) {
+        diagnostics_.error(diag::kTypeMismatch,
+                           conditional.condition().location(),
+                           "'?:' condition must be 'bool', not '" +
+                               cond_type.to_string() + "'");
+      }
+      const Type then_type =
+          check_expression(const_cast<Expr&>(conditional.then_value()));
+      const Type else_type =
+          check_expression(const_cast<Expr&>(conditional.else_value()));
+      if (!then_type.is_valid() || !else_type.is_valid()) break;
+      if (then_type != else_type) {
+        diagnostics_.error(
+            diag::kTypeMismatch, conditional.location(),
+            "both branches of '?:' must have the same type; the true branch is '" +
+                then_type.to_string() + "' and the false branch is '" +
+                else_type.to_string() + "'");
+        type = Type::error();
+        break;
+      }
+      // A branch that owns a buffer would leave by moving, and a conditional has
+      // one destination for two paths: the result would be an owner whose source
+      // is still an owner. Choosing which binding to use is fine; choosing which
+      // buffer to own is not.
+      if (then_type.is_owned_string() || then_type.is_owned_array() ||
+          then_type.is_dynamic_array() || then_type.is_owned_pointer()) {
+        diagnostics_.error(
+            diag::kTypeMismatch, conditional.location(),
+            "a '?:' cannot choose between values of type '" +
+                then_type.to_string() +
+                "': each branch owns a buffer, so the result would have two "
+                "possible owners");
+        type = Type::error();
+        break;
+      }
+      type = then_type;
+      break;
+    }
     case Expr::Kind::StringLiteral:
       type = Type::string_type();
       break;

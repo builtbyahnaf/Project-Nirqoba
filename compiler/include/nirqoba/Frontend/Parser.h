@@ -60,6 +60,11 @@ class Parser {
 
   // Expressions — full Pratt hierarchy.
   ExprPtr parse_expression();
+  ExprPtr parse_conditional();
+  // A `?` either propagates a Result (postfix) or introduces the true branch of
+  // a conditional. The next tokens decide: a branch has a `:` at the same depth
+  // before the expression can end, a propagation does not.
+  bool question_opens_branch() const;
   ExprPtr parse_logical_or();
   ExprPtr parse_logical_and();
   ExprPtr parse_bitwise_or();

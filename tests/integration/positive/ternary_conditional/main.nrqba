@@ -1,0 +1,27 @@
+// `cond ? a : b` is an expression, not a statement: it yields one of two values of
+// the same type and can be used wherever a value is expected.
+int function classify(int value) {
+    return value < 0 ? -1 : value == 0 ? 0 : 1;
+}
+
+int function main() {
+    print(classify(-7));
+    print(classify(0));
+    print(classify(9));
+
+    // The false branch is itself a conditional, so `?:` associates to the right:
+    // the second `?` belongs to the branch, not to the outer condition.
+    var grade = 74;
+    var label = grade >= 90 ? "excellent" : grade >= 70 ? "good" : "needs work";
+    print(label);
+
+    // Both branches may name pointers; the result is one pointer either way.
+    var low = 4;
+    var high = 9;
+    ptr int picked = grade > 50 ? &low : &high;
+    print(*picked);
+
+    // The result is an ordinary value: it can be printed, stored and compared.
+    print((low < high ? low : high) + 1);
+    return 0;
+}
