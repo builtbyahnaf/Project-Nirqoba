@@ -357,30 +357,37 @@ entirely to sentinel values and process death. This is a Version 1.0 blocker.
 
 ## 10. Version 1.0 blockers
 
-Ordered by how much they cost a real program, not by how hard they are. Where
-`0.675-beta` closed the release-blocking part of an entry, the closure is recorded
-inline (B2, B10).
+Ordered by how much they cost a real program, not by how hard they are. Where a
+release closed the release-blocking part of an entry, the closure is recorded inline
+(`0.675-beta`: B2 scalar half, B10; `0.680-beta`: B2 text half, B3).
 
 **B1 — No error handling of any kind.** No exceptions, no `Result`, no `panic`,
 no `assert`. Every fallible operation is a sentinel plus hope, and the only
 failure path that exists ends the process. Nothing in the standard library can
 report a failure to its caller.
 
-**B2 — FFI cannot take a struct, and text only crosses inwards.** *The scalar
-half is closed in `0.675-beta`: a declared function now outranks a same-named math
-builtin, so `extern int function abs(int)` reaches its own ABI, and a `string`
-satisfies a `ptr byte` parameter by borrowing its buffer.* What remains is
-aggregation: an extern parameter takes its struct's parts or a pointer to its
-buffer, never the struct itself, and nothing reads a returned `char*` back as a
-`string` yet.
+**B2 — FFI cannot take a struct by value.** *The scalar half closed in
+`0.675-beta` (a declared function outranks a same-named math builtin, and a `string`
+satisfies a `ptr byte` parameter) and the text half in `0.680-beta`: a byte-pointer
+result of an external function binds or coerces to a borrowed `string`, with no copy
+and no release registered, so `strchr` and `getenv` reach the language.* What remains
+is aggregation: an extern parameter takes its struct's parts or a pointer to its
+buffer, never the struct itself.
 
-**B3 — Pointers cannot live in aggregates, so recursive data is unbuildable.**
-`owned`/`shared`/`borrow` pointer fields are rejected outright, and a `shared`
-field cannot be assigned after construction (`(*a).next = b` →
-`owned, shared, and borrowed pointers cannot be stored in aggregate fields`). Every
-tree, list, graph and cycle in the current test suite is therefore either a flat
-block or absent. This is the single largest gap between Nirqoba and the languages
-in `stress_test_5`.
+**B3 — Recursive data builds and reclaims, but is awkward to walk.** *Closed in
+`0.680-beta` for `owned ptr` and `shared ptr` fields: `(*a).next = b` stores through
+a pointer, `nullptr` initializes a field of any pointer kind, and a payload whose
+fields own storage is destroyed field by field: a drop generated per payload type
+that calls itself for the child each node names, so a list or a tree returns every
+block it owns exactly once from the outermost owner. Clearing a shared field releases
+the count it held, which is how a cycle is broken from source.* What remains is the
+ergonomics and two gaps: there is no borrow of a field (`&` of a struct-typed value or
+of a `*pointer` is still rejected), so a chain is walked by projecting through links
+or by moving each link into a binding rather than with a cursor loop; a payload mixing
+pointer fields with text, arrays or resource handles still keeps the literal-driven
+field walk instead of the recursive drop; and a `shared ptr` cycle is refcounted, not
+collectable — the collector reclaims a cycle of `managed` references, while a shared
+one stays alive until its count is broken.
 
 **B4 — No `++`/`--`, no ternary, no `?:`.** `for` loops must spell `i += 1`; the
 one-line conditional must become a five-line `if`. These are the constructs a

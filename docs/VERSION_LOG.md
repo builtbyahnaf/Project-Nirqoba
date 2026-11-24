@@ -12,6 +12,39 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.680-beta
+
+### Summary of Changes (since `0.675-beta`)
+
+Release label `+0.005` (`0.675-beta` -> `0.680-beta`).
+
+#### Micro-phase 14c: recursive aggregate pointers and returned C strings
+
+- **`owned ptr` and `shared ptr` struct fields are usable after construction.**
+  `(*node).next = child` used to fail because a store through a pointer never reached
+  the aggregate field paths; it now does, for self-referential and mutually recursive
+  types alike. `nullptr` initializes a field of any pointer kind, and the fields raw
+  allocation hands back are recorded as uninitialized so the first store into one is
+  an initialization rather than an overwrite of bytes that were never a value.
+- **A payload that owns fields is destroyed field by field.** `memory.deallocate` on
+  such a payload emits a drop generated per payload type (`nrq_drop_payload_<Type>`),
+  which releases the fields it finds and calls itself for the child each one names.
+  A three-node chain therefore returns three blocks from one owning pointer, in one
+  helper, instead of leaking everything past the head. Explicit allocations of such
+  payloads are accepted for the same reason; the kinds the walk cannot describe -
+  text, arrays, containers, resource handles - stay rejected there.
+- **Clearing a shared field drops the count it held.** A store into a field that
+  holds a reference count now releases the previous value even when the new value is
+  `nullptr`, which is what a shared field's own type cannot announce. Breaking a
+  two-node cycle from source returns each node to one reference.
+- **A C byte pointer is readable as a borrowed `string`.** An external function
+  returning `ptr u8` can initialize or coerce to a `string`: the bytes are already the
+  representation a string uses, so nothing is copied and no release is registered -
+  the buffer belongs to C.
+- 711/711 integration, 537/537 unit.
+
+---
+
 ## Version 0.675-beta
 
 ### Summary of Changes (since `0.670-beta`)
