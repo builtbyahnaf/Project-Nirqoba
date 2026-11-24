@@ -5969,8 +5969,15 @@ Type TypeChecker::check_call(CallExpr& call) {
   // Math builtins: sqrt, sin, cos, abs, floor, ceil (and math.<name>)
   string fn_name = call.callee();
   if (fn_name.rfind("math.", 0) == 0) fn_name = fn_name.substr(5);
-  if (fn_name == "sqrt" || fn_name == "sin" || fn_name == "cos" ||
-      fn_name == "abs" || fn_name == "floor" || fn_name == "ceil") {
+  // A declaration of the same name is the stronger answer. `extern int function
+  // abs(int)` names a C symbol, and a program that wrote it means that one - the
+  // builtin spelling is `math.abs`. Without this the declaration was unreachable:
+  // the bare name matched the builtin first and the call was typed as the
+  // builtin's f64 while the declared ABI stayed integer.
+  const bool shadowed_by_declaration = find_function(call.callee()) != nullptr;
+  if (!shadowed_by_declaration &&
+      (fn_name == "sqrt" || fn_name == "sin" || fn_name == "cos" ||
+       fn_name == "abs" || fn_name == "floor" || fn_name == "ceil")) {
     if (call.arguments().size() != 1) {
       diagnostics_.error(diag::kPrintArity, call.location(),
                          "math function '" + call.callee() + "' takes exactly one argument, but " +

@@ -1,0 +1,15 @@
+// A C symbol declared with an integer parameter is called with an integer.
+//
+// `abs` is also the name of a math builtin, and the builtin used to win the name
+// resolution even when the program had declared the C function: the call was typed
+// as `f64` and lowering then had an i64 argument for an f64 parameter. A
+// declaration is the stronger statement, so it is the one that is used, and the
+// builtin stays reachable as `math.abs`.
+extern int function abs(int value);
+
+int function main() {
+    var x = -9;
+    print(abs(-7));
+    print(abs(x));
+    return 0;
+}
