@@ -1,0 +1,45 @@
+// An `array_view<T>` is a data pointer and a count, borrowed from whoever owns
+// the storage. Three sources produce one and none of them take ownership:
+//
+//   * a fixed or dynamic container, by (source, start, length) or (source, length);
+//   * a raw element block, where the caller spells the count because a pointer
+//     has no length word to read;
+//   * another view, which is how a sub-range is taken out of an existing slice.
+//
+// `memory.array_live_count` is the evidence that a view is not an owner: it counts
+// the dynamic arrays the program allocated, and creating views over them must not
+// change it.
+int function main() {
+    var values = memory.owned_array<int>(4);
+    values[0] = 10;
+    values[1] = 20;
+    values[2] = 30;
+    values[3] = 40;
+    var window = memory.array_view<int>(values, 1, 2);
+    print(window.length);
+    print(window[0]);
+    print(window[1]);
+
+    var block = memory.allocate<int>(3);
+    block[0] = 7;
+    block[1] = 8;
+    block[2] = 9;
+    var whole = memory.array_view<int>(block, 3);
+    print(whole.length);
+    print(whole[2]);
+
+    var rows = memory.dynamic_array<int>();
+    memory.array_append(rows, 5);
+    memory.array_append(rows, 6);
+    memory.array_append(rows, 7);
+    print(memory.array_live_count());
+    var tail = memory.array_view_mut<int>(rows, 1, 2);
+    tail[1] = 70;
+    print(rows[2]);
+    print(tail.length);
+
+    var inner = memory.array_view<int>(whole, 1, 2);
+    print(inner[0]);
+    print(memory.array_live_count());
+    return 0;
+}

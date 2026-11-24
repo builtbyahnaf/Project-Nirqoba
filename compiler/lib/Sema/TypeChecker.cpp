@@ -4904,39 +4904,67 @@ Type TypeChecker::check_call(CallExpr& call) {
        call.callee() == "memory.array_view_mut") &&
       call.has_generic_argument()) {
     const bool mutable_view = call.callee() == "memory.array_view_mut";
-    if (call.arguments().size() != 3) {
+    const std::size_t argument_count = call.arguments().size();
+    // `(source, length)` is the whole-buffer form and `(source, start, length)`
+    // selects a sub-range out of it. A raw element pointer has no descriptor to
+    // ask for its length, so the count is always spelled by the caller.
+    if (argument_count != 3 && argument_count != 2) {
       diagnostics_.error(diag::kPrintArity, call.location(),
-                         "array view constructor takes a source, start, and length");
+                         "array view constructor takes a source and a length, or "
+                         "a source, a start and a length");
       for (const ExprPtr& argument : call.arguments())
         check_expression(const_cast<Expr&>(*argument));
       return Type::error();
     }
+    const bool has_start = argument_count == 3;
+    const std::size_t length_index = has_start ? 2 : 1;
     const Type source_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
-    const Type start_type = check_expression(const_cast<Expr&>(*call.arguments()[1]));
-    const Type length_type = check_expression(const_cast<Expr&>(*call.arguments()[2]));
+    const Type start_type = has_start
+                                ? check_expression(
+                                      const_cast<Expr&>(*call.arguments()[1]))
+                                : Type::int_type();
+    const Type length_type =
+        check_expression(const_cast<Expr&>(*call.arguments()[length_index]));
     const Type element_type = resolve_aggregate_type(call.generic_argument());
     if (contains_array_view(element_type)) {
       diagnostics_.error(diag::kTypeMismatch, call.location(),
                          "borrowed array views cannot be stored in owned arrays");
       return Type::error();
     }
-    if (!source_type.is_owned_array() && !source_type.is_array_view()) {
+    const bool pointer_source = source_type.is_pointer();
+    if (!source_type.is_owned_array() && !source_type.is_array_view() &&
+        !source_type.is_dynamic_array() && !pointer_source) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
-                         "array views require an owned array or an existing array view");
+                         "array views require an array, an array view or a pointer "
+                         "to their elements, not '" +
+                             source_type.to_string() + "'");
     } else if (source_type.element_type() != element_type) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
                          "array view element type must match its source");
     }
     if (start_type.is_valid() && !start_type.is_integer())
-      diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
+      diagnostics_.error(diag::kTypeMismatch,
+                         call.arguments()[has_start ? 1 : 0]->location(),
                          "array view start must be an integer");
     if (length_type.is_valid() && !length_type.is_integer())
-      diagnostics_.error(diag::kTypeMismatch, call.arguments()[2]->location(),
+      diagnostics_.error(diag::kTypeMismatch,
+                         call.arguments()[length_index]->location(),
                          "array view length must be an integer");
     const Symbol* source = find_root_symbol(*call.arguments()[0], symbols_);
     const bool valid_mutable_source =
         source && source->is_mutable() &&
         (source->owns_allocation || (source->borrowed && source->mutable_borrow));
+    if (pointer_source) {
+      // Viewing a block that was released is already a use-after-free at the
+      // argument, so only the write permission needs its own rule here: a
+      // pointer whose owner is immutable cannot hand out a mutable view, and a
+      // pointer with no tracked owner is a borrow the caller has to keep alive.
+      if (source && !source->moved && mutable_view && !valid_mutable_source) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                           "mutable array views require a mutable owned block");
+      }
+      return Type::array_view_type(element_type);
+    }
     if (!source || source->allocation_id == 0 || source->moved ||
         (!source->owns_allocation && !source->borrowed)) {
       diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),

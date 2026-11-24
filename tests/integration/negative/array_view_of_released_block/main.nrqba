@@ -1,0 +1,12 @@
+// A view borrows storage without owning it, so the block it names has to outlive
+// it. Releasing the block and then viewing it would hand out a pointer into freed
+// memory that nothing in the type system could take back, so the checker refuses
+// the argument where the release already made the block unusable.
+int function main() {
+    var block = memory.allocate<int>(2);
+    block[0] = 1;
+    memory.deallocate(block);
+    var view = memory.array_view<int>(block, 2);
+    print(view.length);
+    return 0;
+}

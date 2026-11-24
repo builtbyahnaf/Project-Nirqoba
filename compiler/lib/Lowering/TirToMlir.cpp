@@ -5514,7 +5514,8 @@ class FunctionTranslator {
 
         if ((op.callee == "memory.array_view" ||
              op.callee == "memory.array_view_mut") && op.result.is_valid() &&
-            op.result.type.is_array_view() && args.size() == 3) {
+            op.result.type.is_array_view() &&
+            (args.size() == 2 || args.size() == 3)) {
           const mlir::Type i64 = builder_.getI64Type();
           auto as_i64 = [&](mlir::Value value) {
             if (value.getType() == i64) return value;
@@ -5523,12 +5524,28 @@ class FunctionTranslator {
                 ? builder_.create<mlir::LLVM::ZExtOp>(loc, i64, value).getResult()
                 : builder_.create<mlir::LLVM::TruncOp>(loc, i64, value).getResult();
           };
-          mlir::Value source_data = builder_.create<mlir::LLVM::ExtractValueOp>(
-              loc, args[0], builder_.getDenseI64ArrayAttr({0})).getResult();
-          mlir::Value source_length = builder_.create<mlir::LLVM::ExtractValueOp>(
-              loc, args[0], builder_.getDenseI64ArrayAttr({1})).getResult();
-          mlir::Value start = as_i64(args[1]);
-          mlir::Value count = as_i64(args[2]);
+          // An array, an owned array and a dynamic array all begin with the data
+          // pointer and the element count, so the view reads the same two words
+          // from any of them. A raw element pointer has neither: its data is the
+          // pointer itself, and the caller's count is the only length there is.
+          const bool pointer_source = op.arguments[0].type.is_pointer();
+          const bool has_start = args.size() == 3;
+          mlir::Value source_data;
+          mlir::Value source_length;
+          if (pointer_source) {
+            source_data = args[0];
+            source_length = as_i64(args[args.size() - 1]);
+          } else {
+            source_data = builder_.create<mlir::LLVM::ExtractValueOp>(
+                loc, args[0], builder_.getDenseI64ArrayAttr({0})).getResult();
+            source_length = builder_.create<mlir::LLVM::ExtractValueOp>(
+                loc, args[0], builder_.getDenseI64ArrayAttr({1})).getResult();
+          }
+          mlir::Value start = has_start
+              ? as_i64(args[1])
+              : builder_.create<mlir::LLVM::ConstantOp>(
+                    loc, i64, builder_.getI64IntegerAttr(0)).getResult();
+          mlir::Value count = as_i64(args[args.size() - 1]);
           auto range_check = ensure_runtime_fn(
               module_, builder_, "nrq_memory_array_range_check",
               mlir::LLVM::LLVMVoidType::get(ctx_), {i64, i64, i64});
