@@ -1108,7 +1108,7 @@ static bool callee_is_collection_free(llvm::StringRef callee) {
       "file.free_text", "file.text_live_count", "file.write_text",
       "file.append_text",
       "file.exists", "socket.connect", "socket.close", "socket.send",
-      "socket.receive", "system.exit",
+      "socket.receive", "system.exit", "panic", "runtime.assert_failed",
   };
   return collection_free.count(callee.str()) != 0;
 }
@@ -6835,6 +6835,14 @@ class FunctionTranslator {
           runtime_sym = "nrq_gc_is_enabled";
           runtime_ret_ty = builder_.getI32Type();
           runtime_arg_tys = {};
+        } else if (callee == "panic") {
+          runtime_sym = "nrq_panic";
+          runtime_ret_ty = mlir::LLVM::LLVMVoidType::get(ctx_);
+          runtime_arg_tys = {llvm_ptr_type(ctx_)};
+        } else if (callee == "runtime.assert_failed") {
+          runtime_sym = "nrq_assert_failed";
+          runtime_ret_ty = mlir::LLVM::LLVMVoidType::get(ctx_);
+          runtime_arg_tys = {llvm_ptr_type(ctx_)};
         } else if (callee == "system.exit") {
           runtime_sym = "nrq_system_exit";
           runtime_ret_ty = mlir::LLVM::LLVMVoidType::get(ctx_);

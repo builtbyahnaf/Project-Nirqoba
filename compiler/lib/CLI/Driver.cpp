@@ -837,8 +837,14 @@ int run_driver(int argc, const char* const* argv) {
       return 1;
     }
 
+    // The program's streams belong to the program's caller: its output goes to
+    // this process's standard output and its diagnostics to standard error, so a
+    // shell pipeline sees the same split the program produced.
     if (!run_res.output.empty()) {
       cout << run_res.output;
+    }
+    if (!run_res.error_output.empty()) {
+      cerr << run_res.error_output;
     }
 
     if (options.keep_artifacts) {

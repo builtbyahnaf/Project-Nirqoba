@@ -1,0 +1,7 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 70,
+  "expect_stdout_contains": ["before the panic"],
+  "expect_stdout_not_contains": ["never reached"],
+  "expect_stderr_contains": ["panic: deliberate stop"]
+}

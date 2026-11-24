@@ -1,0 +1,9 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 70,
+  "expect_stdout_contains": ["3"],
+  "expect_stdout_not_contains": ["never reached"],
+  "expect_stderr_contains": [
+    "assertion failed: the catalogue must hold more than ten entries"
+  ]
+}

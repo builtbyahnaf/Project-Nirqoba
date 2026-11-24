@@ -1,0 +1,28 @@
+// `assert` is a statement, not a value: a true condition falls through to the next
+// line of the same block, and an assertion with a message is an `assert` with one
+// more argument rather than a different form.
+//
+// The two spellings are covered here because they lower differently at the call
+// site the runtime sees - a bare assertion still passes a message, the empty one -
+// and both must leave a program running.
+int function classify(int value) {
+    assert(value >= 0, "classify expects a non-negative value");
+    if (value == 0) {
+        return 0;
+    }
+    assert(value > 0);
+    return 1;
+}
+
+int function main() {
+    assert(true);
+    assert(1 + 1 == 2, "arithmetic is broken");
+    assert("abc" == "abc");
+    print(classify(0));
+    print(classify(7));
+    var text = "hello";
+    assert(text.length == 5, "length is the byte count");
+    assert(text[0] == 'h');
+    print("asserts passed");
+    return 0;
+}

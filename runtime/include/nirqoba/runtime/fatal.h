@@ -24,6 +24,27 @@ extern "C" {
 #endif
 void nrq_runtime_fatal(const char* message);
 
+// Language-level panic: writes "panic: <message>" to the standard error handle
+// and terminates with exit code 70. A null or empty message still names the
+// panic, so a bare `panic("")` is visible rather than a silent exit.
+//
+// Unlike nrq_runtime_fatal this is reached from source, so the message is the
+// program's own text; the prefix is what distinguishes a deliberate panic from a
+// violated internal invariant in the same log.
+#ifdef __cplusplus
+[[noreturn]]
+#endif
+void nrq_panic(const char* message);
+
+// A failed `assert`: writes "assertion failed: <message>" (or just "assertion
+// failed" for an assertion without a message) to the standard error handle and
+// terminates with exit code 70. Same exit path as a panic so a test can assert on
+// one code for both.
+#ifdef __cplusplus
+[[noreturn]]
+#endif
+void nrq_assert_failed(const char* message);
+
 #ifdef __cplusplus
 }
 #endif

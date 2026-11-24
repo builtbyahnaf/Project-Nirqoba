@@ -443,7 +443,8 @@ int run_pipeline(const PipelineOptions& options,
   if (!link_res.launched || link_res.exit_code != 0) {
     diagnostics.error(diag::kLinkFailed, SourceLocation{},
                       "linking failed with exit code " +
-                          to_string(link_res.exit_code) + ":\n" + link_res.output);
+                          to_string(link_res.exit_code) + ":\n" + link_res.output +
+                          link_res.error_output);
     return fail_with(diagnostics, sources);
   }
 

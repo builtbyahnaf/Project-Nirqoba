@@ -5,6 +5,7 @@
 #include <windows.h>
 #endif
 
+#include <thread>
 #include <vector>
 #include <string>
 
@@ -93,14 +94,23 @@ ProcessResult run_process(const string& executable,
 
   HANDLE hChildRead = INVALID_HANDLE_VALUE;
   HANDLE hChildWrite = INVALID_HANDLE_VALUE;
+  HANDLE hErrorRead = INVALID_HANDLE_VALUE;
+  HANDLE hErrorWrite = INVALID_HANDLE_VALUE;
 
   if (!CreatePipe(&hChildRead, &hChildWrite, &sa, 0)) {
     result.output = "Failed to create pipe for child process output";
     return result;
   }
+  if (!CreatePipe(&hErrorRead, &hErrorWrite, &sa, 0)) {
+    CloseHandle(hChildRead);
+    CloseHandle(hChildWrite);
+    result.output = "Failed to create pipe for child process error output";
+    return result;
+  }
 
-  // Ensure read handle is not inherited by child.
+  // Ensure read handles are not inherited by the child.
   SetHandleInformation(hChildRead, HANDLE_FLAG_INHERIT, 0);
+  SetHandleInformation(hErrorRead, HANDLE_FLAG_INHERIT, 0);
 
   // Build the complete command line string.
   wstring cmdline = quote_argument(to_wstring(executable));
@@ -113,7 +123,7 @@ ProcessResult run_process(const string& executable,
   si.cb = sizeof(si);
   si.dwFlags |= STARTF_USESTDHANDLES;
   si.hStdOutput = hChildWrite;
-  si.hStdError = hChildWrite;
+  si.hStdError = hErrorWrite;
   si.hStdInput = INVALID_HANDLE_VALUE;
 
   PROCESS_INFORMATION pi;
@@ -136,11 +146,13 @@ ProcessResult run_process(const string& executable,
       &si,
       &pi);
 
-  // Close the write end of the pipe in parent so EOF can be read.
+  // Close the write ends in the parent so EOF can be read from both pipes.
   CloseHandle(hChildWrite);
+  CloseHandle(hErrorWrite);
 
   if (!success) {
     CloseHandle(hChildRead);
+    CloseHandle(hErrorRead);
     result.launched = false;
     result.exit_code = -1;
     DWORD err = GetLastError();
@@ -150,13 +162,28 @@ ProcessResult run_process(const string& executable,
 
   result.launched = true;
 
-  // Read output from the pipe until EOF.
+  // Both pipes are drained at the same time. A child that writes more than a
+  // pipe buffer of error output while its standard output is being read would
+  // otherwise block forever on the full pipe, so the error side is read by its
+  // own thread and joined once the output side has reached EOF.
+  std::thread error_reader([&]() {
+    char error_buffer[4096];
+    DWORD error_read = 0;
+    while (ReadFile(hErrorRead, error_buffer, sizeof(error_buffer), &error_read,
+                    nullptr) &&
+           error_read > 0) {
+      result.error_output.append(error_buffer, error_read);
+    }
+  });
+
   char buffer[4096];
   DWORD bytes_read = 0;
   while (ReadFile(hChildRead, buffer, sizeof(buffer), &bytes_read, nullptr) && bytes_read > 0) {
     result.output.append(buffer, bytes_read);
   }
   CloseHandle(hChildRead);
+  error_reader.join();
+  CloseHandle(hErrorRead);
 
   // Wait for child process termination.
   WaitForSingleObject(pi.hProcess, INFINITE);

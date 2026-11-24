@@ -15,8 +15,13 @@ struct ProcessResult {
   // Exit code returned by the child process. -1 if the process could not
   // be launched.
   int exit_code = -1;
-  // Combined stdout and stderr captured from the child.
+  // Everything the child wrote to its standard output.
   std::string output;
+  // Everything the child wrote to its standard error. Kept apart from `output`
+  // because a program's diagnostics are not its output: `run` forwards them to
+  // the same stream they were written to, which is what makes a runtime message
+  // like a panic observable as a diagnostic rather than as printed text.
+  std::string error_output;
   // True when CreateProcess succeeded (the child may still have exited with
   // a non-zero code).
   bool launched = false;

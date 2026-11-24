@@ -6459,6 +6459,53 @@ Type TypeChecker::check_call(CallExpr& call) {
     return Type::int_type();
   }
 
+  // `panic(message)` ends the program with the message on stderr. It is typed as
+  // void rather than as a distinct bottom type: the call is a statement terminator
+  // by intent, and a void result is what lets it sit anywhere a statement can.
+  if (call.callee() == "panic") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'panic' takes exactly one message");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::void_type();
+    }
+    const Type message_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (message_type.is_valid() && !message_type.is_string()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'panic' message must be a string, not '" +
+                             message_type.to_string() + "'");
+    }
+    return Type::void_type();
+  }
+
+  // `assert(condition)` and `assert(condition, message)`: a false condition ends
+  // the program with the message - or with no detail beyond the failure itself.
+  if (call.callee() == "assert") {
+    if (call.arguments().empty() || call.arguments().size() > 2) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'assert' takes a condition and an optional message");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::void_type();
+    }
+    const Type condition_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (condition_type.is_valid() && !condition_type.is_bool()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'assert' condition must be a bool, not '" +
+                             condition_type.to_string() + "'");
+    }
+    if (call.arguments().size() == 2) {
+      const Type message_type = check_expression(const_cast<Expr&>(*call.arguments()[1]));
+      if (message_type.is_valid() && !message_type.is_string()) {
+        diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
+                           "'assert' message must be a string, not '" +
+                               message_type.to_string() + "'");
+      }
+    }
+    return Type::void_type();
+  }
+
   if (call.callee() == "system.exit") {
     if (call.arguments().size() != 1) {
       diagnostics_.error(diag::kPrintArity, call.location(),

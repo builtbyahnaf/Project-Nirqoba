@@ -1,0 +1,10 @@
+// `panic` ends the program on purpose. The message is the program's, so it goes to
+// stderr with the "panic:" prefix and the process exits with 70 - the same code
+// the runtime uses for an unrecoverable error, which is what makes a panic
+// indistinguishable from one at the exit-code level on purpose.
+int function main() {
+    print("before the panic");
+    panic("deliberate stop");
+    print("never reached");
+    return 0;
+}

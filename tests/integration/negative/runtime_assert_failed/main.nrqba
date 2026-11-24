@@ -1,0 +1,10 @@
+// A false assertion reports the invariant it was guarding and stops. Both spellings
+// are failures here: the message names the expectation, and the bare form says only
+// that an assertion failed.
+int function main() {
+    var catalogue_size = 3;
+    print(catalogue_size);
+    assert(catalogue_size > 10, "the catalogue must hold more than ten entries");
+    print("never reached");
+    return 0;
+}

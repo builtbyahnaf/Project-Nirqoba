@@ -1701,6 +1701,62 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         return tir::Value{};
       }
 
+      // `assert` is control flow, not a call: the condition is evaluated here and
+      // a false one branches to a block that reports the failure and ends the
+      // function. Keeping it in the builder means the failure path is an ordinary
+      // basic block, so blocks after the assertion see the same dominators they
+      // saw before it.
+      if (call.callee() == "assert" && !call.arguments().empty()) {
+        const tir::Value condition = lower_expression(*call.arguments()[0], function);
+        tir::Value message;
+        if (call.arguments().size() > 1) {
+          message = lower_expression(*call.arguments()[1], function);
+        } else {
+          // An assertion without a message still names the failure, so the empty
+          // text is passed rather than a null the runtime would have to explain.
+          message = function.allocate_value(Type::string_type());
+          tir::Op empty;
+          empty.kind = tir::OpKind::ConstantString;
+          empty.location = call.location();
+          empty.result = message;
+          empty.string_value = "";
+          function.add_operation(std::move(empty));
+        }
+
+        const int failure_label = function.allocate_label();
+        const int continue_label = function.allocate_label();
+        tir::Op branch;
+        branch.kind = tir::OpKind::BranchCond;
+        branch.location = call.location();
+        branch.operand = condition;
+        branch.true_label = continue_label;
+        branch.false_label = failure_label;
+        function.add_operation(std::move(branch));
+
+        tir::Op failure;
+        failure.kind = tir::OpKind::Label;
+        failure.label_id = failure_label;
+        function.add_operation(std::move(failure));
+
+        tir::Op report;
+        report.kind = tir::OpKind::Call;
+        report.location = call.location();
+        report.callee = "runtime.assert_failed";
+        report.arguments = {message};
+        function.add_operation(std::move(report));
+
+        tir::Op unreachable;
+        unreachable.kind = tir::OpKind::Unreachable;
+        unreachable.location = call.location();
+        function.add_operation(std::move(unreachable));
+
+        tir::Op resume;
+        resume.kind = tir::OpKind::Label;
+        resume.label_id = continue_label;
+        function.add_operation(std::move(resume));
+        return tir::Value{};
+      }
+
       // `memory.array_append(values, element)` grows the array held in the
       // binding's slot. The first argument names the binding, so it is not
       // lowered as a value: the operation writes the grown header into that

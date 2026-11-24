@@ -23,7 +23,45 @@
 
 using namespace std;
 
+namespace {
+
+// One write per fragment, with no CRT stdio: the same reason the fatal path uses
+// WriteFile. A missing or redirected standard error handle simply writes nothing;
+// the exit code is the part a caller can rely on.
+void write_standard_error(const char* text) {
+    HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
+    if (h == INVALID_HANDLE_VALUE || h == nullptr || text == nullptr) return;
+    const DWORD len = static_cast<DWORD>(std::strlen(text));
+    if (len == 0) return;
+    DWORD written = 0;
+    WriteFile(h, text, len, &written, nullptr);
+}
+
+// `prefix` + `message` + newline. The prefix is written even when the message is
+// empty, so `panic("")` and `assert(false)` name themselves in the log.
+[[noreturn]] void write_prefixed_and_exit(const char* prefix,
+                                          const char* message) {
+    write_standard_error(prefix);
+    if (message != nullptr && message[0] != '\0') write_standard_error(message);
+    write_standard_error("\n");
+    HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
+    if (h != INVALID_HANDLE_VALUE && h != nullptr) FlushFileBuffers(h);
+    ExitProcess(70);
+}
+
+}  // namespace
+
 extern "C" {
+
+[[noreturn]] void nrq_panic(const char* message) {
+    write_prefixed_and_exit("panic: ", message);
+}
+
+[[noreturn]] void nrq_assert_failed(const char* message) {
+    if (message != nullptr && message[0] != '\0')
+        write_prefixed_and_exit("assertion failed: ", message);
+    write_prefixed_and_exit("assertion failed", nullptr);
+}
 
 [[noreturn]] void nrq_runtime_fatal(const char* message) {
     HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
