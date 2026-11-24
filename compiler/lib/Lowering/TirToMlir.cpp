@@ -4816,12 +4816,15 @@ class FunctionTranslator {
         mlir::Value ptr = get(op.lhs);
         mlir::Value val = get(op.operand);
         if (!ptr || !val) return true;
-        // A shared reference written into an aggregate field: the field takes a
-        // count and, when it already held one, releases it.
-        if (op.stores_shared_reference &&
-            shared_field_addresses_.count(op.lhs.id) != 0)
-          emit_managed_field_store(ptr, val, op.destination_holds_live_value,
-                                   loc);
+        // A store into a field that holds a reference count is two ownership
+        // operations: the value joins the field's ownership and whatever the field
+        // held leaves it. `nullptr` is the case the value's own type cannot announce
+        // - it joins nothing - but the destination still holds a count to drop, which
+        // is how a program breaks a reference cycle.
+        if (shared_field_addresses_.count(op.lhs.id) != 0 &&
+            (op.stores_shared_reference || op.destination_holds_live_value))
+          emit_managed_field_store(ptr, op.stores_shared_reference ? val : nullptr,
+                                   op.destination_holds_live_value, loc);
         // A destination no collection can observe needs neither a write barrier
         // nor a root copy. Keeping the store plain also leaves the slot free for
         // SSA promotion instead of making every access a runtime call.

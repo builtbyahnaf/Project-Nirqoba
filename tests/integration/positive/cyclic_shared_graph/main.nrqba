@@ -1,0 +1,39 @@
+// A two-node cycle through shared pointer fields.
+//
+// Storing `b` into `(*a).next` retains it and storing `a` into `(*b).next` retains
+// that, so each node is held twice: once by its binding and once by the other node.
+// That is what a reference cycle is, and the report names the payload shape that
+// selects the collector for it.
+struct GraphNode {
+    int value;
+    shared ptr GraphNode next;
+}
+
+int function main() {
+    var a = memory.shared_allocate<GraphNode>(16);
+    var b = memory.shared_allocate<GraphNode>(16);
+    (*a).value = 1;
+    (*b).value = 2;
+    (*a).next = b;
+    (*b).next = a;
+
+    print(memory.shared_count(a));
+    print(memory.shared_count(b));
+    print((*((*a).next)).value + (*((*b).next)).value);
+
+    // Breaking the cycle releases what the field held, so each node returns to one
+    // reference. A program that left it closed would keep both nodes alive for the
+    // process lifetime: a count that includes itself never reaches zero.
+    (*a).next = nullptr;
+    print(memory.shared_count(b));
+
+    // The same payload type through the general allocator, escaping into foreign
+    // storage: the site is collector storage and the report says why.
+    var kept = memory.dynamic_array<GraphNode*>();
+    var anchor = memory.allocate<GraphNode>(16);
+    (*anchor).value = 9;
+    (*anchor).next = nullptr;
+    memory.array_append(kept, anchor);
+    print((*anchor).value);
+    return 0;
+}

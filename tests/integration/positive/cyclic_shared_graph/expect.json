@@ -1,0 +1,7 @@
+{
+  "mode": "build_and_run",
+  "args": ["--inspect-cdmm"],
+  "expect_exit": 0,
+  "expect_stdout": "2\n2\n3\n1\n9\n",
+  "expect_stderr_contains": "'anchor' GraphNode* -> gc (cyclic object graph detected)"
+}

@@ -1,0 +1,31 @@
+// A cycle the collector actually reclaims.
+//
+// `managed<GraphNode>` is a traced edge: the collector follows it while marking, so
+// a ring of managed nodes is unreachable once the bindings die and the next
+// collection reclaims it. A `shared ptr` ring is not collectable - its counts include
+// themselves - which is why the traced field is the one this fixture closes the ring
+// with.
+struct GraphNode {
+    int value;
+    managed<GraphNode> next;
+}
+
+void function build_ring(int base) {
+    var first = array.allocate<GraphNode>(1);
+    var second = array.allocate<GraphNode>(1);
+    first[0].value = base;
+    second[0].value = base + 1;
+    first[0].next = second;
+    second[0].next = first;
+    print(first[0].value + second[0].value);
+}
+
+int function main() {
+    build_ring(1);
+    var before = gc.get_statistics();
+    print(before.live_objects);
+    gc.collect();
+    var after = gc.get_statistics();
+    print(after.live_objects);
+    return 0;
+}
