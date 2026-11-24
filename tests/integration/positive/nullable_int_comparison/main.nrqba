@@ -1,0 +1,40 @@
+// A `@Nullable` scalar carries "no value" the same way a nullable pointer carries
+// "no address": `nullptr` on the right of a comparison asks the presence flag, and
+// an assignment of a plain value fills it. Before this the annotation was accepted
+// at the declaration and every null check was rejected, so the only usable
+// nullables were pointers.
+int function main() {
+    @Nullable int maybe = nullptr;
+    if (maybe == nullptr) {
+        print("empty");
+    }
+    if (maybe != nullptr) {
+        print("unreachable");
+    }
+
+    @Nullable int filled = 7;
+    if (filled != nullptr) {
+        print(filled.value);
+    }
+
+    maybe = 42;
+    if (maybe != nullptr) {
+        print(maybe.value);
+    }
+    maybe = nullptr;
+    if (maybe == nullptr) {
+        print("cleared");
+    }
+
+    // The annotation still means what it meant for pointers: an address, or none.
+    var target = 9;
+    @Nullable ptr int maybe_pointer = nullptr;
+    if (maybe_pointer == nullptr) {
+        print("no address");
+    }
+    maybe_pointer = &target;
+    if (maybe_pointer != nullptr) {
+        print(*maybe_pointer);
+    }
+    return 0;
+}

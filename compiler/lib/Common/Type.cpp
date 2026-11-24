@@ -206,6 +206,22 @@ Type Type::tuple_type(vector<Type> elements) {
   return t;
 }
 
+Type Type::nullable_scalar_type(Type value_type) {
+  return struct_type("__nrq_nullable_" + value_type.to_string(),
+                     {{"present", Type::bool_type()}, {"value", value_type}});
+}
+
+bool Type::is_nullable_scalar() const {
+  return kind_ == TypeKind::Struct && data_ &&
+         data_->struct_name.rfind("__nrq_nullable_", 0) == 0;
+}
+
+Type Type::nullable_value_type() const {
+  if (!is_nullable_scalar() || data_->struct_fields.size() < 2)
+    return Type::error();
+  return data_->struct_fields[1].second;
+}
+
 Type Type::struct_type(string name, vector<pair<string, Type>> fields) {
   Type t(TypeKind::Struct);
   t.data_ = make_shared<TypeData>();

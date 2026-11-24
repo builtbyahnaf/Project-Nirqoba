@@ -103,6 +103,9 @@ class TypeChecker {
   // Fills `struct_field_table_` from the registered structs and decides, per
   // struct, whether its field graph can close a cycle of owning edges.
   void analyze_struct_types();
+  // Adds the compiler-created box behind `@Nullable T` on a scalar to the struct
+  // catalog, once per boxed type.
+  void register_nullable_scalar(const Type& boxed);
   void check_function(FunctionDecl& function);
   void check_statement(Stmt& statement);
   void check_block(BlockStmt& block);

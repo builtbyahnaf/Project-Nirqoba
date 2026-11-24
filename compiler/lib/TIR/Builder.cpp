@@ -145,6 +145,31 @@ bool builds_owned_text_temporary(const Expr& expression) {
           expression.kind() == Expr::Kind::Call);
 }
 
+// Builds the `{present, value}` box a `@Nullable` scalar lives in. Both halves are
+// written on every path, so the box is always fully initialized: absence is the
+// flag, never an untouched payload.
+tir::Value box_nullable_scalar(tir::Function& function, SourceLocation location,
+                               const tir::Value& payload, const Type& boxed,
+                               bool has_value) {
+  tir::Value present = function.allocate_value(Type::bool_type());
+  tir::Op flag;
+  flag.kind = tir::OpKind::ConstantInt;
+  flag.location = location;
+  flag.result = present;
+  flag.integer_value = has_value ? 1 : 0;
+  function.add_operation(std::move(flag));
+
+  tir::Value box = function.allocate_value(boxed);
+  tir::Op pack;
+  pack.kind = tir::OpKind::AggregatePack;
+  pack.location = location;
+  pack.aggregate_elements = {present, payload};
+  pack.slot_name = boxed.struct_name();
+  pack.result = box;
+  function.add_operation(std::move(pack));
+  return box;
+}
+
 // Hands an owned text buffer back once its last reader is done with it.
 void emit_owned_text_release(tir::Function& function, SourceLocation location,
                              const tir::Value& value) {
@@ -726,8 +751,17 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
     }
     case Stmt::Kind::VariableDeclaration: {
       const auto& declaration = static_cast<const VariableDeclarationStmt&>(statement);
-      const tir::Value initial = lower_expression(declaration.initializer(), function);
+      tir::Value initial = lower_expression(declaration.initializer(), function);
       const Type slot_type = declaration.has_annotation() ? declaration.annotation() : initial.type;
+      if (slot_type.is_nullable_scalar()) {
+        // `@Nullable int x = nullptr` and `@Nullable int x = 5` differ only in the
+        // flag; the payload is the same slot either way.
+        initial = box_nullable_scalar(
+            function, declaration.location(), initial, slot_type,
+            !(declaration.initializer().kind() == Expr::Kind::IntegerLiteral &&
+              static_cast<const IntegerLiteralExpr&>(declaration.initializer())
+                  .is_null_pointer()));
+      }
 
       tir::Value slot = function.allocate_value(slot_type);
       tir::Op alloca;
@@ -805,8 +839,15 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
     }
     case Stmt::Kind::Assignment: {
       const auto& assignment = static_cast<const AssignmentStmt&>(statement);
-      const tir::Value value = lower_expression(assignment.value(), function);
+      tir::Value value = lower_expression(assignment.value(), function);
       const tir::Value slot = resolve_lvalue_ptr(assignment.target(), function);
+      if (slot.is_valid() && slot.type.is_nullable_scalar()) {
+        value = box_nullable_scalar(
+            function, assignment.location(), value, slot.type,
+            !(assignment.value().kind() == Expr::Kind::IntegerLiteral &&
+              static_cast<const IntegerLiteralExpr&>(assignment.value())
+                  .is_null_pointer()));
+      }
       if (!slot.is_valid()) {
         diagnostics_.error(kUnresolvedSymbol, assignment.target().location(),
                            "internal: assignment target has no TIR slot");
@@ -1545,6 +1586,43 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
     }
     case Expr::Kind::Binary: {
       const auto& binary = static_cast<const BinaryExpr&>(expr);
+
+      // A `@Nullable` scalar compared against nullptr asks the presence flag and
+      // never reads the payload, which is why an empty box compares safely.
+      if ((binary.op() == BinaryOp::Equal || binary.op() == BinaryOp::NotEqual) &&
+          (binary.lhs().type().is_nullable_scalar() ||
+           binary.rhs().type().is_nullable_scalar())) {
+        const Expr& boxed_side = binary.lhs().type().is_nullable_scalar()
+                                     ? binary.lhs() : binary.rhs();
+        const tir::Value box = lower_expression(boxed_side, function);
+        tir::Value present = function.allocate_value(Type::bool_type());
+        tir::Op extract;
+        extract.kind = tir::OpKind::AggregateExtract;
+        extract.location = binary.location();
+        extract.operand = box;
+        extract.field_index = 0;
+        extract.result = present;
+        function.add_operation(std::move(extract));
+
+        tir::Value absent = function.allocate_value(Type::bool_type());
+        tir::Op zero;
+        zero.kind = tir::OpKind::ConstantInt;
+        zero.location = binary.location();
+        zero.result = absent;
+        zero.integer_value = 0;
+        function.add_operation(std::move(zero));
+
+        tir::Value result = function.allocate_value(Type::bool_type());
+        tir::Op compare;
+        compare.kind = tir::OpKind::Binary;
+        compare.location = binary.location();
+        compare.binary_op = map_binary_op(binary.op());
+        compare.lhs = present;
+        compare.rhs = absent;
+        compare.result = result;
+        function.add_operation(std::move(compare));
+        return result;
+      }
 
       if (binary.op() == BinaryOp::LogicalAnd || binary.op() == BinaryOp::LogicalOr) {
         tir::Value slot = function.allocate_value(Type::bool_type());

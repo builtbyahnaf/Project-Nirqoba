@@ -137,6 +137,13 @@ class Type {
   static Type string_type() { return Type(TypeKind::String); }
   static Type owned_string_type() { return Type(TypeKind::OwnedString); }
 
+  // A `@Nullable` scalar, boxed as the struct `{present: bool, value: T}`. A
+  // scalar has no spare bit pattern for "no value", so presence is stored
+  // alongside the value; the box is a struct so the existing aggregate lowering
+  // addresses both halves in one stack slot and both are always initialized -
+  // absence is `present == false`, not an undefined payload.
+  static Type nullable_scalar_type(Type value_type);
+
   static Type array_type(Type element_type, std::size_t length);
   static Type dynamic_array_type(Type element_type);
   static Type owned_array_type(Type element_type);
@@ -211,6 +218,11 @@ class Type {
     return kind_ == TypeKind::String || kind_ == TypeKind::OwnedString;
   }
   bool is_owned_string() const { return kind_ == TypeKind::OwnedString; }
+  // A boxed `@Nullable` scalar. Recognised by the shape the factory above builds,
+  // because the box is a compiler-created struct with no declaration in source.
+  bool is_nullable_scalar() const;
+  // The `value` half of a nullable scalar, or an invalid type for anything else.
+  Type nullable_value_type() const;
   bool is_char() const { return kind_ == TypeKind::Char; }
   bool is_f32() const { return kind_ == TypeKind::F32; }
   bool is_f64() const { return kind_ == TypeKind::F64; }

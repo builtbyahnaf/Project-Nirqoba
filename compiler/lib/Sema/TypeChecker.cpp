@@ -611,6 +611,26 @@ bool TypeChecker::check(Program& program) {
   return !diagnostics_.has_errors();
 }
 
+void TypeChecker::register_nullable_scalar(const Type& boxed) {
+  if (!boxed.is_nullable_scalar()) return;
+  const std::string name = boxed.struct_name();
+  if (structs_.count(name) != 0) return;
+  StructInfo info;
+  info.name = name;
+  info.module_name = current_module_;
+  for (const auto& field : boxed.struct_fields()) {
+    Parameter parameter;
+    parameter.name = field.first;
+    parameter.type = field.second;
+    info.fields.push_back(std::move(parameter));
+  }
+  structs_.emplace(name, std::move(info));
+  // The field table was built from the struct declarations, which this struct has
+  // none of, so the catalog has to learn it too: lowering reads the table, not the
+  // registry.
+  struct_field_table_[name] = boxed.struct_fields();
+}
+
 void TypeChecker::analyze_struct_types() {
   struct_field_table_.clear();
   cyclic_structs_.clear();
@@ -1151,10 +1171,33 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
                          BorrowEffectRead | BorrowEffectAlias);
   Type binding_type = initializer_type;
 
+  // Set when `@Nullable T` on a scalar is boxed; the annotation has already been
+  // replaced by the box, so the plain `binding_type = annotation` below must not
+  // undo it.
+  bool nullable_scalar_binding = false;
   if (declaration.has_annotation()) {
     const Type annotation = resolve_aggregate_type(declaration.annotation());
     declaration.set_annotation(annotation);
-    if (is_null_pointer_literal(declaration.initializer()) && annotation.is_pointer()) {
+    const bool scalar = annotation.is_integer() || annotation.is_float() ||
+                        annotation.is_char() || annotation.is_bool();
+    if (declaration.is_nullable() && annotation.is_valid() && scalar) {
+      // A scalar has no spare bit pattern for "no value", so the binding becomes
+      // the box `{present, value}`: `= 5` fills it, `= nullptr` empties it, and
+      // `== nullptr` asks the flag. The box lives where the scalar would have.
+      const Type boxed = Type::nullable_scalar_type(annotation);
+      register_nullable_scalar(boxed);
+      if (is_null_pointer_literal(declaration.initializer())) {
+        const_cast<Expr&>(declaration.initializer()).set_type(annotation);
+      } else if (initializer_type.is_valid() && initializer_type != annotation) {
+        diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
+                           "cannot initialize '" + declaration.name() + "' of type '" +
+                               annotation.to_string() + "' with a value of type '" +
+                               initializer_type.to_string() + "'");
+      }
+      declaration.set_annotation(boxed);
+      binding_type = boxed;
+      nullable_scalar_binding = true;
+    } else if (is_null_pointer_literal(declaration.initializer()) && annotation.is_pointer()) {
       // Pointers are non-nullable by default, so holding nullptr requires '@Nullable'.
       if (!declaration.is_nullable()) {
         diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
@@ -1195,7 +1238,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
                                initializer_type.to_string() + "'");
       }
     }
-    binding_type = annotation;
+    if (!nullable_scalar_binding) binding_type = annotation;
   }
 
   bool extracted_mutable_borrow = false;
@@ -2211,6 +2254,27 @@ void TypeChecker::check_assignment(AssignmentStmt& assignment) {
              ? symbols_.lookup(assignment.name())->type : Type::error())
       : check_expression(const_cast<Expr&>(assignment.target()));
   checking_lvalue_ = was_checking_lvalue;
+
+  // Writing a `@Nullable` scalar writes the box: a value fills it, nullptr empties
+  // it. Neither moves nor borrows anything, so the general rules below - which
+  // exist for owners and references - do not apply.
+  if (target_type.is_nullable_scalar()) {
+    if (is_null_pointer_literal(assignment.value())) {
+      const_cast<Expr&>(assignment.value()).set_type(target_type.nullable_value_type());
+      return;
+    }
+    if (value_type.is_valid() && value_type == target_type.nullable_value_type())
+      return;
+    diagnostics_.error(diag::kTypeMismatch, assignment.value().location(),
+                       "cannot store a value of type '" + value_type.to_string() +
+                           "' in '" +
+                           (assignment.is_simple_name() ? assignment.name()
+                                                        : std::string("that binding")) +
+                           "', which holds either a '" +
+                           target_type.nullable_value_type().to_string() +
+                           "' or nullptr");
+    return;
+  }
 
   // The read-only property rule fires before the general assignment checks, so a
   // write to `.length` or `.capacity` is reported as the mutation it is instead
@@ -3804,9 +3868,13 @@ Type TypeChecker::check_expression(Expr& expr) {
             // `nullptr` adopts the other operand's pointer type, so `p is nullptr`
             // compares two pointers rather than a pointer and an integer zero.
             const Type& other = is_null_pointer_literal(binary.lhs()) ? rhs_type : lhs_type;
-            if (!other.is_pointer()) {
+            // A `@Nullable` scalar answers the same question a nullable pointer
+            // does - is there a value? - so `@Nullable int` compares against
+            // nullptr without the payload having to pretend to be a pointer.
+            if (!other.is_pointer() && !other.is_nullable_scalar()) {
               diagnostics_.error(diag::kTypeMismatch, binary.location(),
-                                 "nullptr can only be compared with a pointer, not '" +
+                                 "nullptr can only be compared with a pointer or a "
+                                 "'@Nullable' value, not '" +
                                      other.to_string() + "'");
               type = Type::error();
               break;
