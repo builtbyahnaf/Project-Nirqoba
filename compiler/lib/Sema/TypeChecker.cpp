@@ -5990,6 +5990,11 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "math function '" + call.callee() + "' requires a numeric argument, not '" +
                              arg_type.to_string() + "'");
     }
+    // Integer absolute value is exact and needs no float round trip, so `abs`
+    // keeps its argument's integer type. The transcendental and rounding
+    // functions are float operations by definition and stay f64.
+    if (fn_name == "abs" && arg_type.is_valid() && arg_type.is_integer())
+      return arg_type;
     return Type::f64_type();
   }
 

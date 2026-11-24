@@ -1,0 +1,13 @@
+// Integer absolute value is computed in integers.
+//
+// The runtime exposes one double-precision `nrq_abs`, so an integer argument used
+// to be handed to a float parameter unchanged. `abs` now keeps its argument's
+// integer type and lowers to a compare-and-negate, while the floating overload
+// still goes through the runtime.
+int function main() {
+    var x = -4;
+    print(math.abs(-4));
+    print(math.abs(x));
+    print(math.abs(-4.5));
+    return 0;
+}

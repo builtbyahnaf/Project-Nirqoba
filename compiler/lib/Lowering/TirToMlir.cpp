@@ -6590,6 +6590,26 @@ class FunctionTranslator {
           runtime_ret_ty = builder_.getF64Type();
           runtime_arg_tys = {builder_.getF64Type()};
         } else if (callee == "math.abs" || callee == "abs") {
+          // Integer absolute value is exact, so it is computed rather than routed
+          // through the double-precision runtime entry point. The runtime has one
+          // `nrq_abs(double)`; sending an integer there either truncated the value
+          // or, as the call verifier said, passed i64 where f64 was required.
+          if (op.result.is_valid() && op.result.type.is_integer() && !args.empty()) {
+            mlir::Type int_ty = args[0].getType();
+            if (mlir::isa<mlir::IntegerType>(int_ty)) {
+              mlir::Value zero = builder_.create<mlir::LLVM::ConstantOp>(
+                  loc, int_ty, builder_.getIntegerAttr(int_ty, 0)).getResult();
+              mlir::Value negative = builder_.create<mlir::LLVM::SubOp>(
+                  loc, int_ty, zero, args[0]).getResult();
+              mlir::Value is_negative = builder_.create<mlir::LLVM::ICmpOp>(
+                  loc, mlir::LLVM::ICmpPredicate::slt, args[0], zero).getResult();
+              set(op.result, builder_
+                                 .create<mlir::LLVM::SelectOp>(
+                                     loc, is_negative, negative, args[0])
+                                 .getResult());
+              return true;
+            }
+          }
           runtime_sym = "nrq_abs";
           runtime_ret_ty = builder_.getF64Type();
           runtime_arg_tys = {builder_.getF64Type()};
@@ -6614,13 +6634,21 @@ class FunctionTranslator {
               if (value.getType().isInteger(1) && target.isInteger()) {
                 value = builder_.create<mlir::LLVM::ZExtOp>(loc, target, value).getResult();
               } else if (target.isInteger() &&
-                         value.getType().getIntOrFloatBitWidth() != 0) {
+                         mlir::isa<mlir::IntegerType>(value.getType())) {
                 const unsigned source_width = value.getType().getIntOrFloatBitWidth();
                 const unsigned target_width = target.getIntOrFloatBitWidth();
                 if (source_width < target_width)
                   value = builder_.create<mlir::LLVM::ZExtOp>(loc, target, value).getResult();
                 else
                   value = builder_.create<mlir::LLVM::TruncOp>(loc, target, value).getResult();
+              } else if (llvm::isa<mlir::FloatType>(target)) {
+                // The runtime's math entry points are double-precision, so an
+                // integer argument is converted here; passing i64 unchanged was
+                // an ABI violation at the call verifier.
+                value = builder_.create<mlir::LLVM::SIToFPOp>(loc, target, value).getResult();
+              } else if (llvm::isa<mlir::FloatType>(value.getType()) &&
+                         target.isInteger()) {
+                value = builder_.create<mlir::LLVM::FPToSIOp>(loc, target, value).getResult();
               }
             }
             abi_args.push_back(value);
