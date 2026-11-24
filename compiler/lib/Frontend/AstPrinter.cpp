@@ -146,6 +146,20 @@ class Printer {
         print_block(for_stmt.body());
         return;
       }
+      case Stmt::Kind::Switch: {
+        const auto& switch_stmt = static_cast<const SwitchStmt&>(statement);
+        indent();
+        out_ << "switch (" << expression(switch_stmt.subject()) << ")\n";
+        ++depth_;
+        for (const SwitchCase& arm : switch_stmt.cases()) {
+          indent();
+          if (arm.label) out_ << "case " << expression(*arm.label) << "\n";
+          else out_ << "default\n";
+          if (arm.body) print_block(*arm.body);
+        }
+        --depth_;
+        return;
+      }
       case Stmt::Kind::Break:
         indent();
         out_ << "break\n";

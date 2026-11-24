@@ -385,6 +385,7 @@ class Stmt {
     For,
     Break,
     Continue,
+    Switch,
     Return,
     DeferredCleanup,
     Expression
@@ -598,6 +599,30 @@ class ForStmt : public Stmt {
   ExprPtr condition_;
   StmtPtr step_;
   std::unique_ptr<BlockStmt> body_;
+};
+
+// One `case value: { ... }` or `default: { ... }` arm. The body is a block, so an
+// arm has its own scope and its own cleanups, and control always leaves it: no
+// arm falls through into the next one.
+struct SwitchCase {
+  // Null for `default`.
+  ExprPtr label;
+  std::unique_ptr<BlockStmt> body;
+};
+
+class SwitchStmt : public Stmt {
+ public:
+  SwitchStmt(SourceLocation location, ExprPtr subject, std::vector<SwitchCase> cases)
+      : Stmt(Kind::Switch, std::move(location)), subject_(std::move(subject)),
+        cases_(std::move(cases)) {}
+  const Expr& subject() const { return *subject_; }
+  Expr& subject() { return *subject_; }
+  const std::vector<SwitchCase>& cases() const { return cases_; }
+  std::vector<SwitchCase>& cases() { return cases_; }
+
+ private:
+  ExprPtr subject_;
+  std::vector<SwitchCase> cases_;
 };
 
 class BreakStmt : public Stmt {

@@ -55,6 +55,9 @@ class Parser {
   StmtPtr parse_if();
   StmtPtr parse_while();
   StmtPtr parse_for();
+  StmtPtr parse_switch();
+  // `case <literal>:` or `default:`; the arm's statements live in braces.
+  bool parse_switch_arm(SwitchCase& arm, bool& seen_default);
   StmtPtr parse_break();
   StmtPtr parse_continue();
 

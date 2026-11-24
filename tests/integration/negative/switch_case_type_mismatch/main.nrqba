@@ -1,0 +1,11 @@
+// A label that cannot be compared with the subject is a type error, not a
+// comparison that silently never matches.
+int function main() {
+    var name = "beta";
+    switch (name) {
+        case 2: {
+            print("two");
+        }
+    }
+    return 0;
+}

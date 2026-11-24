@@ -116,6 +116,7 @@ class TypeChecker {
   void check_if(IfStmt& statement);
   void check_while(WhileStmt& statement);
   void check_for(ForStmt& statement);
+  void check_switch(SwitchStmt& statement);
   void check_break(BreakStmt& statement);
   void check_continue(ContinueStmt& statement);
   void check_return(ReturnStmt& statement);
@@ -234,6 +235,9 @@ class TypeChecker {
   uint64_t current_return_borrow_allocation_id_ = 0;
   bool current_return_mutable_borrow_ = false;
   int loop_depth_ = 0;
+  // `break` leaves a `switch` as it leaves a loop, while `continue` still needs an
+  // enclosing loop: the two depth counts stay separate for that reason.
+  int switch_depth_ = 0;
   std::vector<std::vector<SymbolTable>> loop_break_states_;
   std::vector<std::vector<SymbolTable>> loop_continue_states_;
   std::vector<std::size_t> loop_deferred_scope_depths_;

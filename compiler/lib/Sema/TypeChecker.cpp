@@ -1092,6 +1092,9 @@ void TypeChecker::check_statement(Stmt& statement) {
     case Stmt::Kind::For:
       check_for(static_cast<ForStmt&>(statement));
       return;
+    case Stmt::Kind::Switch:
+      check_switch(static_cast<SwitchStmt&>(statement));
+      return;
     case Stmt::Kind::Break:
       check_break(static_cast<BreakStmt&>(statement));
       return;
@@ -3242,10 +3245,146 @@ void TypeChecker::check_for(ForStmt& statement) {
   symbols_.pop_scope();
 }
 
+void TypeChecker::check_switch(SwitchStmt& statement) {
+  const Type subject_type = check_expression(statement.subject());
+  const bool string_subject =
+      subject_type.is_string() && !subject_type.is_owned_string();
+  if (subject_type.is_valid() && !subject_type.is_integer() &&
+      !subject_type.is_char() && !subject_type.is_bool() && !string_subject) {
+    diagnostics_.error(
+        diag::kTypeMismatch, statement.subject().location(),
+        "'switch' selects on an integer, char, bool or string value, not '" +
+            subject_type.to_string() + "'");
+  }
+
+  // Every arm ends where its block ends, so each arm is checked from the state
+  // the switch was entered with, and what runs afterwards may be the state of
+  // any arm that completed.
+  const SymbolTable incoming = symbols_;
+  std::vector<SymbolTable> completed;
+  std::vector<std::string> seen_labels;
+  bool has_default = false;
+
+  for (SwitchCase& arm : statement.cases()) {
+    if (arm.label) {
+      Expr& label = *arm.label;
+      check_expression(label);
+
+      bool literal = false;
+      std::string key;
+      switch (label.kind()) {
+        case Expr::Kind::IntegerLiteral: {
+          const auto& value = static_cast<const IntegerLiteralExpr&>(label);
+          literal = true;
+          key = "i" + std::to_string(value.value());
+          break;
+        }
+        case Expr::Kind::CharLiteral: {
+          const auto& value = static_cast<const CharLiteralExpr&>(label);
+          literal = true;
+          key = "c" + std::to_string(value.value());
+          break;
+        }
+        case Expr::Kind::BoolLiteral: {
+          const auto& value = static_cast<const BoolLiteralExpr&>(label);
+          literal = true;
+          key = value.value() ? "b1" : "b0";
+          break;
+        }
+        case Expr::Kind::StringLiteral: {
+          const auto& value = static_cast<const StringLiteralExpr&>(label);
+          literal = true;
+          key = "s" + value.value();
+          break;
+        }
+        case Expr::Kind::Unary: {
+          // A negative integer is still a constant: `case -1:` names one value.
+          const auto& unary = static_cast<const UnaryExpr&>(label);
+          if ((unary.op() == UnaryOp::Negate || unary.op() == UnaryOp::Plus) &&
+              unary.operand().kind() == Expr::Kind::IntegerLiteral) {
+            const auto& value =
+                static_cast<const IntegerLiteralExpr&>(unary.operand());
+            literal = true;
+            key = "i" + std::to_string(unary.op() == UnaryOp::Negate
+                                           ? -value.value()
+                                           : value.value());
+          }
+          break;
+        }
+        default:
+          break;
+      }
+
+      if (!literal) {
+        diagnostics_.error(
+            diag::kTypeMismatch, label.location(),
+            "a 'case' label is a constant: write an integer, char, bool or "
+            "string literal");
+      } else {
+        bool matches = false;
+        switch (label.kind()) {
+          case Expr::Kind::StringLiteral:
+            matches = string_subject;
+            break;
+          case Expr::Kind::CharLiteral:
+            matches = subject_type.is_char();
+            break;
+          case Expr::Kind::BoolLiteral:
+            matches = subject_type.is_bool();
+            break;
+          default:
+            // A written integer takes the subject's own integer width.
+            matches = subject_type.is_integer();
+            break;
+        }
+        if (!matches) {
+          diagnostics_.error(
+              diag::kTypeMismatch, label.location(),
+              "a 'case' label of type '" + label.type().to_string() +
+                  "' cannot select on a 'switch' subject of type '" +
+                  subject_type.to_string() + "'");
+        }
+        for (const std::string& seen : seen_labels) {
+          if (seen != key) continue;
+          diagnostics_.error(diag::kTypeMismatch, label.location(),
+                             "this 'switch' already matches that value; each "
+                             "'case' label may appear once");
+          break;
+        }
+        seen_labels.push_back(key);
+      }
+    } else {
+      if (has_default) {
+        diagnostics_.error(diag::kTypeMismatch, arm.body->location(),
+                           "this 'switch' already has a 'default' arm");
+      }
+      has_default = true;
+    }
+
+    symbols_ = incoming;
+    loop_break_states_.emplace_back();
+    loop_deferred_scope_depths_.push_back(deferred_calls_.size());
+    ++switch_depth_;
+    check_block(*arm.body);
+    --switch_depth_;
+    loop_deferred_scope_depths_.pop_back();
+    completed.push_back(symbols_);
+    for (const SymbolTable& break_state : loop_break_states_.back())
+      completed.push_back(break_state);
+    loop_break_states_.pop_back();
+  }
+
+  symbols_ = incoming;
+  for (const SymbolTable& state : completed) {
+    const SymbolTable merged = symbols_;
+    symbols_.merge_conditional_ownership(merged, state);
+  }
+}
+
 void TypeChecker::check_break(BreakStmt& statement) {
-  if (loop_depth_ <= 0) {
+  if (loop_depth_ + switch_depth_ <= 0) {
     diagnostics_.error(diag::kBreakOutsideLoop, statement.location(),
-                       "'break' is only allowed inside an enclosing loop");
+                       "'break' is only allowed inside an enclosing loop or 'switch'");
   } else if (!loop_break_states_.empty()) {
     loop_break_states_.back().push_back(loop_exit_state_after_defer());
   }

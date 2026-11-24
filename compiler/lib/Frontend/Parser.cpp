@@ -773,6 +773,17 @@ StmtPtr Parser::parse_statement() {
   if (check(TokenKind::KwContinue)) {
     return parse_continue();
   }
+  if (check(TokenKind::KwSwitch)) {
+    return parse_switch();
+  }
+  if (check(TokenKind::KwCase) || check(TokenKind::KwDefault)) {
+    error_at(token, diag::kUnexpectedToken,
+             "'" + string(token_kind_name(token.kind)) +
+                 "' is only valid inside a 'switch' body");
+    advance();
+    synchronize();
+    return nullptr;
+  }
   if (check(TokenKind::KwDefer)) {
     const Token keyword = advance();
     ExprPtr expression = parse_expression();
@@ -1109,6 +1120,64 @@ StmtPtr Parser::parse_for() {
   auto body = parse_block();
   return make_unique<ForStmt>(for_tok.location, move(initializer),
                               move(condition), move(step), move(body));
+}
+
+StmtPtr Parser::parse_switch() {
+  const Token switch_tok = advance();
+  expect(TokenKind::LParen, "after 'switch'");
+  ExprPtr subject = parse_expression();
+  expect(TokenKind::RParen, "after the 'switch' subject");
+  if (!check(TokenKind::LBrace)) {
+    error_at(peek(), diag::kExpectedToken,
+             "expected '{' to start the 'switch' body");
+    synchronize();
+    return nullptr;
+  }
+  advance();  // '{'
+
+  vector<SwitchCase> cases;
+  bool seen_default = false;
+  while (!check(TokenKind::RBrace) && !check(TokenKind::EndOfFile)) {
+    SwitchCase arm;
+    if (!parse_switch_arm(arm, seen_default)) break;
+    cases.push_back(move(arm));
+  }
+  expect(TokenKind::RBrace, "to close the 'switch' body");
+  return make_unique<SwitchStmt>(switch_tok.location, move(subject), move(cases));
+}
+
+bool Parser::parse_switch_arm(SwitchCase& arm, bool& seen_default) {
+  if (match(TokenKind::KwDefault)) {
+    if (seen_default)
+      error_at(previous(), diag::kUnexpectedToken,
+               "this 'switch' already has a 'default' arm");
+    seen_default = true;
+    expect(TokenKind::Colon, "after 'default'");
+  } else if (match(TokenKind::KwCase)) {
+    if (check(TokenKind::Colon)) {
+      error_at(peek(), diag::kExpectedToken, "expected a value after 'case'");
+    } else {
+      arm.label = parse_expression();
+    }
+    expect(TokenKind::Colon, "after the 'case' value");
+  } else {
+    error_at(peek(), diag::kExpectedToken,
+             "expected 'case' or 'default' in the 'switch' body, found " +
+                 describe_token(peek()));
+    synchronize();
+    return false;
+  }
+
+  // Every arm is a block, so its bindings are its own and its `defer`s run when
+  // control leaves that arm rather than when the switch ends.
+  if (!check(TokenKind::LBrace)) {
+    error_at(peek(), diag::kExpectedToken,
+             "expected '{' to start this arm; a 'switch' arm is its own scope");
+    synchronize();
+    return false;
+  }
+  arm.body = parse_block();
+  return true;
 }
 
 StmtPtr Parser::parse_break() {

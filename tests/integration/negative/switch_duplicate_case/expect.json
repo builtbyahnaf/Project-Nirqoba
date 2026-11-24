@@ -1,0 +1,7 @@
+{
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": [
+    "this 'switch' already matches that value; each 'case' label may appear once"
+  ]
+}

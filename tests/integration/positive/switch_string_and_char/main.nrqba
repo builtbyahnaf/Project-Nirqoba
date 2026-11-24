@@ -1,0 +1,47 @@
+// The subject decides what a label may be: a char selects on characters, text on
+// text content, and a bool on its two values. Text compares by content, so the
+// same bytes written in a different place still match.
+int function rank(char letter) {
+    switch (letter) {
+        case 'a': {
+            return 1;
+        }
+        case 'b': {
+            return 2;
+        }
+        default: {
+            return 0;
+        }
+    }
+    return 0;
+}
+
+int function main() {
+    print(rank('b'));
+    print(rank('a'));
+    print(rank('z'));
+
+    var name = "beta";
+    switch (name) {
+        case "alpha": {
+            print("alpha");
+        }
+        case "beta": {
+            print("beta");
+        }
+        default: {
+            print("unknown");
+        }
+    }
+
+    var flag = true;
+    switch (flag) {
+        case true: {
+            print("yes");
+        }
+        case false: {
+            print("no");
+        }
+    }
+    return 0;
+}

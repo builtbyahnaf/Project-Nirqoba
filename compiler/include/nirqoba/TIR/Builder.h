@@ -30,6 +30,10 @@ class TirBuilder {
     int break_label = -1;
     int continue_label = -1;
     std::size_t deferred_scope_depth = 0;
+    // A `switch` arm can be left with `break`, but `continue` belongs to the loop
+    // around it, so the two kinds share this stack and disagree only about which
+    // entry `continue` may target.
+    bool is_loop = true;
   };
   struct DeferredCall {
     std::string callee;

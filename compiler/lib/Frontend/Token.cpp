@@ -45,6 +45,9 @@ string_view token_kind_name(TokenKind kind) {
     case TokenKind::KwFor: return "for";
     case TokenKind::KwBreak: return "break";
     case TokenKind::KwContinue: return "continue";
+    case TokenKind::KwSwitch: return "switch";
+    case TokenKind::KwCase: return "case";
+    case TokenKind::KwDefault: return "default";
     case TokenKind::KwStruct: return "struct";
     case TokenKind::KwModule: return "module";
     case TokenKind::KwImport: return "import";
@@ -126,6 +129,8 @@ TokenKind keyword_kind(string_view text) {
       {"if", TokenKind::KwIf},             {"else", TokenKind::KwElse},
       {"while", TokenKind::KwWhile},       {"for", TokenKind::KwFor},
       {"break", TokenKind::KwBreak},       {"continue", TokenKind::KwContinue},
+      {"switch", TokenKind::KwSwitch},     {"case", TokenKind::KwCase},
+      {"default", TokenKind::KwDefault},
       {"struct", TokenKind::KwStruct},     {"module", TokenKind::KwModule},
       {"import", TokenKind::KwImport},     {"public", TokenKind::KwPublic},
       {"extern", TokenKind::KwExtern},

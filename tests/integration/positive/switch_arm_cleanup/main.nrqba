@@ -1,0 +1,37 @@
+// The arm that runs owns what it declares. Leaving it - by reaching its end, by
+// `break`, or by returning - unwinds its scope in reverse order, exactly like any
+// other block, so a `defer` in one arm cannot fire for a different arm.
+int function main() {
+    var code = 2;
+    switch (code) {
+        case 1: {
+            print("arm one");
+        }
+        case 2: {
+            var text: string_owned = string.from_int(42);
+            defer print("arm two finished");
+            defer file.free_text(text);
+            print(text);
+        }
+        default: {
+            print("default arm");
+        }
+    }
+    print(file.text_live_count());
+
+    // A `break` inside an arm runs that arm's cleanups before leaving the switch.
+    switch (code) {
+        case 2: {
+            var again: string_owned = string.from_int(7);
+            defer print("arm two broke out");
+            defer file.free_text(again);
+            print(again);
+            break;
+        }
+        default: {
+            print("not reached");
+        }
+    }
+    print(file.text_live_count());
+    return 0;
+}

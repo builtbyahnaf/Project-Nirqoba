@@ -1261,6 +1261,139 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       pop_scope();
       return;
     }
+    case Stmt::Kind::Switch: {
+      const auto& switch_stmt = static_cast<const SwitchStmt&>(statement);
+      const std::size_t case_count = switch_stmt.cases().size();
+      const tir::Value subject =
+          lower_expression(switch_stmt.subject(), function);
+      const Type subject_type = switch_stmt.subject().type();
+
+      // The switch owns a cleanup scope so `break` can unwind the arm it leaves.
+      // Each arm's block has its own scope on top of this one.
+      deferred_expressions_.emplace_back();
+      const std::size_t switch_cleanup_scope = deferred_expressions_.size() - 1;
+
+      const int exit_label = function.allocate_label();
+      std::vector<int> body_labels(case_count);
+      std::vector<int> test_labels(case_count, -1);
+      for (std::size_t index = 0; index < case_count; ++index)
+        body_labels[index] = function.allocate_label();
+      bool has_test = false;
+      for (std::size_t index = 0; index < case_count; ++index) {
+        if (!switch_stmt.cases()[index].label) continue;
+        test_labels[index] = function.allocate_label();
+        has_test = true;
+      }
+      int default_label = exit_label;
+      for (std::size_t index = 0; index < case_count; ++index)
+        if (!switch_stmt.cases()[index].label) default_label = body_labels[index];
+
+      // Every comparison is emitted first and targets its arm's block, so the
+      // order the arms were written in never decides which arm runs next: there is
+      // no fall-through to fall into.
+      if (has_test) {
+        int first_test = exit_label;
+        for (std::size_t index = 0; index < case_count; ++index)
+          if (test_labels[index] >= 0) {
+            first_test = test_labels[index];
+            break;
+          }
+        tir::Op enter;
+        enter.kind = tir::OpKind::Branch;
+        enter.label_id = first_test;
+        function.add_operation(std::move(enter));
+      }
+      for (std::size_t index = 0; index < case_count; ++index) {
+        const SwitchCase& arm = switch_stmt.cases()[index];
+        if (!arm.label) continue;
+        tir::Op start;
+        start.kind = tir::OpKind::Label;
+        start.label_id = test_labels[index];
+        function.add_operation(std::move(start));
+
+        int next_label = default_label;
+        for (std::size_t next = index + 1; next < case_count; ++next)
+          if (test_labels[next] >= 0) {
+            next_label = test_labels[next];
+            break;
+          }
+
+        const tir::Value label_value =
+            lower_expression(*arm.label, function);
+        tir::Value matches;
+        if (subject_type.is_string() && !subject_type.is_owned_string()) {
+          // Text compares by content, so the runtime answers equality.
+          matches = function.allocate_value(Type::bool_type());
+          tir::Op compare;
+          compare.kind = tir::OpKind::Call;
+          compare.location = arm.label->location();
+          compare.callee = "string.equals";
+          compare.arguments = {subject, label_value};
+          compare.result = matches;
+          function.add_operation(std::move(compare));
+        } else {
+          matches = function.allocate_value(Type::bool_type());
+          tir::Op compare;
+          compare.kind = tir::OpKind::Binary;
+          compare.location = arm.label->location();
+          compare.binary_op = tir::BinaryOp::Equal;
+          compare.lhs = subject;
+          compare.rhs = label_value;
+          compare.result = matches;
+          function.add_operation(std::move(compare));
+        }
+
+        tir::Op branch;
+        branch.kind = tir::OpKind::BranchCond;
+        branch.location = arm.label->location();
+        branch.operand = matches;
+        branch.true_label = body_labels[index];
+        branch.false_label = next_label;
+        function.add_operation(std::move(branch));
+      }
+
+      // `continue` inside an arm still belongs to the loop around the switch.
+      int enclosing_continue = -1;
+      std::size_t enclosing_continue_depth = switch_cleanup_scope;
+      for (auto context = loop_stack_.rbegin(); context != loop_stack_.rend();
+           ++context) {
+        if (!context->is_loop) continue;
+        enclosing_continue = context->continue_label;
+        enclosing_continue_depth = context->deferred_scope_depth;
+        break;
+      }
+
+      for (std::size_t index = 0; index < case_count; ++index) {
+        const SwitchCase& arm = switch_stmt.cases()[index];
+        tir::Op start;
+        start.kind = tir::OpKind::Label;
+        start.label_id = body_labels[index];
+        function.add_operation(std::move(start));
+        loop_stack_.push_back(LoopContext{exit_label, enclosing_continue,
+                                          switch_cleanup_scope, /*is_loop=*/false});
+        {
+          ConditionalRegion arm_region(conditional_depth_);
+          lower_block(*arm.body, function);
+        }
+        loop_stack_.pop_back();
+        if (!block_terminated(function)) {
+          tir::Op leave;
+          leave.kind = tir::OpKind::Branch;
+          leave.label_id = exit_label;
+          function.add_operation(std::move(leave));
+        }
+      }
+      // A `continue` inside an arm unwinds to the loop, which is further out than
+      // this scope; the arm's own block already ran its cleanups on the way.
+      (void)enclosing_continue_depth;
+
+      tir::Op exit;
+      exit.kind = tir::OpKind::Label;
+      exit.label_id = exit_label;
+      function.add_operation(std::move(exit));
+      deferred_expressions_.pop_back();
+      return;
+    }
     case Stmt::Kind::Break: {
       emit_deferred_from(loop_stack_.back().deferred_scope_depth, function);
       tir::Op br;
@@ -1271,11 +1404,25 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
       return;
     }
     case Stmt::Kind::Continue: {
-      emit_deferred_from(loop_stack_.back().deferred_scope_depth, function);
+      // `continue` always targets a loop, so an enclosing `switch` is skipped: the
+      // loop's own iteration scope is what has to be unwound.
+      const LoopContext* target = nullptr;
+      for (auto context = loop_stack_.rbegin(); context != loop_stack_.rend();
+           ++context) {
+        if (!context->is_loop) continue;
+        target = &*context;
+        break;
+      }
+      if (target == nullptr) {
+        diagnostics_.error(kUnresolvedSymbol, statement.location(),
+                           "internal: 'continue' has no enclosing loop");
+        return;
+      }
+      emit_deferred_from(target->deferred_scope_depth, function);
       tir::Op br;
       br.kind = tir::OpKind::Branch;
       br.location = statement.location();
-      br.label_id = loop_stack_.back().continue_label;
+      br.label_id = target->continue_label;
       function.add_operation(std::move(br));
       return;
     }

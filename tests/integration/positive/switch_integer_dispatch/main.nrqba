@@ -1,0 +1,53 @@
+// `switch` picks one arm and runs it. An arm is a block with its own scope, and it
+// never falls through into the arm written after it, so a missing assignment in one
+// arm cannot leave the next arm's value in place.
+int function main() {
+    var total = 0;
+    for (var i = 0; i < 5; i++) {
+        var points = 0;
+        switch (i) {
+            case 0: {
+                points = 5;
+            }
+            case 1: {
+                points = 10;
+            }
+            case 3: {
+                points = 20;
+            }
+            default: {
+                points = -1;
+            }
+        }
+        total += points;
+    }
+    print(total);
+
+    // A negative label is still a constant.
+    var sign = 0 - 1;
+    switch (sign) {
+        case -1: {
+            print("minus one");
+        }
+        case 1: {
+            print("one");
+        }
+        default: {
+            print("other");
+        }
+    }
+
+    // `break` leaves the switch, not the loop around it: the loop keeps going.
+    for (var i = 0; i < 4; i++) {
+        switch (i) {
+            case 2: {
+                break;
+            }
+            default: {
+                print(i);
+            }
+        }
+    }
+    print("done");
+    return 0;
+}

@@ -1,0 +1,15 @@
+// Two arms that match the same value make the second unreachable, and nothing in
+// the program would show that: the label is a constant, so the overlap is known
+// before the program exists.
+int function main() {
+    var value = 2;
+    switch (value) {
+        case 2: {
+            print("two");
+        }
+        case 2: {
+            print("two again");
+        }
+    }
+    return 0;
+}

@@ -62,6 +62,11 @@ enum class TokenKind {
   KwFor,
   KwBreak,
   KwContinue,
+  // `switch`: multi-branch dispatch over a value. `case` labels one arm and
+  // `default` is the arm nothing else matched; no arm falls into the next.
+  KwSwitch,
+  KwCase,
+  KwDefault,
   KwStruct,
   KwModule,
   KwImport,
