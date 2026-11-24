@@ -1573,6 +1573,73 @@ void TirBuilder::lower_statement(const Stmt& statement, tir::Function& function)
   }
 }
 
+// Reads one of the four things a `Result` answers. The box is already a value, so
+// this works the same whether the program named it through a binding or wrote the
+// producing call directly in front of the dot. `unwrap` and `unwrap_err` abort
+// through the panic path when the half they want is not the live one.
+tir::Value TirBuilder::lower_result_operation(const CallExpr& call,
+                                              const tir::Value& box,
+                                              tir::Function& function) {
+  // A binding spells the operation as `name.member`; a call result spells it as
+  // the member alone, because the value is in front of the dot.
+  const std::string& callee = call.callee();
+  const std::size_t dot = callee.rfind('.');
+  const std::string member =
+      dot == std::string::npos ? callee : callee.substr(dot + 1);
+  const Type boxed = box.type;
+  const tir::Value tag = extract_field(function, call.location(), box, 0,
+                                       Type::bool_type());
+  if (member == "is_ok") return tag;
+  if (member == "is_err") {
+    tir::Value result = function.allocate_value(Type::bool_type());
+    tir::Op compare;
+    compare.kind = tir::OpKind::Binary;
+    compare.location = call.location();
+    compare.binary_op = tir::BinaryOp::Equal;
+    compare.lhs = tag;
+    compare.rhs = constant_bool(function, call.location(), false);
+    compare.result = result;
+    function.add_operation(std::move(compare));
+    return result;
+  }
+  const bool wants_ok = member == "unwrap";
+  const Type payload_type =
+      wants_ok ? boxed.result_value_type() : boxed.result_error_type();
+  const int payload_label = function.allocate_label();
+  const int abort_label = function.allocate_label();
+  tir::Op branch;
+  branch.kind = tir::OpKind::BranchCond;
+  branch.location = call.location();
+  branch.operand = tag;
+  branch.true_label = wants_ok ? payload_label : abort_label;
+  branch.false_label = wants_ok ? abort_label : payload_label;
+  function.add_operation(std::move(branch));
+
+  tir::Op abort;
+  abort.kind = tir::OpKind::Label;
+  abort.label_id = abort_label;
+  function.add_operation(std::move(abort));
+  tir::Op report;
+  report.kind = tir::OpKind::Call;
+  report.location = call.location();
+  report.callee = "panic";
+  report.arguments = {constant_text(function, call.location(),
+                                    wants_ok ? "unwrap on an Err value"
+                                             : "unwrap_err on an Ok value")};
+  function.add_operation(std::move(report));
+  tir::Op unreachable;
+  unreachable.kind = tir::OpKind::Unreachable;
+  unreachable.location = call.location();
+  function.add_operation(std::move(unreachable));
+
+  tir::Op present;
+  present.kind = tir::OpKind::Label;
+  present.label_id = payload_label;
+  function.add_operation(std::move(present));
+  return extract_field(function, call.location(), box, wants_ok ? 1 : 2,
+                       payload_type);
+}
+
 tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& function) {
   switch (expr.kind()) {
     case Expr::Kind::IntegerLiteral: {
@@ -2209,6 +2276,12 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         if (boxed.is_result() && enclosing.is_result()) {
           const tir::Value box =
               lower_expression(*call.arguments()[0], function);
+          // A binding is consumed by the propagation: the error or the payload
+          // leaves the box for the caller, so the box's own teardown stands down
+          // rather than releasing a buffer that just left.
+          if (call.arguments()[0]->kind() == Expr::Kind::Name)
+            suppress_automatic_cleanup(lookup_slot(
+                static_cast<const NameExpr&>(*call.arguments()[0]).name()));
           const tir::Value tag = extract_field(function, call.location(), box, 0,
                                                Type::bool_type());
           const int ok_label = function.allocate_label();
@@ -2274,67 +2347,27 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         const std::size_t dot = call.callee().rfind('.');
         if (dot != std::string::npos) {
           const std::string member = call.callee().substr(dot + 1);
-          const tir::Value slot =
-              lookup_slot(call.callee().substr(0, dot));
-          const tir::Value box =
-              slot.is_valid() ? load_value(function, call.location(), slot) : slot;
-          if (box.is_valid() && box.type.is_result() &&
-              (member == "is_ok" || member == "is_err" ||
-               member == "unwrap" || member == "unwrap_err")) {
-            const Type boxed = box.type;
-            const tir::Value tag = extract_field(function, call.location(), box, 0,
-                                                 Type::bool_type());
-            if (member == "is_ok") return tag;
-            if (member == "is_err") {
-              tir::Value result = function.allocate_value(Type::bool_type());
-              tir::Op compare;
-              compare.kind = tir::OpKind::Binary;
-              compare.location = call.location();
-              compare.binary_op = tir::BinaryOp::Equal;
-              compare.lhs = tag;
-              compare.rhs = constant_bool(function, call.location(), false);
-              compare.result = result;
-              function.add_operation(std::move(compare));
-              return result;
-            }
-            const bool wants_ok = member == "unwrap";
-            const Type payload_type = wants_ok ? boxed.result_value_type()
-                                               : boxed.result_error_type();
-            const int payload_label = function.allocate_label();
-            const int abort_label = function.allocate_label();
-            tir::Op branch;
-            branch.kind = tir::OpKind::BranchCond;
-            branch.location = call.location();
-            branch.operand = tag;
-            branch.true_label = wants_ok ? payload_label : abort_label;
-            branch.false_label = wants_ok ? abort_label : payload_label;
-            function.add_operation(std::move(branch));
-
-            tir::Op abort;
-            abort.kind = tir::OpKind::Label;
-            abort.label_id = abort_label;
-            function.add_operation(std::move(abort));
-            tir::Op report;
-            report.kind = tir::OpKind::Call;
-            report.location = call.location();
-            report.callee = "panic";
-            report.arguments = {constant_text(
-                function, call.location(),
-                wants_ok ? "unwrap on an Err value"
-                         : "unwrap_err on an Ok value")};
-            function.add_operation(std::move(report));
-            tir::Op unreachable;
-            unreachable.kind = tir::OpKind::Unreachable;
-            unreachable.location = call.location();
-            function.add_operation(std::move(unreachable));
-
-            tir::Op present;
-            present.kind = tir::OpKind::Label;
-            present.label_id = payload_label;
-            function.add_operation(std::move(present));
-            return extract_field(function, call.location(), box,
-                                 wants_ok ? 1 : 2, payload_type);
+          const bool inspection = member == "is_ok" || member == "is_err" ||
+                                  member == "unwrap" || member == "unwrap_err";
+          if (inspection) {
+            const tir::Value slot = lookup_slot(call.callee().substr(0, dot));
+            const tir::Value box =
+                slot.is_valid() ? load_value(function, call.location(), slot) : slot;
+            if (box.is_valid() && box.type.is_result())
+              return lower_result_operation(call, box, function);
           }
+        }
+      }
+
+      // The same four operations written after a value instead of a binding:
+      // `divide(10, 0).is_err()` inspects the Result the call just produced.
+      if (call.receiver() != nullptr && call.arguments().empty()) {
+        const std::string& member = call.callee();
+        if (member == "is_ok" || member == "is_err" || member == "unwrap" ||
+            member == "unwrap_err") {
+          const tir::Value box = lower_expression(*call.receiver(), function);
+          if (box.is_valid() && box.type.is_result())
+            return lower_result_operation(call, box, function);
         }
       }
 

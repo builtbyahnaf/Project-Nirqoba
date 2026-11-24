@@ -1517,8 +1517,19 @@ ExprPtr Parser::parse_postfix() {
             expr->location(), move(expr), "", static_cast<int>(mem_tok.integer_value));
       } else if (check(TokenKind::Identifier)) {
         advance();
-        expr = make_unique<MemberAccessExpr>(
-            expr->location(), move(expr), mem_tok.text, -1);
+        if (check(TokenKind::LParen)) {
+          // A call written after a value is an operation on that value, so the
+          // expression stays the call's receiver: `divide(1, 0).is_err()` needs no
+          // intermediate binding.
+          advance();  // '('
+          vector<ExprPtr> arguments = parse_argument_list();
+          expect(TokenKind::RParen, "to close the call");
+          expr = make_unique<CallExpr>(expr->location(), move(expr), mem_tok.text,
+                                       move(arguments));
+        } else {
+          expr = make_unique<MemberAccessExpr>(
+              expr->location(), move(expr), mem_tok.text, -1);
+        }
       } else {
         error_at(mem_tok, diag::kExpectedToken, "expected member name or tuple index after '.'");
         break;

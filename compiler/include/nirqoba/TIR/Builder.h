@@ -59,6 +59,9 @@ class TirBuilder {
   // both at scope exit and immediately before an owner slot is overwritten.
   void emit_destruction(const DeferredCall& deferred, tir::Function& function);
   tir::Value lower_expression(const Expr& expr, tir::Function& function);
+  // is_ok/is_err/unwrap/unwrap_err over an already-lowered Result box.
+  tir::Value lower_result_operation(const CallExpr& call, const tir::Value& box,
+                                    tir::Function& function);
   tir::Value resolve_lvalue_ptr(const Expr& target, tir::Function& function);
 
   // Removes an automatic cleanup once its owner is proven transferred or

@@ -227,6 +227,14 @@ class CallExpr : public Expr {
            Type generic_argument)
       : Expr(Kind::Call, std::move(location)), callee_(std::move(callee)),
         arguments_(std::move(arguments)), generic_argument_(generic_argument) {}
+  // A call written after a value - `divide(10, 2).unwrap()` - keeps that value as
+  // its receiver, so the operation reads the expression's result directly instead
+  // of requiring a binding to name it.
+  CallExpr(SourceLocation location, ExprPtr receiver, std::string member,
+           std::vector<ExprPtr> arguments)
+      : Expr(Kind::Call, std::move(location)), callee_(std::move(member)),
+        arguments_(std::move(arguments)), receiver_(std::move(receiver)) {}
+  const Expr* receiver() const { return receiver_.get(); }
   const std::string& callee() const { return callee_; }
   const std::vector<ExprPtr>& arguments() const { return arguments_; }
   bool has_generic_argument() const { return generic_argument_.is_valid(); }
@@ -263,6 +271,7 @@ class CallExpr : public Expr {
  private:
   std::string callee_;
   std::vector<ExprPtr> arguments_;
+  ExprPtr receiver_{};
   Type generic_argument_;
   std::string resolved_symbol_;
   bool external_call_ = false;

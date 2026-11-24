@@ -1,0 +1,5 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 0,
+  "expect_stdout": "5\ntrue\ntrue\ndivision by zero\n6\ntrue\ndivision by zero\n"
+}

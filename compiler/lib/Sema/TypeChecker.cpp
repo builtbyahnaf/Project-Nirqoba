@@ -5104,6 +5104,35 @@ Type TypeChecker::check_external_call(CallExpr& call,
 }
 
 Type TypeChecker::check_call(CallExpr& call) {
+  // `value.operation(...)` names an operation on the value in front of the dot.
+  // Only a `Result` has operations - the language has no methods - so the
+  // receiver's type is what decides whether the call means anything.
+  if (call.receiver() != nullptr) {
+    const Type receiver_type =
+        check_expression(const_cast<Expr&>(*call.receiver()));
+    if (!receiver_type.is_valid()) return Type::error();
+    if (receiver_type.is_result()) {
+      register_generated_struct(receiver_type);
+      const std::string& member = call.callee();
+      if (!call.arguments().empty())
+        diagnostics_.error(diag::kPrintArity, call.location(),
+                           "'" + member + "' takes no arguments");
+      if (member == "is_ok" || member == "is_err") return Type::bool_type();
+      if (member == "unwrap") return receiver_type.result_value_type();
+      if (member == "unwrap_err") return receiver_type.result_error_type();
+      diagnostics_.error(diag::kUndefinedName, call.location(),
+                         "a 'Result' answers is_ok, is_err, unwrap and "
+                         "unwrap_err, not '" + member + "'");
+      return Type::error();
+    }
+    diagnostics_.error(
+        diag::kUndefinedName, call.location(),
+        "no operation named '" + call.callee() + "' on a value of type '" +
+            receiver_type.to_string() +
+            "'; only a 'Result' can answer a call written after a value");
+    return Type::error();
+  }
+
   // `result.ok(value)` and `result.err(error)` build a Result whose T and E come
   // from where the value is going - the binding's annotation, or the enclosing
   // function's return type - so neither has to be written at the call.
@@ -5161,12 +5190,14 @@ Type TypeChecker::check_call(CallExpr& call) {
                              operand.to_string() + "'");
       return Type::error();
     }
-    if (call.arguments()[0]->kind() != Expr::Kind::Call) {
-      // A binding would have to be torn down twice - once by the early return and
-      // once here - so only a value produced in place can be propagated.
+    // A call produces its Result in place and a binding holds one the program
+    // already resolved. Both can be propagated; anything else (a field, an
+    // element) has an owner whose teardown `?` does not control.
+    if (call.arguments()[0]->kind() != Expr::Kind::Call &&
+        call.arguments()[0]->kind() != Expr::Kind::Name) {
       diagnostics_.error(diag::kTypeMismatch, call.location(),
-                         "'?' applies to a Result produced in place, so write "
-                         "'call()?' rather than propagating a binding");
+                         "'?' applies to a Result from a call or a binding; "
+                         "assign this value to a binding first");
       return operand.result_value_type();
     }
     register_generated_struct(operand);
