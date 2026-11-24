@@ -12,6 +12,40 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.690-beta
+
+### Summary of Changes (since `0.685-beta`)
+
+Release label `+0.005` (`0.685-beta` -> `0.690-beta`).
+
+#### Micro-phase 14f: increment, ternary, switch and postfix chaining
+
+- **`++` and `--` exist.** The lexer produces one token for each, so `++i` no
+  longer parses as `+(+i)` and a `for` step actually mutates its counter. Prefix
+  yields the value after the update and postfix the value before it; both write
+  through the operand's storage, so the operator requires a mutable numeric
+  variable, field, element or dereference and rejects a computed value or an
+  immutable binding with a diagnostic that names it.
+- **`cond ? a : b`.** A `bool` condition and two branches of one type. Each branch
+  is lowered in its own block and only the selected one is entered, so a call or an
+  allocation on the other side never happens. `?` still means postfix `Result`
+  propagation; the parser decides by what follows the operator and by whether a
+  pairing `:` exists before the expression can end. A branch that owns a buffer is
+  rejected: one destination cannot absorb two possible owners.
+- **`switch` runs one arm.** `switch (value) { case 1: { … } default: { … } }` over
+  an integer, `char`, `bool` or `string` subject, with content comparison for text.
+  An arm is a block, so its scope, its `defer`s and its owned values end with it and
+  nothing falls through into the next arm. Duplicate labels, a second `default` and
+  labels of a type the subject cannot be compared with are compile errors. `break`
+  leaves the switch; `continue` still targets the enclosing loop.
+- **A call result is a receiver.** `divide(10, 2).unwrap()` and
+  `divide(10, 0).is_err()` read the `Result` the call just produced, and
+  `outcome?` propagates a `Result` the program stored. Propagating a binding
+  consumes it, so the box's teardown stands down instead of releasing what left.
+- 741/741 integration, 537/537 unit.
+
+---
+
 ## Version 0.685-beta
 
 ### Summary of Changes (since `0.682-beta`)

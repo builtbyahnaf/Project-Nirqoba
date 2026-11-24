@@ -61,6 +61,8 @@ Line comments `//` and block comments `/* … */` (lexer trivia).
 | Arithmetic | `+ - * / %` | ✔ run |
 | Exponentiation | `**` (right-associative; `2 ** 10` → `1024`) | ✔ run |
 | Unary | `-x`, `+x`, `!x` (bool only), `~x` (→ `-1` for `~0`) | ✔ run |
+| Increment / decrement | `++x`, `--x`, `x++`, `x--` | ✔ run (`positive/increment_decrement`); prefix yields the updated value, postfix the previous one |
+| Conditional | `cond ? a : b` | ✔ run (`positive/ternary_conditional`); `bool` condition, one type for both branches, only the taken branch runs |
 | Address-of | `&x` | ✔ run (`bump(&x)` → `42`) |
 | Dereference | `*p`, `**pp` (nested) | ✔ run |
 | Indexing | `a[i]` | ✔ run |
@@ -78,10 +80,10 @@ Line comments `//` and block comments `/* … */` (lexer trivia).
 
 | Operator | Status | Evidence |
 |---|---|---|
-| `++` (pre/post) | **absent** | `i++;` → `NRQ2001: expected an expression, found ';'`. No `PlusPlus` token exists. |
-| `--` (pre/post) | **absent** | no `MinusMinus` token. `for` loops must spell `i += 1`. |
+| `++` (pre/post) | **present** (0.690-beta) | one `PlusPlus` token; writes through the operand's storage, so it needs a mutable numeric variable, field, element or dereference |
+| `--` (pre/post) | **present** (0.690-beta) | one `MinusMinus` token; `for (var i = n; i > 0; i--)` steps down |
 | `<<` / `>>` | **present** | tokens `LessLess`/`GreaterGreater`, `BinaryOp::ShiftLeft/ShiftRight`; verified at run time. The brief listed these as missing; they are not. |
-| Ternary `?:` | **absent** | `?` is not a lexable character: `NRQ1008: unexpected character '?'`. |
+| Ternary `?:` | **present** (0.690-beta) | `cond ? a : b`, right-associative, one branch evaluated; the parser distinguishes it from postfix `?` by the `:` that pairs with it |
 | Null-coalescing `??` | absent | same lexer error |
 | Null-safe access `?.` | absent | no token |
 | Range `..` / `...` | absent | no token |
@@ -89,7 +91,7 @@ Line comments `//` and block comments `/* … */` (lexer trivia).
 | `sizeof` | absent | no token, no parser path |
 | Comma operator | absent | `,` is a separator only |
 | Spaceship `<=>` | absent | no token |
-| String concatenation `+` | **absent** | `"hello" + " world"` → `NRQ3015: operator '+' requires numeric operands`. There is no string builder and no `concat`. |
+| String concatenation `+` | **present** (0.682-beta) | `"hello" + " world"` builds one owned buffer; `==`/`!=` compare content (see §5, B6) |
 
 ---
 
@@ -99,15 +101,15 @@ Line comments `//` and block comments `/* … */` (lexer trivia).
 |---|---|---|
 | `if` / `else if` / `else` | ✔ run | `parse_if`, `Parser.cpp:1008` |
 | `while` | ✔ run | all stress-test code |
-| `for (init; cond; step)` | ✔ run | `for (var i = 0; i < 10; i += 1)` → `31` after `continue`/`break` |
+| `for (init; cond; step)` | ✔ run | `for (var i = 0; i < 10; i++)` → `31` after `continue`/`break` |
 | `break` / `continue` | ✔ run | same probe |
 | Early `return`, bare `return;` in `void` | ✔ run | used throughout |
 | `defer <call>;` | ✔ run | runs at scope exit: printed `body` then `outer` |
 | Block statements, nested scopes | ✔ run | |
 | Destructuring `var (a, b) = (1, 2);` | ✔ run | → `3` |
 | `@Nullable` annotation on a declaration | ✔ run | pointers and scalars both, see §5.6 |
-| `value?` propagation | ✔ run | `positive/result_propagation_nested`, see §5.7 |
-| `switch` / `case` | **absent** | `switch (x) { case 1: … }` → parse errors (`expected ';' after the expression, found '{'`) |
+| `value?` propagation | ✔ run | on a call and on a binding, see §5.7 |
+| `switch (x) { case 1: { … } default: { … } }` | ✔ run (0.690-beta) | integer, `char`, `bool` and `string` subjects; one arm runs, each arm is its own scope, no fall-through, `break` leaves the switch (`positive/switch_*`) |
 | `match` / pattern matching | **absent** | not a keyword |
 | `do … while` | **absent** | `do { … } while (…)` → `expected '}' to close struct initializer` |
 | `loop { }` | absent | not a keyword |
@@ -262,18 +264,19 @@ if (bad.is_err()) {
 - `result.ok(value)` and `result.err(error)` take `T` and `E` from the destination —
 the binding's annotated type, or the enclosing function's return type — so the
 constructors never spell them.
-- `is_ok()`, `is_err()`, `unwrap()`, `unwrap_err()` are read on a binding. `unwrap`
-on an `Err` and `unwrap_err` on an `Ok` are program bugs: they print through the
-panic path and exit 70.
+- `is_ok()`, `is_err()`, `unwrap()`, `unwrap_err()` are read on a binding or
+directly on the call that produced the value: `divide(10, 2).unwrap()` needs no
+intermediate name. `unwrap` on an `Err` and `unwrap_err` on an `Ok` are program
+bugs: they print through the panic path and exit 70.
 - `value?` continues with the payload, or returns the error from the enclosing
 function, which must return a `Result` whose error type matches. Everything the
 frame owns — deferred calls, automatic releases, CDMM region exits — runs first, in
-the same LIFO order a `return` produces. `?` applies to a value produced in place
-(`call()?`), not to a binding.
+the same LIFO order a `return` produces. `?` applies to a call (`call()?`) or to a
+`Result` binding (`outcome?`); a binding is consumed by the propagation, so the
+payload or error leaves the box and the box's own teardown stands down.
 
-Not implemented: methods on a call result (`divide(1, 0).unwrap()`), conversion
-between error types, and a standard library whose fallible operations return
-`Result`.
+Not implemented: conversion between error types, and a standard library whose
+fallible operations return `Result`.
 
 ---
 
@@ -359,13 +362,14 @@ symbols) provides:
 
 ## 8. Error handling
 
-There is **no user-facing error mechanism** in the language:
+There is no exception mechanism; failure is a value or a deliberate abort.
 
 | Mechanism | Status |
 |---|---|
-| Exceptions (`try`/`catch`/`throw`) | absent |
-| `Result`/`Option` types | absent |
-| `panic()` / `abort()` / `assert()` builtins | absent |
+| Exceptions (`try`/`catch`/`throw`) | absent by design |
+| `Result<T, E>` | value type with `?`, see §5.7 |
+| `panic(message)` / `assert(cond[, message])` | ✔ run (0.685-beta): message on stderr, exit 70 |
+| `Option<T>` | absent; `@Nullable` covers absence, see §5.6 |
 | `unreachable()` | absent (the string `"unreachable"` exists only in internal TIR lowering) |
 | Process exit | `system.exit(code)` ✔ code |
 | Runtime fatal | `nrq_runtime_fatal` → exit `70`, not reachable from source |
@@ -373,14 +377,17 @@ There is **no user-facing error mechanism** in the language:
 
 Observed consequences worth stating plainly:
 
-1. Calling `file.free_text` on a borrowed `file.read_text` result compiles and
-   then aborts the process with exit `70` — the ownership rule is enforced at run
-   time by the fatal, not at compile time.
-2. `file.write_text` + `file.read_text` + `print` works (exit 0). The same program
-   with an added `file.free_text(text)` prints the text, then dies with exit `70`.
+1. Calling `file.free_text` on a borrowed `file.read_text` result is a compile
+error as of `0.685-beta` (`NRQ3015`): the ownership rule is enforced before the
+program exists rather than by the runtime's fatal path.
+2. `file.write_text` + `file.read_text` + `print` works (exit 0), and the same
+program with an added `file.free_text(text)` is rejected at compile time because
+the text is borrowed.
 
-A language with no exceptions, no `Result` and no panic leaves I/O error handling
-entirely to sentinel values and process death. This is a Version 1.0 blocker.
+Error handling exists; what is left is breadth. `Result` covers the callee's
+choices, and `panic`/`assert` cover the states a program cannot continue from. The
+standard library still reports I/O failure through sentinels, so every caller has
+to wrap it before the language's own error channel can carry it.
 
 ---
 
@@ -401,9 +408,9 @@ entirely to sentinel values and process death. This is a Version 1.0 blocker.
 | K | `extern int function puts(ptr byte text);` called with a string | `argument 1 … must be of type 'u8*', not 'string'` |
 | L | `"x" as string_owned` | `cannot cast value of type 'string' to 'string_owned'` |
 | M–O | `extern int function abs(int)` called with a literal / a variable / `i32` | `llvm.call operand type mismatch 'i64' != 'f64'` for all three |
-| — | `i++` | `NRQ2001: expected an expression, found ';'` |
-| — | `switch` | parse error |
-| — | `x > 0 ? 5 : 6` | `NRQ1008: unexpected character '?'` |
+| — | `i++`, `++i`, `--i` | `0`, `1`, `2`, exit 0 since `0.690-beta` |
+| — | `switch (2) { case 1: … case 2: … default: … }` | `two`, exit 0 since `0.690-beta` |
+| — | `x > 0 ? 5 : 6` | `5`, exit 0 since `0.690-beta` |
 | — | `do { } while (…)` | parse error |
 | — | `"hello" + " world"` | `NRQ3015: operator '+' requires numeric operands` |
 
@@ -414,7 +421,7 @@ entirely to sentinel values and process death. This is a Version 1.0 blocker.
 Ordered by how much they cost a real program, not by how hard they are. Where a
 release closed the release-blocking part of an entry, the closure is recorded inline
 (`0.675-beta`: B2 scalar half, B10; `0.680-beta`: B2 text half, B3;
-`0.682-beta`: B6, B7, B9; `0.685-beta`: B1, B8).
+`0.682-beta`: B6, B7, B9; `0.685-beta`: B1, B8; `0.690-beta`: B4, B5).
 
 **B1 — Error handling exists.** *Closed in `0.685-beta`.* `Result<T, E>` is a stack
 value — `{tag, value, error}`, the half that is not live always zero-filled, so it
@@ -427,8 +434,8 @@ automatic releases and CDMM region exits run in LIFO order first, which
 owned array that both reach live count zero on the error path. `panic(message)` and
 `assert(cond[, message])` abort through the runtime's fatal path on stderr with exit
 70. What remains is breadth: no error interface or `?` conversion between error
-types, `?` propagates a value produced in place rather than a binding, and the
-standard library does not yet return `Result` from the operations that can fail.
+types, and the standard library does not yet return `Result` from the operations
+that can fail.
 
 **B2 — FFI cannot take a struct by value.** *The scalar half closed in
 `0.675-beta` (a declared function outranks a same-named math builtin, and a `string`
@@ -453,13 +460,25 @@ field walk instead of the recursive drop; and a `shared ptr` cycle is refcounted
 collectable — the collector reclaims a cycle of `managed` references, while a shared
 one stays alive until its count is broken.
 
-**B4 — No `++`/`--`, no ternary, no `?:`.** `for` loops must spell `i += 1`; the
-one-line conditional must become a five-line `if`. These are the constructs a
-competent programmer reaches for in the first ten minutes, and the brief's example
-of a missing feature is real.
+**B4 — Increment, decrement and a one-line conditional.** *Closed in `0.690-beta`.*
+`++` and `--` are one token each and write through their operand's storage, so
+`for (var i = 0; i < n; i++)` steps a counter, `++i` yields the updated value and
+`i++` the value before it. A computed value or an immutable binding is rejected at
+the operator rather than lowered into a store that cannot happen. `cond ? a : b` is
+an expression: the condition must be `bool`, both branches must have one type, and
+each branch is its own block, so the branch not taken never runs its calls or
+allocations. `?` keeps its second meaning - postfix `Result` propagation - and the
+parser tells the two apart by their surroundings. What remains is the rest of the
+operator surface: no `??`, `?.`, ranges or `sizeof`.
 
-**B5 — No `switch`/`match`.** Only `if`/`else if` chains. No exhaustiveness
-checking, no destructuring in patterns.
+**B5 — `switch`.** *Closed in `0.690-beta`.* `switch (value) { case 1: { … }
+default: { … } }` selects on an integer, `char`, `bool` or `string` value and runs
+exactly one arm. An arm is a brace-delimited scope of its own, so its bindings, its
+`defer`s and its owned values are released when that arm is left, and no arm falls
+through into the next one. A repeated label, a second `default`, or a label of a
+type the subject cannot be compared with is a compile error; `break` leaves the
+switch, while `continue` still belongs to the loop around it. `match` and pattern
+matching remain absent, as does exhaustiveness checking.
 
 **B6 — String handling is thin but usable.** *The dead end closed in
 `0.682-beta`: `+` concatenates any pair of string values into an owned buffer,
