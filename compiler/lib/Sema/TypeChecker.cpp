@@ -1136,6 +1136,9 @@ bool TypeChecker::reject_move_after_defer(const Symbol& source,
 void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaration) {
   const Type initializer_type =
       check_expression(const_cast<Expr&>(declaration.initializer()));
+  // A binding of C text borrows a buffer the foreign function owns; it registers
+  // no release, so the symbol must not be treated as the buffer's owner.
+  bool foreign_c_string_binding = false;
   if (declaration.initializer().kind() == Expr::Kind::Name)
     record_parameter_use(declaration.initializer(),
                          BorrowEffectRead | BorrowEffectAlias);
@@ -1154,10 +1157,36 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
       const_cast<Expr&>(declaration.initializer()).set_type(annotation);
     } else if (annotation.is_valid() && initializer_type.is_valid() &&
         annotation != initializer_type) {
-      diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
-                         "cannot initialize '" + declaration.name() + "' of type '" +
-                             annotation.to_string() + "' with a value of type '" +
-                             initializer_type.to_string() + "'");
+      // A C function returning `char*` hands back a NUL-terminated buffer this
+      // language did not allocate. Reading it as a `string` borrows the text: the
+      // bytes are already the representation a string uses, so nothing is copied,
+      // nothing is freed, and the binding lives as long as C keeps the pointer
+      // valid. The alternative - owning it - would free memory it never allocated.
+      const bool foreign_c_string = [&] {
+        if (!annotation.is_string() || annotation.is_owned_string()) return false;
+        if (!initializer_type.is_pointer()) return false;
+        const Type element = initializer_type.element_type();
+        if (!((element.is_integer() && element.bit_width() == 8) ||
+              element.is_char())) return false;
+        if (declaration.initializer().kind() != Expr::Kind::Call) return false;
+        const auto& call =
+            static_cast<const CallExpr&>(declaration.initializer());
+        const FunctionSignature* signature = find_function(call.callee());
+        return signature != nullptr && signature->is_external;
+      }();
+      if (foreign_c_string) {
+        const_cast<Expr&>(declaration.initializer()).set_type(annotation);
+        // The value is a view of someone else's buffer, and the ownership travels
+        // with it so no stage downstream registers a release.
+        const_cast<Expr&>(declaration.initializer())
+            .set_ownership(ValueOwnership::Borrowed);
+        foreign_c_string_binding = true;
+      } else {
+        diagnostics_.error(diag::kTypeMismatch, declaration.initializer().location(),
+                           "cannot initialize '" + declaration.name() + "' of type '" +
+                               annotation.to_string() + "' with a value of type '" +
+                               initializer_type.to_string() + "'");
+      }
     }
     binding_type = annotation;
   }
@@ -1176,6 +1205,12 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
 
   Symbol symbol{declaration.name(), binding_type, declaration.binding(),
                 declaration.location()};
+  if (foreign_c_string_binding) {
+    symbol.borrowed = true;
+    symbol.owns_allocation = false;
+    symbol.cleanup_callee.clear();
+    symbol.explicit_borrow = true;
+  }
   symbol.nullable = declaration.is_nullable();
   symbol.definitely_null = is_null_pointer_literal(declaration.initializer());
   if ((binding_type.is_owned_array() || contains_owned_array(binding_type)) &&

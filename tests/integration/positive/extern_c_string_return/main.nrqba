@@ -1,0 +1,15 @@
+// A C function that returns a byte pointer gives Nirqoba a readable string.
+//
+// `strchr` answers with a pointer *into* the buffer it was given - storage this
+// language did not allocate and must not free. Binding the result as a `string`
+// borrows those bytes: the termination and the representation are the same thing a
+// string already is, so nothing is copied and no release is registered.
+extern ptr u8 function strchr(ptr byte text, int ch);
+
+int function main() {
+    var start: string = strchr("nirqoba", 113);
+    print(start);
+    var missing: ptr u8 = strchr("nirqoba", 122);
+    print(missing == nullptr);
+    return 0;
+}
