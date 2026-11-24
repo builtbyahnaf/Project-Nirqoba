@@ -1421,6 +1421,24 @@ ExprPtr Parser::parse_primary() {
       return make_unique<BoolLiteralExpr>(token.location, false);
     case TokenKind::LBracket:
       return parse_array_literal();
+    case TokenKind::KwString: {
+      // `string` is a type keyword, so `string.from_int(1)` cannot reach the
+      // identifier path. A qualified call is unambiguous - no string value has a
+      // member that is called with this spelling - so it names a text builtin.
+      if (peek(1).kind == TokenKind::Dot &&
+          peek(2).kind == TokenKind::Identifier &&
+          peek(3).kind == TokenKind::LParen) {
+        advance();  // 'string'
+        advance();  // '.'
+        const Token member = advance();
+        advance();  // '('
+        vector<ExprPtr> arguments = parse_argument_list();
+        expect(TokenKind::RParen, "to close the qualified call");
+        return make_unique<CallExpr>(token.location, "string." + member.text,
+                                     move(arguments));
+      }
+      break;
+    }
     case TokenKind::KwPrint: {
       advance();
       expect(TokenKind::LParen, "after 'print'");

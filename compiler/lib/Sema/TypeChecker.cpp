@@ -291,7 +291,9 @@ static bool expression_creates_owned_pointer(const Expr& expr) {
          callee == "memory.shared_retain" || callee == "mutex.create" ||
          callee == "memory.owned_array" ||
          callee == "memory.owned_soa" ||
-         callee == "memory.owned_array_aligned" || callee == "socket.connect";
+         callee == "memory.owned_array_aligned" || callee == "socket.connect" ||
+         callee == "string.concat" || callee == "string.slice" ||
+         callee == "string.from_int" || callee == "string.from_float";
 }
 
 static std::string cleanup_for_owner_producer(const std::string& callee,
@@ -310,6 +312,11 @@ static std::string cleanup_for_owner_producer(const std::string& callee,
     return "memory.deallocate";
   if (callee == "mutex.create") return "mutex.destroy";
   if (callee == "socket.connect") return "socket.close";
+  // The text constructors hand the language a fresh buffer for the same release
+  // the owned reader uses, so they are producers of owned text like it is.
+  if (callee == "string.concat" || callee == "string.slice" ||
+      callee == "string.from_int" || callee == "string.from_float")
+    return "file.free_text";
   if (callee == "memory.owned_array" ||
       callee == "memory.owned_array_aligned") return "array.owned_release";
   if (callee == "memory.owned_soa") return "soa.owned_release";
@@ -1273,6 +1280,14 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
     // A dynamic array value is created empty or moved in; either way the binding
     // is the container's owner, so it installs the array destructor.
     if (binding_type.is_dynamic_array() &&
+        declaration.initializer().ownership() == ValueOwnership::Owned) {
+      symbol.owns_allocation = true;
+      symbol.cleanup_callee = cleanup_for_type(binding_type);
+    }
+    // An owned string binding releases the buffer it was given, whether that
+    // buffer came from a call or from concatenating two strings: the expression
+    // marked itself owned, so this scope's exit is the release point.
+    if (binding_type.is_owned_string() &&
         declaration.initializer().ownership() == ValueOwnership::Owned) {
       symbol.owns_allocation = true;
       symbol.cleanup_callee = cleanup_for_type(binding_type);
@@ -3501,6 +3516,9 @@ Type TypeChecker::check_expression(Expr& expr) {
     }
     case Expr::Kind::Call:
       type = check_call(static_cast<CallExpr&>(expr));
+      // A call that produces an owned string produces a buffer, exactly like one
+      // that produces a pointer: the value is owned whatever the callee was.
+      if (type.is_owned_string()) expr.set_ownership(ValueOwnership::Owned);
       if (type.is_pointer()) {
         auto& call = static_cast<CallExpr&>(expr);
         const FunctionSignature* signature = find_function(call.callee());
@@ -3725,6 +3743,20 @@ Type TypeChecker::check_expression(Expr& expr) {
         case BinaryOp::Multiply:
         case BinaryOp::Divide:
         case BinaryOp::Exponentiate:
+          // `+` on strings concatenates. The result is a fresh buffer, so it is
+          // owned: nothing else can be responsible for releasing it, and both
+          // string kinds mix freely because the bytes are what matter.
+          if (lhs_type.is_string() && rhs_type.is_string()) {
+            if (binary.op() != BinaryOp::Add) {
+              diagnostics_.error(diag::kTypeMismatch, binary.location(),
+                                 "operator '" + spelling + "' is not defined for strings");
+              type = Type::error();
+            } else {
+              type = Type::owned_string_type();
+              expr.set_ownership(ValueOwnership::Owned);
+            }
+            break;
+          }
           if (!lhs_type.is_numeric() || !rhs_type.is_numeric()) {
             diagnostics_.error(diag::kTypeMismatch, binary.location(),
                                "operator '" + spelling + "' requires numeric operands, found '" +
@@ -3777,6 +3809,12 @@ Type TypeChecker::check_expression(Expr& expr) {
               const_cast<Expr&>(binary.lhs()).set_type(other);
             else
               const_cast<Expr&>(binary.rhs()).set_type(other);
+            type = Type::bool_type();
+            break;
+          }
+          // Text compares by content, never by address, and the two string
+          // kinds compare with each other because both name byte buffers.
+          if (lhs_type.is_string() && rhs_type.is_string()) {
             type = Type::bool_type();
             break;
           }
@@ -5304,6 +5342,71 @@ Type TypeChecker::check_call(CallExpr& call) {
                          "'length' requires a string or array argument, not '" + arg_type.to_string() + "'");
     }
     return Type::int_type();
+  }
+
+  // Text building and parsing. `string` is a type keyword, so these reach the
+  // checker through the qualified-call form (`string.from_int(42)`) rather than
+  // through the members of a value. Every producer returns an owned buffer; the
+  // parsers are total and answer 0 for text that holds no number.
+  if (call.callee() == "string.from_int" || call.callee() == "string.from_float") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "' takes exactly one value to format");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::owned_string_type();
+    }
+    const Type value_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (value_type.is_valid() && !value_type.is_numeric() &&
+        !value_type.is_char()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'" + call.callee() + "' requires a numeric value, not '" +
+                             value_type.to_string() + "'");
+    }
+    return Type::owned_string_type();
+  }
+  if (call.callee() == "string.to_int" || call.callee() == "string.to_float") {
+    const Type parsed_type = call.callee() == "string.to_int"
+                                 ? Type::int_type()
+                                 : Type::f64_type();
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "' takes exactly one string to parse");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return parsed_type;
+    }
+    const Type text_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (text_type.is_valid() && !text_type.is_string()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'" + call.callee() + "' requires a string, not '" +
+                             text_type.to_string() + "'");
+    }
+    return parsed_type;
+  }
+  if (call.callee() == "string.slice") {
+    if (call.arguments().size() != 3) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'string.slice' takes a string and the start and end offsets");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::owned_string_type();
+    }
+    const Type text_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    const Type start_type = check_expression(const_cast<Expr&>(*call.arguments()[1]));
+    const Type end_type = check_expression(const_cast<Expr&>(*call.arguments()[2]));
+    if (text_type.is_valid() && !text_type.is_string()) {
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[0]->location(),
+                         "'string.slice' requires a string, not '" +
+                             text_type.to_string() + "'");
+    }
+    if (start_type.is_valid() && !start_type.is_integer())
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[1]->location(),
+                         "'string.slice' start offset must be an integer");
+    if (end_type.is_valid() && !end_type.is_integer())
+      diagnostics_.error(diag::kTypeMismatch, call.arguments()[2]->location(),
+                         "'string.slice' end offset must be an integer");
+    return Type::owned_string_type();
   }
 
   // Namespaced GC API from Phase 6.5. Statistics are a value with named

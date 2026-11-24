@@ -1,0 +1,5 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 0,
+  "expect_stdout": "abcdef\n6\nabc def!\n8\nabc|def\n2\n6\n6\n6\n2\n"
+}

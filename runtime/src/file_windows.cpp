@@ -191,6 +191,16 @@ char* nrq_file_read_text_owned(const char* path) {
     return read_owned_text(path);
 }
 
+char* nrq_owned_text_allocate(int64_t bytes) {
+    if (bytes <= 0) return nullptr;
+    char* buffer = static_cast<char*>(
+        nrq_memory_allocate(static_cast<size_t>(bytes), 1));
+    if (!buffer) return nullptr;
+    live_owned_texts.fetch_add(1, std::memory_order_relaxed);
+    buffer[0] = '\0';
+    return buffer;
+}
+
 void nrq_file_text_release(char* text) {
     if (!text) return;
     nrq_memory_deallocate_checked(text);

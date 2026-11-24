@@ -136,6 +136,26 @@ tir::CastKind determine_cast_kind(Type src, Type dst) {
   return tir::CastKind::Trunc;
 }
 
+// True when an expression builds a string buffer of its own rather than naming
+// one: a nested concatenation or a text constructor. Such a value has no binding
+// to release it, so whichever expression consumes it releases it.
+bool builds_owned_text_temporary(const Expr& expression) {
+  return expression.type().is_owned_string() &&
+         (expression.kind() == Expr::Kind::Binary ||
+          expression.kind() == Expr::Kind::Call);
+}
+
+// Hands an owned text buffer back once its last reader is done with it.
+void emit_owned_text_release(tir::Function& function, SourceLocation location,
+                             const tir::Value& value) {
+  tir::Op release;
+  release.kind = tir::OpKind::Call;
+  release.location = location;
+  release.callee = "file.free_text";
+  release.arguments = {value};
+  function.add_operation(std::move(release));
+}
+
 }  // namespace
 
 unique_ptr<tir::Module> TirBuilder::lower(const Program& program) {
@@ -1598,6 +1618,46 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         return final_val;
       }
 
+      // Text is a byte buffer, so no operator on it is an arithmetic instruction:
+      // `+` builds a concatenated buffer and `==`/`!=` compare content. Both are
+      // runtime calls, and the call carries the freshness of the result.
+      if (binary.lhs().type().is_string() && binary.rhs().type().is_string() &&
+          (binary.op() == BinaryOp::Add || binary.op() == BinaryOp::Equal ||
+           binary.op() == BinaryOp::NotEqual)) {
+        // An operand that builds its own buffer - a nested concatenation or a
+        // constructor call - has no binding to release it, so this operation, the
+        // only consumer it has, releases it once the bytes are copied. Without
+        // that, `a + b + c` would leave the `a + b` buffer live forever.
+        const bool release_left = builds_owned_text_temporary(binary.lhs());
+        const bool release_right = builds_owned_text_temporary(binary.rhs());
+        const tir::Value left = lower_expression(binary.lhs(), function);
+        const tir::Value right = lower_expression(binary.rhs(), function);
+        const bool joins = binary.op() == BinaryOp::Add;
+        tir::Value result = function.allocate_value(
+            binary.type().is_valid() ? binary.type() : Type::owned_string_type());
+        tir::Op call;
+        call.kind = tir::OpKind::Call;
+        call.location = binary.location();
+        call.callee = joins ? "string.concat" : "string.equals";
+        call.arguments = {left, right};
+        call.result = result;
+        function.add_operation(std::move(call));
+        if (release_left) emit_owned_text_release(function, binary.location(), left);
+        if (release_right) emit_owned_text_release(function, binary.location(), right);
+        if (joins) return result;
+        if (binary.op() == BinaryOp::Equal) return result;
+        // The runtime answers equality, so the negated form is a second op over
+        // the same call rather than a second entry point.
+        tir::Op negate;
+        negate.kind = tir::OpKind::Unary;
+        negate.location = binary.location();
+        negate.unary_op = tir::UnaryOp::LogicalNot;
+        negate.operand = result;
+        negate.result = function.allocate_value(Type::bool_type());
+        function.add_operation(std::move(negate));
+        return negate.result;
+      }
+
       const tir::Value lhs = lower_expression(binary.lhs(), function);
       const tir::Value rhs = lower_expression(binary.rhs(), function);
       tir::BinaryOp op_kind = map_binary_op(binary.op());
@@ -1634,6 +1694,10 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         op.location = call.location();
         op.operand = arg_val;
         function.add_operation(std::move(op));
+        // The stream only reads the bytes, so a buffer the argument built itself
+        // is released here rather than left to no one.
+        if (builds_owned_text_temporary(argument))
+          emit_owned_text_release(function, call.location(), arg_val);
         return tir::Value{};
       }
 
@@ -1742,6 +1806,8 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         length.operand = arg_vals.front();
         length.result = result;
         function.add_operation(std::move(length));
+        if (builds_owned_text_temporary(*call.arguments().front()))
+          emit_owned_text_release(function, call.location(), arg_vals.front());
         return result;
       }
 
@@ -1749,6 +1815,16 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
       if (call.type().is_valid() && !call.type().is_void()) {
         result = function.allocate_value(call.type(), call.ownership(),
                                         call.arena_id(), call.arena_kind());
+      }
+
+      // A buffer an argument built for this call is borrowed by the callee for
+      // the duration of the call, so the caller still owns it and releases it
+      // afterwards - an argument is never the callee's destruction duty.
+      std::vector<tir::Value> released_arguments;
+      for (std::size_t index = 0;
+           index < call.arguments().size() && index < arg_vals.size(); ++index) {
+        if (builds_owned_text_temporary(*call.arguments()[index]))
+          released_arguments.push_back(arg_vals[index]);
       }
 
       tir::Op op;
@@ -1764,6 +1840,8 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         op.external_parameter_types = call.external_parameter_types();
       }
       function.add_operation(std::move(op));
+      for (const tir::Value& temporary : released_arguments)
+        emit_owned_text_release(function, call.location(), temporary);
       return result;
     }
     case Expr::Kind::ArrayLiteral: {
@@ -1879,6 +1957,25 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         index.result = element;
         function.add_operation(std::move(index));
         return element;
+      }
+
+      // A string is a byte buffer, and its `char` element is a 32-bit code unit,
+      // so indexing it cannot be a load of the element type: that would read four
+      // bytes where one was meant. The runtime reads the single byte and widens
+      // it, which also gives an out-of-range index a defined answer.
+      if (base_type.is_string()) {
+        const tir::Value text = lower_expression(base_expr, function);
+        const tir::Value position = lower_expression(idx_expr.index(), function);
+        tir::Value byte = function.allocate_value(
+            result_type.is_valid() ? result_type : Type::char_type());
+        tir::Op read;
+        read.kind = tir::OpKind::Call;
+        read.location = idx_expr.location();
+        read.callee = "string.byte_at";
+        read.arguments = {text, position};
+        read.result = byte;
+        function.add_operation(std::move(read));
+        return byte;
       }
 
       // A fixed array lives in storage, so it is indexed through its address.

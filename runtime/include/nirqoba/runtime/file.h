@@ -27,6 +27,12 @@ void nrq_file_text_release(char* text);
 // Buffers currently owned by the language. Exists so a leak can be asserted in a
 // test instead of inferred from a working-set number.
 int32_t nrq_file_text_live_count(void);
+// Allocates `bytes` bytes of owned text from the deterministic allocator and
+// counts it as live owned text, so the count above covers every buffer the
+// language can be given, not only the ones a file read produced. The string
+// operations build their results here and hand them out as `string_owned`; the
+// matching release is nrq_file_text_release, exactly like a read buffer.
+char* nrq_owned_text_allocate(int64_t bytes);
 
 // Writes text to path, creating or overwriting it. Returns 0 on success, or Win32 error code.
 int32_t nrq_file_write_text(const char* path, const char* text);

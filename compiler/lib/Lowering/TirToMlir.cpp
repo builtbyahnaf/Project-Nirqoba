@@ -1097,6 +1097,11 @@ static bool callee_is_collection_free(llvm::StringRef callee) {
       "nrq_ffi_free",
       "memory.dynamic_array", "memory.array_live_count",
       "memory.array_append",
+      // The text operations allocate from the deterministic allocator, never the
+      // managed heap, so a concatenation in a loop is not a collection point.
+      "string.concat", "string.equals", "string.slice", "string.byte_at",
+      "string.from_int",
+      "string.from_float", "string.to_int", "string.to_float",
       "aggregate.owned_drop", "file.open", "file.close", "file.write",
       "file.read", "file.read_text", "file.read_text_owned",
       "file.free_text", "file.text_live_count", "file.write_text",
@@ -6667,6 +6672,42 @@ class FunctionTranslator {
           runtime_sym = "nrq_file_text_live_count";
           runtime_ret_ty = builder_.getI32Type();
           runtime_arg_tys = {};
+        } else if (callee == "string.concat") {
+          // A concatenation hands back a buffer this program owns, so it is the
+          // runtime's owned-text producer and the compiler's release for it.
+          runtime_sym = "nrq_string_concat";
+          runtime_ret_ty = llvm_ptr_type(ctx_);
+          runtime_arg_tys = {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)};
+        } else if (callee == "string.equals") {
+          runtime_sym = "nrq_string_equals";
+          runtime_ret_ty = builder_.getI32Type();
+          runtime_arg_tys = {llvm_ptr_type(ctx_), llvm_ptr_type(ctx_)};
+        } else if (callee == "string.byte_at") {
+          // One byte wide, widened to the language's `char` code unit.
+          runtime_sym = "nrq_string_byte_at";
+          runtime_ret_ty = builder_.getI32Type();
+          runtime_arg_tys = {llvm_ptr_type(ctx_), builder_.getI64Type()};
+        } else if (callee == "string.slice") {
+          runtime_sym = "nrq_string_slice";
+          runtime_ret_ty = llvm_ptr_type(ctx_);
+          runtime_arg_tys = {llvm_ptr_type(ctx_), builder_.getI64Type(),
+                             builder_.getI64Type()};
+        } else if (callee == "string.from_int") {
+          runtime_sym = "nrq_string_from_int";
+          runtime_ret_ty = llvm_ptr_type(ctx_);
+          runtime_arg_tys = {builder_.getI64Type()};
+        } else if (callee == "string.from_float") {
+          runtime_sym = "nrq_string_from_float";
+          runtime_ret_ty = llvm_ptr_type(ctx_);
+          runtime_arg_tys = {builder_.getF64Type()};
+        } else if (callee == "string.to_int") {
+          runtime_sym = "nrq_string_to_int";
+          runtime_ret_ty = builder_.getI64Type();
+          runtime_arg_tys = {llvm_ptr_type(ctx_)};
+        } else if (callee == "string.to_float") {
+          runtime_sym = "nrq_string_to_float";
+          runtime_ret_ty = builder_.getF64Type();
+          runtime_arg_tys = {llvm_ptr_type(ctx_)};
         } else if (callee == "memory.array_live_count") {
           runtime_sym = "nrq_array_live_count";
           runtime_ret_ty = builder_.getI32Type();

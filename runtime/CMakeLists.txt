@@ -51,6 +51,7 @@ set(NIRQOBA_RUNTIME_SOURCES
   src/runtime_abi.cpp
   src/math.cpp
   src/file_windows.cpp
+  src/string_windows.cpp
   src/array.cpp
   src/ffi.cpp
   src/sync_windows.cpp

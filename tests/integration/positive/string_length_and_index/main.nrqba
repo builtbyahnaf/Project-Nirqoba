@@ -1,0 +1,20 @@
+// A string is a byte buffer with a length word's worth of meaning, not an
+// aggregate: `.length` asks the runtime how many bytes precede the terminator and
+// `s[i]` reads one byte and widens it to the language's `char`.
+//
+// The owned kind reads the same way, because ownership is about who releases the
+// buffer and never about how it is indexed.
+int function main() {
+    var text = "hello";
+    print(text.length);
+    print(text[0]);
+    print(text[4]);
+    print(text[1] == 'e');
+    print(text[text.length - 1]);
+    var owned: string_owned = string.from_int(1234);
+    print(owned.length);
+    print(owned[0]);
+    print(owned[owned.length - 1]);
+    print(file.text_live_count());
+    return 0;
+}

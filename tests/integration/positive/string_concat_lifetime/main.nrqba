@@ -1,0 +1,30 @@
+// `+` on text builds a new owned buffer. Three lifetimes are at stake, and the
+// live count after each one is what proves them:
+//
+//   * `a + b` bound to a name lives until its scope ends;
+//   * `a + b + c` produces an intermediate that no name holds, so the outer
+//     concatenation releases it once the bytes are copied;
+//   * a concatenation passed straight to `print` is released after the write.
+//
+// The loop is the regression: before the intermediate was released, every
+// iteration leaked one buffer and the count grew with the trip count.
+int function main() {
+    var first = "abc";
+    var second = "def";
+    var joined = first + second;
+    print(joined);
+    print(joined.length);
+    var chained = first + " " + second + "!";
+    print(chained);
+    print(chained.length);
+    print(first + "|" + second);
+    print(file.text_live_count());
+    var trip = 0;
+    while (trip < 3) {
+        var scratch = first + second;
+        print(scratch.length);
+        trip += 1;
+    }
+    print(file.text_live_count());
+    return 0;
+}

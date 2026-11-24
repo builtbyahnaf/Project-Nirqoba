@@ -1,0 +1,21 @@
+// `==` and `!=` on text compare bytes, not addresses. Two literals that happen to
+// be the same buffer would pass an address comparison by accident, so the decisive
+// case here is a concatenation compared with a literal: `"ab" + "c"` is a fresh
+// buffer on the heap and still equals "abc".
+//
+// The owned kind compares against the borrowed one: both name byte sequences, and
+// ownership is a lifetime question rather than a value question.
+int function main() {
+    var left = "abc";
+    var right = "abc";
+    print(left == right);
+    print(left != right);
+    var joined = "ab" + "c";
+    print(joined == left);
+    print(joined != right);
+    print(left == "abd");
+    var owned: string_owned = string.from_int(7);
+    print(owned == "7");
+    print(owned != left);
+    return 0;
+}
