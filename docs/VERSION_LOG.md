@@ -12,6 +12,45 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.685-beta
+
+### Summary of Changes (since `0.682-beta`)
+
+Release label `+0.003` (`0.682-beta` -> `0.685-beta`).
+
+#### Micro-phase 14e: error handling, panic/assert and two safety rails
+
+- **`panic` and `assert` are language constructs.** `panic(message)` and
+  `assert(condition)` / `assert(condition, message)` end the process through the
+  runtime's fatal path: `panic: <message>` or `assertion failed: <message>` on
+  stderr, exit 70. `assert` lowers as control flow, so the passing case is one
+  branch and no call. The driver grew the other half of the contract: a launched
+  program's stderr now travels on its own pipe, drained by a reader thread, so the
+  message reaches the terminal (and a test) instead of dying in a shared buffer;
+  six existing fixtures were re-expectationed from stdout to stderr because their
+  messages finally went where they belong.
+- **`Result<T, E>` with `?` propagation.** A stack value of `{tag, value, error}` -
+  no allocation, both halves always initialized - built by `result.ok(v)` /
+  `result.err(e)` with `T` and `E` taken from the destination, read by `is_ok`,
+  `is_err`, `unwrap` and `unwrap_err`, and propagated by postfix `?` inside a
+  function returning a `Result` with the same error type. An early `?` return is a
+  return: `defer` blocks, owned bindings and CDMM region exits run in LIFO order
+  first. The stress fixture holds an owned text buffer, an owned array and an
+  arena-routed struct at the failure point and reports every allocator empty on
+  both paths.
+- **`file.free_text` on borrowed text is a compile error.** Releasing a `string`
+  that came from `file.read_text`, or from another binding's destructor, used to
+  type-check and then abort inside the allocator's ownership registry. The accept
+  case now requires `string_owned`, and the released binding is marked moved, so a
+  double release is rejected at the same site.
+- **`@Nullable` works on scalars.** The annotation used to be accepted at the
+  declaration and rejected at every null check. A scalar is now boxed as `{present,
+  value}`: `= nullptr` clears the flag, `= 5` sets it, `== nullptr` / `!= nullptr`
+  ask it, and the payload is read as `x.value`. Pointers keep their representation.
+- 729/729 integration, 537/537 unit.
+
+---
+
 ## Version 0.682-beta
 
 ### Summary of Changes (since `0.680-beta`)

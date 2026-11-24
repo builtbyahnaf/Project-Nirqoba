@@ -105,7 +105,8 @@ Line comments `//` and block comments `/* … */` (lexer trivia).
 | `defer <call>;` | ✔ run | runs at scope exit: printed `body` then `outer` |
 | Block statements, nested scopes | ✔ run | |
 | Destructuring `var (a, b) = (1, 2);` | ✔ run | → `3` |
-| `@Nullable` annotation on a declaration | partially | see §5.6 |
+| `@Nullable` annotation on a declaration | ✔ run | pointers and scalars both, see §5.6 |
+| `value?` propagation | ✔ run | `positive/result_propagation_nested`, see §5.7 |
 | `switch` / `case` | **absent** | `switch (x) { case 1: … }` → parse errors (`expected ';' after the expression, found '{'`) |
 | `match` / pattern matching | **absent** | not a keyword |
 | `do … while` | **absent** | `do { … } while (…)` → `expected '}' to close struct initializer` |
@@ -218,10 +219,61 @@ Type kind, literals `(1, 2)`, `.0`/`.1` access, and destructuring declarations a
 exist and were verified by run.
 
 ### 5.6 `@Nullable`
-Parsed as an annotation before a declaration. Verified behaviour: `@Nullable int
-maybe = 5;` then `maybe != nullptr` is rejected — `nullptr can only be compared
-with a pointer, not 'int'`. The annotation is therefore usable only on pointer
-types; on scalars it is accepted at declaration and useless at the check.
+Parsed as an annotation before a declaration, on pointers and on scalars.
+
+A pointer is non-nullable by default, so holding `nullptr` in one requires the
+annotation, and `== nullptr` / `!= nullptr` are what read it back.
+
+A scalar has no spare bit pattern that means "absent", so the annotation boxes it:
+the binding is the struct `{present: bool, value: T}`, both halves always written.
+`@Nullable int maybe = nullptr;` clears the flag, `= 42` sets it, `maybe == nullptr`
+and `maybe != nullptr` ask the flag without reading the payload, and the value is
+read as `maybe.value`. Assignment follows the same two cases. Verified by run in
+`positive/nullable_int_comparison`. Not implemented: the annotation on parameters,
+returns and fields, and flow-sensitive narrowing through a check.
+
+---
+
+### 5.7 `Result<T, E>`
+A stack value carrying one of two outcomes, built by the compiler as the struct
+`{tag: bool, value: T, error: E}`. The half that is not live is zero-filled, so a
+`Result` holds no allocation of its own and its teardown destroys at most one live
+payload. Verified by run in `positive/result_construction_inspection`,
+`positive/result_propagation_nested`, `positive/result_propagation_defer_stress`
+and `negative/result_unwrap_on_err`.
+
+```
+Result<int, string> function divide(int a, int b) {
+    if (b == 0) {
+        return result.err("division by zero");
+    }
+    return result.ok(a / b);
+}
+
+var good = divide(10, 2);
+print(good.is_ok());     // true
+print(good.unwrap());    // 5
+var bad = divide(1, 0);
+if (bad.is_err()) {
+    print(bad.unwrap_err());   // division by zero
+}
+```
+
+- `result.ok(value)` and `result.err(error)` take `T` and `E` from the destination —
+the binding's annotated type, or the enclosing function's return type — so the
+constructors never spell them.
+- `is_ok()`, `is_err()`, `unwrap()`, `unwrap_err()` are read on a binding. `unwrap`
+on an `Err` and `unwrap_err` on an `Ok` are program bugs: they print through the
+panic path and exit 70.
+- `value?` continues with the payload, or returns the error from the enclosing
+function, which must return a `Result` whose error type matches. Everything the
+frame owns — deferred calls, automatic releases, CDMM region exits — runs first, in
+the same LIFO order a `return` produces. `?` applies to a value produced in place
+(`call()?`), not to a binding.
+
+Not implemented: methods on a call result (`divide(1, 0).unwrap()`), conversion
+between error types, and a standard library whose fallible operations return
+`Result`.
 
 ---
 
@@ -362,12 +414,21 @@ entirely to sentinel values and process death. This is a Version 1.0 blocker.
 Ordered by how much they cost a real program, not by how hard they are. Where a
 release closed the release-blocking part of an entry, the closure is recorded inline
 (`0.675-beta`: B2 scalar half, B10; `0.680-beta`: B2 text half, B3;
-`0.682-beta`: B6, B7, B9).
+`0.682-beta`: B6, B7, B9; `0.685-beta`: B1, B8).
 
-**B1 — No error handling of any kind.** No exceptions, no `Result`, no `panic`,
-no `assert`. Every fallible operation is a sentinel plus hope, and the only
-failure path that exists ends the process. Nothing in the standard library can
-report a failure to its caller.
+**B1 — Error handling exists.** *Closed in `0.685-beta`.* `Result<T, E>` is a stack
+value — `{tag, value, error}`, the half that is not live always zero-filled, so it
+allocates nothing and both paths tear down safely — built with `result.ok(v)` /
+`result.err(e)`, read with `is_ok`/`is_err`/`unwrap`/`unwrap_err`, and propagated
+with postfix `?`, which either continues with the payload or leaves the enclosing
+function returning the error type. The early leave is a return: `defer` blocks,
+automatic releases and CDMM region exits run in LIFO order first, which
+`positive/result_propagation_defer_stress` proves with an owned text buffer and an
+owned array that both reach live count zero on the error path. `panic(message)` and
+`assert(cond[, message])` abort through the runtime's fatal path on stderr with exit
+70. What remains is breadth: no error interface or `?` conversion between error
+types, `?` propagates a value produced in place rather than a binding, and the
+standard library does not yet return `Result` from the operations that can fail.
 
 **B2 — FFI cannot take a struct by value.** *The scalar half closed in
 `0.675-beta` (a declared function outranks a same-named math builtin, and a `string`
@@ -421,9 +482,14 @@ write and read every element.* What remains is what a view cannot do: it cannot 
 stored in an aggregate or returned past its owner's lifetime, and there is no
 builtin to fill, copy into, or search one.
 
-**B8 — No user-facing panic or assertion.** Even without full error handling, a V1
-language needs a documented way to abort with a message. Today the only abort is
-`nrq_runtime_fatal`, described in its own header as internal.
+**B8 — Panic and assert.** *Closed in `0.685-beta`.* `panic(message)` writes
+`panic: <message>` and `assert(condition[, message])` writes `assertion failed:
+<message>` (bare `assertion failed` when no message is given), both to stderr, both
+ending the process with exit 70 through the runtime's fatal path. `assert` lowers as
+control flow, so the passing case costs one branch and emits nothing. The driver had
+to grow the other half of the deal: `run_process` now keeps stderr on its own pipe
+with a reader thread, so a failing program's message reaches the terminal and the
+failures are assertable in the integration fixtures.
 
 **B9 — Program arguments are readable.** *Closed in `0.682-beta`: `main` may
 declare `string[] args`, which receives the tokens after the executable path, and
@@ -441,9 +507,6 @@ six functions and no `min`/`max`/`pow`/`round`.
 
 ### Secondary defects found while auditing (not blockers)
 
-- `@Nullable` on a scalar is accepted at declaration and then cannot be
-  null-checked (`nullptr can only be compared with a pointer, not 'int'`).
-- `file.free_text` on a borrowed `read_text` result compiles, then exits 70.
 - `&` cannot be taken of a struct-typed local.
 - The `->` token is lexed but no grammar rule consumes it.
 - Multi-field structs promoted to a loop's stack slot read their fields back stale
