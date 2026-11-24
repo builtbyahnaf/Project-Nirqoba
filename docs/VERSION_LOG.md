@@ -12,6 +12,39 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.682-beta
+
+### Summary of Changes (since `0.680-beta`)
+
+Release label `+0.002` (`0.680-beta` -> `0.682-beta`).
+
+#### Micro-phase 14d: string operations, array views and program arguments
+
+- **Text has an operator set.** `+` concatenates any pair of string values into a
+  buffer this scope owns, `==`/`!=` compare bytes instead of addresses, `.length`
+  asks the runtime how many bytes precede the terminator, and `s[i]` reads one byte
+  and widens it to `char`. Indexing used to ask for a 32-bit code unit out of a byte
+  buffer, which read four bytes and produced garbage.
+- **Owned text cannot leak through a temporary.** A concatenation's intermediate in
+  `a + b + c`, and a concatenation passed straight to a call or to `print`, have no
+  binding to release them; the expression that consumes them now does. A loop that
+  builds one string per iteration holds a constant live-text count.
+- **Formatting and parsing between text and numbers.** `string.from_int`,
+  `string.from_float`, `string.slice` produce owned buffers from the same counted
+  allocator as an owned file read, so the same release applies; `string.to_int` and
+  `string.to_float` are total and answer 0 for text with no number.
+- **`array_view<T>` is built from any block or container.** The constructor reads
+  the data and count words from an owned array, a dynamic array or another view, takes a bare pointer as its data, and accepts `(source, length)` for
+  the whole range. A view still owns nothing: the dynamic-array live count is
+  unchanged by creating one, and the mutable form still requires a mutable owner.
+- **Program arguments are readable anywhere.** `main(string[] args)` receives the
+  tokens after the executable path, and `env.args()` returns an `array_view<string>`
+  over the runtime's process-lifetime table from any function - borrowed, so it can
+  be read repeatedly, unlike the owning array a parameter takes.
+- 719/719 integration, 537/537 unit.
+
+---
+
 ## Version 0.680-beta
 
 ### Summary of Changes (since `0.675-beta`)

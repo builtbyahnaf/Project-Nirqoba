@@ -277,9 +277,11 @@ for operand 0: 'i64' != 'f64'` (`NRQ5004`). Float arguments work.
 - `print` — one argument; accepts numeric, `bool`, `char`, `string`; prints a
   newline. There is no `print` formatting, no `println` distinction, no
   `eprint`.
-- `argv`-style access exists at the runtime level (`nrq_args_build`,
-  `nrq_args_length`, `nrq_args_get`) but is **not exposed** as a language builtin
-  — a program cannot read its own arguments today.
+- `string.from_int`, `string.from_float`, `string.to_int`, `string.to_float`,
+  `string.slice` — text construction, parsing and copying; `string.byte_at`
+  (internal) reads one byte for `s[i]`.
+- `env.args()` — the process arguments as an `array_view<string>`, borrowed from
+  the table the runtime builds at startup.
 
 ---
 
@@ -359,7 +361,8 @@ entirely to sentinel values and process death. This is a Version 1.0 blocker.
 
 Ordered by how much they cost a real program, not by how hard they are. Where a
 release closed the release-blocking part of an entry, the closure is recorded inline
-(`0.675-beta`: B2 scalar half, B10; `0.680-beta`: B2 text half, B3).
+(`0.675-beta`: B2 scalar half, B10; `0.680-beta`: B2 text half, B3;
+`0.682-beta`: B6, B7, B9).
 
 **B1 — No error handling of any kind.** No exceptions, no `Result`, no `panic`,
 no `assert`. Every fallible operation is a sentinel plus hope, and the only
@@ -397,22 +400,39 @@ of a missing feature is real.
 **B5 — No `switch`/`match`.** Only `if`/`else if` chains. No exhaustiveness
 checking, no destructuring in patterns.
 
-**B6 — String handling is a dead end.** No concatenation (`+` is numeric only), no
-comparison beyond `==`, no length builtin exposed to source, no formatting, no
-`substring`/`contains`/`split`, no `int`↔`string` conversion. A program can print a
-string and write it to a file; it cannot build one.
+**B6 — String handling is thin but usable.** *The dead end closed in
+`0.682-beta`: `+` concatenates any pair of string values into an owned buffer,
+`==`/`!=` compare content, `.length` and `s[i]` read the bytes, `string.slice`
+copies a range, and `string.from_int`, `string.from_float`, `string.to_int` and
+`string.to_float` convert between text and numbers. Concatenation releases the
+intermediate of `a + b + c` and any concatenation passed straight to a call, so a
+loop that builds text does not leak.* What remains is search and splitting: no
+`find`, `contains`, `split`, `trim`, case conversion or pattern formatting, and no
+way to walk a string by code point rather than by byte.
 
-**B7 — Array views and multi-element indexing.** `array_view<T>` exists as a type
-with no constructor builtin at call site. And `memory.allocate<T>(n)` is reliable
-at element 0 only: writing `values[1]` and reading it back returns the wrong value.
-Every benchmark in this repository is shaped around that defect.
+**B7 — Array views are built from any source.** *Closed in `0.682-beta`:
+`memory.array_view<T>` and its mutable form take an owned array, a dynamic
+array, another view, or a raw element block, spelled `(source, length)` or
+`(source, start, length)`. The view borrows and never releases - the dynamic
+array live count is unchanged by creating one - and the mutable form still
+demands a mutable owner. The entry's multi-element defect (`memory.allocate<T>(n)`
+reliable only at element 0) no longer reproduces; the array and view fixtures
+write and read every element.* What remains is what a view cannot do: it cannot be
+stored in an aggregate or returned past its owner's lifetime, and there is no
+builtin to fill, copy into, or search one.
 
 **B8 — No user-facing panic or assertion.** Even without full error handling, a V1
 language needs a documented way to abort with a message. Today the only abort is
 `nrq_runtime_fatal`, described in its own header as internal.
 
-**B9 — No program arguments.** The runtime builds `argc`/`argv`, but no builtin
-exposes them; a Nirqoba program cannot read its command line.
+**B9 — Program arguments are readable.** *Closed in `0.682-beta`: `main` may
+declare `string[] args`, which receives the tokens after the executable path, and
+`env.args()` hands out an `array_view<string>` over the same table from any
+function. The accessor borrows process storage, so it copies nothing, releases
+nothing and can be read as many times as a program likes, which the owning array a
+parameter receives cannot be without a move.* What remains is the parsing a CLI
+has to do itself: no flag parser, and no environment-variable access alongside it.
+
 
 **B10 — `math` is small.** *Integer `abs` is closed in `0.675-beta`: it keeps its
 argument's type and lowers to a compare-and-negate, and a runtime entry point that
