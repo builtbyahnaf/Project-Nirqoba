@@ -1,0 +1,7 @@
+{
+  "mode": "check",
+  "expect_exit": 1,
+  "expect_stderr_contains": [
+    "'file.free_text' releases a buffer this program owns, so it cannot take 'string'"
+  ]
+}

@@ -1,0 +1,11 @@
+// `file.free_text` hands a buffer back to the allocator this language uses. A
+// borrowed `string` did not come from that allocator: `file.read_text` returns the
+// C library's buffer, and an owned binding's destructor is what releases an owned
+// one. The call used to compile and then die inside the allocator's ownership
+// registry with exit 70; the argument's type is what says it cannot work, so the
+// rejection happens before the program exists.
+int function main() {
+    var text = file.read_text("tests/integration/positive/file_owned_annotation/data.txt");
+    file.free_text(text);
+    return 0;
+}

@@ -6320,7 +6320,26 @@ Type TypeChecker::check_call(CallExpr& call) {
                              to_string(call.arguments().size()) + " were given");
       return Type::int_type();
     }
-    check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    const Type text_type = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    const Symbol* text_symbol = find_root_symbol(*call.arguments()[0], symbols_);
+    // Only an owned buffer can be handed back. A borrowed `string` is released by
+    // whoever owns it - a `file.read_text` result by the C library's own buffer,
+    // an owned binding by its destructor - so releasing it here would either free
+    // memory this program never allocated or free the same buffer twice. The
+    // runtime used to reject it at the allocator boundary; the type is what knows,
+    // so the rejection belongs here.
+    if (text_type.is_valid() && !text_type.is_owned_string()) {
+      diagnostics_.error(
+          diag::kTypeMismatch, call.arguments()[0]->location(),
+          "'file.free_text' releases a buffer this program owns, so it cannot take "
+          "'" + text_type.to_string() + "': borrowed text is released by its owner");
+    } else if (!checking_deferred_cleanup_ && text_symbol) {
+      // The buffer is gone after this call. Saying so is what turns a second
+      // release - the manual one followed by the scope's own destructor, or two
+      // manual ones - into a compile error instead of a double free.
+      const_cast<Expr&>(*call.arguments()[0]).set_transfers_ownership();
+      symbols_.mark_allocation_moved(text_symbol->allocation_id);
+    }
     return Type::int_type();
   }
 

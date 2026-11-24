@@ -1,0 +1,12 @@
+// The legal use of `file.free_text`: an owned buffer is handed back before its
+// scope would have released it. The live count is zero afterwards both because the
+// manual release ran and because the scope's destructor stood down - a released
+// owner is not released again.
+int function main() {
+    var text = file.read_text_owned("tests/integration/positive/file_owned_annotation/data.txt");
+    print(text.length);
+    print(file.text_live_count());
+    file.free_text(text);
+    print(file.text_live_count());
+    return 0;
+}
