@@ -1,0 +1,36 @@
+// `value?` is the whole error-handling statement: the payload continues as a plain
+// value, and an error leaves through the enclosing function's own return path.
+//
+// The chain is three calls deep. `outer` propagates from `middle`, which propagates
+// from `leaf`. The failure from the bottom leaves each frame in turn - none of them
+// mentions the error, and none of them can forget to check it, because the type
+// forces the value to be propagated before it can be used.
+Result<int, string> function leaf(int v) {
+    if (v < 0) {
+        return result.err("negative input");
+    }
+    return result.ok(v * 2);
+}
+
+Result<int, string> function middle(int v) {
+    var doubled = leaf(v)?;
+    return result.ok(doubled + 1);
+}
+
+Result<int, string> function outer(int v) {
+    var adjusted = middle(v)?;
+    return result.ok(adjusted * 10);
+}
+
+int function main() {
+    var good = outer(3);
+    print(good.unwrap());
+
+    // The same chain, failing at the bottom: nothing above it ran, and the error
+    // arrives intact.
+    var bad = outer(-2);
+    if (bad.is_err()) {
+        print(bad.unwrap_err());
+    }
+    return 0;
+}

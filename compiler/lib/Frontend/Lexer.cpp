@@ -138,6 +138,8 @@ Token Lexer::scan_token() {
     case ',': return make_token(TokenKind::Comma, start);
     case ';': return make_token(TokenKind::Semicolon, start);
     case ':': return make_token(TokenKind::Colon, start);
+    // Postfix propagation: `lookup()?` returns the payload or returns the error.
+    case '?': return make_token(TokenKind::Question, start);
     case '.': return make_token(TokenKind::Dot, start);
     case '+':
       if (match('=')) return make_token(TokenKind::PlusEqual, start);

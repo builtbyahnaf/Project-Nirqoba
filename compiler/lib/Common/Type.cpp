@@ -222,6 +222,29 @@ Type Type::nullable_value_type() const {
   return data_->struct_fields[1].second;
 }
 
+Type Type::result_type(Type value_type, Type error_type) {
+  return struct_type(
+      "__nrq_result_" + value_type.to_string() + "_" + error_type.to_string(),
+      {{"tag", Type::bool_type()},
+       {"value", value_type},
+       {"error", error_type}});
+}
+
+bool Type::is_result() const {
+  return kind_ == TypeKind::Struct && data_ &&
+         data_->struct_name.rfind("__nrq_result_", 0) == 0;
+}
+
+Type Type::result_value_type() const {
+  if (!is_result() || data_->struct_fields.size() < 3) return Type::error();
+  return data_->struct_fields[1].second;
+}
+
+Type Type::result_error_type() const {
+  if (!is_result() || data_->struct_fields.size() < 3) return Type::error();
+  return data_->struct_fields[2].second;
+}
+
 Type Type::struct_type(string name, vector<pair<string, Type>> fields) {
   Type t(TypeKind::Struct);
   t.data_ = make_shared<TypeData>();

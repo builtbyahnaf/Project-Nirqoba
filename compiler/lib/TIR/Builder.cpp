@@ -170,6 +170,70 @@ tir::Value box_nullable_scalar(tir::Function& function, SourceLocation location,
   return box;
 }
 
+// The four primitives a boxed value is built from: a boolean flag, a zero-filled
+// slot for the half that is not live, a field read, and a text constant.
+tir::Value constant_bool(tir::Function& function, SourceLocation location,
+                         bool value) {
+  tir::Value result = function.allocate_value(Type::bool_type());
+  tir::Op op;
+  op.kind = tir::OpKind::ConstantInt;
+  op.location = location;
+  op.result = result;
+  op.integer_value = value ? 1 : 0;
+  function.add_operation(std::move(op));
+  return result;
+}
+
+tir::Value zero_value(tir::Function& function, SourceLocation location,
+                      const Type& type) {
+  tir::Value result = function.allocate_value(type);
+  tir::Op op;
+  op.kind = tir::OpKind::ConstantNull;
+  op.location = location;
+  op.result = result;
+  function.add_operation(std::move(op));
+  return result;
+}
+
+tir::Value constant_text(tir::Function& function, SourceLocation location,
+                         const std::string& text) {
+  tir::Value result = function.allocate_value(Type::string_type());
+  tir::Op op;
+  op.kind = tir::OpKind::ConstantString;
+  op.location = location;
+  op.result = result;
+  op.string_value = text;
+  function.add_operation(std::move(op));
+  return result;
+}
+
+// The value a slot holds. Field reads address a value, not the binding's address.
+tir::Value load_value(tir::Function& function, SourceLocation location,
+                      const tir::Value& slot) {
+  tir::Value result = function.allocate_value(slot.type);
+  tir::Op load;
+  load.kind = tir::OpKind::Load;
+  load.location = location;
+  load.lhs = slot;
+  load.result = result;
+  function.add_operation(std::move(load));
+  return result;
+}
+
+tir::Value extract_field(tir::Function& function, SourceLocation location,
+                         const tir::Value& aggregate, int field_index,
+                         const Type& field_type) {
+  tir::Value result = function.allocate_value(field_type);
+  tir::Op extract;
+  extract.kind = tir::OpKind::AggregateExtract;
+  extract.location = location;
+  extract.operand = aggregate;
+  extract.field_index = field_index;
+  extract.result = result;
+  function.add_operation(std::move(extract));
+  return result;
+}
+
 // Hands an owned text buffer back once its last reader is done with it.
 void emit_owned_text_release(tir::Function& function, SourceLocation location,
                              const tir::Value& value) {
@@ -1833,6 +1897,183 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
         resume.label_id = continue_label;
         function.add_operation(std::move(resume));
         return tir::Value{};
+      }
+
+      // `result.ok(value)` / `result.err(error)` pack the box. The half that is
+      // not live is zero-filled, so both paths leave a value whose teardown is a
+      // no-op and the box can be destroyed wherever it happens to die.
+      if ((call.callee() == "result.ok" || call.callee() == "result.err") &&
+          call.arguments().size() == 1 && call.type().is_result()) {
+        const bool ok = call.callee() == "result.ok";
+        const Type boxed = call.type();
+        const tir::Value payload =
+            lower_expression(*call.arguments()[0], function);
+        const tir::Value idle = zero_value(
+            function, call.location(),
+            ok ? boxed.result_error_type() : boxed.result_value_type());
+        const tir::Value tag = constant_bool(function, call.location(), ok);
+
+        tir::Value box = function.allocate_value(boxed);
+        tir::Op pack;
+        pack.kind = tir::OpKind::AggregatePack;
+        pack.location = call.location();
+        pack.aggregate_elements = {tag, ok ? payload : idle,
+                                   ok ? idle : payload};
+        pack.slot_name = boxed.struct_name();
+        pack.result = box;
+        // A payload that owns storage belongs to the box now: the box's teardown
+        // is what releases it, on whichever path the value dies.
+        const Type payload_type =
+            ok ? boxed.result_value_type() : boxed.result_error_type();
+        std::string release;
+        if (managed_field_release(payload_type, function, payload, release)) {
+          pack.release_fields.push_back(ok ? 1 : 2);
+          pack.release_callees.push_back(std::move(release));
+          if (call.arguments()[0]->kind() == Expr::Kind::Name)
+            suppress_automatic_cleanup(lookup_slot(
+                static_cast<const NameExpr&>(*call.arguments()[0]).name()));
+        }
+        function.add_operation(std::move(pack));
+        return box;
+      }
+
+      // `value?` is the one place an early return is not a `return`: the error
+      // leaves through the caller's return path, and every scope's teardown runs
+      // first, in the same LIFO order a plain `return` would produce.
+      if (call.callee() == "result.propagate" && call.arguments().size() == 1 &&
+          current_function_ != nullptr) {
+        const Type boxed = call.arguments()[0]->type();
+        const Type enclosing = current_function_->return_type();
+        if (boxed.is_result() && enclosing.is_result()) {
+          const tir::Value box =
+              lower_expression(*call.arguments()[0], function);
+          const tir::Value tag = extract_field(function, call.location(), box, 0,
+                                               Type::bool_type());
+          const int ok_label = function.allocate_label();
+          const int err_label = function.allocate_label();
+          tir::Op branch;
+          branch.kind = tir::OpKind::BranchCond;
+          branch.location = call.location();
+          branch.operand = tag;
+          branch.true_label = ok_label;
+          branch.false_label = err_label;
+          function.add_operation(std::move(branch));
+
+          tir::Op failure;
+          failure.kind = tir::OpKind::Label;
+          failure.label_id = err_label;
+          function.add_operation(std::move(failure));
+
+          // Nothing may outlive this frame, so the deferred calls, the automatic
+          // releases and the CDMM region exits all run before the error leaves.
+          emit_deferred_from(0, function);
+
+          const tir::Value error = extract_field(
+              function, call.location(), box, 2, enclosing.result_error_type());
+          const tir::Value idle = zero_value(
+              function, call.location(), enclosing.result_value_type());
+          const tir::Value failed_tag =
+              constant_bool(function, call.location(), false);
+          tir::Value out = function.allocate_value(enclosing);
+          tir::Op pack;
+          pack.kind = tir::OpKind::AggregatePack;
+          pack.location = call.location();
+          pack.aggregate_elements = {failed_tag, idle, error};
+          pack.slot_name = enclosing.struct_name();
+          pack.result = out;
+          std::string release;
+          if (managed_field_release(enclosing.result_error_type(), function, error,
+                                    release)) {
+            pack.release_fields.push_back(2);
+            pack.release_callees.push_back(std::move(release));
+          }
+          function.add_operation(std::move(pack));
+
+          tir::Op leave;
+          leave.kind = tir::OpKind::Return;
+          leave.location = call.location();
+          leave.operand = out;
+          function.add_operation(std::move(leave));
+
+          tir::Op resume;
+          resume.kind = tir::OpKind::Label;
+          resume.label_id = ok_label;
+          function.add_operation(std::move(resume));
+          return extract_field(function, call.location(), box, 1,
+                               boxed.result_value_type());
+        }
+      }
+
+      // `r.is_ok()`, `r.is_err()`, `r.unwrap()` and `r.unwrap_err()` read the box
+      // in place. The last two abort through the panic path when the half they
+      // want is not the live one, which is why they need no error handling of
+      // their own.
+      if (call.arguments().empty()) {
+        const std::size_t dot = call.callee().rfind('.');
+        if (dot != std::string::npos) {
+          const std::string member = call.callee().substr(dot + 1);
+          const tir::Value slot =
+              lookup_slot(call.callee().substr(0, dot));
+          const tir::Value box =
+              slot.is_valid() ? load_value(function, call.location(), slot) : slot;
+          if (box.is_valid() && box.type.is_result() &&
+              (member == "is_ok" || member == "is_err" ||
+               member == "unwrap" || member == "unwrap_err")) {
+            const Type boxed = box.type;
+            const tir::Value tag = extract_field(function, call.location(), box, 0,
+                                                 Type::bool_type());
+            if (member == "is_ok") return tag;
+            if (member == "is_err") {
+              tir::Value result = function.allocate_value(Type::bool_type());
+              tir::Op compare;
+              compare.kind = tir::OpKind::Binary;
+              compare.location = call.location();
+              compare.binary_op = tir::BinaryOp::Equal;
+              compare.lhs = tag;
+              compare.rhs = constant_bool(function, call.location(), false);
+              compare.result = result;
+              function.add_operation(std::move(compare));
+              return result;
+            }
+            const bool wants_ok = member == "unwrap";
+            const Type payload_type = wants_ok ? boxed.result_value_type()
+                                               : boxed.result_error_type();
+            const int payload_label = function.allocate_label();
+            const int abort_label = function.allocate_label();
+            tir::Op branch;
+            branch.kind = tir::OpKind::BranchCond;
+            branch.location = call.location();
+            branch.operand = tag;
+            branch.true_label = wants_ok ? payload_label : abort_label;
+            branch.false_label = wants_ok ? abort_label : payload_label;
+            function.add_operation(std::move(branch));
+
+            tir::Op abort;
+            abort.kind = tir::OpKind::Label;
+            abort.label_id = abort_label;
+            function.add_operation(std::move(abort));
+            tir::Op report;
+            report.kind = tir::OpKind::Call;
+            report.location = call.location();
+            report.callee = "panic";
+            report.arguments = {constant_text(
+                function, call.location(),
+                wants_ok ? "unwrap on an Err value"
+                         : "unwrap_err on an Ok value")};
+            function.add_operation(std::move(report));
+            tir::Op unreachable;
+            unreachable.kind = tir::OpKind::Unreachable;
+            unreachable.location = call.location();
+            function.add_operation(std::move(unreachable));
+
+            tir::Op present;
+            present.kind = tir::OpKind::Label;
+            present.label_id = payload_label;
+            function.add_operation(std::move(present));
+            return extract_field(function, call.location(), box,
+                                 wants_ok ? 1 : 2, payload_type);
+          }
+        }
       }
 
       // `memory.array_append(values, element)` grows the array held in the

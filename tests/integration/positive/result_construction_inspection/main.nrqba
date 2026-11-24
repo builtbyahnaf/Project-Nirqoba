@@ -1,0 +1,31 @@
+// A `Result<T, E>` is one of two outcomes in one stack slot: a value, or an error.
+// The tag says which, the other half is always zero-filled, and the four
+// operations read it without allocating anything.
+//
+//   ok:     result.ok(value)   is_ok()   unwrap()      -> the value
+//   err:    result.err(error)  is_err()  unwrap_err()  -> the error
+//
+// `result.ok` and `result.err` take their T and E from the binding's type, so the
+// destination is the only place the types are written.
+Result<int, string> function divide(int a, int b) {
+    if (b == 0) {
+        return result.err("division by zero");
+    }
+    return result.ok(a / b);
+}
+
+int function main() {
+    var good = divide(10, 2);
+    print(good.is_ok());
+    print(good.unwrap());
+
+    var bad = divide(1, 0);
+    print(bad.is_err());
+    print(bad.unwrap_err());
+
+    // The payload and the error are independent types; neither is constrained to
+    // a message or an integer.
+    Result<int, int> coded = result.err(404);
+    print(coded.unwrap_err());
+    return 0;
+}

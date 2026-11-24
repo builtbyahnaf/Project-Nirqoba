@@ -144,6 +144,12 @@ class Type {
   // absence is `present == false`, not an undefined payload.
   static Type nullable_scalar_type(Type value_type);
 
+  // `Result<T, E>`: one of two outcomes, never both. Lowered as the struct
+  // `{tag: bool, value: T, error: E}` so it lives in a stack slot with no
+  // allocation of its own; the half that is not live is always zero-filled, which
+  // is why destroying the value destroys at most one payload.
+  static Type result_type(Type value_type, Type error_type);
+
   static Type array_type(Type element_type, std::size_t length);
   static Type dynamic_array_type(Type element_type);
   static Type owned_array_type(Type element_type);
@@ -223,6 +229,10 @@ class Type {
   bool is_nullable_scalar() const;
   // The `value` half of a nullable scalar, or an invalid type for anything else.
   Type nullable_value_type() const;
+  // A `Result<T, E>` box, recognised by the name the factory builds.
+  bool is_result() const;
+  Type result_value_type() const;
+  Type result_error_type() const;
   bool is_char() const { return kind_ == TypeKind::Char; }
   bool is_f32() const { return kind_ == TypeKind::F32; }
   bool is_f64() const { return kind_ == TypeKind::F64; }

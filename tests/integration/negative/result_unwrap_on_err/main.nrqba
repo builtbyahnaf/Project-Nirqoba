@@ -1,0 +1,10 @@
+// `unwrap` is the claim that a Result is Ok. When it is not, the claim is a bug in
+// the program, so it stops through the fatal path `panic` uses: the message goes to
+// stderr and the process exits 70 rather than continuing with a value that is not
+// there. A caller that expects a failure to be possible uses `?` or `is_err`.
+int function main() {
+    Result<int, string> missing = result.err("the value was missing");
+    print(missing.unwrap());
+    print("unreachable");
+    return 0;
+}

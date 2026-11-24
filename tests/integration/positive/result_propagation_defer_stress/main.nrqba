@@ -1,0 +1,57 @@
+// The invariant behind `?`: an early error return is a return. Everything the
+// frame owns must be released, in the order a plain `return` would take.
+//
+// `middle` holds three things at the point where the error can arrive:
+//
+//   * an owned text buffer, released by a `defer`;
+//   * two more `defer` calls, so the output shows the order they run in;
+//   * an owned array, released by its own binding's destructor;
+//   * and, once the propagated value comes back, a CDMM-routed `Box` payload.
+//
+// The three `defer` prints are the LIFO evidence: they were written 1 then 2 and
+// leave as 2 then 1, on the success path and on the error path alike. The live
+// counts are the leak evidence: both allocators are empty after each call, so the
+// early return released the text and the array exactly as the ordinary return did.
+struct Box {
+    int total;
+    owned ptr Box next;
+}
+
+Result<int, string> function leaf(int v) {
+    if (v < 0) {
+        return result.err("negative input");
+    }
+    return result.ok(v * 3);
+}
+
+Result<int, string> function middle(int v) {
+    var text = file.read_text_owned("tests/integration/positive/file_owned_annotation/data.txt");
+    defer file.free_text(text);
+    defer print(1);
+    defer print(2);
+
+    var values = memory.owned_array<int>(3);
+    values[0] = 5;
+
+    // An error here leaves the function without reaching the code below it.
+    var tripled = leaf(v)?;
+
+    var node = memory.allocate<Box>(4);
+    *node = Box { total: tripled + values[0], next: nullptr };
+    return result.ok((*node).total);
+}
+
+int function main() {
+    var ok = middle(2);
+    print(ok.unwrap());
+    print(file.text_live_count());
+    print(memory.array_live_count());
+
+    var bad = middle(-1);
+    if (bad.is_err()) {
+        print(bad.unwrap_err());
+    }
+    print(file.text_live_count());
+    print(memory.array_live_count());
+    return 0;
+}

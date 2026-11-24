@@ -611,8 +611,8 @@ bool TypeChecker::check(Program& program) {
   return !diagnostics_.has_errors();
 }
 
-void TypeChecker::register_nullable_scalar(const Type& boxed) {
-  if (!boxed.is_nullable_scalar()) return;
+void TypeChecker::register_generated_struct(const Type& boxed) {
+  if (!boxed.is_nullable_scalar() && !boxed.is_result()) return;
   const std::string name = boxed.struct_name();
   if (structs_.count(name) != 0) return;
   StructInfo info;
@@ -1161,8 +1161,19 @@ bool TypeChecker::reject_move_after_defer(const Symbol& source,
 }
 
 void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaration) {
+  // A `Result<T, E>` constructor learns T and E from the destination, so the
+  // annotation is resolved before the initializer is checked rather than after.
+  const Type declared_annotation = declaration.has_annotation()
+                                       ? resolve_aggregate_type(declaration.annotation())
+                                       : Type{};
+  const Type outer_expected_result = expected_result_type_;
+  if (declared_annotation.is_result()) {
+    register_generated_struct(declared_annotation);
+    expected_result_type_ = declared_annotation;
+  }
   const Type initializer_type =
       check_expression(const_cast<Expr&>(declaration.initializer()));
+  expected_result_type_ = outer_expected_result;
   // A binding of C text borrows a buffer the foreign function owns; it registers
   // no release, so the symbol must not be treated as the buffer's owner.
   bool foreign_c_string_binding = false;
@@ -1176,7 +1187,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
   // undo it.
   bool nullable_scalar_binding = false;
   if (declaration.has_annotation()) {
-    const Type annotation = resolve_aggregate_type(declaration.annotation());
+    const Type annotation = declared_annotation;
     declaration.set_annotation(annotation);
     const bool scalar = annotation.is_integer() || annotation.is_float() ||
                         annotation.is_char() || annotation.is_bool();
@@ -1185,7 +1196,7 @@ void TypeChecker::check_variable_declaration(VariableDeclarationStmt& declaratio
       // the box `{present, value}`: `= 5` fills it, `= nullptr` empties it, and
       // `== nullptr` asks the flag. The box lives where the scalar would have.
       const Type boxed = Type::nullable_scalar_type(annotation);
-      register_nullable_scalar(boxed);
+      register_generated_struct(boxed);
       if (is_null_pointer_literal(declaration.initializer())) {
         const_cast<Expr&>(declaration.initializer()).set_type(annotation);
       } else if (initializer_type.is_valid() && initializer_type != annotation) {
@@ -3329,9 +3340,17 @@ void TypeChecker::check_return(ReturnStmt& statement) {
   // storage is an allocation the caller receives, so the decision cannot come
   // after those answers are computed.
   const bool promoted = promote_returned_local(statement);
+  // A returned `result.err(...)` takes T and E from the function's own return
+  // type, so the context is the return type while its value is checked.
+  const Type outer_expected_result = expected_result_type_;
+  if (current_return_type_.is_result()) {
+    register_generated_struct(current_return_type_);
+    expected_result_type_ = current_return_type_;
+  }
   const Type value_type = promoted
       ? current_return_type_
       : check_expression(const_cast<Expr&>(*statement.value()));
+  expected_result_type_ = outer_expected_result;
   if (statement.value()->ownership() == ValueOwnership::ArenaBound) {
     diagnostics_.error(diag::kTypeMismatch, statement.value()->location(),
                        "arena-bound storage cannot escape through a return value");
@@ -4846,6 +4865,113 @@ Type TypeChecker::check_external_call(CallExpr& call,
 }
 
 Type TypeChecker::check_call(CallExpr& call) {
+  // `result.ok(value)` and `result.err(error)` build a Result whose T and E come
+  // from where the value is going - the binding's annotation, or the enclosing
+  // function's return type - so neither has to be written at the call.
+  if (call.callee() == "result.ok" || call.callee() == "result.err") {
+    const bool ok = call.callee() == "result.ok";
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'" + call.callee() + "' takes exactly one argument");
+      for (const ExprPtr& argument : call.arguments())
+        check_expression(const_cast<Expr&>(*argument));
+      return Type::error();
+    }
+    Expr& payload = const_cast<Expr&>(*call.arguments()[0]);
+    const Type payload_type = check_expression(payload);
+    if (!expected_result_type_.is_result()) {
+      diagnostics_.error(
+          diag::kTypeMismatch, call.location(),
+          "'" + call.callee() + "' needs to know which Result it builds: declare "
+          "the binding with 'Result<T, E>' or return it from a function that "
+          "returns one");
+      return Type::error();
+    }
+    register_generated_struct(expected_result_type_);
+    const Type wanted = ok ? expected_result_type_.result_value_type()
+                           : expected_result_type_.result_error_type();
+    if (payload_type.is_valid() && wanted.is_valid() && payload_type != wanted) {
+      diagnostics_.error(diag::kTypeMismatch, payload.location(),
+                         "'" + call.callee() + "' for '" +
+                             expected_result_type_.to_string() + "' holds a '" +
+                             wanted.to_string() + "', not a '" +
+                             payload_type.to_string() + "'");
+      return expected_result_type_;
+    }
+    // The payload becomes the box's field, so the binding it may have come from
+    // stops owning it here. A trivial payload moves nothing and is left alone.
+    if (wanted.is_owned_string() || wanted.is_owned_pointer() ||
+        wanted.is_owned_array() || wanted.is_dynamic_array() || wanted.is_soa())
+      payload.set_transfers_ownership();
+    return expected_result_type_;
+  }
+
+  // `value?` propagates a failure to the enclosing function: the payload continues
+  // as a plain value, and an error returns through the caller's own return path
+  // after every live binding and `defer` is torn down.
+  if (call.callee() == "result.propagate") {
+    if (call.arguments().size() != 1) {
+      diagnostics_.error(diag::kPrintArity, call.location(),
+                         "'?' takes exactly one Result");
+      return Type::error();
+    }
+    const Type operand = check_expression(const_cast<Expr&>(*call.arguments()[0]));
+    if (!operand.is_result()) {
+      diagnostics_.error(diag::kTypeMismatch, call.location(),
+                         "'?' propagates a 'Result', not a '" +
+                             operand.to_string() + "'");
+      return Type::error();
+    }
+    if (call.arguments()[0]->kind() != Expr::Kind::Call) {
+      // A binding would have to be torn down twice - once by the early return and
+      // once here - so only a value produced in place can be propagated.
+      diagnostics_.error(diag::kTypeMismatch, call.location(),
+                         "'?' applies to a Result produced in place, so write "
+                         "'call()?' rather than propagating a binding");
+      return operand.result_value_type();
+    }
+    register_generated_struct(operand);
+    if (!current_return_type_.is_result()) {
+      diagnostics_.error(diag::kTypeMismatch, call.location(),
+                         "'?' needs an enclosing function that returns a Result; "
+                         "this one returns '" + current_return_type_.to_string() +
+                             "'");
+      return operand.result_value_type();
+    }
+    if (current_return_type_.result_error_type() != operand.result_error_type()) {
+      diagnostics_.error(
+          diag::kTypeMismatch, call.location(),
+          "'?' propagates '" + operand.result_error_type().to_string() +
+              "' but the enclosing function returns errors of type '" +
+              current_return_type_.result_error_type().to_string() + "'");
+    }
+    return operand.result_value_type();
+  }
+
+  // No methods exist in this language, so a dotted callee whose head names a
+  // Result binding is an operation on that value.
+  if (const std::size_t dot = call.callee().rfind('.');
+      dot != std::string::npos) {
+    const std::string receiver = call.callee().substr(0, dot);
+    const std::string member = call.callee().substr(dot + 1);
+    const Symbol* symbol = symbols_.lookup(receiver);
+    if (symbol != nullptr && symbol->type.is_result()) {
+      const Type boxed = symbol->type;
+      register_generated_struct(boxed);
+      if (!call.arguments().empty()) {
+        diagnostics_.error(diag::kPrintArity, call.location(),
+                           "'" + member + "' takes no arguments");
+      }
+      if (member == "is_ok" || member == "is_err") return Type::bool_type();
+      if (member == "unwrap") return boxed.result_value_type();
+      if (member == "unwrap_err") return boxed.result_error_type();
+      diagnostics_.error(diag::kUndefinedName, call.location(),
+                         "a 'Result' answers is_ok, is_err, unwrap and unwrap_err, "
+                         "not '" + member + "'");
+      return Type::error();
+    }
+  }
+
   // The only way to obtain a dynamic array. It starts empty: capacity 0 is the
   // documented empty representation, so the value carries a null buffer and the
   // growth path (append) is what allocates later. The element type must have a

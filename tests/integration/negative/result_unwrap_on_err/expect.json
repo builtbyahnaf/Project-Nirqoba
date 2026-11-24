@@ -1,0 +1,8 @@
+{
+  "mode": "build_and_run",
+  "expect_exit": 70,
+  "expect_stderr_contains": [
+    "panic: unwrap on an Err value"
+  ],
+  "expect_stdout": ""
+}

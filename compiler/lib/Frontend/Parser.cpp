@@ -245,6 +245,9 @@ unique_ptr<Program> Parser::parse_program() {
          peek(1).kind == TokenKind::Less) ||
         (check(TokenKind::Identifier) && peek().text == "array_view" &&
          peek(1).kind == TokenKind::Less) ||
+        // `Result<T, E> function name(...)`: a declaration whose type is generic.
+        (check(TokenKind::Identifier) && peek().text == "Result" &&
+         peek(1).kind == TokenKind::Less) ||
         is_type_keyword(peek().kind) ||
         (check(TokenKind::Identifier) &&
          (peek(1).kind == TokenKind::KwFunction || pointer_return_type_ahead() ||
@@ -638,10 +641,19 @@ Type Parser::parse_type_annotation() {
     if (check(TokenKind::Less)) {
       const Token open = advance();  // '<'
       const Type argument = parse_type_annotation();
-      expect(TokenKind::Greater, "after the qualified generic type argument");
+      // `Result<T, E>` is the one spelling with two arguments: the payload the
+      // success half carries and the error the failure half carries.
+      Type error_argument;
+      if (check(TokenKind::Comma)) {
+        advance();
+        error_argument = parse_type_annotation();
+      }
+      expect(TokenKind::Greater, "after the generic type argument");
       std::string bare = name;
       if (bare.rfind("memory.", 0) == 0) bare = bare.substr(std::string("memory.").size());
-      if (bare == "owned_array") base_type = Type::owned_array_type(argument);
+      if (bare == "Result" && error_argument.is_valid())
+        base_type = Type::result_type(argument, error_argument);
+      else if (bare == "owned_array") base_type = Type::owned_array_type(argument);
       else if (bare == "soa") base_type = Type::soa_type(argument);
       else if (bare == "owned_ptr") base_type = Type::owned_pointer_type(argument);
       else if (bare == "array_view") base_type = Type::array_view_type(argument);
@@ -823,7 +835,8 @@ bool Parser::starts_type_first_declaration() const {
     return true;
   if (peek().text == "managed" && peek(1).kind == TokenKind::Less) return true;
   if ((peek().text == "owned_array" || peek().text == "array_view" ||
-       peek().text == "soa") && peek(1).kind == TokenKind::Less)
+       peek().text == "soa" || peek().text == "Result") &&
+      peek(1).kind == TokenKind::Less)
     return true;
   // A user-defined type starts a declaration only when the name after it opens an
   // initializer or is the malformed `Point p;` case; otherwise the statement stays an
@@ -1328,6 +1341,15 @@ ExprPtr Parser::parse_postfix() {
       ExprPtr index = parse_expression();
       expect(TokenKind::RBracket, "to close array index");
       expr = make_unique<IndexExpr>(expr->location(), move(expr), move(index));
+    } else if (match(TokenKind::Question)) {
+      // `value?` is one token rather than a keyword-and-block: the operand is the
+      // Result being propagated. It parses as a call so the checker and the
+      // builder see it in the shape they already handle, with no new node kind.
+      vector<ExprPtr> propagated;
+      const SourceLocation location = expr->location();
+      propagated.push_back(move(expr));
+      expr = make_unique<CallExpr>(location, "result.propagate",
+                                   move(propagated));
     } else if (match(TokenKind::Dot)) {
       const Token mem_tok = peek();
       if (check(TokenKind::IntegerLiteral)) {

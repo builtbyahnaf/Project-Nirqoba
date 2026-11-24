@@ -103,9 +103,9 @@ class TypeChecker {
   // Fills `struct_field_table_` from the registered structs and decides, per
   // struct, whether its field graph can close a cycle of owning edges.
   void analyze_struct_types();
-  // Adds the compiler-created box behind `@Nullable T` on a scalar to the struct
-  // catalog, once per boxed type.
-  void register_nullable_scalar(const Type& boxed);
+  // Adds a compiler-created box - `@Nullable T` on a scalar, or a `Result<T, E>` -
+  // to the struct catalog, once per boxed type.
+  void register_generated_struct(const Type& boxed);
   void check_function(FunctionDecl& function);
   void check_statement(Stmt& statement);
   void check_block(BlockStmt& block);
@@ -278,6 +278,9 @@ class TypeChecker {
   std::unordered_set<std::string> nonnull_proven_;
   std::vector<std::vector<DeferredCleanup>> deferred_calls_;
   std::unordered_map<std::string, FunctionSignature> functions_;
+  // The `Result<T, E>` a constructor in the current initializer or return
+  // expression is building. Empty when the destination is not a Result.
+  Type expected_result_type_;
   std::unordered_map<std::string, StructInfo> structs_;
   StructFieldTable struct_field_table_;
   std::unordered_set<std::string> cyclic_structs_;
