@@ -1,0 +1,13 @@
+// Text crosses the C boundary as its byte pointer.
+//
+// A Nirqoba string is one null-terminated buffer - the same thing a C `char*`
+// parameter reads - so a byte-pointer parameter borrows it. Nothing transfers and
+// nothing is freed: the buffer is process-lifetime storage either way.
+extern i64 function strlen(ptr byte text);
+
+int function main() {
+    var text = "hello ffi";
+    print(strlen(text));
+    print(strlen("abc"));
+    return 0;
+}

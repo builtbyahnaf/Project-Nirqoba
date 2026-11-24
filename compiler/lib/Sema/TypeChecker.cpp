@@ -4598,6 +4598,22 @@ Type TypeChecker::check_external_call(CallExpr& call,
       continue;
     }
 
+    // Text crosses the boundary as itself. A Nirqoba string is one null-terminated
+    // buffer, which is exactly what a C `char*` parameter reads, so a byte-pointer
+    // parameter borrows the buffer: nothing transfers, nothing is freed, and the
+    // string stays valid for the process lifetime.
+    const Type text_element =
+        parameter_type.is_pointer() ? parameter_type.element_type() : Type::error();
+    const bool byte_element =
+        (text_element.is_integer() && text_element.bit_width() == 8) ||
+        text_element.is_char();
+    const bool text_to_byte_pointer =
+        byte_element && argument_type.is_string();
+    if (text_to_byte_pointer) {
+      const_cast<Expr&>(argument).set_ownership(ValueOwnership::Borrowed);
+      continue;
+    }
+
     if (argument_type != parameter_type) {
       diagnostics_.error(diag::kTypeMismatch, argument.location(),
                          "argument " + to_string(i + 1) + " of extern function '" +
