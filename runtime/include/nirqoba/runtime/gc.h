@@ -520,11 +520,17 @@ struct nrq_gc_sweep_record {
 };
 size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max);
 
-// Diagnostic for a chain walk: bits 1 and 2 are "offered to the marker" and
-// "accepted onto its worklist", 4 marked, 8 born this cycle, 16 young. Negative when
-// the address is not a managed object (-2) or is null (-1). Costs one directory probe
-// and is intended for failure diagnosis, not for a hot path.
+// Diagnostic for a chain walk. Bit 1 offered to this cycle's marker, bit 2 accepted
+// onto its worklist, bit 32 actually popped by it, bit 4 marked, bit 8 born this
+// cycle, bit 16 young, and bits 6-7 the refusal code when it was offered and not
+// accepted: 1 already marked, 2 born this cycle, 3 old object in a minor cycle.
+// Negative when the address is not a managed object (-2) or is null (-1).
 int nrq_gc_debug_object_state(void* object);
+
+// The mark-clear provenance of an object's page: how many times this page's marks
+// were cleared in the current cycle, and which code last did it (1 page-level bulk
+// clear, 2 a single object's mark). Returns 0 when the object resolves.
+int nrq_gc_debug_page_counts(void* object, int* clears, int* site);
 // The shared layout descriptor the object was allocated with, or null when the
 // address is not a live managed object. A diagnostic: because instances of one
 // layout share a descriptor, equal pointers mean equal layout.

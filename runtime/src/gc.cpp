@@ -2331,6 +2331,14 @@ int debug_object_state_locked_impl(void* object) {
       const uint64_t bit = uint64_t{1} << (index % 64);
       if ((page.visit_bits[index / 64] & bit) != 0) state |= 1;
       if ((page.visit_bits[page.visit_words + index / 64] & bit) != 0) state |= 2;
+      if ((page.visit_bits[page.visit_words * 2 + index / 64] & bit) != 0)
+        state |= 32;
+      unsigned reason = 0;
+      if ((page.visit_bits[page.visit_words * 3 + index / 64] & bit) != 0)
+        reason |= 1u;
+      if ((page.visit_bits[page.visit_words * 4 + index / 64] & bit) != 0)
+        reason |= 2u;
+      state |= static_cast<int>(reason) << 6;
     }
   }
   if (object_marked(ref)) state |= 4;
@@ -3192,16 +3200,30 @@ void enqueue_object_locked(const ObjectRef& object, MarkContext& context) {
   if (visit_tracking) {
     if (!page.visit_bits) {
       page.visit_words = page.mark_words;
-      page.visit_bits.reset(new uint64_t[page.mark_words * 2]());
+      page.visit_bits.reset(new uint64_t[page.mark_words * 5]());
     }
     page.visit_bits[word_idx] |= bit;
   }
-  if ((word & bit) != 0) return;
-  if (object_born_in_cycle(object, context.epoch)) return;
+  auto note_refusal = [&](unsigned code) {
+    if (!visit_tracking) return;
+    page.visit_bits[page.visit_words * 3 + word_idx] |= bit * (code & 1u);
+    page.visit_bits[page.visit_words * 4 + word_idx] |= bit * ((code >> 1) & 1u);
+  };
+  if ((word & bit) != 0) {
+    note_refusal(1);  // already marked
+    return;
+  }
+  if (object_born_in_cycle(object, context.epoch)) {
+    note_refusal(2);  // born this cycle
+    return;
+  }
   bool young = false;
   if (page.young_objects != 0) {
     young = object_young(object);
-    if (context.young_only && !young) return;
+    if (context.young_only && !young) {
+      note_refusal(3);  // old object, minor cycle
+      return;
+    }
   }
   word |= bit;
   ++page.marked_objects;
@@ -3688,6 +3710,16 @@ bool mark_slice_locked(size_t budget_bytes) {
   while (!active_mark.worklist.empty() && touched < budget_bytes) {
     ++cycle_timing.mark_objects;
     const ObjectRef object = active_mark.worklist.pop();
+    // Coverage, not classification: this is the set the marker actually walked.
+    if (mark_visit_tracking_enabled()) {
+      GcPage& walked = *object.page;
+      if (walked.visit_bits && walked.visit_words != 0) {
+        const size_t popped_slot = mark_bit_index(object);
+        if (popped_slot / 64 < walked.visit_words)
+          walked.visit_bits[walked.visit_words * 2 + popped_slot / 64] |=
+              uint64_t{1} << (popped_slot % 64);
+      }
+    }
     const PageKind kind = object.page->kind;
     const size_t header_bytes = page_header_bytes(kind);
     const nrq_object_layout* layout = object_layout(object);
@@ -5400,7 +5432,7 @@ void reset_page_gc_metadata_locked(GcPage& page) {
     // address must not inherit an answer from the object that used to live there.
     if (page.visit_bits && page.visit_words != 0)
       std::memset(page.visit_bits.get(), 0,
-                  page.visit_words * 2 * sizeof(uint64_t));
+                  page.visit_words * 5 * sizeof(uint64_t));
   } else {
     clear_page_marks(page);
     clear_page_remembered(page);
@@ -5862,7 +5894,7 @@ void prepare_cycle_locked(bool young_only) {
       GcPage* page = entry.get();
       if (!page || !page->visit_bits || page->visit_words == 0) continue;
       std::memset(page->visit_bits.get(), 0,
-                  page->visit_words * 2 * sizeof(uint64_t));
+                  page->visit_words * 5 * sizeof(uint64_t));
     }
   }
   active_mark.reset();
@@ -9604,4 +9636,15 @@ void print_tlab_diag_report() {
 // namespace; this wrapper is what the header declares.
 int nrq_gc_debug_object_state(void* object) {
   return debug_object_state_locked_impl(object);
+}
+
+int nrq_gc_debug_page_counts(void* object, int* clears, int* site) {
+  if (clears) *clears = -1;
+  if (site) *site = -1;
+  if (!object) return -1;
+  const ObjectRef ref = find_object_locked(object);
+  if (!ref.valid()) return -2;
+  if (clears) *clears = ref.page->clear_count;
+  if (site) *site = ref.page->clear_site;
+  return 0;
 }
