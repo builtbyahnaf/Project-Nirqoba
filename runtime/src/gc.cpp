@@ -2308,6 +2308,33 @@ struct SweepHistoryRecord {
   int32_t born_refs_seen = 0;
   int32_t born_null_children = 0;
 };
+// Diagnostic: what the collector knows about one object right now. Bits 1 and 2 are
+// the provenance the reclamation record carries (offered to the marker, accepted
+// onto its worklist), 4 marked, 8 born this cycle, 16 young. A negative result means
+// the address is not a managed object (-2) or the address was not given (-1). The
+// caller uses it to walk a chain and read, hop by hop, where the marker's coverage
+// stops - which is the one thing the reclamation record cannot show, because it only
+// exists for objects that were already reclaimed.
+int debug_object_state_locked_impl(void* object) {
+  if (!object) return -1;
+  const ObjectRef ref = find_object_locked(object);
+  if (!ref.valid()) return -2;
+  GcPage& page = *ref.page;
+  int state = 0;
+  if (page.visit_bits && page.visit_words != 0) {
+    const size_t index = mark_bit_index(ref);
+    if (index / 64 < page.visit_words) {
+      const uint64_t bit = uint64_t{1} << (index % 64);
+      if ((page.visit_bits[index / 64] & bit) != 0) state |= 1;
+      if ((page.visit_bits[page.visit_words + index / 64] & bit) != 0) state |= 2;
+    }
+  }
+  if (object_marked(ref)) state |= 4;
+  if (object_born_in_cycle(ref, active_cycle_epoch)) state |= 8;
+  if (object_young(ref)) state |= 16;
+  return state;
+}
+
 constexpr size_t kSweepHistoryEntries = 512;
 SweepHistoryRecord sweep_history[kSweepHistoryEntries];
 std::atomic<size_t> sweep_history_cursor{0};
@@ -5822,6 +5849,17 @@ void prepare_cycle_locked(bool young_only) {
   // survivor count meaningful for the new snapshot.
   for (auto& entry : gc_pages) {
     if (entry) entry->born_this_cycle = 0;
+  }
+  // Visit provenance is a statement about the cycle it was recorded in. Leaving the
+  // bits from earlier cycles in place would make every survivor look like it was
+  // offered to this cycle's marker.
+  if (mark_visit_tracking_enabled()) {
+    for (auto& entry : gc_pages) {
+      GcPage* page = entry.get();
+      if (!page || !page->visit_bits || page->visit_words == 0) continue;
+      std::memset(page->visit_bits.get(), 0,
+                  page->visit_words * 2 * sizeof(uint64_t));
+    }
   }
   active_mark.reset();
   active_mark.young_only = young_only;
@@ -9556,3 +9594,9 @@ void print_tlab_diag_report() {
       static_cast<unsigned long long>(t.sweep_objects));
 }
 }  // namespace
+
+// Public entry point. The body lives next to the mark bookkeeping in the anonymous
+// namespace; this wrapper is what the header declares.
+int nrq_gc_debug_object_state(void* object) {
+  return debug_object_state_locked_impl(object);
+}

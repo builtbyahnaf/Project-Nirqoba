@@ -519,6 +519,12 @@ struct nrq_gc_sweep_record {
   int32_t born_null_children;
 };
 size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max);
+
+// Diagnostic for a chain walk: bits 1 and 2 are "offered to the marker" and
+// "accepted onto its worklist", 4 marked, 8 born this cycle, 16 young. Negative when
+// the address is not a managed object (-2) or is null (-1). Costs one directory probe
+// and is intended for failure diagnosis, not for a hot path.
+int nrq_gc_debug_object_state(void* object);
 // The shared layout descriptor the object was allocated with, or null when the
 // address is not a live managed object. A diagnostic: because instances of one
 // layout share a descriptor, equal pointers mean equal layout.

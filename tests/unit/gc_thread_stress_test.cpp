@@ -87,6 +87,20 @@ uint64_t verify_chain(Failure& failure, void* head, uint64_t expected_stamp,
   for (void* cursor = head; cursor && hops < limit; ++hops) {
     const auto* cell = static_cast<const Cell*>(cursor);
     if (cell->stamp == 0 || cell->stamp >= previous) {
+      // Where the marker's coverage stops. The reclamation record only exists for
+      // objects already swept, so the hops above it are invisible without this: a
+      // hop that was never offered, followed by hops that were, says the edge above
+      // it was never followed.
+      {
+        void* link = head;
+        for (size_t hop = 1; link && hop <= limit + 1; ++hop) {
+          const int state = nrq_gc_debug_object_state(link);
+          std::fprintf(stderr, "NRQ_HOP n=%zu addr=%p state=%d\n", hop, link,
+                       state);
+          if (state < 0) break;
+          link = static_cast<const Cell*>(link)->child;
+        }
+      }
       nrq_gc_sweep_record history[256];
       const size_t recorded = nrq_gc_sweep_history(history, 256);
       for (size_t entry = 0; entry < recorded; ++entry) {
