@@ -488,6 +488,13 @@ struct nrq_gc_sweep_record {
   uint64_t mark_word;
   uint32_t mark_bit;
   int32_t page_marked_objects;
+  // Provenance (NRQ_GC_VISIT_TRACK only): 1 when the marker was ever offered this
+  // object, and 1 when it was ever accepted onto the worklist. `seen=0` means the
+  // edge that should have led here was never traced; `pushed=0` with `seen=1` means
+  // it was offered and a filter turned it away; `pushed=1` means it was queued and
+  // the mark was lost afterwards.
+  int32_t visit_seen;
+  int32_t visit_pushed;
 };
 size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max);
 // The shared layout descriptor the object was allocated with, or null when the

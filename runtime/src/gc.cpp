@@ -240,6 +240,12 @@ struct GcPage {
   // without reading every header in it.
   uint64_t* mark_bits = nullptr;
   size_t mark_words = 0;
+  // Provenance telemetry (NRQ_GC_VISIT_TRACK): two bits per object recording that
+  // the marker was ever offered it and that it was ever accepted onto the
+  // worklist. Their whole purpose is to separate "the edge was never traced" from
+  // "the mark was set and then lost", which look identical at sweep time.
+  std::unique_ptr<uint64_t[]> visit_bits;
+  size_t visit_words = 0;
   size_t marked_objects = 0;
   size_t marked_young_objects = 0;
   // Remembered-set membership is a property of a young object, but it is
@@ -2231,6 +2237,10 @@ struct SweepHistoryRecord {
   uint64_t mark_word = 0;
   uint32_t mark_bit = 0;
   int32_t page_marked_objects = 0;
+  // Whether the marker was ever offered this object and ever queued it
+  // (NRQ_GC_VISIT_TRACK only). Stays zero when tracking is off.
+  int32_t visit_seen = 0;
+  int32_t visit_pushed = 0;
 };
 constexpr size_t kSweepHistoryEntries = 512;
 SweepHistoryRecord sweep_history[kSweepHistoryEntries];
@@ -2269,6 +2279,20 @@ void record_sweep_object_locked(const ObjectRef& object, bool whole_page) {
   }
   record.page_marked_objects =
       static_cast<int32_t>(object.page->marked_objects);
+  if (object.page->visit_bits && object.page->visit_words != 0) {
+    const size_t bit_index = mark_bit_index(object);
+    const size_t visit_word = bit_index / 64;
+    if (visit_word < object.page->visit_words) {
+      const uint64_t visit_bit = uint64_t{1} << (bit_index % 64);
+      record.visit_seen =
+          (object.page->visit_bits[visit_word] & visit_bit) != 0 ? 1 : 0;
+      record.visit_pushed =
+          (object.page->visit_bits[object.page->visit_words + visit_word] &
+           visit_bit) != 0
+              ? 1
+              : 0;
+    }
+  }
   record.page_index = SIZE_MAX;
   for (size_t slot = 0; slot < gc_pages.size(); ++slot) {
     if (gc_pages[slot].get() != object.page) continue;
@@ -3036,6 +3060,11 @@ void trace_children(const ObjectRef& object, nrq_gc_visit_fn visit,
   }
 }
 
+bool mark_visit_tracking_enabled() {
+  static const bool enabled = std::getenv("NRQ_GC_VISIT_TRACK") != nullptr;
+  return enabled;
+}
+
 void enqueue_object_locked(const ObjectRef& object, MarkContext& context) {
   if (!object.valid()) return;
   GcPage& page = *object.page;
@@ -3051,6 +3080,14 @@ void enqueue_object_locked(const ObjectRef& object, MarkContext& context) {
     nrq_runtime_fatal("GC object mark bit is outside its page");
   uint64_t& word = page.mark_bits[word_idx];
   const uint64_t bit = uint64_t{1} << (index % 64);
+  const bool visit_tracking = mark_visit_tracking_enabled();
+  if (visit_tracking) {
+    if (!page.visit_bits) {
+      page.visit_words = page.mark_words;
+      page.visit_bits.reset(new uint64_t[page.mark_words * 2]());
+    }
+    page.visit_bits[word_idx] |= bit;
+  }
   if ((word & bit) != 0) return;
   if (object_born_in_cycle(object, context.epoch)) return;
   bool young = false;
@@ -3062,6 +3099,7 @@ void enqueue_object_locked(const ObjectRef& object, MarkContext& context) {
   ++page.marked_objects;
   if (young) ++page.marked_young_objects;
   context.worklist.push(object);
+  if (visit_tracking) page.visit_bits[page.visit_words + word_idx] |= bit;
 }
 
 void resolve_reference_locked(void* object, MarkContext& context) {
@@ -5242,6 +5280,11 @@ void reset_page_gc_metadata_locked(GcPage& page) {
     page.marked_objects = 0;
     page.marked_young_objects = 0;
     page.remembered_objects = 0;
+    // The visit bitmaps describe the previous incarnation's objects: a reused
+    // address must not inherit an answer from the object that used to live there.
+    if (page.visit_bits && page.visit_words != 0)
+      std::memset(page.visit_bits.get(), 0,
+                  page.visit_words * 2 * sizeof(uint64_t));
   } else {
     clear_page_marks(page);
     clear_page_remembered(page);
@@ -8765,6 +8808,8 @@ size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max) {
     out[index].mark_word = record.mark_word;
     out[index].mark_bit = record.mark_bit;
     out[index].page_marked_objects = record.page_marked_objects;
+    out[index].visit_seen = record.visit_seen;
+    out[index].visit_pushed = record.visit_pushed;
   }
   return count;
 }
