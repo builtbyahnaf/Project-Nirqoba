@@ -1586,6 +1586,14 @@ ObjectRef find_object_locked(void* object);
 // page-directory probe with one range compare. A child outside the page takes the
 // ordinary path, and a slot this page does not consider an object start is the
 // same decisive miss find_object_locked reports.
+// A child that lands inside its parent's page but does not pass the start-bit test
+// is reported as "not an object" - which the marker treats as "nothing to do". If
+// that slot was in fact a live object, the edge was dropped silently, which is
+// exactly what a victim no path ever offered looks like. Counting the two rejection
+// branches is what separates a structural drop from a concurrent one.
+int32_t child_below_header = 0;
+int32_t child_start_missing = 0;
+
 ObjectRef find_child_in_page_locked(void* object, const GcPage* page) {
   if (!page || !page->object_starts) return find_object_locked(object);
   if (page->starts_pending)
@@ -1595,9 +1603,15 @@ ObjectRef find_child_in_page_locked(void* object, const GcPage* page) {
   const size_t payload_offset = static_cast<size_t>(address - page->storage);
   if (payload_offset >= page->capacity) return find_object_locked(object);
   const size_t header_bytes = page_header_bytes(*page);
-  if (payload_offset < header_bytes) return ObjectRef{};
+  if (payload_offset < header_bytes) {
+    ++child_below_header;
+    return ObjectRef{};
+  }
   const size_t span_offset = payload_offset - header_bytes;
-  if (!test_object_start(*page, span_offset)) return ObjectRef{};
+  if (!test_object_start(*page, span_offset)) {
+    ++child_start_missing;
+    return ObjectRef{};
+  }
   return ObjectRef{page->storage + span_offset, const_cast<GcPage*>(page)};
 }
 
@@ -2277,6 +2291,14 @@ struct SweepHistoryRecord {
   int32_t enqueued_after_sweep = 0;
   int32_t clear_count = 0;
   int32_t clear_site = 0;
+  int32_t child_start_missing = 0;
+  int32_t child_below_header = 0;
+  // The page's birth stamp against the cycle that swept it. The born pass walks a
+  // page only when its bit count says it holds born objects, and then asks each
+  // object whether it was born *this* epoch: a stamp from any other epoch makes the
+  // pass find nothing and the children of those objects go untraced.
+  uint64_t born_epoch = 0;
+  int32_t born_this_cycle = 0;
 };
 constexpr size_t kSweepHistoryEntries = 512;
 SweepHistoryRecord sweep_history[kSweepHistoryEntries];
@@ -2319,6 +2341,10 @@ void record_sweep_object_locked(const ObjectRef& object, bool whole_page) {
   record.enqueued_after_sweep = enqueued_during_sweep;
   record.clear_count = object.page->clear_count;
   record.clear_site = object.page->clear_site;
+  record.child_start_missing = child_start_missing;
+  record.child_below_header = child_below_header;
+  record.born_epoch = object.page->born_epoch;
+  record.born_this_cycle = static_cast<int32_t>(object.page->born_this_cycle);
   if (object.page->visit_bits && object.page->visit_words != 0) {
     const size_t bit_index = mark_bit_index(object);
     const size_t visit_word = bit_index / 64;
@@ -8867,6 +8893,10 @@ size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max) {
     out[index].enqueued_after_sweep = record.enqueued_after_sweep;
     out[index].clear_count = record.clear_count;
     out[index].clear_site = record.clear_site;
+    out[index].child_start_missing = record.child_start_missing;
+    out[index].child_below_header = record.child_below_header;
+    out[index].born_epoch = record.born_epoch;
+    out[index].born_this_cycle = record.born_this_cycle;
   }
   return count;
 }

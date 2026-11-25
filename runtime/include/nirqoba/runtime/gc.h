@@ -502,6 +502,16 @@ struct nrq_gc_sweep_record {
   int32_t enqueued_after_sweep;
   int32_t clear_count;
   int32_t clear_site;
+  // Children found inside their parent's page that failed the start-bit test, and
+  // children that fell below the page's header. Both are reported to the marker as
+  // "not an object"; a live object counted here is an edge the sweep never knew
+  // about.
+  int32_t child_start_missing;
+  int32_t child_below_header;
+  // The page's birth stamp and born-object count at reclamation. A stamp that does
+  // not match the sweeping cycle means the born pass could not find those objects.
+  uint64_t born_epoch;
+  int32_t born_this_cycle;
 };
 size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max);
 // The shared layout descriptor the object was allocated with, or null when the
