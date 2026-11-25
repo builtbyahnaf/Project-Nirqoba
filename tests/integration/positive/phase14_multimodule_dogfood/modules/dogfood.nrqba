@@ -36,3 +36,28 @@ public string function describe(int kind) {
     }
     return "many";
 }
+
+// A failure that crosses the module boundary: the caller propagates it with `?`
+// and its own deferred cleanup still runs.
+public Result<int, string> function triple_checked(int value) {
+    if (value < 0) {
+        return result.err("negative input");
+    }
+    return result.ok(scale(value));
+}
+
+public int function classify(int value) {
+    var kind = 2;
+    switch (value) {
+        case 0: {
+            kind = 0;
+        }
+        case 3: {
+            kind = 1;
+        }
+        default: {
+            kind = 2;
+        }
+    }
+    return kind;
+}

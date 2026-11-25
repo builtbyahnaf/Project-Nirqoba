@@ -1,5 +1,13 @@
 import dogfood;
 
+// The error arrives from another module and leaves through this frame, so the
+// defer below is the evidence that a propagated failure unwinds like a return.
+Result<int, string> function attempt(int value) {
+    defer print("release");
+    var scaled = dogfood.triple_checked(value)?;
+    return result.ok(scaled + 1);
+}
+
 int function main() {
     // A size computed by the imported module's own layout, used to size a buffer
     // in the importer: the count crosses the module boundary as a constant.
@@ -12,9 +20,30 @@ int function main() {
     var index = 0;
     while (index < 4) {
         nodes[index].value = index;
-        
+        nodes[index].weight = index * 2;
         index = index + 1;
     }
     print(nodes[3].value);
+
+    var ok = attempt(2);
+    print(ok.unwrap());
+    var bad = attempt(-1);
+    if (bad.is_err()) {
+        print(bad.unwrap_err());
+    }
+
+    switch (dogfood.classify(3)) {
+        case 0: {
+            print("zero");
+        }
+        case 1: {
+            print("positive");
+        }
+        default: {
+            print("other");
+        }
+    }
+
+    print(env.args().length);
     return 0;
 }

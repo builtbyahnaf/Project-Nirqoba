@@ -1,6 +1,7 @@
 {
   "mode": "build_and_run",
   "module_paths": ["modules"],
+  "args": ["--", "alpha", "beta"],
   "expect_exit": 0,
-  "expect_stdout": "16\n21\none/many\n3\n"
+  "expect_stdout": "16\n21\none/many\n3\nrelease\n7\nrelease\nnegative input\npositive\n2\n"
 }
