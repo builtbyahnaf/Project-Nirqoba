@@ -95,6 +95,7 @@ uint64_t verify_chain(Failure& failure, void* head, uint64_t expected_stamp,
                      "NRQ_FREED hop=%llu cell=%p cycle=%llu born=%d marked=%d "
                      "whole_page=%d kind=%d layout=%u live=%d gen=%d full=%d "
                      "mark_word=%llx bit=%u pagemarks=%d seen=%d pushed=%d "
+                     "pending=%d after=%d clears=%d site=%d "
                      "page=%p idx=%llu ret=%d\n",
                      static_cast<unsigned long long>(hops),
                      static_cast<const void*>(cursor),
@@ -112,6 +113,10 @@ uint64_t verify_chain(Failure& failure, void* head, uint64_t expected_stamp,
                      static_cast<int>(history[entry].page_marked_objects),
                      static_cast<int>(history[entry].visit_seen),
                      static_cast<int>(history[entry].visit_pushed),
+                     static_cast<int>(history[entry].pending_at_sweep),
+                     static_cast<int>(history[entry].enqueued_after_sweep),
+                     static_cast<int>(history[entry].clear_count),
+                     static_cast<int>(history[entry].clear_site),
                      history[entry].page,
                      static_cast<unsigned long long>(history[entry].page_index),
                      static_cast<int>(history[entry].retired));

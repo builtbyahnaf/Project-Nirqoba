@@ -246,6 +246,12 @@ struct GcPage {
   // "the mark was set and then lost", which look identical at sweep time.
   std::unique_ptr<uint64_t[]> visit_bits;
   size_t visit_words = 0;
+  // Who last cleared a mark on this page and how often, so a mark that reached the
+  // sweep missing can name the code that removed it instead of leaving it to be
+  // inferred. Site 1 is the page-level bulk clear, site 2 a single object's mark.
+  int32_t clear_count = 0;
+  int32_t clear_site = 0;
+  uint64_t clear_cycle = 0;
   size_t marked_objects = 0;
   size_t marked_young_objects = 0;
   // Remembered-set membership is a property of a young object, but it is
@@ -806,6 +812,10 @@ inline bool object_marked(const ObjectRef& ref) {
   return (page.mark_bits[index / 64] >> (index % 64)) & 1;
 }
 
+// Declared before the mark bookkeeping because that bookkeeping keeps the cycle it
+// belongs to, and the cycle is a property of the whole collector, not of a page.
+uint64_t active_cycle_epoch = 0;
+
 // Sets or clears a mark and keeps the page's survivor counts exact. The counts
 // are what let sweep classify a whole page without reading its objects.
 inline void set_object_marked(const ObjectRef& ref, bool value) {
@@ -819,6 +829,17 @@ inline void set_object_marked(const ObjectRef& ref, bool value) {
   const uint64_t bit = uint64_t{1} << (index % 64);
   const bool was_marked = (word & bit) != 0;
   if (value == was_marked) return;
+  // Provenance: a single-object clear, as opposed to the page-level bulk clear.
+  if constexpr (nirq::runtime_debug_enabled) {
+    if (!value) {
+      if (page.clear_cycle != active_cycle_epoch) {
+        page.clear_cycle = active_cycle_epoch;
+        page.clear_count = 0;
+      }
+      ++page.clear_count;
+      page.clear_site = 2;
+    }
+  }
   if (value) {
     word |= bit;
     ++page.marked_objects;
@@ -842,6 +863,12 @@ inline void clear_page_marks(GcPage& page) {
   if (page.mark_bits && page.mark_words != 0) {
     std::memset(page.mark_bits, 0, page.mark_words * sizeof(uint64_t));
   }
+  if (page.clear_cycle != active_cycle_epoch) {
+    page.clear_cycle = active_cycle_epoch;
+    page.clear_count = 0;
+  }
+  ++page.clear_count;
+  page.clear_site = 1;
   page.marked_objects = 0;
   page.marked_young_objects = 0;
 }
@@ -2203,8 +2230,13 @@ bool active_collection_is_minor = false;
 // heap lock is held and published for the triggered collection to consume.
 size_t live_heap_bytes_at_last_major = 0;
 std::atomic<bool> next_cycle_is_major{false};
-uint64_t active_cycle_epoch = 0;
 std::atomic<uint64_t> next_cycle_epoch{1};
+// Transition provenance: what the mark worklist still held when the sweep began,
+// how many objects were offered to the marker after that point, and which cycle
+// the sweep belongs to (so a later cycle's marking is not counted as sweeping).
+int32_t pending_at_sweep_start = -1;
+int32_t enqueued_during_sweep = 0;
+uint64_t sweep_cycle_epoch = 0;
 
 // History of reclamation decisions, newest last. A stamp that vanishes under a
 // concurrent collector says storage was freed, but not which cycle freed it or
@@ -2241,6 +2273,10 @@ struct SweepHistoryRecord {
   // (NRQ_GC_VISIT_TRACK only). Stays zero when tracking is off.
   int32_t visit_seen = 0;
   int32_t visit_pushed = 0;
+  int32_t pending_at_sweep = 0;
+  int32_t enqueued_after_sweep = 0;
+  int32_t clear_count = 0;
+  int32_t clear_site = 0;
 };
 constexpr size_t kSweepHistoryEntries = 512;
 SweepHistoryRecord sweep_history[kSweepHistoryEntries];
@@ -2279,6 +2315,10 @@ void record_sweep_object_locked(const ObjectRef& object, bool whole_page) {
   }
   record.page_marked_objects =
       static_cast<int32_t>(object.page->marked_objects);
+  record.pending_at_sweep = pending_at_sweep_start;
+  record.enqueued_after_sweep = enqueued_during_sweep;
+  record.clear_count = object.page->clear_count;
+  record.clear_site = object.page->clear_site;
   if (object.page->visit_bits && object.page->visit_words != 0) {
     const size_t bit_index = mark_bit_index(object);
     const size_t visit_word = bit_index / 64;
@@ -3081,6 +3121,7 @@ void enqueue_object_locked(const ObjectRef& object, MarkContext& context) {
   uint64_t& word = page.mark_bits[word_idx];
   const uint64_t bit = uint64_t{1} << (index % 64);
   const bool visit_tracking = mark_visit_tracking_enabled();
+  if (sweep_cycle_epoch == context.epoch) ++enqueued_during_sweep;
   if (visit_tracking) {
     if (!page.visit_bits) {
       page.visit_words = page.mark_words;
@@ -5968,6 +6009,18 @@ void run_collection(bool young_only) {
           // the lock for sweep slices. Allocations after this point either land
           // in a fresh page (outside the captured set) or carry a birth epoch
           // past the cycle, so the sweeper never has to reason about them.
+          // What the sweep is about to run against. A mark is a promise to trace
+          // the object; a worklist that is not empty here is a promise the sweep
+          // will run past without keeping.
+          // The born pass pushes into this worklist after the ordinary walk has
+          // already reported it empty, so anything left here is a mark the sweep
+          // will never trace. 1 means "work left over", 0 means "closure closed".
+          pending_at_sweep_start =
+              (active_mark.worklist.empty() && active_mark.reference_count == 0)
+                  ? 0
+                  : 1;
+          sweep_cycle_epoch = active_cycle_epoch;
+          enqueued_during_sweep = 0;
           sweep_list.clear();
           sweep_list.swap(unindexed_objects);
           sweep_cursor = SweepCursor{};
@@ -8810,6 +8863,10 @@ size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max) {
     out[index].page_marked_objects = record.page_marked_objects;
     out[index].visit_seen = record.visit_seen;
     out[index].visit_pushed = record.visit_pushed;
+    out[index].pending_at_sweep = record.pending_at_sweep;
+    out[index].enqueued_after_sweep = record.enqueued_after_sweep;
+    out[index].clear_count = record.clear_count;
+    out[index].clear_site = record.clear_site;
   }
   return count;
 }

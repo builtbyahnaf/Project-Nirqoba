@@ -495,6 +495,13 @@ struct nrq_gc_sweep_record {
   // the mark was lost afterwards.
   int32_t visit_seen;
   int32_t visit_pushed;
+  // What the mark worklist held when the sweep began, how many objects the marker
+  // was offered after that point, and who last cleared a mark on this page. A
+  // victim whose page shows a single-object clear names the code that removed it.
+  int32_t pending_at_sweep;
+  int32_t enqueued_after_sweep;
+  int32_t clear_count;
+  int32_t clear_site;
 };
 size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max);
 // The shared layout descriptor the object was allocated with, or null when the
