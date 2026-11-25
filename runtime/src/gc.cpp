@@ -2224,6 +2224,13 @@ struct SweepHistoryRecord {
   const GcPage* page = nullptr;
   uint64_t page_index = 0;
   int32_t retired = 0;
+  // The mark bitmap word the victim sits in, its bit, and how many marks the page
+  // carried at that moment. A zero word with zero page marks says nothing was ever
+  // marked on the page; a populated word with the victim's bit clear says the mark
+  // is missing for this object alone.
+  uint64_t mark_word = 0;
+  uint32_t mark_bit = 0;
+  int32_t page_marked_objects = 0;
 };
 constexpr size_t kSweepHistoryEntries = 512;
 SweepHistoryRecord sweep_history[kSweepHistoryEntries];
@@ -2255,6 +2262,13 @@ void record_sweep_object_locked(const ObjectRef& object, bool whole_page) {
   record.generation = object_young(object) ? 0 : 1;
   record.full = active_collection_is_minor ? 0 : 1;
   record.page = object.page;
+  if (object.page->mark_bits) {
+    const size_t bit_index = mark_bit_index(object);
+    record.mark_word = object.page->mark_bits[bit_index / 64];
+    record.mark_bit = static_cast<uint32_t>(bit_index % 64);
+  }
+  record.page_marked_objects =
+      static_cast<int32_t>(object.page->marked_objects);
   record.page_index = SIZE_MAX;
   for (size_t slot = 0; slot < gc_pages.size(); ++slot) {
     if (gc_pages[slot].get() != object.page) continue;
@@ -8748,6 +8762,9 @@ size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max) {
     out[index].page = const_cast<GcPage*>(record.page);
     out[index].page_index = record.page_index;
     out[index].retired = record.retired;
+    out[index].mark_word = record.mark_word;
+    out[index].mark_bit = record.mark_bit;
+    out[index].page_marked_objects = record.page_marked_objects;
   }
   return count;
 }

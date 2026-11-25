@@ -482,6 +482,12 @@ struct nrq_gc_sweep_record {
   void* page;
   uint64_t page_index;
   int32_t retired;
+  // The mark bitmap word the address sits in, the bit within it, and the page's
+  // marked-object count at reclamation. The word separates "nothing on this page was
+  // ever marked" from "neighbouring bits are set and this one is not".
+  uint64_t mark_word;
+  uint32_t mark_bit;
+  int32_t page_marked_objects;
 };
 size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max);
 // The shared layout descriptor the object was allocated with, or null when the

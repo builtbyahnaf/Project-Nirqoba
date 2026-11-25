@@ -93,7 +93,8 @@ uint64_t verify_chain(Failure& failure, void* head, uint64_t expected_stamp,
         if (history[entry].address != cursor) continue;
         std::fprintf(stderr,
                      "NRQ_FREED hop=%llu cell=%p cycle=%llu born=%d marked=%d "
-                     "whole_page=%d kind=%d layout=%u live=%d gen=%d full=%d\n",
+                     "whole_page=%d kind=%d layout=%u live=%d gen=%d full=%d "
+                     "mark_word=%llx bit=%u pagemarks=%d page=%p idx=%llu ret=%d\n",
                      static_cast<unsigned long long>(hops),
                      static_cast<const void*>(cursor),
                      static_cast<unsigned long long>(history[entry].cycle),
@@ -104,7 +105,13 @@ uint64_t verify_chain(Failure& failure, void* head, uint64_t expected_stamp,
                      history[entry].payload_bytes,
                      static_cast<int>(history[entry].live_objects),
                      static_cast<int>(history[entry].generation),
-                     static_cast<int>(history[entry].full));
+                     static_cast<int>(history[entry].full),
+                     static_cast<unsigned long long>(history[entry].mark_word),
+                     static_cast<unsigned>(history[entry].mark_bit),
+                     static_cast<int>(history[entry].page_marked_objects),
+                     history[entry].page,
+                     static_cast<unsigned long long>(history[entry].page_index),
+                     static_cast<int>(history[entry].retired));
       }
       std::fprintf(stderr, "NRQ_STAMP hop=%llu cell=%p stamp=%llu\n",
                    static_cast<unsigned long long>(hops),
