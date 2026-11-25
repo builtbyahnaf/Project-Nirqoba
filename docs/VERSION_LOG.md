@@ -49,10 +49,24 @@ Release label `+0.005` (`0.690-beta` -> `0.695-beta`).
   roots before the write landed - and putting the store inside the region with the
   collector's depth handshake measured two failures in five hundred runs, the same
   rate as before, for two fences on every root store. It was reverted rather than
-  kept: a cost on the hot path with no measurement behind it is not a fix. Phase 14
-  therefore closes as a feature milestone with this one stability defect documented
-  and carried into Phase 15, where it is the first task; nothing in this release
-  trades correctness for a green suite.
+  kept: a cost on the hot path with no measurement behind it is not a fix.
+- **What the mark word proved (14p).** Reclamation records now carry the 64-bit mark
+  word an object sits in, its bit and the page's marked-object count. The failures
+  read `mark_word=0x1400` with two page marks and the victim on bit 8, and
+  `mark_word=0x400000` with one page mark and the victim on bit 20: neighbours in the
+  same word are marked, the page's marks were never wiped, and the victim's bit is
+  clear. So the mark was never set for that object alone. The mechanism is the one
+  publication is supposed to close: an object published while marking is still
+  running is skipped by the marker and depends on the transition's born pass, which
+  has already run when that object's field writes land.
+- **The fix for that mechanism, attempted and rejected (14p).** Publication was
+  deferred to the moment an object enters a root, and publication then traced the
+  new object's references in every non-idle phase instead of only during the sweep.
+  Measured: 179 failures in 180 runs, including on minor cycles. It was reverted
+  whole; the regression is not committed and the telemetry that diagnosed it is.
+  Phase 14 therefore closes as a feature milestone with this one stability defect
+  documented and carried into Phase 15, where it is the first task; nothing in this
+  release trades correctness for a green suite.
 
 #### Micro-phase 14m-14n: layout-aware `sizeof`
 
@@ -76,8 +90,14 @@ Release label `+0.005` (`0.690-beta` -> `0.695-beta`).
 - **Positive coverage** (`tests/integration/positive/phase14_multimodule_dogfood`): a
   size measured by the imported module's layout sizes a buffer in the importer, a
   public function reaches a private helper inside its module, text built by one
-  module is concatenated by the other, and the buffer is written and read element by
-  element.
+  module is concatenated by the other, the buffer is written and read element by
+  element, a `Result` returned by the module is propagated through the importer with
+  `?` across a frame holding an active `defer` (so the teardown prints on the error
+  path exactly as on the success path), the module dispatches with `switch`, and the
+  program reads `env.args()`.
+- **`extern` FFI is still not in the fixture.** Linking a C object from a fixture is
+  a harness capability this phase did not add, so the FFI path stays covered by its
+  own single-file fixtures rather than across a module boundary.
 - **Negative coverage** (`tests/integration/negative/private_symbol_across_modules`):
   calling that private function from outside its module is rejected with the
   diagnostic that names the module and the symbol.
