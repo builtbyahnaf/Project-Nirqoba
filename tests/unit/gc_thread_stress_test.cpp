@@ -18,6 +18,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <thread>
@@ -86,6 +87,27 @@ uint64_t verify_chain(Failure& failure, void* head, uint64_t expected_stamp,
   for (void* cursor = head; cursor && hops < limit; ++hops) {
     const auto* cell = static_cast<const Cell*>(cursor);
     if (cell->stamp == 0 || cell->stamp >= previous) {
+      nrq_gc_sweep_record history[256];
+      const size_t recorded = nrq_gc_sweep_history(history, 256);
+      for (size_t entry = 0; entry < recorded; ++entry) {
+        if (history[entry].address != cursor) continue;
+        std::fprintf(stderr,
+                     "NRQ_FREED hop=%llu cell=%p cycle=%llu born=%d marked=%d "
+                     "whole_page=%d kind=%d layout=%u live=%d\n",
+                     static_cast<unsigned long long>(hops),
+                     static_cast<const void*>(cursor),
+                     static_cast<unsigned long long>(history[entry].cycle),
+                     static_cast<int>(history[entry].born),
+                     static_cast<int>(history[entry].marked),
+                     static_cast<int>(history[entry].whole_page),
+                     static_cast<int>(history[entry].kind),
+                     history[entry].payload_bytes,
+                     static_cast<int>(history[entry].live_objects));
+      }
+      std::fprintf(stderr, "NRQ_STAMP hop=%llu cell=%p stamp=%llu\n",
+                   static_cast<unsigned long long>(hops),
+                   static_cast<const void*>(cell),
+                   static_cast<unsigned long long>(cell->stamp));
       failure.stamp_mismatch.fetch_add(1);
       break;
     }
@@ -113,13 +135,21 @@ TEST(GcThreadStressTest, MixedAllocationUnderConcurrentCollection) {
   Failure failure;
   std::atomic<bool> stop{false};
   std::atomic<uint64_t> collected{0};
+  std::atomic<bool> collected_once{false};
 
   std::vector<std::thread> workers;
   for (int thread = 0; thread < kThreads; ++thread) {
-    workers.emplace_back([thread, &failure, &collected] {
+    workers.emplace_back([thread, &failure, &collected, &collected_once] {
       nrq_gc_mutator_enter();
       Slot head;
       Slot anchor;
+      // Register the generation slot once, before anything is stored in it. A
+      // slot that is unregistered while it already names an object publishes that
+      // object only through the path its allocation took, so a cycle that lands in
+      // that window may legitimately reclaim an object this thread is about to
+      // call reachable. Registration is the property under test here, not a step
+      // to be repeated per generation.
+      nrq_gc_root_register_typed(head.address(), sizeof(void*), kChildOffset, 1);
       // One arena per mutator: explicit storage is owned, not shared.
       void* arena = nrq_cdmm_arena_create(8192, 0);
       if (!arena) failure.allocation_failed.fetch_add(1);
@@ -151,13 +181,11 @@ TEST(GcThreadStressTest, MixedAllocationUnderConcurrentCollection) {
 
         // Publish this generation through a slot the thread owns and reuses.
         nrq_gc_root_store(head.address(), cell);
-        nrq_gc_root_register_typed(head.address(), sizeof(void*), kChildOffset, 1);
         // Publish this thread's batch before walking it, so the walk is over
         // storage the collector is allowed to see rather than over a range the
         // collector must ignore.
         nrq_gc_safepoint();
         verify_chain(failure, *head.address(), stamp, 8);
-        nrq_gc_root_unregister(head.address());
 
         // H8: a compact record. The representation is a property of published
         // storage, so it is not read here: this thread's batch is not visible
@@ -203,6 +231,17 @@ TEST(GcThreadStressTest, MixedAllocationUnderConcurrentCollection) {
         }
       }
 
+      // The collector is a thread of its own, so the work below can finish before
+      // it has completed a single cycle: that is a fact about the scheduler, not
+      // about the collector. Stay in the mutator region - parked at a safepoint,
+      // so a cycle shrinks the registry it waits on rather than blocking it - until
+      // one full cycle has finished, which is what the assertion counts. The bound
+      // keeps a collector that never finishes from hanging the suite.
+      for (int spin = 0; spin < 200000 && !collected_once.load(); ++spin) {
+        nrq_gc_safepoint();
+        std::this_thread::yield();
+      }
+
       // Leaving publishes this thread's batch. Only then can the object the
       // anchor points at be classified: the last young cell was written through
       // the barrier while it was still thread-local.
@@ -214,18 +253,20 @@ TEST(GcThreadStressTest, MixedAllocationUnderConcurrentCollection) {
 
       // The anchor is still rooted across the leave, which is what kept `old` and
       // its child alive for the check above.
+      nrq_gc_root_unregister(head.address());
       nrq_gc_root_unregister(anchor.address());
       if (arena) nrq_cdmm_arena_destroy(arena);
     });
   }
 
-  std::thread collector([&stop, &collected] {
+  std::thread collector([&stop, &collected, &collected_once] {
     uint64_t rounds = 0;
     while (!stop.load(std::memory_order_relaxed)) {
       nrq_gc_collect_minor();
       if ((++rounds % 4) == 0) {
         nrq_gc_collect();
         collected.fetch_add(1);
+        collected_once.store(true);
       }
       std::this_thread::yield();
     }

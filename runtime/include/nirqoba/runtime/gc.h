@@ -450,6 +450,26 @@ size_t nrq_gc_object_index_entries(void);
 // Interior pointers, stale addresses, and arbitrary invalid references report 0.
 // This exposes the collector's object-discovery path for auditing and tests.
 int32_t nrq_gc_pointer_is_managed(void* object);
+// Diagnostic-only history of reclamation decisions, newest last. Each entry
+// names storage the sweep freed and the collector's view of it at that moment:
+// the cycle, the object's start offset, its layout, and whether it was born in
+// that cycle or marked. A stress test that reads a survivor whose stamp vanished
+// can ask which cycle freed that address instead of inferring it from counters.
+// `whole_page` marks an entry the page-level reclamation recorded, where the
+// address is the page's storage and `live_objects` is what the page claimed to
+// hold when the collector decided it was entirely dead.
+struct nrq_gc_sweep_record {
+  void* address;
+  uint64_t cycle;
+  uint64_t offset;
+  uint32_t payload_bytes;
+  int32_t kind;
+  int32_t born;
+  int32_t marked;
+  int32_t whole_page;
+  int32_t live_objects;
+};
+size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max);
 // The shared layout descriptor the object was allocated with, or null when the
 // address is not a live managed object. A diagnostic: because instances of one
 // layout share a descriptor, equal pointers mean equal layout.

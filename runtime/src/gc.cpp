@@ -373,7 +373,32 @@ struct GcPage {
   // Counted per page so a workload can show whether the bound is costing space
   // rather than leaving that to inference.
   size_t dropped_free_bytes = 0;
+  // Objects a mutator has written into this page but not yet published. A
+  // thread-local object is invisible to the collector until the range that names
+  // it is published, so a page whose counters and marks say it is entirely dead
+  // can still hold one that a mutator is about to hand out. The whole-page
+  // reclamation path therefore has to see this at zero; a page that carries an
+  // uncommitted object falls back to the per-object sweep, which only frees the
+  // starts it can actually see.
+  std::atomic<uint32_t> uncommitted_objects{0};
 };
+
+// Drops `count` unpublished objects from a page's tally, saturating at zero so a
+// publication that names more objects than the page is charged with cannot wrap
+// the counter into a value that looks committed.
+void release_uncommitted_objects(GcPage& page, uint64_t count) {
+  if (count == 0) return;
+  const uint32_t amount =
+      count > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(count);
+  uint32_t current = page.uncommitted_objects.load(std::memory_order_relaxed);
+  while (current != 0) {
+    const uint32_t next = current > amount ? current - amount : 0;
+    if (page.uncommitted_objects.compare_exchange_weak(
+            current, next, std::memory_order_relaxed)) {
+      return;
+    }
+  }
+}
 
 
 inline size_t page_header_bytes(const GcPage& page) {
@@ -2165,6 +2190,60 @@ size_t live_heap_bytes_at_last_major = 0;
 std::atomic<bool> next_cycle_is_major{false};
 uint64_t active_cycle_epoch = 0;
 std::atomic<uint64_t> next_cycle_epoch{1};
+
+// History of reclamation decisions, newest last. A stamp that vanishes under a
+// concurrent collector says storage was freed, but not which cycle freed it or
+// what the collector believed about the object; both questions have to be
+// answerable after the fact, so every reclamation records one entry.
+struct SweepHistoryRecord {
+  void* address = nullptr;
+  uint64_t cycle = 0;
+  uint64_t offset = 0;
+  uint32_t payload_bytes = 0;
+  int32_t kind = 0;
+  int32_t born = 0;
+  int32_t marked = 0;
+  int32_t whole_page = 0;
+  int32_t live_objects = 0;
+};
+constexpr size_t kSweepHistoryEntries = 512;
+SweepHistoryRecord sweep_history[kSweepHistoryEntries];
+std::atomic<size_t> sweep_history_cursor{0};
+
+void record_sweep_object_locked(const ObjectRef& object, bool born, bool marked) {
+  if constexpr (!nirq::runtime_debug_enabled) return;
+  const size_t index =
+      sweep_history_cursor.fetch_add(1, std::memory_order_relaxed) %
+      kSweepHistoryEntries;
+  SweepHistoryRecord& record = sweep_history[index];
+  const nrq_object_layout* layout = object_layout(object);
+  record.address = object_payload(object);
+  record.cycle = active_cycle_epoch;
+  record.offset = static_cast<uint64_t>(object.header - object.page->storage);
+  record.payload_bytes = layout ? layout->payload_size : 0;
+  record.kind = static_cast<int32_t>(object.page->kind);
+  record.born = born ? 1 : 0;
+  record.marked = marked ? 1 : 0;
+  record.whole_page = 0;
+  record.live_objects = static_cast<int32_t>(object.page->live_objects);
+}
+
+void record_sweep_page_locked(const GcPage& page, size_t live) {
+  if constexpr (!nirq::runtime_debug_enabled) return;
+  const size_t index =
+      sweep_history_cursor.fetch_add(1, std::memory_order_relaxed) %
+      kSweepHistoryEntries;
+  SweepHistoryRecord& record = sweep_history[index];
+  record.address = page.storage;
+  record.cycle = active_cycle_epoch;
+  record.offset = 0;
+  record.payload_bytes = 0;
+  record.kind = static_cast<int32_t>(page.kind);
+  record.born = 0;
+  record.marked = 0;
+  record.whole_page = 1;
+  record.live_objects = static_cast<int32_t>(live);
+}
 std::atomic<size_t> minor_collections_since_major{0};
 // A trace callback may visit many references. Resolve them in a short
 // contiguous batch after the callback returns instead of interleaving a page
@@ -2396,6 +2475,12 @@ void clear_h0_fast_path(NrqGcFastTls& fast) {
   fast.h0_fast_layout = nullptr;
 }
 
+// Declared here because publication precedes the marking primitives it uses once
+// a sweep is already running.
+void trace_children(const ObjectRef& object, nrq_gc_visit_fn visit,
+                    void* context);
+void mark_reference_value(void* reference, void* context);
+
 void publish_one_range_locked(const NrqGcPendingRange& range,
                               bool collection_active,
                               uint64_t next_epoch) {
@@ -2451,7 +2536,18 @@ void publish_one_range_locked(const NrqGcPendingRange& range,
     if (range_bytes > SIZE_MAX - payload_bytes)
       nrq_runtime_fatal("GC page live-byte count overflow");
     range_bytes += payload_bytes;
-    if (collection_active) mark_object_born(object, next_epoch);
+    if (collection_active) {
+      mark_object_born(object, next_epoch);
+      // Marking is already finished once the sweep runs, so an object that
+      // appears then keeps its references alive only if they are marked as it
+      // arrives: the transition pass cannot have seen this object. A page that
+      // was reclaimed before this point is the only case left uncovered, and it
+      // needs the object to have been allocated after its own referent's page was
+      // already swept.
+      if (collection_phase.load(std::memory_order_relaxed) ==
+          CollectionPhase::Sweeping)
+        trace_children(object, mark_reference_value, nullptr);
+    }
     if (object_young(object)) {
       ++range_young;
     } else {
@@ -2462,6 +2558,7 @@ void publish_one_range_locked(const NrqGcPendingRange& range,
 
   if (page.live_objects > SIZE_MAX - range_objects)
     nrq_runtime_fatal("GC page live-object count overflow");
+  release_uncommitted_objects(page, range_objects);
   page.live_objects += range_objects;
   if (page.live_payload_bytes > SIZE_MAX - range_bytes)
     nrq_runtime_fatal("GC page live-byte count overflow");
@@ -2516,7 +2613,14 @@ void record_window_runs_locked(GcPage& page, MutatorState& mutator) {
         return;
       }
     }
-    if (page.pending_start_count >= GcPage::kMaxPendingStartRuns) return;
+    // A run the list cannot hold has to be written out now: its objects are
+    // already counted live, so dropping the run would leave them with no start
+    // bit at all. A reference into them would then fail to resolve, the marker
+    // would never reach them, and the sweep would free storage a reachable chain
+    // still points at. Writing the recorded runs and starting a fresh list keeps
+    // the deferral for the common case without ever losing a run.
+    if (page.pending_start_count >= GcPage::kMaxPendingStartRuns)
+      materialize_page_starts_locked(page);
     page.pending_starts[page.pending_start_count++] =
         GcPage::PendingStartRun{static_cast<uint32_t>(begin),
                                 static_cast<uint32_t>(end)};
@@ -2534,6 +2638,7 @@ void apply_window_locked(GcPage& page, size_t objects, size_t bytes,
                          bool young) {
   if (page.live_objects > SIZE_MAX - objects)
     nrq_runtime_fatal("GC page live-object count overflow");
+  release_uncommitted_objects(page, objects);
   page.live_objects += objects;
   if (page.live_payload_bytes > SIZE_MAX - bytes)
     nrq_runtime_fatal("GC page live-byte count overflow");
@@ -2564,8 +2669,8 @@ void materialize_page_starts_locked(GcPage& page) {
   for (uint8_t index = 0; index < page.pending_start_count; ++index) {
     const GcPage::PendingStartRun run = page.pending_starts[index];
     if (run.end <= run.begin || run.end > page.capacity) continue;
-    for (unsigned char* cursor = page.storage + run.begin;
-         cursor < page.storage + run.end;) {
+    unsigned char* cursor = page.storage + run.begin;
+    for (; cursor < page.storage + run.end;) {
       const ObjectRef object{cursor, &page};
       size_t payload_bytes = 0;
       if (is_compact) {
@@ -2590,6 +2695,12 @@ void materialize_page_starts_locked(GcPage& page) {
       mark_object_start(page, static_cast<size_t>(cursor - page.storage));
       cursor += span;
     }
+    // A run was recorded from object starts, so walking its spans has to land
+    // exactly on its end. A walk that stops short means a span was derived from
+    // the wrong header, and every object after it would be left without a start
+    // bit - invisible to the marker and therefore collected while reachable.
+    if (cursor != page.storage + run.end)
+      nrq_runtime_fatal("GC pending run does not end on an object boundary");
   }
   page.pending_start_count = 0;
   page.starts_pending = false;
@@ -2898,6 +3009,44 @@ void mark_value_locked(void* object) {
   resolve_reference_locked(object, active_mark);
 }
 
+void mark_reference_value(void* reference, void* /*context*/) {
+  mark_value_locked(reference);
+}
+
+// An object allocated during a cycle is retained for that cycle without being
+// traced: the sweep reads its birth bit and leaves it alone. The references it
+// already carries were written into an unpublished object, so no barrier saw
+// them, and they point at objects from earlier cycles. An untraced edge from a
+// retained object is how a reachable object stays unmarked and is reclaimed -
+// which is what a survivor whose stamp vanished looks like from outside. Marking
+// those edges once, before the first sweep slice, is the allocation-is-black
+// half of the rule the store barrier applies to every other new edge, and doing
+// it here rather than at publication means no page can already have been swept.
+void mark_born_references_locked() {
+  const uint64_t epoch = active_cycle_epoch;
+  for (auto& entry : gc_pages) {
+    GcPage* page = entry.get();
+    if (!page || page->born_this_cycle == 0) continue;
+    const uint64_t* const start_bits = start_bits_for_scan_locked(*page);
+    if (!start_bits) continue;
+    for (size_t word = 0; word < page->object_start_words; ++word) {
+      uint64_t bits = start_bits[word];
+      while (bits != 0) {
+        const unsigned index = static_cast<unsigned>(std::countr_zero(bits));
+        bits &= bits - 1;
+        const ObjectRef object{
+            page->storage + (word * 64 + index) * kObjectStartAlignment, page};
+        if (!object_born_in_cycle(object, epoch)) continue;
+        trace_children(object, mark_reference_value, nullptr);
+      }
+    }
+  }
+  for (const ObjectRef& object : unindexed_objects) {
+    if (!object.valid() || !object_born_in_cycle(object, epoch)) continue;
+    trace_children(object, mark_reference_value, nullptr);
+  }
+}
+
 void mark_root_values_locked(void* storage, const nrq_object_layout* layout,
                              size_t repeated_count) {
   if (!layout || layout->reference_count == 0) return;
@@ -2981,6 +3130,65 @@ void for_each_fast_root_slot_locked(const ShadowStack& stack, Callback&& callbac
       callback(const_cast<void**>(&slots[index]), &kPointerRootLayout);
     }
   }
+}
+
+// Debug-only root audit at the sweep transition. A root slot that names a live
+// object which this cycle neither marked nor stamped as born is the sharpest form
+// of the mark-loss failure: the collector has already decided the object is not
+// reachable while a mutator is about to read it. Only pointer-shaped roots are
+// checked here, which is the shape a single slot with one reference has.
+void verify_root_marks_locked() {
+  if constexpr (!nirq::runtime_debug_enabled) return;
+  static const bool enabled = std::getenv("NRQ_GC_VERIFY_MARKS") != nullptr;
+  if (!enabled) return;
+  size_t checked = 0;
+  size_t lost = 0;
+  auto audit = [&](void* slot, void* value) {
+    if (!value) return;
+    ++checked;
+    const ObjectRef ref = find_object_locked(value);
+    if (!ref.valid()) {
+      ++lost;
+      std::fprintf(stderr, "NRQ_ROOT_LOSS slot=%p value=%p unresolved\n", slot,
+                   value);
+      return;
+    }
+    if (object_born_in_cycle(ref, active_cycle_epoch) || object_marked(ref))
+      return;
+    // A minor cycle does not mark old objects: they are outside its reachability
+    // question and only a full cycle can reclaim them. Reporting them would bury
+    // the real loss.
+    if (active_collection_is_minor && !object_young(ref)) return;
+    ++lost;
+    std::fprintf(stderr,
+                 "NRQ_ROOT_LOSS slot=%p value=%p kind=%d live=%zu young=%zu "
+                 "marked=%zu born=%zu\n",
+                 slot, value, static_cast<int>(ref.page->kind),
+                 ref.page->live_objects, ref.page->young_objects,
+                 ref.page->marked_objects, ref.page->born_this_cycle);
+  };
+  for (const auto& root : roots) {
+    if (!is_pointer_root_layout(root.second.layout)) continue;
+    void* value = nullptr;
+    std::memcpy(&value, root.first, sizeof(value));
+    audit(root.first, value);
+  }
+  // A typed root registered through the runtime API lives on its owner's shadow
+  // stack, not in the map above, so the audit has to read the same structures the
+  // root snapshot reads.
+  for (ShadowStack* stack : shadow_stacks) {
+    if (!stack || !stack->fast) continue;
+    std::lock_guard<std::mutex> stack_lock(stack->mutex);
+    for_each_fast_root_slot_locked(
+        *stack, [&](void* slot, const nrq_object_layout* layout) {
+          if (!is_pointer_root_layout(layout)) return;
+          void* value = nullptr;
+          std::memcpy(&value, slot, sizeof(value));
+          audit(slot, value);
+        });
+  }
+  if (lost != 0)
+    std::fprintf(stderr, "NRQ_ROOT_LOSS total=%zu of %zu\n", lost, checked);
 }
 
 void enqueue_roots_locked(MarkContext& context) {
@@ -3272,6 +3480,152 @@ bool mark_slice_locked(size_t budget_bytes) {
   return active_mark.worklist.empty() && active_mark.reference_count == 0;
 }
 
+// Debug-only closure diff at the sweep transition. Every managed object's mark is
+// snapshotted, marks are cleared, and reachability is recomputed from the roots
+// under the same lock. An object the second walk reaches that the first did not
+// mark, and that was not born in this cycle, is an interior edge the marker
+// dropped: the sweep is about to reclaim storage that is still reachable. The
+// marks left behind are the recomputed closure, which is a superset of what the
+// collector had, so running the diff cannot make the cycle less safe.
+struct ClosureLoss
+{
+  void* object = nullptr;
+  int32_t kind = 0;
+  size_t live = 0;
+  size_t marked = 0;
+  size_t born = 0;
+};
+
+struct ParentSearch {
+  void* target = nullptr;
+  ObjectRef current;
+  ObjectRef parent;
+};
+
+void closure_parent_visit(void* reference, void* opaque) {
+  auto* search = static_cast<ParentSearch*>(opaque);
+  if (search->parent.valid() || reference != search->target) return;
+  search->parent = search->current;
+}
+
+void closure_diff_locked(int pass) {
+  if constexpr (!nirq::runtime_debug_enabled) return;
+  static const bool enabled = std::getenv("NRQ_GC_VERIFY_MARKS") != nullptr;
+  if (!enabled) return;
+  std::vector<void*> was_marked;
+  for (auto& entry : gc_pages) {
+    GcPage* page = entry.get();
+    if (!page) continue;
+    const uint64_t* const start_bits = start_bits_for_scan_locked(*page);
+    if (!start_bits) continue;
+    for (size_t word = 0; word < page->object_start_words; ++word) {
+      uint64_t bits = start_bits[word];
+      while (bits != 0) {
+        const unsigned index = static_cast<unsigned>(std::countr_zero(bits));
+        bits &= bits - 1;
+        const ObjectRef object{
+            page->storage + (word * 64 + index) * kObjectStartAlignment, page};
+        if (object_marked(object)) was_marked.push_back(object_payload(object));
+      }
+    }
+  }
+  for (const ObjectRef& object : unindexed_objects) {
+    if (object.valid() && object_marked(object))
+      was_marked.push_back(object_payload(object));
+  }
+  std::sort(was_marked.begin(), was_marked.end());
+
+  for (auto& entry : gc_pages) {
+    if (entry) clear_page_marks(*entry);
+  }
+  active_mark.reset();
+  active_mark.young_only = active_collection_is_minor;
+  active_mark.epoch = active_cycle_epoch;
+  enqueue_roots_locked(active_mark);
+  for (int slice = 0; slice < 1000000; ++slice) {
+    if (mark_slice_locked(size_t{1} << 26)) break;
+  }
+  // The ordinary walk never traces a born object, so the recomputed closure is
+  // only comparable to the collector's once the same pass has run against it.
+  // Without this the diff would credit itself with every edge the born pass owns
+  // and, worse, would clear marks the pass had already contributed.
+  mark_born_references_locked();
+
+  size_t losses = 0;
+  auto report = [&](const ObjectRef& object) {
+    if (!object_marked(object)) return;
+    if (object_born_in_cycle(object, active_cycle_epoch)) return;
+    void* const payload = object_payload(object);
+    if (std::binary_search(was_marked.begin(), was_marked.end(), payload)) return;
+    ++losses;
+    if (losses > 8) return;
+    ParentSearch search;
+    search.target = payload;
+    auto scan = [&](const ObjectRef& candidate) {
+      if (search.parent.valid() || !candidate.valid()) return;
+      search.current = candidate;
+      trace_children(candidate, closure_parent_visit, &search);
+    };
+    for (auto& entry : gc_pages) {
+      GcPage* page = entry.get();
+      if (!page) continue;
+      const uint64_t* const start_bits = start_bits_for_scan_locked(*page);
+      if (!start_bits) continue;
+      for (size_t word = 0; word < page->object_start_words; ++word) {
+        uint64_t bits = start_bits[word];
+        while (bits != 0) {
+          const unsigned index = static_cast<unsigned>(std::countr_zero(bits));
+          bits &= bits - 1;
+          scan(ObjectRef{
+              page->storage + (word * 64 + index) * kObjectStartAlignment,
+              page});
+        }
+      }
+    }
+    for (const ObjectRef& candidate : unindexed_objects) scan(candidate);
+    std::fprintf(stderr,
+                 "CLOSURE_LOSS pass=%d object=%p kind=%d live=%zu marked=%zu "
+                 "born=%zu young=%d parent=%p parent_born=%d parent_marked=%d "
+                 "parent_young=%d minor=%d young_only=%d\n",
+                 pass, payload, static_cast<int>(object.page->kind),
+                 object.page->live_objects, object.page->marked_objects,
+                 object.page->born_this_cycle,
+                 static_cast<int>(object_young(object)),
+                 object_payload(search.parent),
+                 search.parent.valid()
+                     ? static_cast<int>(object_born_in_cycle(search.parent,
+                                                             active_cycle_epoch))
+                     : -1,
+                 search.parent.valid()
+                     ? static_cast<int>(object_marked(search.parent))
+                     : -1,
+                 search.parent.valid()
+                     ? static_cast<int>(object_young(search.parent))
+                     : -1,
+                 static_cast<int>(active_collection_is_minor),
+                 static_cast<int>(active_mark.young_only));
+  };
+  for (auto& entry : gc_pages) {
+    GcPage* page = entry.get();
+    if (!page) continue;
+    const uint64_t* const start_bits = start_bits_for_scan_locked(*page);
+    if (!start_bits) continue;
+    for (size_t word = 0; word < page->object_start_words; ++word) {
+      uint64_t bits = start_bits[word];
+      while (bits != 0) {
+        const unsigned index = static_cast<unsigned>(std::countr_zero(bits));
+        bits &= bits - 1;
+        report(ObjectRef{
+            page->storage + (word * 64 + index) * kObjectStartAlignment, page});
+      }
+    }
+  }
+  for (const ObjectRef& object : unindexed_objects) report(object);
+  if (losses != 0)
+    std::fprintf(stderr, "CLOSURE_LOSS total=%zu of %zu marked pass=%d\n",
+                 losses, was_marked.size(), pass);
+}
+
 // Sweep state. A cycle reclaims along the page set instead of following one
 // global list: pages are visited in allocation order and each page's start
 // bitmap in address order, which is also the order a page's spans want to be
@@ -3373,6 +3727,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
         page->retired = true;
         ++retired_page_count;
       }
+      record_sweep_object_locked(object, false, false);
       forget_object_storage(object);
       return true;
     }
@@ -3462,10 +3817,18 @@ bool sweep_chunk_locked(size_t budget_bytes) {
         sweep_cursor.word = 0;
         continue;
       }
-      const bool all_dead = active_collection_is_minor
-          ? (live == young && page->marked_objects == 0 &&
-             page->born_this_cycle == 0)
-          : (page->marked_objects == 0 && page->born_this_cycle == 0);
+      // A page is only entirely dead once every object a mutator has written
+      // into it has been published. Until then the counters cannot see that
+      // object, so retiring the page would free storage a mutator is still
+      // filling - and the next reservation on the page would zero the header of
+      // an object the collector is then asked to trace.
+      const bool no_uncommitted =
+          page->uncommitted_objects.load(std::memory_order_relaxed) == 0;
+      const bool all_dead = no_uncommitted &&
+          (active_collection_is_minor
+               ? (live == young && page->marked_objects == 0 &&
+                  page->born_this_cycle == 0)
+               : (page->marked_objects == 0 && page->born_this_cycle == 0));
       // A page that holds a registered payload cannot take the whole-page path:
       // that path retires the page without reading a header, so a reference count
       // registered for one of its objects would never be dropped. Falling through
@@ -3515,6 +3878,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
           page->free_span_bytes = 0;
         }
         set_page_max_free_span_locked(*page, 0, 0);
+        record_sweep_page_locked(*page, live);
         if (page->used != 0) release_span_locked(*page, 0, page->used);
         page->retired = true;
         ++retired_page_count;
@@ -3710,6 +4074,10 @@ void release_span_locked(GcPage& page, size_t offset, size_t span) {
   // A run the representation cannot describe would be recorded as a negative
   // length; such a page simply keeps behaving like the bump allocator it was.
   if (offset > UINT32_MAX || span > UINT32_MAX) return;
+  // A run has to stay inside the page it is recorded on. Recording one that
+  // crosses the end would let a later reservation take a span whose other half is
+  // a live object, so it is dropped instead of corrupting the page.
+  if (offset > page.capacity || span > page.capacity - offset) return;
   // Runs are kept ordered by offset and always merged with a neighbour they
   // touch. Sweeping visits objects in list order, not address order, so a run
   // that is freed in pieces has to coalesce back into one region; otherwise the
@@ -4091,6 +4459,12 @@ void flush_window_for_page_switch(MutatorState& mutator, GcPage* page) {
 }
 
 void install_tlab(MutatorState& mutator, GcPage* page, size_t offset, size_t span) {
+  // A reservation is storage inside one page. Anything else is bookkeeping that
+  // has already gone wrong, and handing it out would let the tail release write a
+  // free run that overlaps a live object - the failure that zeroes a survivor's
+  // header and makes the collector read an object that is no longer there.
+  if (!page || offset > page->capacity || span > page->capacity - offset)
+    nrq_runtime_fatal("GC thread-local reservation escapes its page");
   sync_inline_unflushed(mutator);
   flush_window_for_page_switch(mutator, page);
   NrqGcFastTls& fast = *mutator.fast;
@@ -4180,11 +4554,22 @@ bool take_spare_run(MutatorState& mutator, size_t minimum_span, PageKind kind) {
 bool reserve_spare_runs_locked(MutatorState& mutator, size_t minimum_span,
                                PageKind kind) {
   constexpr size_t byte_budget = kGcTlabBytes * 2;
+  // The list this fills is fixed-size, and a refill can arrive while it already
+  // holds runs a smaller request left behind. Asking for a full batch then wrote
+  // past the end of `spare_runs`, and the fields that follow it are the slab
+  // cursors and the generation stamp a later tail release reads: one bogus tail
+  // released that way records a free run overlapping a live object, and the next
+  // reservation zeroes it. A batch therefore sizes itself to the free room.
+  const size_t room =
+      mutator.spare_run_count < MutatorState::kSpareRunCapacity
+          ? MutatorState::kSpareRunCapacity - mutator.spare_run_count
+          : 0;
+  if (room == 0) return false;
   GcPage::FreeSpan runs[MutatorState::kSpareRunCapacity];
   GcPage* page = nullptr;
-  const size_t taken = take_free_runs_locked(
-      minimum_span, byte_budget, MutatorState::kSpareRunCapacity, minimum_span,
-      page, runs, kind, nullptr);
+  const size_t taken = take_free_runs_locked(minimum_span, byte_budget, room,
+                                             minimum_span, page, runs, kind,
+                                             nullptr);
   if (taken == 0) return false;
   for (size_t index = 0; index < taken; ++index) {
     MutatorState::SpareRun& spare = mutator.spare_runs[mutator.spare_run_count];
@@ -4681,6 +5066,7 @@ void reset_page_gc_metadata_locked(GcPage& page) {
   page.retired = false;
   page.pending_start_count = 0;
   page.starts_pending = false;
+  page.uncommitted_objects.store(0, std::memory_order_relaxed);
   if (!page.grown_bitmaps && page.mark_words != 0) {
     std::memset(page.inline_bitmaps.data(), 0,
                 4 * page.mark_words * sizeof(uint64_t));
@@ -5363,6 +5749,9 @@ void run_collection(bool young_only) {
         cycle_timing.mark_ns += cycle_ns(mark_start);
         made_progress = true;
         if (marked) {
+          verify_root_marks_locked();
+          closure_diff_locked(1);
+          mark_born_references_locked();
           // Freeze the unindexed list and capture the page set before releasing
           // the lock for sweep slices. Allocations after this point either land
           // in a fresh page (outside the captured set) or carry a birth epoch
@@ -5610,7 +5999,15 @@ void account_new_object_locked(const ObjectRef& object, size_t payload_bytes,
   page.live_payload_bytes += payload_bytes;
   if (collection_phase.load(std::memory_order_acquire) !=
       CollectionPhase::Idle)
-    mark_object_born(object, next_cycle_epoch.load(std::memory_order_relaxed));
+    {
+      mark_object_born(object, next_cycle_epoch.load(std::memory_order_relaxed));
+      // The same rule as the range path: an object appearing while a sweep is
+      // already running keeps its references only if they are marked as it
+      // arrives, because the transition pass cannot have seen this object.
+      if (collection_phase.load(std::memory_order_relaxed) ==
+          CollectionPhase::Sweeping)
+        trace_children(object, mark_reference_value, nullptr);
+    }
   if (young) {
     ++page.young_objects;
   } else {
@@ -6079,11 +6476,19 @@ bool reserve_h0_tlab_locked(MutatorState& mutator,
   // is reserved and handed out from the thread list, exactly as the other
   // representations do.
   constexpr size_t byte_budget = kGcTlabBytes * 2;
+  // Same bound as the compact batch: a headerless refill can also arrive while the
+  // list still holds runs of another shape, and taking more than fits would both
+  // overrun the list and strand the runs it could not store.
+  const size_t room =
+      mutator.spare_run_count < MutatorState::kSpareRunCapacity
+          ? MutatorState::kSpareRunCapacity - mutator.spare_run_count
+          : 0;
+  if (room == 0) return false;
   GcPage::FreeSpan runs[MutatorState::kSpareRunCapacity];
   GcPage* run_page = nullptr;
   const size_t taken = take_free_runs_locked(
-      slot, byte_budget, MutatorState::kSpareRunCapacity, slot, run_page, runs,
-      PageKind::Headerless, layout);
+      slot, byte_budget, room, slot, run_page, runs, PageKind::Headerless,
+      layout);
   NrqGcFastTls& fast = *mutator.fast;
   auto release_h0_tail = [&]() {
     GcPage* const h0_page = static_cast<GcPage*>(fast.h0_page);
@@ -6191,6 +6596,7 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
     ++fast.h0_state_cursor;
     initialize_object(object, layout, 1, layout->payload_size, young,
                       fast.h0_payload_zero != 0);
+    object.page->uncommitted_objects.fetch_add(1, std::memory_order_relaxed);
     fast.h0_active_range =
         note_pending_range(thread_mutator, object.page, object.header, slot);
     fast.h0_fast_layout = layout;
@@ -6258,6 +6664,10 @@ void* allocate_tlab(size_t bytes, size_t element_size, size_t elements,
   cursor_ref += span;
   initialize_object(object, layout, static_cast<uint32_t>(elements), bytes,
                     young, fast.tlab_payload_zero != 0);
+  // The object exists but is not published yet: charge it to the page until the
+  // range that names it is published, so the sweep cannot retire a page that is
+  // still being filled.
+  object.page->uncommitted_objects.fetch_add(1, std::memory_order_relaxed);
   NrqGcPendingRange* const active_range =
       note_pending_range(thread_mutator, object.page, object.header, span);
   if (page_is_representable(object.page->kind) &&
@@ -8153,6 +8563,33 @@ size_t nrq_gc_object_index_entries(void) {
 int32_t nrq_gc_pointer_is_managed(void* object) {
   HeapLockGuard lock(gc_mutex);
   return find_object_locked(object).valid() ? 1 : 0;
+}
+
+// Read without the heap lock: the caller is a mutator diagnosing damage it has
+// already observed, and blocking it behind a collection cycle it may be parked
+// against would turn a diagnostic into a hang. Entry tearing is acceptable here
+// because every field is read for one address the caller already knows about.
+size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max) {
+  if (!out || max == 0) return 0;
+  const size_t total = sweep_history_cursor.load(std::memory_order_relaxed);
+  const size_t oldest = total > kSweepHistoryEntries ? total - kSweepHistoryEntries : 0;
+  const size_t available = total - oldest;
+  const size_t count = available < max ? available : max;
+  const size_t first = total - count;
+  for (size_t index = 0; index < count; ++index) {
+    const SweepHistoryRecord& record =
+        sweep_history[(first + index) % kSweepHistoryEntries];
+    out[index].address = record.address;
+    out[index].cycle = record.cycle;
+    out[index].offset = record.offset;
+    out[index].payload_bytes = record.payload_bytes;
+    out[index].kind = record.kind;
+    out[index].born = record.born;
+    out[index].marked = record.marked;
+    out[index].whole_page = record.whole_page;
+    out[index].live_objects = record.live_objects;
+  }
+  return count;
 }
 
 const nrq_object_layout* nrq_gc_object_layout(void* object) {
