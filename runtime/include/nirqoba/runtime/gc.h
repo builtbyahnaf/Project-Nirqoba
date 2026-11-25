@@ -512,6 +512,11 @@ struct nrq_gc_sweep_record {
   // not match the sweeping cycle means the born pass could not find those objects.
   uint64_t born_epoch;
   int32_t born_this_cycle;
+  // Reference fields the born pass read and how many of them were null. A newborn
+  // whose child is null there and non-null at the next sweep is the window in which
+  // the allocation was visible but its edge was not.
+  int32_t born_refs_seen;
+  int32_t born_null_children;
 };
 size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max);
 // The shared layout descriptor the object was allocated with, or null when the

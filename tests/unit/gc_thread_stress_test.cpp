@@ -97,7 +97,7 @@ uint64_t verify_chain(Failure& failure, void* head, uint64_t expected_stamp,
                      "mark_word=%llx bit=%u pagemarks=%d seen=%d pushed=%d "
                      "pending=%d after=%d clears=%d site=%d "
                      "nokids=%d below=%d bornep=%llu bornnow=%d "
-                     "page=%p idx=%llu ret=%d\n",
+                     "brefs=%d bnull=%d page=%p idx=%llu ret=%d\n",
                      static_cast<unsigned long long>(hops),
                      static_cast<const void*>(cursor),
                      static_cast<unsigned long long>(history[entry].cycle),
@@ -122,6 +122,8 @@ uint64_t verify_chain(Failure& failure, void* head, uint64_t expected_stamp,
                      static_cast<int>(history[entry].child_below_header),
                      static_cast<unsigned long long>(history[entry].born_epoch),
                      static_cast<int>(history[entry].born_this_cycle),
+                     static_cast<int>(history[entry].born_refs_seen),
+                     static_cast<int>(history[entry].born_null_children),
                      history[entry].page,
                      static_cast<unsigned long long>(history[entry].page_index),
                      static_cast<int>(history[entry].retired));

@@ -2249,6 +2249,12 @@ std::atomic<uint64_t> next_cycle_epoch{1};
 // how many objects were offered to the marker after that point, and which cycle
 // the sweep belongs to (so a later cycle's marking is not counted as sweeping).
 int32_t pending_at_sweep_start = -1;
+// Born-pass provenance: how many reference fields it read and how many of them were
+// null. A born object whose child is null at that moment and non-null a moment
+// later is the preemption window: the allocation was visible, its edge was not.
+bool in_born_pass = false;
+int32_t born_refs_seen = 0;
+int32_t born_null_children = 0;
 int32_t enqueued_during_sweep = 0;
 uint64_t sweep_cycle_epoch = 0;
 
@@ -2299,6 +2305,8 @@ struct SweepHistoryRecord {
   // pass find nothing and the children of those objects go untraced.
   uint64_t born_epoch = 0;
   int32_t born_this_cycle = 0;
+  int32_t born_refs_seen = 0;
+  int32_t born_null_children = 0;
 };
 constexpr size_t kSweepHistoryEntries = 512;
 SweepHistoryRecord sweep_history[kSweepHistoryEntries];
@@ -2345,6 +2353,8 @@ void record_sweep_object_locked(const ObjectRef& object, bool whole_page) {
   record.child_below_header = child_below_header;
   record.born_epoch = object.page->born_epoch;
   record.born_this_cycle = static_cast<int32_t>(object.page->born_this_cycle);
+  record.born_refs_seen = born_refs_seen;
+  record.born_null_children = born_null_children;
   if (object.page->visit_bits && object.page->visit_words != 0) {
     const size_t bit_index = mark_bit_index(object);
     const size_t visit_word = bit_index / 64;
@@ -3203,6 +3213,10 @@ void mark_value_locked(void* object) {
 }
 
 void mark_reference_value(void* reference, void* /*context*/) {
+  if (in_born_pass) {
+    ++born_refs_seen;
+    if (!reference) ++born_null_children;
+  }
   mark_value_locked(reference);
 }
 
@@ -3217,6 +3231,9 @@ void mark_reference_value(void* reference, void* /*context*/) {
 // it here rather than at publication means no page can already have been swept.
 void mark_born_references_locked() {
   const uint64_t epoch = active_cycle_epoch;
+  in_born_pass = true;
+  born_refs_seen = 0;
+  born_null_children = 0;
   for (auto& entry : gc_pages) {
     GcPage* page = entry.get();
     if (!page || page->born_this_cycle == 0) continue;
@@ -3238,6 +3255,7 @@ void mark_born_references_locked() {
     if (!object.valid() || !object_born_in_cycle(object, epoch)) continue;
     trace_children(object, mark_reference_value, nullptr);
   }
+  in_born_pass = false;
 }
 
 void mark_root_values_locked(void* storage, const nrq_object_layout* layout,
@@ -8897,6 +8915,8 @@ size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max) {
     out[index].child_below_header = record.child_below_header;
     out[index].born_epoch = record.born_epoch;
     out[index].born_this_cycle = record.born_this_cycle;
+    out[index].born_refs_seen = record.born_refs_seen;
+    out[index].born_null_children = record.born_null_children;
   }
   return count;
 }
