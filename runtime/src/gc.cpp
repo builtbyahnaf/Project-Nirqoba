@@ -2249,6 +2249,10 @@ std::atomic<uint64_t> next_cycle_epoch{1};
 // how many objects were offered to the marker after that point, and which cycle
 // the sweep belongs to (so a later cycle's marking is not counted as sweeping).
 int32_t pending_at_sweep_start = -1;
+// The kind of cycle the running sweep belongs to, captured when it starts. The
+// global it used to read is rewritten by the next cycle's preparation, so a sweep
+// still draining slices could reclaim against the wrong predicate.
+bool sweep_is_minor = false;
 // Born-pass provenance: how many reference fields it read and how many of them were
 // null. A born object whose child is null at that moment and non-null a moment
 // later is the preemption window: the allocation was visible, its edge was not.
@@ -3960,7 +3964,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
     const uint32_t state = object_state(object);
     const bool young = (state & kYoungBit) != 0;
     const bool marked = object_marked(object);
-    const bool collectable = !active_collection_is_minor || young;
+    const bool collectable = !sweep_is_minor || young;
     if (!marked && collectable) {
       if constexpr (nirq::runtime_debug_enabled) {
         static const bool verify_marks =
@@ -6102,6 +6106,7 @@ void run_collection(bool young_only) {
                   ? 0
                   : 1;
           sweep_cycle_epoch = active_cycle_epoch;
+          sweep_is_minor = active_collection_is_minor;
           enqueued_during_sweep = 0;
           sweep_list.clear();
           sweep_list.swap(unindexed_objects);
