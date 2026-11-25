@@ -5242,6 +5242,36 @@ Type TypeChecker::check_call(CallExpr& call) {
     }
   }
 
+  // `sizeof(T)` is a byte count computed from the layout, so it is a constant
+  // expression: nothing about it is evaluated at run time. The written type is a
+  // name; it is resolved here so that a struct arrives at the lowering with its
+  // fields, which is what makes a padded struct measure its padded size rather
+  // than a guess. Types whose size is not a fixed property of the declaration
+  // (text, views, containers) are rejected instead of reporting a storage size a
+  // program would then allocate.
+  if (call.callee() == "sizeof") {
+    if (!call.has_generic_argument()) {
+      diagnostics_.error(diag::kTypeMismatch, call.location(),
+                         "'sizeof' takes a type: write 'sizeof(T)'");
+      return Type::error();
+    }
+    const Type measured = resolve_aggregate_type(call.generic_argument());
+    if (!measured.is_valid()) {
+      diagnostics_.error(diag::kTypeMismatch, call.location(),
+                         "'sizeof' was given a type it cannot measure");
+      return Type::error();
+    }
+    if (measured.is_string() || measured.is_array_view() || measured.is_soa() ||
+        measured.is_array() || measured.is_dynamic_array()) {
+      diagnostics_.error(diag::kTypeMismatch, call.location(),
+                         "'sizeof' needs a type with a fixed layout, found " +
+                             measured.to_string());
+      return Type::error();
+    }
+    const_cast<CallExpr&>(call).set_generic_argument(measured);
+    return Type::int_type();
+  }
+
   // The only way to obtain a dynamic array. It starts empty: capacity 0 is the
   // documented empty representation, so the value carries a null buffer and the
   // growth path (append) is what allocates later. The element type must have a

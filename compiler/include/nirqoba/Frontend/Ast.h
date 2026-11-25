@@ -239,6 +239,10 @@ class CallExpr : public Expr {
   const std::vector<ExprPtr>& arguments() const { return arguments_; }
   bool has_generic_argument() const { return generic_argument_.is_valid(); }
   Type generic_argument() const { return generic_argument_; }
+  // The checker rewrites the written type into the one it resolved, so lowering
+  // measures a complete struct - the one whose fields the program declared -
+  // rather than the bare name it was spelled with.
+  void set_generic_argument(Type type) { generic_argument_ = type; }
 
   // Fully-qualified symbol semantic analysis resolved this call to, for
   // example `geometry.calculate_area` or `main`. Empty for builtins and for

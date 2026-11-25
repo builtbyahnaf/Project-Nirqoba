@@ -1640,6 +1640,16 @@ ExprPtr Parser::parse_primary() {
     }
     case TokenKind::Identifier: {
       advance();
+      // `sizeof(T)` is spelled like a call but its argument is a type, so it is
+      // parsed here rather than as an expression: the byte count is a property of
+      // the layout, and the checker is what resolves `T` to a complete type.
+      if (token.text == "sizeof" && check(TokenKind::LParen)) {
+        advance();  // '('
+        Type measured = parse_type_annotation();
+        expect(TokenKind::RParen, "to close sizeof");
+        return make_unique<CallExpr>(token.location, "sizeof", vector<ExprPtr>{},
+                                     std::move(measured));
+      }
       if ((token.text == "memory" || token.text == "array") && check(TokenKind::Dot) &&
           peek(1).kind == TokenKind::Identifier &&
           (peek(1).text == "allocate" || peek(1).text == "manual_allocate" ||

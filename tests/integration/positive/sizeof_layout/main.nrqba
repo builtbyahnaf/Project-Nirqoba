@@ -1,0 +1,30 @@
+struct Padded {
+    i8 small;
+    i64 wide;
+}
+
+struct Vec3 {
+    f64 x;
+    f64 y;
+    f64 z;
+}
+
+int function main() {
+    // Scalars and a pointer: the counts the layout defines, not a guess.
+    print(sizeof(int) + sizeof(bool) + sizeof(char) + sizeof(f64) + sizeof(ptr int));
+    // A padded struct measures its padded size: i8 then i64 is 16 bytes.
+    print(sizeof(Padded));
+    print(sizeof(Vec3));
+    // The size is a constant expression, so it scales a buffer exactly.
+    var points = memory.allocate<Vec3>(4 * sizeof(Vec3));
+    defer memory.deallocate(points);
+    var index = 0;
+    while (index < 4) {
+        points[index].x = 1.5;
+        points[index].y = 2.5;
+        points[index].z = 3.5;
+        index = index + 1;
+    }
+    print(points[3].x + points[3].y + points[3].z);
+    return 0;
+}

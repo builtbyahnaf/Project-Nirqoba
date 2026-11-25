@@ -2147,6 +2147,20 @@ tir::Value TirBuilder::lower_expression(const Expr& expr, tir::Function& functio
     }
     case Expr::Kind::Call: {
       const auto& call = static_cast<const CallExpr&>(expr);
+      // `sizeof(T)` is a constant by construction: the checker resolved the type
+      // and the layout has already been computed for it, so lowering folds the
+      // byte count into the instruction stream instead of calling anything.
+      if (call.callee() == "sizeof" && call.has_generic_argument()) {
+        tir::Value measured = function.allocate_value(Type::int_type());
+        tir::Op op;
+        op.kind = tir::OpKind::ConstantInt;
+        op.location = call.location();
+        op.result = measured;
+        op.integer_value =
+            static_cast<long long>(nirq::type_size(call.generic_argument()));
+        function.add_operation(std::move(op));
+        return measured;
+      }
       if (call.callee() == "print") {
         if (call.arguments().size() != 1) return tir::Value{};
         const Expr& argument = *call.arguments().front();
