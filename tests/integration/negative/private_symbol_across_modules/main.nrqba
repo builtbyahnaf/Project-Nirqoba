@@ -1,0 +1,7 @@
+import vault;
+
+int function main() {
+    print(vault.public_secret());
+    print(vault.secret());
+    return 0;
+}

@@ -1,0 +1,6 @@
+{
+  "mode": "build_and_run",
+  "module_paths": ["modules"],
+  "expect_exit": 0,
+  "expect_stdout": "16\n21\none/many\n3\n"
+}

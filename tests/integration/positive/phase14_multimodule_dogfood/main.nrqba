@@ -1,0 +1,20 @@
+import dogfood;
+
+int function main() {
+    // A size computed by the imported module's own layout, used to size a buffer
+    // in the importer: the count crosses the module boundary as a constant.
+    var bytes = dogfood.node_bytes();
+    print(bytes);
+    print(dogfood.triple(7));
+    print(dogfood.describe(1) + "/" + dogfood.describe(2));
+    var nodes = memory.allocate<dogfood.Node>(4 * bytes);
+    defer memory.deallocate(nodes);
+    var index = 0;
+    while (index < 4) {
+        nodes[index].value = index;
+        
+        index = index + 1;
+    }
+    print(nodes[3].value);
+    return 0;
+}

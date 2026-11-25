@@ -1,0 +1,6 @@
+{
+  "mode": "check",
+  "module_paths": ["modules"],
+  "expect_exit": 1,
+  "expect_stderr_contains": "cannot access private function 'secret' from outside module"
+}

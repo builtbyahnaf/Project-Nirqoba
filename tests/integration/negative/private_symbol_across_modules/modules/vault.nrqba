@@ -1,0 +1,9 @@
+module vault;
+
+private int function secret() {
+    return 41;
+}
+
+public int function public_secret() {
+    return secret() + 1;
+}

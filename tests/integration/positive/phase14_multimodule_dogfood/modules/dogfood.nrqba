@@ -1,0 +1,38 @@
+module dogfood;
+
+// Recursive `owned ptr`: the type names itself, and `sizeof` still has to produce
+// a finite size for it, which is the pointer plus the payload.
+struct Tail {
+    i64 value;
+    owned ptr Tail next;
+}
+
+// The buffer element: plain data, so a caller can allocate a run of them and
+// release the whole run with one deallocation.
+struct Node {
+    i64 value;
+    i64 weight;
+}
+
+private int function scale(int value) {
+    return value * 3;
+}
+
+public int function node_bytes() {
+    return sizeof(Node);
+}
+
+public int function tail_bytes() {
+    return sizeof(Tail);
+}
+
+public int function triple(int value) {
+    return scale(value);
+}
+
+public string function describe(int kind) {
+    if (kind == 1) {
+        return "one";
+    }
+    return "many";
+}

@@ -293,6 +293,14 @@ def run_case(case_dir, compiler_exe, temp_dir):
         spec = expand_version_tokens(spec, compiler_runtime_version(compiler_exe))
     mode = spec.get("mode", "build_and_run")
     extra_args = spec.get("args", [])
+    # A fixture that spans modules keeps its companion modules in a directory of
+    # its own, so the import has to be resolved by a search path rather than by
+    # the directory the root file happens to sit in. Every directory the fixture
+    # names is handed to the compiler as it is written: a path relative to the
+    # fixture, resolved to an absolute one so the compiler's working directory
+    # never decides what a fixture means.
+    for module_dir in spec.get("module_paths", []):
+        extra_args.extend(["--module-path", str((case_dir / module_dir).resolve())])
     expected_exit = spec.get("expect_exit", 0)
     expected_stdout = spec.get("expect_stdout", None)
     expected_stderr_contains = spec.get("expect_stderr_contains", None)
