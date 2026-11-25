@@ -42,9 +42,17 @@ Release label `+0.005` (`0.690-beta` -> `0.695-beta`).
 - **Known open defect.** `GcThreadStressTest` still fails in about one run of two
   hundred with `stamp_mismatch`. The victim is always an unborn, unmarked object on
   a `Headerless` page reclaimed with per-object granularity during a full cycle, and
-  the new record proves no address is reclaimed twice, so the reclamation is a single
-  legitimate-looking one whose mark should have existed. Chasing it further is Phase
-  15's first task; nothing in this release trades correctness for a green suite.
+  the record proves no address is reclaimed twice, so the reclamation is a single
+  legitimate-looking one whose mark should have existed. Phase 14o examined the
+  last named suspect on that list - a root store that ran its phase check and then
+  wrote the slot outside a barrier region, so a cycle could snapshot that thread's
+  roots before the write landed - and putting the store inside the region with the
+  collector's depth handshake measured two failures in five hundred runs, the same
+  rate as before, for two fences on every root store. It was reverted rather than
+  kept: a cost on the hot path with no measurement behind it is not a fix. Phase 14
+  therefore closes as a feature milestone with this one stability defect documented
+  and carried into Phase 15, where it is the first task; nothing in this release
+  trades correctness for a green suite.
 
 #### Micro-phase 14m-14n: layout-aware `sizeof`
 
@@ -57,6 +65,22 @@ Release label `+0.005` (`0.690-beta` -> `0.695-beta`).
 - **Fixture.** `tests/integration/positive/sizeof_layout` pins the scalars, a padded
   struct (`i8` then `i64` is 16 bytes), a three-field struct, and an indexed read and
   write through `memory.allocate<T>(n * sizeof(T))`.
+
+#### Micro-phase 14o: the module boundary, exercised end to end
+
+- **Fixtures can span modules.** The harness had no way to give a fixture a module
+  search path, so every integration fixture was one file and the module boundary was
+  never tested as a program. A fixture now names the directories it wants searched
+  and the harness hands the compiler an absolute `--module-path` for each, resolved
+  from the fixture rather than from the working directory.
+- **Positive coverage** (`tests/integration/positive/phase14_multimodule_dogfood`): a
+  size measured by the imported module's layout sizes a buffer in the importer, a
+  public function reaches a private helper inside its module, text built by one
+  module is concatenated by the other, and the buffer is written and read element by
+  element.
+- **Negative coverage** (`tests/integration/negative/private_symbol_across_modules`):
+  calling that private function from outside its module is rejected with the
+  diagnostic that names the module and the symbol.
 
 #### Baseline entering Phase 15
 
