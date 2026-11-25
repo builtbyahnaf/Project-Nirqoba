@@ -468,6 +468,12 @@ struct nrq_gc_sweep_record {
   int32_t marked;
   int32_t whole_page;
   int32_t live_objects;
+  // Generation of the reclaimed object (0 young, 1 old, -1 for a whole-page
+  // record) and whether the cycle that reclaimed it was a full one (1) or a minor
+  // one (0). A young victim that was unmarked in a minor cycle is a remembered-set
+  // miss; an old or unborn one in a full cycle is a snapshot-barrier miss.
+  int32_t generation;
+  int32_t full;
 };
 size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max);
 // The shared layout descriptor the object was allocated with, or null when the

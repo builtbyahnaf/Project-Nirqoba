@@ -274,6 +274,14 @@ struct GcPage {
   // stop-the-world cycle boundary, when no mutator can still be inside an
   // allocator or holding a TLAB cursor into the page.
   bool retired = false;
+  // How many times this page has been emptied and handed storage out again. The
+  // incremental sweep walks a captured page set across chunks, and a page it has
+  // already passed stays in that set: the space it reclaimed is handed straight
+  // back to mutators, and a page emptied before the cursor reached it would be
+  // walked with bitmaps that now describe a different generation of objects. The
+  // sweep binds this counter when it starts on a page and abandons the page when
+  // it no longer matches.
+  uint64_t reuse_generation = 0;
   // Set when this page cannot be found through the page directory, either
   // because its start bitmap was not allocated or because indexing it failed.
   // Objects in such a page are tracked by the global object index instead.
@@ -1733,6 +1741,7 @@ void note_page_tail_locked(GcPage& page) {
 void unretire_page_locked(GcPage& page) {
   if (!page.retired) return;
   page.retired = false;
+  ++page.reuse_generation;
   if (retired_page_count != 0) --retired_page_count;
 }
 
@@ -2205,12 +2214,26 @@ struct SweepHistoryRecord {
   int32_t marked = 0;
   int32_t whole_page = 0;
   int32_t live_objects = 0;
+  // The object's generation at the moment it was reclaimed (0 young, 1 old) and
+  // whether the cycle reclaiming it was a minor one. A victim that was young and
+  // reachable from an old parent is a remembered-set miss; one that was unborn
+  // and unmarked in a full cycle is a snapshot-barrier miss. The distinction
+  // cannot be recovered from the address afterwards, so it is recorded here.
+  int32_t generation = -1;
+  int32_t full = -1;
 };
 constexpr size_t kSweepHistoryEntries = 512;
 SweepHistoryRecord sweep_history[kSweepHistoryEntries];
 std::atomic<size_t> sweep_history_cursor{0};
 
-void record_sweep_object_locked(const ObjectRef& object, bool born, bool marked) {
+// Records what the collector believed about an object at the moment it reclaimed
+// it. Every field is read from state the sweep already carries - the birth bitmap,
+// the mark bitmap, the page's state table - so recording costs no lock, no walk,
+// and no allocation, and the diagnostic runs at the speed the workload runs at.
+// Its flags used to be passed in by the caller, which meant the free site recorded
+// two hardcoded zeroes and the record could not distinguish a young remembered-set
+// miss from an unmarked survivor.
+void record_sweep_object_locked(const ObjectRef& object, bool whole_page) {
   if constexpr (!nirq::runtime_debug_enabled) return;
   const size_t index =
       sweep_history_cursor.fetch_add(1, std::memory_order_relaxed) %
@@ -2222,10 +2245,12 @@ void record_sweep_object_locked(const ObjectRef& object, bool born, bool marked)
   record.offset = static_cast<uint64_t>(object.header - object.page->storage);
   record.payload_bytes = layout ? layout->payload_size : 0;
   record.kind = static_cast<int32_t>(object.page->kind);
-  record.born = born ? 1 : 0;
-  record.marked = marked ? 1 : 0;
-  record.whole_page = 0;
+  record.born = object_born_in_cycle(object, active_cycle_epoch) ? 1 : 0;
+  record.marked = object_marked(object) ? 1 : 0;
+  record.whole_page = whole_page ? 1 : 0;
   record.live_objects = static_cast<int32_t>(object.page->live_objects);
+  record.generation = object_young(object) ? 0 : 1;
+  record.full = active_collection_is_minor ? 0 : 1;
 }
 
 void record_sweep_page_locked(const GcPage& page, size_t live) {
@@ -2243,6 +2268,8 @@ void record_sweep_page_locked(const GcPage& page, size_t live) {
   record.marked = 0;
   record.whole_page = 1;
   record.live_objects = static_cast<int32_t>(live);
+  record.generation = -1;
+  record.full = active_collection_is_minor ? 0 : 1;
 }
 std::atomic<size_t> minor_collections_since_major{0};
 // A trace callback may visit many references. Resolve them in a short
@@ -3508,11 +3535,17 @@ void closure_parent_visit(void* reference, void* opaque) {
   search->parent = search->current;
 }
 
+// The mark set the transition produced, for the sweep to compare against. It is
+// filled only by the verification walk below; the sweep reads it only when that
+// walk ran for the same cycle.
+std::vector<void*> transition_marks;
+uint64_t transition_marks_epoch = 0;
+
 void closure_diff_locked(int pass) {
   if constexpr (!nirq::runtime_debug_enabled) return;
   static const bool enabled = std::getenv("NRQ_GC_VERIFY_MARKS") != nullptr;
   if (!enabled) return;
-  std::vector<void*> was_marked;
+  std::vector<std::pair<void*, ObjectRef>> was_marked;
   for (auto& entry : gc_pages) {
     GcPage* page = entry.get();
     if (!page) continue;
@@ -3525,15 +3558,27 @@ void closure_diff_locked(int pass) {
         bits &= bits - 1;
         const ObjectRef object{
             page->storage + (word * 64 + index) * kObjectStartAlignment, page};
-        if (object_marked(object)) was_marked.push_back(object_payload(object));
+        if (object_marked(object))
+          was_marked.emplace_back(object_payload(object), object);
       }
     }
   }
   for (const ObjectRef& object : unindexed_objects) {
     if (object.valid() && object_marked(object))
-      was_marked.push_back(object_payload(object));
+      was_marked.emplace_back(object_payload(object), object);
   }
-  std::sort(was_marked.begin(), was_marked.end());
+  std::sort(was_marked.begin(), was_marked.end(),
+            [](const auto& left, const auto& right) {
+              return left.first < right.first;
+            });
+  auto was_marked_contains = [&](void* payload) {
+    const auto found = std::lower_bound(
+        was_marked.begin(), was_marked.end(), payload,
+        [](const std::pair<void*, ObjectRef>& entry, void* value) {
+          return entry.first < value;
+        });
+    return found != was_marked.end() && found->first == payload;
+  };
 
   for (auto& entry : gc_pages) {
     if (entry) clear_page_marks(*entry);
@@ -3556,7 +3601,7 @@ void closure_diff_locked(int pass) {
     if (!object_marked(object)) return;
     if (object_born_in_cycle(object, active_cycle_epoch)) return;
     void* const payload = object_payload(object);
-    if (std::binary_search(was_marked.begin(), was_marked.end(), payload)) return;
+    if (was_marked_contains(payload)) return;
     ++losses;
     if (losses > 8) return;
     ParentSearch search;
@@ -3624,6 +3669,19 @@ void closure_diff_locked(int pass) {
   if (losses != 0)
     std::fprintf(stderr, "CLOSURE_LOSS total=%zu of %zu marked pass=%d\n",
                  losses, was_marked.size(), pass);
+  // Put the collector's own mark set back. The re-walk above was only ever a
+  // question; leaving its answer in place would let the verification retain
+  // storage the collector had decided to reclaim, which is how a diagnostic
+  // turns into a silent repair and hides the very race it looks for.
+  for (auto& entry : gc_pages) {
+    if (entry) clear_page_marks(*entry);
+  }
+  for (const auto& entry : was_marked) set_object_marked(entry.second, true);
+  transition_marks.clear();
+  transition_marks.reserve(was_marked.size());
+  for (const auto& entry : was_marked) transition_marks.push_back(entry.first);
+  std::sort(transition_marks.begin(), transition_marks.end());
+  transition_marks_epoch = active_cycle_epoch;
 }
 
 // Sweep state. A cycle reclaims along the page set instead of following one
@@ -3641,6 +3699,9 @@ struct SweepCursor {
   // not enough: resuming mid-word by re-testing positions would visit every
   // zero bit between object starts, which is 94 % of a full page's bitmap.
   uint64_t mask = 0;
+  // The page's reuse generation when this sweep last started on it. A mismatch
+  // means the page was emptied and handed out again mid-sweep.
+  uint64_t page_generation = 0;
 };
 SweepCursor sweep_cursor;
 
@@ -3690,6 +3751,19 @@ bool sweep_chunk_locked(size_t budget_bytes) {
     const bool marked = object_marked(object);
     const bool collectable = !active_collection_is_minor || young;
     if (!marked && collectable) {
+      if constexpr (nirq::runtime_debug_enabled) {
+        static const bool verify_marks =
+            std::getenv("NRQ_GC_VERIFY_MARKS") != nullptr;
+        if (verify_marks &&
+            active_cycle_epoch == transition_marks_epoch &&
+            std::binary_search(transition_marks.begin(), transition_marks.end(),
+                               object_payload(object)))
+          std::fprintf(stderr,
+                       "SWEEP_LOST_MARK object=%p kind=%d cycle=%llu live=%zu\n",
+                       object_payload(object), static_cast<int>(page->kind),
+                       static_cast<unsigned long long>(active_cycle_epoch),
+                       page->live_objects);
+      }
       const size_t payload_bytes = object_payload_bytes(object);
       const size_t object_offset = static_cast<size_t>(
           object.header - page->storage);
@@ -3727,7 +3801,7 @@ bool sweep_chunk_locked(size_t budget_bytes) {
         page->retired = true;
         ++retired_page_count;
       }
-      record_sweep_object_locked(object, false, false);
+      record_sweep_object_locked(object, false);
       forget_object_storage(object);
       return true;
     }
@@ -3783,6 +3857,20 @@ bool sweep_chunk_locked(size_t budget_bytes) {
          touched < budget_bytes &&
          bitmap_words < kSweepBitmapWordsPerChunk) {
     GcPage* page = gc_pages[sweep_cursor.page].get();
+    if (sweep_cursor.word == 0 && sweep_cursor.mask == 0)
+      sweep_cursor.page_generation = page ? page->reuse_generation : 0;
+    if (page && page->reuse_generation != sweep_cursor.page_generation) {
+      // Between two chunks this page was emptied and its storage handed back to
+      // a mutator. Its start and mark bitmaps now describe objects that were
+      // allocated after this cycle began, so a walk would reclaim storage the
+      // mutator is still writing into. The next cycle owns those objects.
+      bitmap_words += page->object_start_words != 0 ? page->object_start_words
+                                                   : size_t{1};
+      ++sweep_cursor.page;
+      sweep_cursor.word = 0;
+      sweep_cursor.mask = 0;
+      continue;
+    }
     if (!page || page_uses_index(page) || page->object_start_words == 0 ||
         page->live_objects == 0 ||
         (active_collection_is_minor && page->young_objects == 0)) {
@@ -8588,6 +8676,8 @@ size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max) {
     out[index].marked = record.marked;
     out[index].whole_page = record.whole_page;
     out[index].live_objects = record.live_objects;
+    out[index].generation = record.generation;
+    out[index].full = record.full;
   }
   return count;
 }
