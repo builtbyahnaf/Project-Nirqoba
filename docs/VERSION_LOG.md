@@ -12,6 +12,61 @@ recorded below is made under that authority.
 
 ---
 
+## Version 0.695-beta
+
+### Summary of Changes (since `0.690-beta`)
+
+Release label `+0.005` (`0.690-beta` -> `0.695-beta`).
+
+#### Micro-phase 14k-14n: concurrent reclamation
+
+- **TLAB publication races.** A run could be reserved past the end of a slab, a
+  start bit could be dropped when an object was published in the same cycle it was
+  allocated, and a page could be retired while a mutator still held a cursor into
+  it. Each is fixed at the point it happens: reservation guards that stay inside the
+  page, a start-bit flush at object boundaries, and `uncommitted_objects` gating the
+  whole-page paths.
+- **Reclamation records state the truth.** The sweep history recorded two constants
+  instead of the victim's state, so a reclamation could not be attributed to a
+  trusted generation or a remembered-set miss. Each record now reads the birth
+  bitmap, the mark bitmap, the page's state table and the cycle's mode - no lock, no
+  walk - and carries the owning page, its index, the offset within it and whether the
+  page was retired. A second reclamation of one address in one cycle is reported as
+  both halves together.
+- **Page generations bind the sweep cursor.** A page emptied and handed out again
+  between two chunks was walked with bitmaps describing a different generation of
+  objects. `reuse_generation` is bumped where a page is described from scratch and
+  where emptied storage is un-retired, and the cursor re-checks it per object.
+  Measured on the concurrency stress test at full speed: from roughly one failure per
+  hundred runs to two in six hundred.
+- **Known open defect.** `GcThreadStressTest` still fails in about one run of two
+  hundred with `stamp_mismatch`. The victim is always an unborn, unmarked object on
+  a `Headerless` page reclaimed with per-object granularity during a full cycle, and
+  the new record proves no address is reclaimed twice, so the reclamation is a single
+  legitimate-looking one whose mark should have existed. Chasing it further is Phase
+  15's first task; nothing in this release trades correctness for a green suite.
+
+#### Micro-phase 14m-14n: layout-aware `sizeof`
+
+- **`sizeof(T)` exists.** A buffer's byte count no longer has to be written by hand:
+  `memory.allocate<Vec3>(4 * sizeof(Vec3))` measures the declaration. The parser
+  reads a type where an argument would be, the checker resolves the name into the
+  complete type (a struct arrives with its fields) and rewrites the call's type
+  argument, and the builder folds the count to a constant. Text, views and
+  containers have no fixed layout and are rejected.
+- **Fixture.** `tests/integration/positive/sizeof_layout` pins the scalars, a padded
+  struct (`i8` then `i64` is 16 bytes), a three-field struct, and an indexed read and
+  write through `memory.allocate<T>(n * sizeof(T))`.
+
+#### Baseline entering Phase 15
+
+`benchmarks/stress_test_5`, five repeats on the development host, all four checksums
+validated: **39.8 ms median wall clock, 34.9 ms best, 14.48 MiB peak RSS.** The
+report on file records 33.8 / 29.3 / 34.9 ms and 13.7 MiB from an earlier host, so
+the delta is recorded rather than explained; it is the number Phase 15 has to beat.
+
+---
+
 ## Version 0.690-beta
 
 ### Summary of Changes (since `0.685-beta`)

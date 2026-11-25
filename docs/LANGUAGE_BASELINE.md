@@ -88,7 +88,7 @@ Line comments `//` and block comments `/* … */` (lexer trivia).
 | Null-safe access `?.` | absent | no token |
 | Range `..` / `...` | absent | no token |
 | Arrow `->` | **tokenized but unused** | `TokenKind::Arrow` exists; no parser path consumes it |
-| `sizeof` | absent | no token, no parser path |
+| `sizeof` | **present** (0.695-beta) | `sizeof(T)` takes a type annotation, not an expression, and folds to an `int` constant built from the layout (`Lowering/DataLayout.h`). Scalars, pointers and padded structs all measure; a struct named in it is resolved to its declaration so its fields decide the size. Types with no fixed layout (text, views, containers) are a compile error rather than a made-up byte count |
 | Comma operator | absent | `,` is a separator only |
 | Spaceship `<=>` | absent | no token |
 | String concatenation `+` | **present** (0.682-beta) | `"hello" + " world"` builds one owned buffer; `==`/`!=` compare content (see §5, B6) |
@@ -469,7 +469,7 @@ an expression: the condition must be `bool`, both branches must have one type, a
 each branch is its own block, so the branch not taken never runs its calls or
 allocations. `?` keeps its second meaning - postfix `Result` propagation - and the
 parser tells the two apart by their surroundings. What remains is the rest of the
-operator surface: no `??`, `?.`, ranges or `sizeof`.
+operator surface: no `??`, `?.` or ranges.
 
 **B5 — `switch`.** *Closed in `0.690-beta`.* `switch (value) { case 1: { … }
 default: { … } }` selects on an integer, `char`, `bool` or `string` value and runs
