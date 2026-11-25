@@ -4014,6 +4014,20 @@ bool sweep_chunk_locked(size_t budget_bytes) {
       set_object_marked(object, false);
       continue;
     }
+    // A per-object free can empty this page in the middle of its own walk: the
+    // page is retired the moment its last object is reclaimed, and the space goes
+    // back to a mutator immediately. The cursor is still part-way through the
+    // bitmap, so the generation has to be checked here, per object, and not only
+    // where a page is entered: the storage under the next set bit may already
+    // hold an object this cycle has never seen.
+    if (page->reuse_generation != sweep_cursor.page_generation) {
+      bitmap_words += page->object_start_words != 0 ? page->object_start_words
+                                                   : size_t{1};
+      ++sweep_cursor.page;
+      sweep_cursor.word = 0;
+      sweep_cursor.mask = 0;
+      continue;
+    }
     sweep_object(object);
   }
 
@@ -5129,6 +5143,12 @@ void release_page_storage(unsigned char* storage, size_t bytes) {
 // recycling on the same helper prevents a new page class from forgetting a
 // bitmap or counter that the sweep fast paths rely on.
 void reset_page_gc_metadata_locked(GcPage& page) {
+  // This is the one point where a page's storage is described from scratch, and a
+  // sweep that is already part-way through the page's bitmaps is describing the
+  // previous generation of objects. Bumping here - rather than only where an
+  // emptied page is un-retired - makes every reuse path, including the ones that
+  // go through the recycle pool, invalidate a captured cursor.
+  ++page.reuse_generation;
   page.used = 0;
   page.live_objects = 0;
   page.indexed_objects = 0;
