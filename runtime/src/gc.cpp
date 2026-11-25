@@ -2221,6 +2221,9 @@ struct SweepHistoryRecord {
   // cannot be recovered from the address afterwards, so it is recorded here.
   int32_t generation = -1;
   int32_t full = -1;
+  const GcPage* page = nullptr;
+  uint64_t page_index = 0;
+  int32_t retired = 0;
 };
 constexpr size_t kSweepHistoryEntries = 512;
 SweepHistoryRecord sweep_history[kSweepHistoryEntries];
@@ -2251,6 +2254,50 @@ void record_sweep_object_locked(const ObjectRef& object, bool whole_page) {
   record.live_objects = static_cast<int32_t>(object.page->live_objects);
   record.generation = object_young(object) ? 0 : 1;
   record.full = active_collection_is_minor ? 0 : 1;
+  record.page = object.page;
+  record.page_index = SIZE_MAX;
+  for (size_t slot = 0; slot < gc_pages.size(); ++slot) {
+    if (gc_pages[slot].get() != object.page) continue;
+    record.page_index = slot;
+    break;
+  }
+  record.retired = object.page->retired ? 1 : 0;
+  // Reclaiming one address twice in one cycle is not a race to be inferred later
+  // from a missing stamp: it is a defect whose two halves are both in this ring.
+  // Reporting them together is what separates one page walked twice from one block
+  // of storage described by two page shells, so the record does it at the only
+  // moment both are still available.
+  if (!whole_page) {
+    for (size_t back = 1; back < kSweepHistoryEntries; ++back) {
+      const SweepHistoryRecord& prior =
+          sweep_history[(index + kSweepHistoryEntries - back) %
+                        kSweepHistoryEntries];
+      if (!prior.address) break;
+      if (prior.whole_page || prior.address != record.address) continue;
+      std::fprintf(stderr,
+                   "NRQ_DUP address=%p cycle=%llu/%llu "
+                   "page1=%p idx1=%llu off1=%llu live1=%d gen1=%d ret1=%d "
+                   "page2=%p idx2=%llu off2=%llu live2=%d gen2=%d ret2=%d "
+                   "back=%llu\n",
+                   record.address,
+                   static_cast<unsigned long long>(prior.cycle),
+                   static_cast<unsigned long long>(record.cycle),
+                   static_cast<const void*>(prior.page),
+                   static_cast<unsigned long long>(prior.page_index),
+                   static_cast<unsigned long long>(prior.offset),
+                   static_cast<int>(prior.live_objects),
+                   static_cast<int>(prior.generation),
+                   static_cast<int>(prior.retired),
+                   static_cast<const void*>(record.page),
+                   static_cast<unsigned long long>(record.page_index),
+                   static_cast<unsigned long long>(record.offset),
+                   static_cast<int>(record.live_objects),
+                   static_cast<int>(record.generation),
+                   static_cast<int>(record.retired),
+                   static_cast<unsigned long long>(back));
+      break;
+    }
+  }
 }
 
 void record_sweep_page_locked(const GcPage& page, size_t live) {
@@ -8698,6 +8745,9 @@ size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max) {
     out[index].live_objects = record.live_objects;
     out[index].generation = record.generation;
     out[index].full = record.full;
+    out[index].page = const_cast<GcPage*>(record.page);
+    out[index].page_index = record.page_index;
+    out[index].retired = record.retired;
   }
   return count;
 }

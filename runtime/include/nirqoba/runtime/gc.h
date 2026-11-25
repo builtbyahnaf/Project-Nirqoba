@@ -474,6 +474,14 @@ struct nrq_gc_sweep_record {
   // miss; an old or unborn one in a full cycle is a snapshot-barrier miss.
   int32_t generation;
   int32_t full;
+  // The page that owned the object when it was reclaimed, its index in the live
+  // page list at that moment, and whether the page was already retired. Two
+  // records for one address carry either the same page here - one page walked
+  // twice - or two different pages at the same offset, which is one block of
+  // storage described by two page shells.
+  void* page;
+  uint64_t page_index;
+  int32_t retired;
 };
 size_t nrq_gc_sweep_history(struct nrq_gc_sweep_record* out, size_t max);
 // The shared layout descriptor the object was allocated with, or null when the
